@@ -71,6 +71,51 @@ fn create_venv() {
     context.venv.assert(predicates::path::is_dir());
 }
 
+/// Managed debug launchers and their aliases both run inside the virtual environment.
+#[cfg(all(windows, feature = "test-python-managed"))]
+#[test]
+fn create_managed_debug_venv() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context
+        .python_install()
+        .arg("--preview")
+        .arg("3.13d")
+        .assert()
+        .success();
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.13d")
+        .assert()
+        .success();
+
+    let script = indoc! {r#"
+        from pathlib import Path
+        import sys
+        import sysconfig
+
+        print(f"Debug build: {bool(sysconfig.get_config_var('Py_DEBUG'))}")
+        print(f"Expected prefix: {Path(sys.prefix) == Path(sys.argv[1])}")
+        print(f"Virtual environment: {sys.prefix != sys.base_prefix}")
+    "#};
+    uv_snapshot!(context.filters(), context.external_command(context.venv.join("Scripts/python.exe"))
+        .arg("-c").arg(script).arg(context.venv.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Debug build: True
+    Expected prefix: True
+    Virtual environment: True
+    ");
+    uv_snapshot!(context.filters(), context.external_command(context.venv.join("Scripts/python_d.exe"))
+        .arg("-c").arg(script).arg(context.venv.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Debug build: True
+    Expected prefix: True
+    Virtual environment: True
+    ");
+}
+
 #[test]
 fn create_venv_skips_distutils_patch_on_py310() {
     let context = uv_test::test_context_with_versions!(&["3.10"]);
