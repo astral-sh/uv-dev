@@ -661,7 +661,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                     .lock
                     .root()
                     .is_some_and(|root| root.id == expected.package.id)
-                && expected.lock.members().contains(&requirement.name)
+                && expected.lock.resolution_roots().contains(&requirement.name)
                 && requirement.extras.iter().any(&project_conflicts_with_extra);
             let item_conflicts_with_project = |item: &ConflictItem| {
                 expected.lock.conflicts.iter().any(|conflicts| {
@@ -3203,7 +3203,7 @@ impl Lock {
     }
 
     /// Returns the workspace members selected as resolution roots for this lock.
-    pub fn members(&self) -> &BTreeSet<PackageName> {
+    pub fn resolution_roots(&self) -> &BTreeSet<PackageName> {
         &self.manifest.members
     }
 
@@ -4049,8 +4049,8 @@ impl Lock {
 
     /// Return whether every optional dependency and group was included in resolution.
     fn is_resolution_root(&self, package: &Package) -> bool {
-        self.members().contains(&package.id.name)
-            || (self.members().is_empty() && package.id.source.is_implicit_root())
+        self.resolution_roots().contains(&package.id.name)
+            || (self.resolution_roots().is_empty() && package.id.source.is_implicit_root())
     }
 
     /// Return whether a source tree belongs to the workspace or represents its root.

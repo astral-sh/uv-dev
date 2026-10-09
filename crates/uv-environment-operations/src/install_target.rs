@@ -155,16 +155,16 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         let lock = self.lock();
         match self.package_selection() {
             Some(PackageSelection::Projects(names)) => Box::new(names.iter()),
-            Some(PackageSelection::NonProjectWorkspace) => Box::new(lock.members().iter()),
+            Some(PackageSelection::NonProjectWorkspace) => Box::new(lock.resolution_roots().iter()),
             Some(PackageSelection::Workspace) => {
-                // Identify the workspace members.
+                // Identify the resolution roots.
                 //
-                // The members are encoded directly in the lockfile, unless the workspace contains a
-                // single member at the root, in which case, we identify it by its source.
-                if lock.members().is_empty() {
+                // The roots are encoded directly in the lockfile, unless the workspace contains a
+                // single project at the root, in which case, we identify it by its source.
+                if lock.resolution_roots().is_empty() {
                     Box::new(lock.root().into_iter().map(Package::name))
                 } else {
-                    Box::new(lock.members().iter())
+                    Box::new(lock.resolution_roots().iter())
                 }
             }
             None => Box::new(std::iter::empty()),
@@ -263,7 +263,7 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
                 project_name, lock, ..
             } => project_name.or_else(|| {
                 // A single-member workspace omits the member list from the lockfile.
-                if lock.members().is_empty() {
+                if lock.resolution_roots().is_empty() {
                     lock.root().map(Package::name)
                 } else {
                     None
