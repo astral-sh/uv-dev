@@ -1,5 +1,6 @@
 //! Edit project and script metadata while preserving TOML formatting.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::str::FromStr;
 use std::{fmt, mem};
@@ -296,6 +297,54 @@ impl PyProjectTomlMut {
 
     /// Add an [`Index`] to `tool.uv.index`.
     pub fn add_index(&mut self, index: &Index, root_dir: &Path) -> Result<(), Error> {
+        self.add_indexes(&[index], root_dir, &BTreeSet::new())
+    }
+
+    /// Add indexes before updating source names against the final declarations.
+    /// Replacement names shadowed by workspace members retain explicit aliases for old sources.
+    pub fn add_indexes(
+        &mut self,
+        indexes: &[&Index],
+        root_dir: &Path,
+        shadowed_names: &BTreeSet<String>,
+    ) -> Result<(), Error> {
+        let mut renames = Vec::new();
+        for index in indexes {
+            let retain_aliases = index
+                .name
+                .as_deref()
+                .is_some_and(|name| shadowed_names.contains(name));
+            let previous_names = self.edit_index(index, root_dir, retain_aliases)?;
+            if let Some(name) = index.name.as_deref() {
+                renames.push((previous_names, name));
+            }
+        }
+        let names = self
+            .doc
+            .get("tool")
+            .and_then(Item::as_table_like)
+            .and_then(|tool| tool.get("uv"))
+            .and_then(Item::as_table_like)
+            .and_then(|uv| uv.get("index"))
+            .and_then(Item::as_array_of_tables)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter())
+            .filter_map(|index| index.get("name").and_then(Item::as_str))
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
+        for (mut previous_names, name) in renames {
+            previous_names.retain(|name| !names.contains(name));
+            self.rename_index_sources(&previous_names, name);
+        }
+        Ok(())
+    }
+
+    fn edit_index(
+        &mut self,
+        index: &Index,
+        root_dir: &Path,
+        retain_aliases: bool,
+    ) -> Result<Vec<String>, Error> {
         let size = self.doc.len();
         let existing = self
             .doc
@@ -447,6 +496,7 @@ impl PyProjectTomlMut {
 
         // Remove any replaced tables and retain every name whose sources need updating.
         let mut previous_names = Vec::new();
+        let mut aliases = Vec::new();
         existing.retain(|table| {
             let same_name = index
                 .name
@@ -461,9 +511,19 @@ impl PyProjectTomlMut {
             let replaced = same_name || replaced_default || same_url;
             if replaced && let Some(name) = table.get("name").and_then(Item::as_str) {
                 previous_names.push(name.to_owned());
+                if retain_aliases && index.name.as_deref() != Some(name) {
+                    let mut alias = table.clone();
+                    // Retained aliases are available to pinned sources, not implicit searches.
+                    alias.remove("default");
+                    alias.insert("explicit", toml_edit::value(true));
+                    aliases.push(alias);
+                }
             }
             !replaced
         });
+        for alias in aliases {
+            existing.push(alias);
+        }
 
         // Set the position to the minimum, if it's not already the first element.
         if let Some(min) = existing.iter().filter_map(Table::position).min() {
@@ -483,33 +543,33 @@ impl PyProjectTomlMut {
         // Push the item to the table.
         existing.push(table);
 
-        // Keep source references valid when an equivalent index is renamed.
-        if let Some(name) = index.name.as_deref()
-            && let Some(sources) = self
-                .doc
-                .get_mut("tool")
-                .and_then(Item::as_table_like_mut)
-                .and_then(|tool| tool.get_mut("uv"))
-                .and_then(Item::as_table_like_mut)
-                .and_then(|uv| uv.get_mut("sources"))
-                .and_then(Item::as_table_like_mut)
+        Ok(previous_names)
+    }
+
+    fn rename_index_sources(&mut self, previous_names: &[String], name: &str) {
+        if let Some(sources) = self
+            .doc
+            .get_mut("tool")
+            .and_then(Item::as_table_like_mut)
+            .and_then(|tool| tool.get_mut("uv"))
+            .and_then(Item::as_table_like_mut)
+            .and_then(|uv| uv.get_mut("sources"))
+            .and_then(Item::as_table_like_mut)
         {
             for (_, source) in sources.iter_mut() {
                 if let Some(source) = source.as_table_like_mut() {
-                    rename_index_source(source, &previous_names, name);
+                    rename_index_source(source, previous_names, name);
                 } else if let Some(source) = source.as_array_mut() {
                     for source in source.iter_mut().filter_map(Value::as_inline_table_mut) {
-                        rename_index_source(source, &previous_names, name);
+                        rename_index_source(source, previous_names, name);
                     }
                 } else if let Some(source) = source.as_array_of_tables_mut() {
                     for source in source.iter_mut() {
-                        rename_index_source(source, &previous_names, name);
+                        rename_index_source(source, previous_names, name);
                     }
                 }
             }
         }
-
-        Ok(())
     }
 
     /// Adds a dependency to `project.optional-dependencies`.
