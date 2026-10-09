@@ -7,7 +7,7 @@
         "title": "Does `uv` support the concept of `--only main`?",
         "url": "https://github.com/astral-sh/uv/issues/12366",
         "state": "open",
-        "reason": "Tracks selecting only project/production dependencies, explicitly including export for dependency analysis. A maintainer recommends --no-default-groups and identifies broader production/development selection as needing design."
+        "reason": "Canonical discussion of selecting only project.dependencies, explicitly including export for a dependency-analysis tool. A maintainer recommends --no-default-groups --no-sources and identifies broader production/development selection as needing design. The vulnerability-tracker use case requests the same selection capability."
       },
       {
         "kind": "issue",
@@ -15,7 +15,7 @@
         "title": "Option to disable all dependency groups in `uv sync`",
         "url": "https://github.com/astral-sh/uv/issues/10592",
         "state": "closed",
-        "reason": "Reports that --no-dev leaves other configured default groups enabled and requests one flag to exclude them all. Although its example uses sync, the resulting implementation also covered export."
+        "reason": "Reports the same distinction: --no-dev leaves other configured default groups enabled, and requests a single exclusion flag or broader --no-dev semantics. Its example uses sync rather than export; the resulting implementation added --no-default-groups to both."
       },
       {
         "kind": "pull_request",
@@ -23,7 +23,7 @@
         "title": "feat: add `--no-default-groups` flag",
         "url": "https://github.com/astral-sh/uv/pull/10618",
         "state": "merged",
-        "reason": "Merged January 21, 2025, closing astral-sh/uv#10592 and adding --no-default-groups to export, sync, run, and tree. Maintainer comments confirm that it excludes implicit dev and configured default groups while retaining explicitly selected groups."
+        "reason": "Merged on 2025-01-21, closing astral-sh/uv#10592 and adding --no-default-groups to ExportArgs. Maintainer comments explicitly confirm that it excludes the implicit dev default and configured default groups while permitting explicitly selected groups."
       },
       {
         "kind": "issue",
@@ -31,13 +31,21 @@
         "title": "(Documentation) Not clear which groups `uv export` exports",
         "url": "https://github.com/astral-sh/uv/issues/16512",
         "state": "open",
-        "reason": "Adjacent documentation issue about export's default group selection. A maintainer confirms that export follows run and sync semantics. This concerns discoverability rather than a missing exclusion capability."
+        "reason": "Adjacent documentation issue about discovering export's default group selection. A maintainer confirms export uses default groups like run and sync. It concerns explaining existing behavior, whereas this report proposes a dedicated package-only flag."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18474,
+        "title": "docs: clarify uv export default dependency selection",
+        "url": "https://github.com/astral-sh/uv/pull/18474",
+        "state": "open",
+        "reason": "Documentation proposal addressing astral-sh/uv#16512 by explaining default dependency groups and opt-in extras. It could improve discovery of the existing behavior; it does not implement a package-only flag and has not merged."
       }
     ],
-    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs in astral-sh/uv. Separate literal searches covered export, --no-dev, dependency groups, --only-package, --no-dependency-groups, and --no-default-groups. Conceptual searches covered only main, production/runtime dependencies, and excluding development groups. Fix-oriented searches covered closed group-filtering reports and default-group PRs. PR keyword searches returned no entries, so issue timelines supplied relevant PRs for direct inspection, including comments and reviews. Inspected documentation PRs astral-sh/uv#18474, astral-sh/uv#18755, and astral-sh/uv#20520. Ruled out astral-sh/uv#10755 because its reporter confirmed a pre-commit configuration problem, and astral-sh/uv#22089 with merged fix astral-sh/uv#22090 because they concern audit ignoring --no-default-groups rather than export using --no-dev. Also inspected astral-sh/uv#11619, which concerns environment-variable controls. Checked current CLI definitions, group-selection implementation, documentation, and existing export snapshots."
+    "search_scope": "Searched astral-sh/uv open and closed issues for export with --no-dev, --only-package, --no-dependency-groups, --no-default-groups, default groups, only main, production/runtime dependencies, and excluding groups. Separately searched PRs across open, closed, and merged states for export, dependency groups, default groups, and exclusion flags. PR keyword searches returned no matches, so issue timelines were used to find and inspect linked open, closed, and merged PRs, including the historical implementation and documentation proposals. Read candidate bodies, maintainer comments, review comments, and the implementation diff. Ruled out astral-sh/uv#10755, resolved as pre-commit output-file misconfiguration, and astral-sh/uv#22089 with merged astral-sh/uv#22090, which concern uv audit ignoring --no-default-groups rather than export's --no-dev semantics. Checked current CLI definitions, group-selection source, and existing export snapshots. No version or error was supplied; no export regression was established."
   },
   "type": "duplicate",
-  "type_reason": "The package-only export request is already covered by astral-sh/uv#12366, and excluding all default groups was implemented through astral-sh/uv#10592 and astral-sh/uv#10618. Current source confirms that --no-dev excludes only dev and export supports --no-default-groups. No incorrect behavior or regression is established.",
-  "summary": "astral-sh/uv#12366 is the canonical production-only selection discussion; astral-sh/uv#10618 implemented the existing --no-default-groups solution. The required issue-context README update was attempted but blocked by a read-only filesystem. No checkout files or GitHub data were changed.",
-  "draft_response": "`uv export --no-default-groups` covers this case: `--no-dev` excludes only the group named `dev`, while `--no-default-groups` disables all groups included by default. Groups explicitly selected with options such as `--group` or `--all-groups` are still included.\n\nIf your tracker should receive only dependencies, add `--no-emit-project` to omit the project itself.\n\nThe broader request for an explicit production-only selection is already tracked in astral-sh/uv#12366. Let's continue that discussion there."
+  "type_reason": "astral-sh/uv#12366 already tracks selecting only project dependencies, including export for dependency analysis. The narrower request to disable every default group was implemented by astral-sh/uv#10618. Current source confirms that --no-dev excludes only dev and --no-default-groups disables default group inclusion. The report establishes no incorrect behavior or regression; discussion of another package-only flag can be centralized in the existing open issue.",
+  "summary": "Duplicate of astral-sh/uv#12366. astral-sh/uv#10592 and merged astral-sh/uv#10618 establish the existing --no-default-groups solution; astral-sh/uv#16512 and astral-sh/uv#18474 track documentation clarity.",
+  "draft_response": "You can use `uv export --no-default-groups` to export your project's dependencies without including dependency groups, provided you don't also select groups with `--group` or `--all-groups`. `--no-dev` is an alias for `--no-group dev`, so it only disables the group named `dev`. Add `--no-emit-project` if your tracker should receive the dependencies without the project itself.\n\nThe request for an explicit “only main” selection is already tracked in astral-sh/uv#12366. Please continue the discussion of a dedicated flag there."
 }
