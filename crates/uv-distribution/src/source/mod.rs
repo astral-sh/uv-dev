@@ -692,6 +692,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 if hashes.requires_validation() {
                     return Err(Error::HashesNotSupportedSourceTree(source.to_string()));
                 }
+                let cache_shard = self.build_context.cache().shard(
+                    CacheBucket::SourceDistributions,
+                    if dist.editable.unwrap_or(false) {
+                        WheelCache::Editable(&dist.url).root()
+                    } else {
+                        WheelCache::Path(&dist.url).root()
+                    },
+                );
+                let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
                 self.setup_build_environment(
                     &source,
                     &dist.install_path,
@@ -717,6 +726,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         .map(|reporter| reporter.into_git_reporter()),
                 )
                 .await?;
+                let git_sha = fetch.git().precise().expect("Exact commit after checkout");
+                let cache_shard = self.build_context.cache().shard(
+                    CacheBucket::SourceDistributions,
+                    WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
+                );
+                let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
                 self.setup_build_environment(
                     &source,
                     fetch.path(),

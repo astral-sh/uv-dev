@@ -11,6 +11,8 @@ use anyhow::Result;
 use anyhow::{Context, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+#[cfg(unix)]
+use fs_err::create_dir_all;
 use fs_err::{File, read};
 #[cfg(all(feature = "test-git", feature = "test-universal"))]
 use fs_err::{read_to_string, remove_file, write};
@@ -24,12 +26,16 @@ use url::Url;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-#[cfg(all(feature = "test-git", feature = "test-universal"))]
+#[cfg(any(unix, all(feature = "test-git", feature = "test-universal")))]
 use uv_cache::CacheBucket;
+#[cfg(unix)]
+use uv_cache::{Cache, WheelCache};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pep508::Requirement;
+#[cfg(unix)]
+use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 
 use uv_test::archive::{generate_source_archive, write_tar_gz};
@@ -21130,6 +21136,60 @@ fn include_build_dependencies_with_metadata_override() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Backend hooks hold the same interprocess source lock as metadata and wheel preparation.
+#[cfg(unix)]
+#[test]
+fn include_build_dependencies_holds_source_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        import fcntl
+        import os
+
+        def get_requires_for_build_wheel(config_settings=None):
+            with open(os.environ["UV_TEST_SOURCE_LOCK"], "r+") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return []
+                raise AssertionError("requirement hook must hold the source lock")
+    "#})?;
+    let source_url = DisplaySafeUrl::from_file_path(project.path()).expect("absolute source path");
+    let cache = Cache::from_path(context.cache_dir.path());
+    let shard = cache.shard(
+        CacheBucket::SourceDistributions,
+        WheelCache::Path(&source_url).root(),
+    );
+    create_dir_all(&shard)?;
+    let lock = shard.join(".lock");
+    File::create(&lock)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies",
+        "--no-header", "--no-annotate", "--offline",
+    ]).env("UV_TEST_SOURCE_LOCK", lock), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ./project
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
     ");
     Ok(())
 }
