@@ -526,7 +526,7 @@ impl SourceBuild {
             source_tree,
             pep517_backend,
             extra_build_dependencies,
-            isolated: build_isolation.is_isolated(package_name.as_ref()),
+            isolated: shared_environment.is_none(),
             project,
             venv,
             build_kind,
