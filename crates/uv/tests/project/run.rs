@@ -1957,6 +1957,12 @@ fn run_with_overlay_long_project_path() -> Result<()> {
         .with_exclude_newer("2025-04-01T00:00:00Z")
         .with_env("TERM", "dumb")
         .with_filter((r"a{200}", "[LONG_DIR]"));
+    let cache = context
+        .temp_dir
+        .child("cache")
+        .child("b".repeat(100))
+        .child("c".repeat(100));
+    let context = context.with_cache_dir(cache.path());
     let project = context.temp_dir.child("a".repeat(200));
     project.child("pyproject.toml").write_str(indoc! { r#"
         [project]
@@ -1968,7 +1974,10 @@ fn run_with_overlay_long_project_path() -> Result<()> {
     })?;
     project.child("test_import.py").write_str(indoc! { r"
         def test_import():
+            import os
+            import sys
             import six
+            assert len(os.fsencode(sys.executable)) > 256
         "
     })?;
 
@@ -2003,8 +2012,7 @@ fn run_with_overlay_long_project_path() -> Result<()> {
         "#);
     });
 
-    // The absolute shell wrapper is not rewritten, so the entrypoint cannot import `--with`
-    // packages even though they are installed: astral-sh/uv#22323.
+    // The absolute shell wrapper must be rewritten to import packages from the overlay.
     uv_snapshot!(context.filters(), context.run()
         .current_dir(&project)
         .env_remove(EnvVars::VIRTUAL_ENV)
@@ -2014,17 +2022,10 @@ fn run_with_overlay_long_project_path() -> Result<()> {
         .arg("-q")
         .arg("--tb=short")
         .arg("test_import.py"), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stdout -----
-    F                                                                                            [100%]
-    ============================================= FAILURES =============================================
-    ___________________________________________ test_import ____________________________________________
-    test_import.py:2: in test_import
-        import six
-    E   ModuleNotFoundError: No module named 'six'
-    ===================================== short test summary info ======================================
-    FAILED test_import.py::test_import - ModuleNotFoundError: No module named 'six'
-    1 failed in [TIME]
+    .                                                                                            [100%]
+    1 passed in [TIME]
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
@@ -2060,14 +2061,14 @@ fn run_with_overlay_long_project_path() -> Result<()> {
     Ok(())
 }
 
-/// Spaces in a configured project environment also force an absolute `/bin/sh` wrapper.
+/// Spaces force an absolute shell wrapper, whose interpreter path must also escape quotes.
 #[test]
 #[cfg(unix)]
 fn run_with_overlay_space_in_environment_path() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
         .with_exclude_newer("2025-04-01T00:00:00Z")
         .with_env("TERM", "dumb")
-        .with_env(EnvVars::UV_PROJECT_ENVIRONMENT, "custom venv");
+        .with_env(EnvVars::UV_PROJECT_ENVIRONMENT, "custom 'venv");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -2092,7 +2093,7 @@ fn run_with_overlay_space_in_environment_path() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: custom venv
+    Creating virtual environment at: custom 'venv
     Resolved 6 packages in [TIME]
     Prepared 4 packages in [TIME]
     Installed 4 packages in [TIME]
@@ -2103,9 +2104,9 @@ fn run_with_overlay_space_in_environment_path() -> Result<()> {
     ");
 
     insta::with_settings!({ filters => context.filters() }, {
-        assert_snapshot!(context.read("custom venv/bin/pytest"), @r#"
+        assert_snapshot!(context.read("custom 'venv/bin/pytest"), @r#"
         #!/bin/sh
-        '''exec' '[TEMP_DIR]/custom venv/bin/python' "$0" "$@"
+        '''exec' '[TEMP_DIR]/custom '"'"'venv/bin/python' "$0" "$@"
         ' '''
         # -*- coding: utf-8 -*-
         import sys
@@ -2119,8 +2120,7 @@ fn run_with_overlay_space_in_environment_path() -> Result<()> {
         "#);
     });
 
-    // The absolute shell wrapper is not rewritten, so the entrypoint cannot import `--with`
-    // packages even though they are installed: astral-sh/uv#22323.
+    // The absolute shell wrapper must be rewritten to import packages from the overlay.
     uv_snapshot!(context.filters(), context.run()
         .env_remove(EnvVars::VIRTUAL_ENV)
         .arg("--with")
@@ -2129,17 +2129,10 @@ fn run_with_overlay_space_in_environment_path() -> Result<()> {
         .arg("-q")
         .arg("--tb=short")
         .arg("test_import.py"), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stdout -----
-    F                                                                                            [100%]
-    ============================================= FAILURES =============================================
-    ___________________________________________ test_import ____________________________________________
-    test_import.py:2: in test_import
-        import six
-    E   ModuleNotFoundError: No module named 'six'
-    ===================================== short test summary info ======================================
-    FAILED test_import.py::test_import - ModuleNotFoundError: No module named 'six'
-    1 failed in [TIME]
+    .                                                                                            [100%]
+    1 passed in [TIME]
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
