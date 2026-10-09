@@ -592,7 +592,30 @@ fn relocate_script_body(
         } else {
             contents.extend_from_slice(command.as_bytes());
         }
-        contents.extend_from_slice(arguments);
+        if previous_shell {
+            contents.extend_from_slice(arguments);
+        } else {
+            // Linux passes the complete optional suffix as one argument; Darwin splits words.
+            #[cfg(target_os = "macos")]
+            for argument in arguments
+                .split(|byte| *byte == b'#')
+                .next()
+                .unwrap_or_default()
+                .split(|byte| matches!(byte, b' ' | b'\t'))
+            {
+                append_quoted_shell_argument(&mut contents, argument);
+            }
+            #[cfg(not(target_os = "macos"))]
+            if let Some(start) = arguments
+                .iter()
+                .position(|byte| !matches!(byte, b' ' | b'\t'))
+            {
+                let end = arguments
+                    .iter()
+                    .rposition(|byte| !matches!(byte, b' ' | b'\t'))?;
+                append_quoted_shell_argument(&mut contents, &arguments[start..=end]);
+            }
+        }
         contents.extend_from_slice(SHELL_WRAPPER_SUFFIX.as_bytes());
     } else {
         contents.extend_from_slice(current.as_bytes());
@@ -600,6 +623,22 @@ fn relocate_script_body(
     }
     contents.extend_from_slice(body);
     Some(contents)
+}
+
+/// Quote bytes literally without treating original shebang text as shell syntax.
+fn append_quoted_shell_argument(contents: &mut Vec<u8>, argument: &[u8]) {
+    if argument.is_empty() {
+        return;
+    }
+    contents.extend_from_slice(b" '");
+    for byte in argument {
+        if *byte == b'\'' {
+            contents.extend_from_slice(br#"'"'"'"#);
+        } else {
+            contents.push(*byte);
+        }
+    }
+    contents.push(b'\'');
 }
 
 /// Retain the installed launcher payload so overlapping entrypoint declarations keep their provider.
@@ -1563,7 +1602,7 @@ mod test {
             .ok_or_else(|| anyhow::anyhow!("simple shebang should be relocated"))?;
         assert_eq!(
             contents.as_slice(),
-            b"#!/bin/sh\n'''exec' '/new path/python' -O \"$0\" \"$@\"\n' '''\nprint('body')\n",
+            b"#!/bin/sh\n'''exec' '/new path/python' '-O' \"$0\" \"$@\"\n' '''\nprint('body')\n",
         );
         Ok(())
     }
@@ -1589,13 +1628,28 @@ mod test {
     fn relocated_simple_shebang_retains_source_encoding() -> Result<()> {
         let current = format_shebang("/new path/python", "posix", false);
         let contents = relocate_script_body(
-            b"\n# coding: latin-1\nprint('caf\xe9')\n",
+            b"\n# coding: latin-1\nprint('\xe9')\n",
             false,
             &current,
             None,
         )
         .ok_or_else(|| anyhow::anyhow!("encoded script should be relocated"))?;
-        assert_eq!(contents.as_slice(), b"#!/bin/sh\n# coding: latin-1\n'''exec' '/new path/python' \"$0\" \"$@\"\n' '''\n# coding: latin-1\nprint('caf\xe9')\n");
+        assert_eq!(contents.as_slice(), b"#!/bin/sh\n# coding: latin-1\n'''exec' '/new path/python' \"$0\" \"$@\"\n' '''\n# coding: latin-1\nprint('\xe9')\n");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn relocated_simple_shebang_quotes_optional_argument() -> Result<()> {
+        let current = format_shebang("/new path/python", "posix", false);
+        let contents = relocate_script_body(
+            b" -W ignore:deprecated message's:UserWarning\nprint('body')\n",
+            false,
+            &current,
+            None,
+        )
+        .ok_or_else(|| anyhow::anyhow!("simple shebang should be relocated"))?;
+        assert_eq!(contents.as_slice(), b"#!/bin/sh\n'''exec' '/new path/python' '-W ignore:deprecated message'\"'\"'s:UserWarning' \"$0\" \"$@\"\n' '''\nprint('body')\n");
         Ok(())
     }
 

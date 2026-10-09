@@ -3848,8 +3848,13 @@ fn tool_install_preflight_relocates_retained_data_scripts() -> Result<()> {
     #[cfg(unix)]
     {
         let python = context.temp_dir.child("tools/tool/bin/python");
-        let mut script = format!("#!{}\n", python.path().display()).into_bytes();
-        script.extend_from_slice(b"# coding: latin-1\nlabel = 'caf\xe9'\nimport backend_helper\nassert backend_helper.__version__ == '2.0.0'\n");
+        let arguments = if cfg!(target_os = "linux") {
+            " -W ignore:deprecated message's:UserWarning"
+        } else {
+            ""
+        };
+        let mut script = format!("#!{}{arguments}\n", python.path().display()).into_bytes();
+        script.extend_from_slice(b"# coding: latin-1\nlabel = '\xe9'\nimport backend_helper\nassert backend_helper.__version__ == '2.0.0'\n");
         context
             .temp_dir
             .child("tools/tool/bin/backend-data")
