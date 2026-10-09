@@ -468,6 +468,7 @@ pub(crate) async fn install(
 
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let _lock = installed_tools.lock().await?;
+    super::export_transaction::recover_tool_exports(&installed_tools, package_name).await?;
     let tool_dir = installed_tools.tool_dir(package_name);
 
     // Find the existing receipt, if it exists. If the receipt is present but malformed, we'll

@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 #[cfg(windows)]
 use std::io::{Read, Seek, Write as _};
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 #[cfg(windows)]
@@ -3302,6 +3302,145 @@ fn tool_install_recovery_handles_bin_directory_aliases() -> Result<()> {
     );
     for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
         assert_eq!(fs_err::read(receipt.path())?, *contents);
+    }
+    Ok(())
+}
+
+/// Fresh short executable names are distinct even when neither destination exists yet.
+#[test]
+fn tool_install_fresh_multiple_short_executables() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "short-exports",
+        "1.0.0",
+        &[],
+        &[("alpha", "first"), ("beta", "second")],
+    )?;
+    context
+        .tool_install()
+        .args(["short-exports", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    for (name, expected) in [("alpha", "first\n"), ("beta", "second\n")] {
+        Command::new(
+            context
+                .temp_dir
+                .join(format!("bin/{name}{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::diff(expected).normalize());
+    }
+    Ok(())
+}
+
+/// Final metadata failure restores authorized replacements and removes unreceipted commands.
+#[test]
+#[cfg(unix)]
+fn tool_install_fresh_receipt_failure_restores_exports() -> Result<()> {
+    for locked in [false, true] {
+        let context = uv_test::test_context!("3.13").with_tool_dirs();
+        let links = context.temp_dir.child("links");
+        links.create_dir_all()?;
+        let name = "export-transaction";
+        let entrypoints = "[console_scripts]\ntransaction-alpha = export_transaction:alpha\ntransaction-beta = export_transaction:beta\n";
+        let module = "def alpha():\n    print('alpha')\ndef beta():\n    print('beta')\n";
+        // Bytecode compilation starts this interpreter after installation. Deny only the final
+        // tool-root metadata writes; the executable directory remains writable.
+        let obstruction = "import os, pathlib, sys; pathlib.Path(sys.prefix, 'blocked-receipt').write_text('ready'); os.chmod(sys.prefix, 0o500)\n";
+        let (filename, wheel) = generate_wheel_with_files(
+            &name.parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::default(),
+            None,
+            "py3-none-any",
+            &[
+                (
+                    "export_transaction-1.0.0.dist-info/entry_points.txt",
+                    entrypoints,
+                ),
+                ("export_transaction.py", module),
+                ("deny_receipt.pth", obstruction),
+            ],
+        );
+        fs_err::write(links.join(filename), wheel)?;
+        let bin = context.temp_dir.child("bin");
+        bin.create_dir_all()?;
+        let alpha = bin.child("transaction-alpha");
+        let beta = bin.child("transaction-beta");
+        let original = "#!/bin/sh\nprintf 'original command\\n'\n";
+        alpha.write_str(original)?;
+        fs_err::set_permissions(alpha.path(), std::fs::Permissions::from_mode(0o755))?;
+        let tool = context.temp_dir.child("tools").child(name);
+        let mut command = context.tool_install();
+        command
+            .args([
+                name,
+                "--compile-bytecode",
+                "--force",
+                "--no-index",
+                "--find-links",
+            ])
+            .arg(links.path());
+        if locked {
+            command.args(["--preview-features", "tool-install-locks"]);
+        }
+        let output = command.output()?;
+        fs_err::set_permissions(tool.path(), std::fs::Permissions::from_mode(0o755))?;
+        output.assert().code(2);
+        assert!(tool.join("blocked-receipt").exists());
+        assert_eq!(fs_err::read_to_string(alpha.path())?, original);
+        assert!(!beta.exists());
+        assert!(!tool.join("uv-receipt.toml").exists());
+        assert!(
+            !context
+                .temp_dir
+                .join("tools/.uv-tool-exports-export-transaction.json")
+                .exists()
+        );
+        Command::new(alpha.path())
+            .assert()
+            .success()
+            .stdout("original command\n");
+
+        context.tool_uninstall().arg(name).assert().success();
+        assert!(!tool.exists());
+        assert_eq!(fs_err::read_to_string(alpha.path())?, original);
+        write_recovery_wheel(
+            links.path(),
+            name,
+            "1.0.1",
+            &[],
+            &[("transaction-alpha", "alpha"), ("transaction-beta", "beta")],
+        )?;
+        let mut retry = context.tool_install();
+        retry
+            .args([
+                "export-transaction==1.0.1",
+                "--force",
+                "--no-index",
+                "--find-links",
+            ])
+            .arg(links.path());
+        if locked {
+            retry.args(["--preview-features", "tool-install-locks"]);
+        }
+        retry.assert().success();
+        assert!(tool.join("uv-receipt.toml").exists());
+        assert_eq!(tool.join("uv.lock").exists(), locked);
+        Command::new(alpha.path())
+            .assert()
+            .success()
+            .stdout("alpha\n");
+        Command::new(beta.path())
+            .assert()
+            .success()
+            .stdout("beta\n");
     }
     Ok(())
 }

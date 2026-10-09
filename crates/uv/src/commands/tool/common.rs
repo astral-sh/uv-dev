@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet, Bound},
-    ffi::OsString,
     fmt::Write,
     io,
     path::{Path, PathBuf},
@@ -10,7 +9,7 @@ use anyhow::{Context, bail};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::debug;
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
@@ -25,7 +24,7 @@ use uv_distribution_types::{
     DependencyMetadata, HashCollection, Index, IndexLocations, InstalledDist, Name, Requirement,
     RequiresPython, Resolution, UnresolvedRequirement,
 };
-use uv_errors::{ErrorWithHints, Hinted, Hints};
+use uv_errors::{Hinted, Hints};
 #[cfg(unix)]
 use uv_fs::replace_symlink;
 use uv_fs::{CWD, Simplified};
@@ -53,6 +52,7 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 use crate::commands::pip;
+use crate::commands::tool::export_transaction::FreshToolExportPlan;
 #[cfg(windows)]
 use crate::commands::tool::recovery::copy_executable;
 use crate::commands::tool::recovery::{
@@ -308,19 +308,6 @@ pub(super) fn repair_tool_entrypoints(
     Ok(Some(tool.clone().with_entrypoints(entrypoints)))
 }
 
-/// Remove the entrypoints at the given paths.
-fn remove_entrypoint_paths<'a>(entrypoints: impl IntoIterator<Item = &'a Path>) {
-    for executable in entrypoints {
-        debug!("Removing executable: `{}`", executable.simplified_display());
-        if let Err(err) = fs_err::remove_file(executable) {
-            warn!(
-                "Failed to remove executable: `{}`: {err}",
-                executable.simplified_display()
-            );
-        }
-    }
-}
-
 /// The resolved Python request for a tool invocation.
 #[derive(Debug, Clone)]
 pub(crate) struct ToolPython {
@@ -534,14 +521,19 @@ impl ToolLock {
 
     /// Write or remove the lock for a tool.
     pub(crate) fn write(directory: &Path, lock: Option<&Self>) -> anyhow::Result<()> {
+        let contents = lock.map(|lock| lock.lock.to_toml()).transpose()?;
+        Self::write_contents(directory, contents.as_deref())
+    }
+
+    fn write_contents(directory: &Path, contents: Option<&str>) -> anyhow::Result<()> {
         let path = directory.join("uv.lock");
-        if let Some(lock) = lock {
-            uv_fs::write_atomic_sync(&path, lock.lock.to_toml()?)?;
+        if let Some(contents) = contents {
+            uv_fs::write_atomic_sync(&path, contents)?;
         } else {
             match fs_err::remove_file(path) {
                 Ok(()) => (),
-                Err(err) if err.kind() == io::ErrorKind::NotFound => (),
-                Err(err) => return Err(err.into()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(())
@@ -908,13 +900,10 @@ pub(super) async fn finalize_tool_install(
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
-    // Resolution and environment installation are complete. Keep the destination guards through
-    // the final ownership checks, publication, and matching receipt; this interval has no await.
-    let _entrypoint_locks = ToolEntrypointLocks::for_installation(
-        previous.map_or(&[], ToolEntrypointSnapshot::entrypoints),
-    )
-    .await?;
     if let Some(previous) = previous {
+        // Keep admission through ownership checks, publication, and the matching receipt.
+        let _entrypoint_locks =
+            ToolEntrypointLocks::for_installation(previous.entrypoints()).await?;
         let installed_entrypoints = match previous.install(
             environment,
             name,
@@ -956,227 +945,27 @@ pub(super) async fn finalize_tool_install(
         return Ok(());
     }
     let executable_directory = uv_tool::tool_executable_dir()?;
-    fs_err::create_dir_all(&executable_directory)
-        .context("Failed to create executable directory")?;
-    debug!(
-        "Installing tool executables into: {}",
-        executable_directory.user_display()
-    );
-
-    let site_packages = SitePackages::from_environment(environment)?;
-    if installed_tools.get_tool_receipt(name)?.is_none() {
-        let installed = site_packages.get_packages(name);
-        let Some(root) = installed.first() else {
-            writeln!(
-                printer.stdout(),
-                "No executables are provided by package `{}`; removing tool",
-                name.cyan()
-            )?;
-            installed_tools.remove_environment(name)?;
-
-            return Err(NoExecutablesError::Root {
-                package: name.clone(),
-                matching_dependency_packages: Vec::new(),
-            }
-            .into());
-        };
-
-        // Validate new tools before touching dependency entrypoints owned by another tool.
-        if entrypoint_paths(&site_packages, root.name(), root.version())?.is_empty() {
-            let err = NoExecutablesError::Root {
-                package: name.clone(),
-                matching_dependency_packages: matching_packages(name.as_ref(), &site_packages)
-                    .into_iter()
-                    .map(|dist| dist.name().clone())
-                    .collect(),
-            };
-            writeln!(
-                printer.stdout(),
-                "No executables are provided by package `{}`; removing tool",
-                name.cyan()
-            )?;
-            installed_tools.remove_environment(name)?;
-
-            return Err(err.into());
-        }
-    }
-
-    let mut installed_entrypoints: Vec<ToolEntrypoint> = Vec::new();
-    let ordered_packages = entrypoints
-        // Install dependencies first
-        .iter()
-        .filter(|pkg| *pkg != name)
-        .collect::<BTreeSet<_>>()
-        // Then install the root package last
-        .into_iter()
-        .chain(std::iter::once(name));
-
-    for package in ordered_packages {
-        if package == name {
-            debug!("Installing entrypoints for tool `{package}`");
-        } else {
-            debug!("Installing entrypoints for `{package}` as part of tool `{name}`");
-        }
-
-        let installed = site_packages.get_packages(package);
-        let Some(dist) = installed.first() else {
-            if package != name {
-                bail!("Expected package `{package}` to be installed");
-            }
-
-            writeln!(
-                printer.stdout(),
-                "No executables are provided by package `{}`; removing tool",
-                package.cyan()
-            )?;
-            remove_entrypoint_paths(
-                installed_entrypoints
-                    .iter()
-                    .map(|entrypoint| entrypoint.install_path.as_path()),
-            );
-            installed_tools.remove_environment(name)?;
-
-            return Err(NoExecutablesError::Root {
-                package: package.clone(),
-                matching_dependency_packages: Vec::new(),
-            }
-            .into());
-        };
-        let dist_entrypoints = entrypoint_paths(&site_packages, dist.name(), dist.version())?;
-
-        // Determine the entry points targets. Use a sorted collection for deterministic output.
-        let target_entrypoints = dist_entrypoints
-            .into_iter()
-            .map(|(name, source_path)| {
-                let target_path = executable_directory.join(
-                    source_path
-                        .file_name()
-                        .map(std::borrow::ToOwned::to_owned)
-                        .unwrap_or_else(|| OsString::from(name.clone())),
-                );
-                (name, source_path, target_path)
-            })
-            .collect::<BTreeSet<_>>();
-
-        if target_entrypoints.is_empty() {
-            let err = if package != name {
-                NoExecutablesError::Dependency {
-                    package: package.clone(),
-                }
-            } else {
-                NoExecutablesError::Root {
-                    package: package.clone(),
-                    matching_dependency_packages: matching_packages(
-                        package.as_ref(),
-                        &site_packages,
-                    )
-                    .into_iter()
-                    .map(|dist| dist.name().clone())
-                    .collect(),
-                }
-            };
-
-            if package != name {
-                // Non-root package: display the error with hints and continue.
+    let plan = match FreshToolExportPlan::prepare(environment, name, entrypoints, printer) {
+        Ok(plan) => plan,
+        Err(error) => {
+            if matches!(
+                error.downcast_ref::<NoExecutablesError>(),
+                Some(NoExecutablesError::Root { .. })
+            ) {
                 writeln!(
                     printer.stdout(),
-                    "{}",
-                    ErrorWithHints::new(&err, err.hints())
+                    "No executables are provided by package `{}`; removing tool",
+                    name.cyan()
                 )?;
-                continue;
-            }
-
-            // For the root package, this is a fatal error.
-            writeln!(
-                printer.stdout(),
-                "No executables are provided by package `{}`; removing tool",
-                package.cyan()
-            )?;
-
-            // Clean up the environment we just created.
-            remove_entrypoint_paths(
-                installed_entrypoints
-                    .iter()
-                    .map(|entrypoint| entrypoint.install_path.as_path()),
-            );
-            installed_tools.remove_environment(name)?;
-
-            return Err(err.into());
-        }
-
-        // Error if we're overwriting an existing entrypoint, unless the user passed `--force`.
-        if !force {
-            let mut existing_entrypoints = target_entrypoints
-                .iter()
-                .filter(|(_, _, target_path)| target_path.exists())
-                .peekable();
-            if existing_entrypoints.peek().is_some() {
-                // Clean up the environment we just created
-                remove_entrypoint_paths(
-                    installed_entrypoints
-                        .iter()
-                        .map(|entrypoint| entrypoint.install_path.as_path()),
-                );
                 installed_tools.remove_environment(name)?;
-
-                let existing_entrypoints = existing_entrypoints
-                    // SAFETY: We know the target has a filename because we just constructed it above
-                    .map(|(_, _, target)| target.file_name().unwrap().to_string_lossy())
-                    .collect::<Vec<_>>();
-                let (s, exists) = if existing_entrypoints.len() == 1 {
-                    ("", "exists")
-                } else {
-                    ("s", "exist")
-                };
-                bail!(
-                    "Executable{s} already {exists}: {} (use `--force` to overwrite)",
-                    existing_entrypoints
-                        .iter()
-                        .map(|name| name.bold())
-                        .join(", ")
-                )
             }
+            return Err(error);
         }
-
-        #[cfg(windows)]
-        let itself = std::env::current_exe().ok();
-
-        let mut names = BTreeSet::new();
-        for (name, src, target) in target_entrypoints {
-            debug!("Installing executable: `{name}`");
-
-            #[cfg(unix)]
-            replace_symlink(src, &target).context("Failed to install executable")?;
-
-            #[cfg(windows)]
-            if itself.as_ref().is_some_and(|itself| {
-                std::path::absolute(&target).is_ok_and(|target| *itself == target)
-            }) {
-                self_replace::self_replace(src).context("Failed to install entrypoint")?;
-            } else {
-                fs_err::copy(src, &target).context("Failed to install entrypoint")?;
-            }
-
-            let tool_entry = ToolEntrypoint::new(&name, target, package.to_string());
-            names.insert(tool_entry.name.clone());
-            installed_entrypoints.push(tool_entry);
-        }
-
-        let s = if names.len() == 1 { "" } else { "s" };
-        let from_pkg = if name == package {
-            String::new()
-        } else {
-            format!(" from `{package}`")
-        };
-        writeln!(
-            printer.stderr(),
-            "Installed {} executable{s}{from_pkg}: {}",
-            names.len(),
-            names.iter().map(|name| name.bold()).join(", ")
-        )?;
+    };
+    if let Err(error) = plan.check_conflicts(force) {
+        installed_tools.remove_environment(name)?;
+        return Err(error);
     }
-
-    debug!("Adding receipt for tool `{name}`");
     let tool = Tool::new(
         requirements,
         constraints,
@@ -1184,14 +973,32 @@ pub(super) async fn finalize_tool_install(
         excludes,
         build_constraints,
         python,
-        installed_entrypoints,
+        plan.entrypoints(),
         options.clone(),
     );
-    ToolLock::write(&installed_tools.tool_dir(name), lock)?;
-    installed_tools.add_tool_receipt(name, tool)?;
-
+    let receipt = installed_tools.prepare_tool_receipt(name, tool)?;
+    let lock_contents = lock.map(|lock| lock.lock.to_toml()).transpose()?;
+    let prepared = plan.stage(
+        name,
+        receipt.as_bytes(),
+        lock_contents.as_deref().map(str::as_bytes),
+        force,
+    )?;
+    let directory = prepared.canonical_directory().to_owned();
+    // Discovery, serialization, and staging do not hold shared destination admission. Recheck
+    // the prepared versions after admission, then retain it through publication and rollback.
+    let _entrypoint_locks = ToolEntrypointLocks::for_directories([directory.clone()]).await?;
+    let mut transaction = prepared.begin(installed_tools).with_context(|| {
+        format!(
+            "Failed to publish executables into `{}`",
+            directory.user_display()
+        )
+    })?;
+    transaction.publish(printer)?;
+    ToolLock::write_contents(&installed_tools.tool_dir(name), lock_contents.as_deref())?;
+    installed_tools.publish_new_tool_receipt(name, &receipt)?;
+    transaction.commit()?;
     warn_out_of_path(&executable_directory);
-
     Ok(())
 }
 

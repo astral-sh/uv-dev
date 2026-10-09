@@ -97,6 +97,7 @@ rkyv = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tar-codec = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
@@ -117,7 +118,6 @@ which = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 self-replace = { workspace = true }
-sha2 = { workspace = true }
 uv-windows = { workspace = true }
 
 [build-dependencies]

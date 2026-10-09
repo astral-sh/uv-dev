@@ -39,6 +39,7 @@ fs-err = { workspace = true }
 owo-colors = { workspace = true }
 pathdiff = { workspace = true }
 serde = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
