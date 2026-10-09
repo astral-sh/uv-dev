@@ -1320,6 +1320,7 @@ fn check_no_sync_creates_lock_without_sync() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2026-02-15T00:00:00Z"
 
         [[package]]
@@ -1493,12 +1494,13 @@ fn check_no_sync_updates_stale_lock_without_sync() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -1,26 +1,26 @@
+        @@ -1,27 +1,27 @@
          version = 1
          revision = 5
          requires-python = ">=3.12"
 
          [options]
+         index-strategy = "first-index"
          exclude-newer = "2026-02-15T00:00:00Z"
 
          [[package]]

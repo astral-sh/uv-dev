@@ -12112,6 +12112,7 @@ fn lock_index_absolute_path_from_config() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -12950,6 +12951,9 @@ fn lock_mixed_hashes() -> Result<()> {
         revision = 5
         requires-python = ">=3.13"
 
+        [options]
+        index-strategy = "first-index"
+
         [[package]]
         name = "basic-package"
         version = "0.1.0"
@@ -13025,6 +13029,9 @@ fn lock_mixed_hashes() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.13"
+
+        [options]
+        index-strategy = "first-index"
 
         [[package]]
         name = "basic-package"
@@ -13560,6 +13567,210 @@ fn lock_resolution_mode() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
+    Ok(())
+}
+
+/// Changing the index strategy must invalidate a lock resolved from a lower-priority index.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_strategy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::new("extras/missing-extra.toml");
+    let default = PackseServer::new("simple/single-package.toml");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [[tool.uv.index]]
+        name = "test"
+        url = "{index}"
+        "#,
+            index = first.index_url(),
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--index-strategy").arg("unsafe-best-match"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        index-strategy = "unsafe-best-match"
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/a-2.0.0.tar.gz", hash = "sha256:9610291c2bd57390019f58ca72d0dd4584bb9e7073fa347633ed8bc7267fccfe", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl", hash = "sha256:833374310e0a15880f3be9e6d082f527c9ac70129b2054d733da9b754315361f", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a" }]
+        "#);
+    });
+
+    // `first-index` must not reuse the package selected from the lower-priority index.
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index strategy: `unsafe-best-match` vs. `first-index`
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // Legacy locks can have been created with an unsafe strategy even when the field is absent.
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.replace("index-strategy = \"unsafe-best-match\"\n", ""))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Ignoring existing lockfile because its index strategy is unknown
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Ignoring existing lockfile because its index strategy is unknown
+    Resolved 2 packages in [TIME]
+    Updated a v2.0.0 -> v1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Repeated definitions of the same fetch URL are one competing package index.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_strategy_duplicate_index_definitions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index").arg(server.index_url())
+        .arg("--default-index").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    assert!(!lock.contains("index-strategy"));
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache")
+        .arg("--index").arg(server.index_url())
+        .arg("--default-index").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// Find-links locations are combined before index priority is applied.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_strategy_multiple_find_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = context.temp_dir.child("first");
+    first.create_dir_all()?;
+    let second = context.temp_dir.child("second");
+    second.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"a".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    first.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"a".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    second.child(filename).write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index")
+        .arg("--find-links").arg(first.path())
+        .arg("--find-links").arg(second.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    assert!(!lock.contains("index-strategy"));
+    uv_snapshot!(context.filters(), context.tree().arg("--locked").arg("--offline").arg("--no-cache")
+        .arg("--no-index").arg("--find-links").arg(first.path())
+        .arg("--find-links").arg(second.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── a v2.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }
 
@@ -15529,6 +15740,7 @@ async fn lock_redact_index_sources() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17739,6 +17951,7 @@ fn lock_find_links_higher_priority_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17832,6 +18045,7 @@ fn lock_find_links_lower_priority_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17964,6 +18178,9 @@ fn lock_local_index() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.13"
+
+        [options]
+        index-strategy = "first-index"
 
         [[package]]
         name = "basic-package"
@@ -28146,6 +28363,7 @@ async fn lock_named_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -28213,6 +28431,7 @@ fn lock_default_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -28273,6 +28492,7 @@ fn lock_default_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -28348,6 +28568,7 @@ fn lock_named_index_cli() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [[package]]
@@ -28634,6 +28855,7 @@ fn lock_repeat_named_index_member() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -28721,6 +28943,7 @@ fn lock_unique_named_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -28793,6 +29016,7 @@ fn lock_repeat_named_index_cli() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -28858,6 +29082,7 @@ fn lock_repeat_named_index_cli() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -28959,6 +29184,7 @@ fn lock_named_index_overlap() -> Result<()> {
         ]
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -31914,6 +32140,7 @@ fn lock_multiple_sources_index_disjoint_markers() -> Result<()> {
         ]
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -32040,6 +32267,7 @@ fn lock_multiple_sources_index_mixed() -> Result<()> {
         ]
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -32169,6 +32397,7 @@ fn lock_multiple_sources_index_non_total() -> Result<()> {
         ]
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [[package]]
@@ -41399,6 +41628,7 @@ async fn lock_trailing_slash_index_url_in_pyproject_not_index_argument() -> Resu
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -41490,6 +41720,7 @@ async fn lock_trailing_slash_index_url_in_lockfile_not_pyproject() -> Result<()>
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -41583,6 +41814,7 @@ async fn lock_trailing_slash_index_url_in_pyproject_and_not_lockfile() -> Result
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -41676,6 +41908,7 @@ async fn lock_trailing_slash_index_url_in_lockfile_and_pyproject_toml() -> Resul
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -44706,6 +44939,7 @@ fn lock_supported_environment_abi3_wheel() -> Result<()> {
         ]
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
