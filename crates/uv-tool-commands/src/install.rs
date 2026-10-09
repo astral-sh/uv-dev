@@ -497,7 +497,18 @@ pub async fn install(
     // Resolve the excludes.
     let receipt_excludes = spec.excludes.clone();
 
-    // Convert to tool options.
+    // Persist selected script policies with the same precedence used for this installation.
+    let mut options = options;
+    if !spec.indexes.is_empty() {
+        options.indexes.index = Some(
+            settings
+                .resolver
+                .index_locations
+                .defined_indexes()
+                .cloned()
+                .collect(),
+        );
+    }
     let options = ToolOptions::from(options);
     let lock_manifest = ToolLock::manifest(
         &requirements,
