@@ -1732,6 +1732,77 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
         }
     }
 
+    /// Reconstruct effective requirements from metadata already retained in the lockfile.
+    fn from_retained_metadata(
+        lock: &'lock Lock,
+        package: &'lock Package,
+        source_requirements: &'lock DependencySources<'lock>,
+        modifiers: &DependencyModifiers,
+        activated_extras: BTreeMap<ExtraName, UniversalMarker>,
+        workspace_root: &'lock Path,
+    ) -> Result<Self, LockError> {
+        let normalizer = RequirementNormalizer::new(workspace_root, &lock.requires_python);
+        let requires_dist = package
+            .metadata
+            .requires_dist
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let declarations = normalizer
+            .requirements(Lock::preprocess_requirements(
+                &package.id.name,
+                package.id.version.as_ref(),
+                &requires_dist,
+                DependencyContext::Production,
+                modifiers,
+            ))?
+            .into_iter()
+            .collect();
+        let groups = package
+            .metadata
+            .dependency_groups
+            .iter()
+            .filter(|(_, requirements)| lock.includes_empty_groups() || !requirements.is_empty())
+            .map(|(group, requirements)| {
+                Ok((
+                    group.clone(),
+                    normalizer
+                        .requirements(requirements.iter().cloned())?
+                        .into_iter()
+                        .collect(),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, LockError>>()?;
+        Ok(Self::new(
+            lock,
+            declarations,
+            &package.metadata.provides_extra,
+            &groups,
+            source_requirements,
+            modifiers,
+            None,
+            package.id.version.as_ref(),
+            package,
+            activated_extras,
+            workspace_root,
+        ))
+    }
+
+    /// Check every reachable dependency section against the package's effective declarations.
+    fn uncovered_dependency(
+        &self,
+        activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
+    ) -> Result<Option<Requirement>, LockError> {
+        for context in self.contexts() {
+            if let Some(requirement) =
+                self.uncovered_context_dependency(context, activated_extras)?
+            {
+                return Ok(Some(requirement));
+            }
+        }
+        Ok(None)
+    }
+
     /// Return the declarations belonging to this dependency section.
     fn requirements(&self, context: DependencyContext<'_>) -> Option<&BTreeSet<Requirement>> {
         match context {
@@ -1741,7 +1812,7 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
     }
 
     /// Return the first requirement whose marker is not covered by its locked dependency section.
-    fn uncovered_dependency(
+    fn uncovered_context_dependency(
         &self,
         context: DependencyContext<'_>,
         activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
@@ -4209,16 +4280,12 @@ impl Lock {
         if !missing_metadata {
             // Metadata declarations precede overrides, exclusions, and recursive-extra flattening.
             // Compare effective requirements in the same contexts used to construct dependency edges.
-            for context in expected.contexts() {
-                if let Some(requirement) =
-                    expected.uncovered_dependency(context, activated_extras)?
-                {
-                    return Ok(SatisfiesResult::UncoveredPackageDependency(
-                        &package.id.name,
-                        package.id.version.as_ref(),
-                        Box::new(requirement),
-                    ));
-                }
+            if let Some(requirement) = expected.uncovered_dependency(activated_extras)? {
+                return Ok(SatisfiesResult::UncoveredPackageDependency(
+                    &package.id.name,
+                    package.id.version.as_ref(),
+                    Box::new(requirement),
+                ));
             }
         }
 
@@ -4885,6 +4952,28 @@ impl Lock {
                     "Skipping metadata validation for `{}` because its direct URL cannot be refreshed while offline",
                     package.id
                 );
+                if package.has_metadata() {
+                    let expected = ExpectedPackageDependencies::from_retained_metadata(
+                        self,
+                        package,
+                        &dependency_sources,
+                        &dependency_modifiers,
+                        activated_extras
+                            .get(&package.id)
+                            .cloned()
+                            .unwrap_or_default(),
+                        root,
+                    )?;
+                    if let Some(requirement) =
+                        expected.uncovered_dependency(&mut activated_extras)?
+                    {
+                        return Ok(SatisfiesResult::UncoveredPackageDependency(
+                            &package.id.name,
+                            package.id.version.as_ref(),
+                            Box::new(requirement),
+                        ));
+                    }
+                }
             } else if let Some(version) = package.id.version.as_ref() {
                 // If the distribution is a source tree, attempt to validate it from statically
                 // available `pyproject.toml` metadata before converting it to an installable
@@ -11042,7 +11131,7 @@ source = { registry = "https://example.com/simple" }
         );
         assert!(
             expected
-                .uncovered_dependency(DependencyContext::Production, &mut FxHashMap::default())
+                .uncovered_dependency(&mut FxHashMap::default())
                 .expect("valid source")
                 .is_none()
         );

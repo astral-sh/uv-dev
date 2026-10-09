@@ -1998,6 +1998,44 @@ fn lock_wheel_url() -> Result<()> {
     Ok(())
 }
 
+/// Retained URL metadata still requires complete dependency edges while offline.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_dependency_edges_reject_offline_url_omission() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio @ https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    // A complete lock remains usable without cached URL artifacts.
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    let original = context.read("uv.lock");
+    let missing_edge = original.replace("    { name = \"idna\" },\n", "");
+    assert_ne!(original, missing_edge);
+    context.temp_dir.child("uv.lock").write_str(&missing_edge)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download `anyio @ https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl`
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl
+    ");
+    Ok(())
+}
+
 /// Lock a requirement from a direct URL to a source distribution.
 #[cfg(feature = "test-universal")]
 #[test]
