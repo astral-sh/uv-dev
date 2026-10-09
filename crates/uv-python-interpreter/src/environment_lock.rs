@@ -7,6 +7,8 @@ use uv_cache::Cache;
 use uv_cache_key::cache_digest;
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified};
 
+const MAX_LINK_EXPANSIONS: usize = 256;
+
 /// Failure to establish environment coordination or acquire its advisory locks.
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentLockError {
@@ -252,12 +254,20 @@ fn canonicalize_destination(
     path: &Path,
     keys: &mut BTreeMap<Key, bool>,
 ) -> io::Result<(PathBuf, bool)> {
+    resolve_destination(path, keys, &mut 0)
+}
+
+fn resolve_destination(
+    path: &Path,
+    keys: &mut BTreeMap<Key, bool>,
+    links: &mut usize,
+) -> io::Result<(PathBuf, bool)> {
     match fs_err::canonicalize(path) {
         Ok(path) => Ok((path, true)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let absolute = std::path::absolute(path)?;
             let parent = absolute.parent().ok_or(error)?;
-            let (parent, exists) = canonicalize_destination(parent, keys)?;
+            let (parent, exists) = resolve_destination(parent, keys, links)?;
             let destination = match absolute.components().next_back() {
                 Some(Component::Normal(name)) => parent.join(name),
                 Some(Component::ParentDir) => parent.parent().unwrap_or(&parent).to_path_buf(),
@@ -268,6 +278,36 @@ fn canonicalize_destination(
                     ));
                 }
             };
+            match fs_err::symlink_metadata(&destination) {
+                Ok(metadata) if metadata.is_symlink() => {
+                    // A dangling link already selects a future destination. Reconstruct its
+                    // target, rather than treating the link's name as a missing directory.
+                    *links += 1;
+                    if *links > MAX_LINK_EXPANSIONS {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "too many symbolic links while resolving environment admission",
+                        ));
+                    }
+                    let parent = destination.parent().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "environment link requires a parent",
+                        )
+                    })?;
+                    let (target, _) = resolve_destination(
+                        &parent.join(fs_err::read_link(&destination)?),
+                        keys,
+                        links,
+                    )?;
+                    // Required intermediate directories can still be missing even if the
+                    // target reached after `..` exists. Keep their creation-parent claims.
+                    return Ok((target, false));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
             if exists {
                 // A missing filename has no canonical spelling. The nearest existing parent is
                 // exclusive; shared ancestors keep this claim connected when another creator
@@ -339,7 +379,7 @@ fn insert_traversed_slots(path: &Path, keys: &mut BTreeMap<Key, bool>) -> io::Re
                 // Canonicalization enforces the OS link limit. Also bound traversal if links
                 // keep changing between the individual filesystem observations.
                 links += 1;
-                if links > 256 {
+                if links > MAX_LINK_EXPANSIONS {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "too many symbolic links while collecting environment admission",
@@ -413,6 +453,72 @@ mod tests {
     use uv_cache::Cache;
 
     use super::EnvironmentLock;
+
+    #[test]
+    #[cfg(unix)]
+    fn dangling_relative_link_resolves_links_before_parent_components() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let root = fs_err::canonicalize(root.path())?;
+        fs_err::create_dir(root.join("a"))?;
+        fs_err::create_dir(root.join("b"))?;
+        fs_err::os::unix::fs::symlink("../b", root.join("a/through"))?;
+        fs_err::os::unix::fs::symlink("through/../future", root.join("a/alias"))?;
+
+        let path = root.join("a/alias/env");
+        let (destination, exists) =
+            super::canonicalize_destination(&path, &mut std::collections::BTreeMap::new())?;
+        assert_eq!(destination, root.join("future/env"));
+        assert!(!exists);
+        let claims = super::destination_keys(&[path], true)?;
+        assert!(claims.contains(&super::Claim {
+            key: super::Key::Destination(root.join("future/env")),
+            exclusive: true,
+        }));
+        assert!(claims.contains(&super::Claim {
+            key: super::Key::Destination(root.join("a/through")),
+            exclusive: false,
+        }));
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dangling_link_retains_missing_traversal_before_another_link() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let root = fs_err::canonicalize(root.path())?;
+        fs_err::create_dir(root.join("a"))?;
+        fs_err::create_dir(root.join("b"))?;
+        fs_err::os::unix::fs::symlink("missing/../other", root.join("a/alias"))?;
+        fs_err::os::unix::fs::symlink("../b", root.join("a/other"))?;
+
+        let mut claims = std::collections::BTreeMap::new();
+        let (destination, exists) =
+            super::canonicalize_destination(&root.join("a/alias"), &mut claims)?;
+        assert_eq!(destination, root.join("b"));
+        assert!(!exists);
+        assert_eq!(
+            claims.get(&super::Key::CreationParent(root.join("a"))),
+            Some(&true)
+        );
+        assert!(!root.join("a/missing").exists());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dangling_link_expansion_is_bounded() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("alias");
+        fs_err::os::unix::fs::symlink("missing/../alias", &path)?;
+        assert_eq!(
+            fs_err::canonicalize(&path).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        let error = super::canonicalize_destination(&path, &mut std::collections::BTreeMap::new())
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn absent_case_alias_waits_for_creation_owner() -> Result<()> {

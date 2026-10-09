@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -36,7 +36,13 @@ fn lock_holder() -> Result<()> {
         let cache = Cache::temp()?;
         let path = std::path::PathBuf::from(path);
         let mut guard = EnvironmentLock::acquire(std::slice::from_ref(&path), &cache).await?;
-        if std::env::var_os("UV_TEST_LOCK_REPLACE").is_some() {
+        if let Some(destination) = std::env::var_os("UV_TEST_LOCK_CREATE") {
+            signal("missing")?;
+            release()?;
+            fs_err::create_dir_all(destination)?;
+            guard.finish_creation()?;
+            signal("created")?;
+        } else if std::env::var_os("UV_TEST_LOCK_REPLACE").is_some() {
             fs_err::remove_dir_all(&path)?;
             signal("removed")?;
             release()?;
@@ -86,6 +92,19 @@ struct Holder {
 
 impl Holder {
     fn spawn(path: &Path, settings: &Path, replace: bool) -> Result<Self> {
+        Self::spawn_with_creation(path, settings, replace, None)
+    }
+
+    fn spawn_creating(path: &Path, settings: &Path, destination: &Path) -> Result<Self> {
+        Self::spawn_with_creation(path, settings, false, Some(destination))
+    }
+
+    fn spawn_with_creation(
+        path: &Path,
+        settings: &Path,
+        replace: bool,
+        create: Option<&Path>,
+    ) -> Result<Self> {
         fs_err::create_dir_all(settings)?;
         let mut command = tokio::process::Command::new(std::env::current_exe()?);
         command
@@ -93,6 +112,7 @@ impl Holder {
             .env("__RUST_TEST_INVOKE", HOLDER)
             .env("UV_TEST_LOCK_DESTINATION", path)
             .env_remove("UV_TEST_LOCK_REPLACE")
+            .env_remove("UV_TEST_LOCK_CREATE")
             .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -112,6 +132,9 @@ impl Holder {
         }
         if replace {
             command.env("UV_TEST_LOCK_REPLACE", "1");
+        }
+        if let Some(destination) = create {
+            command.env("UV_TEST_LOCK_CREATE", destination);
         }
         let mut child = command.spawn()?;
         Ok(Self {
@@ -203,6 +226,89 @@ async fn existing_case_replacement_keeps_admission_while_absent() -> Result<()> 
     owner.finish().await?;
     waiter.wait(Event::State("ready")).await?;
     waiter.finish().await
+}
+
+#[tokio::test]
+async fn dangling_link_contender_waits_for_direct_creation_owner() -> Result<()> {
+    let parent = tempfile::tempdir()?;
+    let (direct, indirect) = dangling_link_destinations(parent.path())?;
+    assert_dangling_creation_waits(parent.path(), &direct, &indirect, &direct).await
+}
+
+#[tokio::test]
+async fn direct_contender_waits_for_dangling_link_creation_owner() -> Result<()> {
+    let parent = tempfile::tempdir()?;
+    let (direct, indirect) = dangling_link_destinations(parent.path())?;
+    assert_dangling_creation_waits(parent.path(), &indirect, &direct, &direct).await
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn relative_dangling_chain_waits_for_creation_owner() -> Result<()> {
+    let parent = tempfile::tempdir()?;
+    let root = fs_err::canonicalize(parent.path())?;
+    fs_err::create_dir(root.join("a"))?;
+    fs_err::create_dir(root.join("intermediate"))?;
+    let target = root.join("b/parent");
+    fs_err::create_dir_all(&target)?;
+    fs_err::os::unix::fs::symlink("../b/parent", root.join("intermediate/second"))?;
+    fs_err::os::unix::fs::symlink("../intermediate/second", root.join("a/link"))?;
+    fs_err::remove_dir(&target)?;
+    let direct = target.join("env");
+    let indirect = root.join("a/link/env");
+    assert_dangling_creation_waits(parent.path(), &direct, &indirect, &direct).await
+}
+
+fn dangling_link_destinations(parent: &Path) -> Result<(PathBuf, PathBuf)> {
+    let parent = fs_err::canonicalize(parent)?;
+    let alias_parent = parent.join("a");
+    let target_parent = parent.join("b").join("parent");
+    fs_err::create_dir(&alias_parent)?;
+    fs_err::create_dir_all(&target_parent)?;
+    let link = alias_parent.join("link");
+    // Creating the directory link before removing its target also supports Windows junctions.
+    uv_fs::create_symlink(&target_parent, &link)?;
+    fs_err::remove_dir(&target_parent)?;
+    assert!(fs_err::symlink_metadata(&link)?.is_symlink());
+    assert!(!target_parent.exists());
+    Ok((target_parent.join("env"), link.join("env")))
+}
+
+async fn assert_dangling_creation_waits(
+    parent: &Path,
+    owner_path: &Path,
+    contender_path: &Path,
+    destination: &Path,
+) -> Result<()> {
+    let mut owner = Holder::spawn_creating(owner_path, &parent.join("owner"), destination)?;
+    owner.wait(Event::State("missing")).await?;
+    assert!(!destination.exists());
+    assert!(!contender_path.exists());
+    let mut contender = Holder::spawn(contender_path, &parent.join("before-creation"), false)?;
+    contender.wait(Event::Waiting(destination)).await?;
+
+    owner.advance().await?;
+    owner.wait(Event::State("created")).await?;
+    assert_eq!(
+        fs_err::canonicalize(owner_path)?,
+        fs_err::canonicalize(contender_path)?
+    );
+    // A fresh lookup must still wait after the owner releases its creation-parent claims.
+    let mut after_creation = Holder::spawn(contender_path, &parent.join("after-creation"), false)?;
+    after_creation.wait(Event::Waiting(destination)).await?;
+    owner.finish().await?;
+
+    tokio::try_join!(
+        async {
+            contender.wait(Event::State("ready")).await?;
+            contender.finish().await
+        },
+        async {
+            after_creation.wait(Event::State("ready")).await?;
+            after_creation.finish().await
+        },
+    )?;
+    Ok(())
 }
 
 #[tokio::test]
