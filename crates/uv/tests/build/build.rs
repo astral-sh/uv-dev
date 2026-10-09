@@ -3437,6 +3437,41 @@ fn build_wheel_metadata_filename_local_version() -> Result<()> {
     Ok(())
 }
 
+/// Building a wheel checks identity without resolving its dependency URLs.
+#[test]
+fn build_wheel_metadata_unsupported_resolver_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "alpha-1.0.0-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "alpha-1.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: alpha\nVersion: 1.0.0\nRequires-Dist: dep @ hg+https://example.com/dep\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/alpha-1.0.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
 /// Setuptools can omit the name when a source tree has no project metadata.
 #[test]
 fn build_wheel_metadata_unnamed() -> Result<()> {
@@ -3457,7 +3492,7 @@ fn build_wheel_metadata_unnamed() -> Result<()> {
             with ZipFile(Path(wheel_directory, filename), "w") as wheel:
                 wheel.writestr(
                     "UNKNOWN-0.0.0.dist-info/METADATA",
-                    "Metadata-Version: 2.1\nVersion: 0.0.0\n",
+                    "Metadata-Version: 2.1\nVersion: 0.0.0\nRequires-Dist: dep @ hg+https://example.com/dep\n",
                 )
             return filename
     "#})?;
