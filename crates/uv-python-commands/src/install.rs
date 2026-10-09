@@ -697,6 +697,7 @@ async fn perform_install(
                 &mut changelog,
                 &mut errors,
                 preview,
+                replace_link_to_executable,
             );
         }
 
@@ -977,6 +978,7 @@ fn create_bin_links(
     changelog: &mut Changelog,
     errors: &mut Vec<(InstallErrorKind, PythonInstallationKey, Error)>,
     preview: Preview,
+    replace_link: impl Fn(&Path, PythonExecutable<'_>) -> Result<(), uv_python_managed::Error>,
 ) {
     // TODO(zanieb): We want more feedback on the `is_default_install` behavior before stabilizing
     // it. In particular, it may be confusing because it does not apply when versions are loaded
@@ -1143,16 +1145,14 @@ fn create_bin_links(
                 }
 
                 // Replace the existing link
-                if let Err(err) =
-                    replace_link_to_executable(&target, PythonExecutable::console(&executable))
-                {
+                if let Err(err) = replace_link(&target, PythonExecutable::console(&executable)) {
                     errors.push((
                         InstallErrorKind::Bin,
                         installation.key().clone(),
-                        anyhow::anyhow!(
-                            "Failed to replace link at `{}`: {err}",
+                        Error::new(err).context(format!(
+                            "Failed to replace link at `{}`",
                             target.simplified_display()
-                        ),
+                        )),
                     ));
                     continue;
                 }
@@ -1370,7 +1370,7 @@ mod tests {
     use uv_preview::Preview;
     use uv_python_managed::{
         ManagedPythonInstallation, ManagedPythonInstallations, PythonExecutable,
-        create_link_to_executable, platform_key_from_env,
+        create_link_to_executable, platform_key_from_env, replace_link_to_executable,
     };
 
     use super::{Cache, Changelog, InstallErrorKind, create_bin_links, find_matching_bin_link};
@@ -1415,6 +1415,7 @@ mod tests {
             &mut changelog,
             &mut errors,
             Preview::default(),
+            replace_link_to_executable,
         );
         assert_eq!(fs_err::read(&target)?, b"unmanaged executable");
         assert!(changelog.installed.is_empty());
@@ -1439,6 +1440,7 @@ mod tests {
             &mut changelog,
             &mut errors,
             Preview::default(),
+            replace_link_to_executable,
         );
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(
@@ -1484,6 +1486,7 @@ mod tests {
             &mut changelog,
             &mut errors,
             Preview::default(),
+            replace_link_to_executable,
         );
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(
@@ -1507,42 +1510,59 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
-    fn create_bin_links_preserves_directory_on_replacement_failure() -> Result<()> {
+    fn create_bin_links_preserves_managed_owner_on_replacement_failure() -> Result<()> {
         let temp_dir = Cache::temp()?;
         let root = dunce::canonicalize(temp_dir.root())?;
-        let installation = create_installation(&root, "3.12.8")?;
+        let older = create_installation(&root, "3.12.6")?;
+        let newer = create_installation(&root, "3.12.8")?;
         let bin = root.join("bin");
-        let target = bin.join(installation.key().executable_name_minor());
-        fs_err::create_dir_all(&target)?;
-        let existing = target.join("existing");
-        fs_err::write(&existing, b"existing directory contents")?;
+        let target = bin.join(older.key().executable_name_minor());
+        create_link_to_executable(&target, PythonExecutable::console(&older.executable(false)))?;
         let mut changelog = Changelog::default();
+        changelog.installed.insert(older.key().clone());
+        changelog
+            .installed_executables
+            .insert(older.key().clone(), [target.clone()].into_iter().collect());
         let mut errors = Vec::new();
 
         create_bin_links(
-            &installation,
+            &newer,
             &bin,
+            false,
+            false,
+            false,
             false,
             true,
             false,
-            false,
-            false,
-            false,
-            &[],
-            &[&installation],
+            std::slice::from_ref(&older),
+            &[&newer],
             &mut changelog,
             &mut errors,
             Preview::default(),
+            |_, _| {
+                Err(uv_python_managed::Error::LinkExecutable(
+                    std::io::Error::other("injected replacement failure"),
+                ))
+            },
         );
-        assert!(target.is_dir());
-        assert_eq!(fs_err::read(&existing)?, b"existing directory contents");
-        assert!(changelog.installed.is_empty());
-        assert!(changelog.installed_executables.is_empty());
-        let [(InstallErrorKind::Bin, key, _)] = errors.as_slice() else {
+        assert_eq!(
+            find_matching_bin_link([&older, &newer].into_iter(), &target)
+                .map(ManagedPythonInstallation::key),
+            Some(older.key()),
+        );
+        assert!(!changelog.installed.contains(newer.key()));
+        assert_eq!(
+            changelog.installed_executables.get(older.key()),
+            Some(&[target].into_iter().collect()),
+        );
+        let [(InstallErrorKind::Bin, key, error)] = errors.as_slice() else {
             anyhow::bail!("unexpected errors: {errors:?}");
         };
-        assert_eq!(key, installation.key());
+        assert_eq!(key, newer.key());
+        assert_eq!(
+            error.root_cause().to_string(),
+            "injected replacement failure"
+        );
         Ok(())
     }
 }
