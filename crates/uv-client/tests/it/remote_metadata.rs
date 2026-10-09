@@ -1,18 +1,21 @@
 use std::path::Path;
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_zip::base::read::mem::ZipFileReader;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::error::ZipError;
 use async_zip::{Compression, ZipEntryBuilder};
+use futures::poll;
 use reqwest::header::{
     ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, HeaderName, LOCATION, RANGE,
 };
+use tokio::sync::Semaphore;
 use wiremock::matchers::{basic_auth, header_exists, header_regex, method, path};
 use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
-use uv_cache::Cache;
+use uv_cache::{Cache, CacheBucket, WheelCache};
 use uv_client::{BaseClientBuilder, MetadataRangeRequest, RegistryClientBuilder};
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{BuiltDist, DirectUrlBuiltDist, IndexCapabilities};
@@ -49,7 +52,7 @@ async fn remote_metadata_with_and_without_cache() -> Result<()> {
         let resolver = GitResolver::default();
         let capabilities = IndexCapabilities::default();
         let metadata = client
-            .wheel_metadata(&dist, &resolver, &capabilities, None)
+            .wheel_metadata(&dist, &resolver, &capabilities, &Semaphore::new(1), None)
             .await?;
         assert_eq!(metadata.version.to_string(), "1.0.0");
     }
@@ -87,7 +90,7 @@ async fn remote_metadata_requires_range_requests() -> Result<()> {
     let resolver = GitResolver::default();
     let capabilities = IndexCapabilities::default();
     let error = client
-        .wheel_metadata(&dist, &resolver, &capabilities, None)
+        .wheel_metadata(&dist, &resolver, &capabilities, &Semaphore::new(1), None)
         .await
         .expect_err("range requests should be required");
 
@@ -616,6 +619,7 @@ async fn assert_wheel_metadata_readable(source_server: &MockServer) -> Result<()
             &dist,
             &GitResolver::default(),
             &IndexCapabilities::default(),
+            &Semaphore::new(1),
             None,
         )
         .await?;
@@ -673,4 +677,46 @@ fn parse_byte_range(range: &str, length: usize) -> Option<(usize, usize)> {
         end.parse::<usize>().ok()?.min(length - 1)
     };
     (start <= end).then_some((start, end))
+}
+
+/// A metadata waiter must leave a download slot available to the wheel-lock owner.
+#[tokio::test]
+async fn remote_metadata_waits_for_wheel_lock_before_download_permit() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ok-1.0.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(wheel()?, "application/octet-stream"))
+        .mount(&server)
+        .await;
+    let cache = Cache::temp()?.init().await?;
+    let url = VerbatimUrl::from_str(&format!("{}/ok-1.0.0-py3-none-any.whl", server.uri()))?;
+    let filename = WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?;
+    let lock_entry = cache.entry(
+        CacheBucket::Wheels,
+        WheelCache::Url(&url).wheel_dir(filename.name.as_ref()),
+        format!("{}.lock", filename.cache_key()),
+    );
+    let wheel_lock = lock_entry.lock().await?;
+    let dist = BuiltDist::DirectUrl(DirectUrlBuiltDist {
+        filename,
+        location: Box::new(url.to_url()),
+        url,
+        size: None,
+    });
+    let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
+    let resolver = GitResolver::default();
+    let capabilities = IndexCapabilities::default();
+    let download_concurrency = Semaphore::new(1);
+    let metadata =
+        client.wheel_metadata(&dist, &resolver, &capabilities, &download_concurrency, None);
+    tokio::pin!(metadata);
+    assert!(poll!(&mut metadata).is_pending());
+    let download_permit = download_concurrency
+        .try_acquire()
+        .context("the wheel-lock owner must be able to acquire a download permit")?;
+    drop(download_permit);
+    drop(wheel_lock);
+    let metadata = tokio::time::timeout(Duration::from_secs(10), metadata).await??;
+    assert_eq!(metadata.version.to_string(), "1.0.0");
+    Ok(())
 }

@@ -652,12 +652,13 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         let result = self
             .client
-            .managed(|client| {
+            .manual(|client, download_concurrency| {
                 client
                     .wheel_metadata(
                         dist,
                         self.build_context.git(),
                         self.build_context.capabilities(),
+                        download_concurrency,
                         self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
                     )
                     .boxed_local()

@@ -935,6 +935,7 @@ impl RegistryClient {
         built_dist: &BuiltDist,
         git: &GitResolver,
         capabilities: &IndexCapabilities,
+        download_concurrency: &Semaphore,
         reporter: Option<Arc<dyn Reporter>>,
     ) -> Result<ResolutionMetadata, Error> {
         let metadata = match &built_dist {
@@ -961,12 +962,18 @@ impl RegistryClient {
 
                 match location {
                     WheelLocation::Path(path) => {
+                        let _permit = download_concurrency.acquire().await;
                         Self::wheel_metadata_local(&path, &path, &wheel.filename, built_dist)
                             .await?
                     }
                     WheelLocation::Url(url) => {
-                        self.wheel_metadata_registry(wheel, &url, capabilities)
-                            .await?
+                        self.wheel_metadata_registry(
+                            wheel,
+                            &url,
+                            capabilities,
+                            download_concurrency,
+                        )
+                        .await?
                     }
                 }
             }
@@ -977,10 +984,12 @@ impl RegistryClient {
                     None,
                     WheelCache::Url(&wheel.url),
                     capabilities,
+                    download_concurrency,
                 )
                 .await?
             }
             BuiltDist::Path(wheel) => {
+                let _permit = download_concurrency.acquire().await;
                 Self::wheel_metadata_local(
                     &wheel.install_path,
                     &wheel.install_path,
@@ -990,6 +999,7 @@ impl RegistryClient {
                 .await?
             }
             BuiltDist::GitPath(wheel) => {
+                let _permit = download_concurrency.acquire().await;
                 // Fetch the Git repository.
                 let fetch = git
                     .fetch(
@@ -1080,6 +1090,7 @@ impl RegistryClient {
         wheel: &RegistryBuiltWheel,
         url: &DisplaySafeUrl,
         capabilities: &IndexCapabilities,
+        download_concurrency: &Semaphore,
     ) -> Result<ResolutionMetadata, Error> {
         let RegistryBuiltWheel {
             filename,
@@ -1102,6 +1113,8 @@ impl RegistryClient {
 
             // Acquire an advisory lock, to guard against concurrent writes.
             let _lock = Self::lock_wheel_metadata(&cache_entry, filename).await?;
+            // Wheel downloads take the same file lock before requesting a download slot.
+            let _permit = download_concurrency.acquire().await;
 
             let cache_control = match self.connectivity {
                 Connectivity::Online
@@ -1167,6 +1180,7 @@ impl RegistryClient {
                 Some(index),
                 WheelCache::Index(index),
                 capabilities,
+                download_concurrency,
             )
             .await
         }
@@ -1180,6 +1194,7 @@ impl RegistryClient {
         index: Option<&'data IndexUrl>,
         cache_shard: WheelCache<'data>,
         capabilities: &'data IndexCapabilities,
+        download_concurrency: &Semaphore,
     ) -> Result<ResolutionMetadata, Error> {
         let cache_entry = self.cache.entry(
             CacheBucket::Wheels,
@@ -1189,6 +1204,8 @@ impl RegistryClient {
 
         // Acquire an advisory lock, to guard against concurrent writes.
         let _lock = Self::lock_wheel_metadata(&cache_entry, filename).await?;
+        // Wheel downloads take the same file lock before requesting a download slot.
+        let _permit = download_concurrency.acquire().await;
 
         let cache_control = match self.connectivity {
             Connectivity::Online
