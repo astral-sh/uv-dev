@@ -1361,6 +1361,158 @@ fn git_lfs_cache_recovery(partial_fetches: bool) -> Result<()> {
     Ok(())
 }
 
+/// Revision-local LFS endpoints apply to downloads, while cached-object copies stay local.
+#[test]
+#[cfg(all(feature = "test-git-lfs", feature = "test-pypi"))]
+fn add_git_lfs_custom_endpoint() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_git_lfs_config();
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    let endpoint = context.temp_dir.child("lfs-endpoint");
+    Command::new("git")
+        .args(["init", "--template="])
+        .arg(endpoint.path())
+        .output()?
+        .assert()
+        .success();
+    let endpoint_url = Url::from_directory_path(endpoint.path())
+        .map_err(|()| anyhow!("invalid LFS endpoint path"))?;
+    let git = |arguments: &[&str]| -> Result<String> {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(repository.path())
+            .output()?
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        Ok(String::from_utf8(output)?.trim().to_owned())
+    };
+    git(&["init", "--template="])?;
+    git(&["config", "user.name", "Alice"])?;
+    git(&["config", "user.email", "alice@example.com"])?;
+    git(&["config", "commit.gpgsign", "false"])?;
+    git(&["config", "uploadpack.allowFilter", "true"])?;
+    git(&["lfs", "install", "--local", "--skip-repo"])?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+    "#})?;
+    repository
+        .child(".gitattributes")
+        .write_str("module.py filter=lfs diff=lfs merge=lfs -text\n")?;
+    repository.child(".lfsconfig").write_str(&formatdoc! {r#"
+        [lfs]
+        url = "{endpoint_url}"
+    "#})?;
+    repository.child("module.py").write_str("VALUE = True\n")?;
+    git(&["add", "."])?;
+    git(&["commit", "-m", "Initial version"])?;
+    let revision = git(&["rev-parse", "HEAD"])?;
+    let short_revision = git(&["rev-parse", "--short", "HEAD"])?;
+    fs_err::rename(repository.child(".git/lfs"), endpoint.child(".git/lfs"))?;
+    let url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository path"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = {{ git = "{url}", rev = "{revision}", lfs = true }}
+    "#})?;
+    let lock = || {
+        let mut command = context.lock();
+        command.args(["--offline", "--preview-features", "git-partial-fetches"]);
+        command
+    };
+    let clear_source_metadata = || -> Result<()> {
+        fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+        for entry in fs_err::read_dir(context.cache_dir.path())? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().starts_with("sdists-v") {
+                fs_err::remove_dir_all(entry.path())?;
+            }
+        }
+        Ok(())
+    };
+    let repo_url = RepositoryUrl::parse(url.as_str())?;
+    let git_cache = context.cache_dir.child("git-v1");
+    let db_root = git_cache.child("db").child(cache_digest(&repo_url));
+    let checkout_root = git_cache
+        .child("checkouts")
+        .child(cache_digest(&repo_url.with_lfs(Some(true))))
+        .child(short_revision);
+
+    // The Git source has no LFS objects; only the selected revision identifies their endpoint.
+    lock().assert().success();
+    assert!(db_root.child(".git/lfs/objects").exists());
+    assert_eq!(
+        fs_err::read_to_string(checkout_root.child("module.py"))?,
+        "VALUE = True\n"
+    );
+
+    // A stale checkout still has .lfsconfig, but recovery must copy from the database locally.
+    clear_source_metadata()?;
+    fs_err::remove_dir_all(checkout_root.child(".git/lfs"))?;
+    let unavailable_endpoint = context.temp_dir.child("unavailable-lfs-endpoint");
+    fs_err::rename(endpoint.path(), unavailable_endpoint.path())?;
+    lock().assert().success();
+    Command::new("git")
+        .args(["lfs", "fsck", "--objects", &revision])
+        .current_dir(checkout_root.path())
+        .output()?
+        .assert()
+        .success();
+
+    #[cfg(unix)]
+    {
+        // Older Git LFS cannot validate cached objects, so it must attempt a fetch.
+        fs_err::rename(unavailable_endpoint.path(), endpoint.path())?;
+        clear_source_metadata()?;
+        fs_err::remove_dir_all(db_root.child(".git/lfs/objects"))?;
+        fs_err::remove_dir_all(checkout_root.child(".git/lfs/objects"))?;
+        let shim_dir = context.temp_dir.child("old-lfs");
+        shim_dir.create_dir_all()?;
+        let shim = shim_dir.child("git-lfs");
+        shim.write_str(indoc! {r#"
+            #!/bin/sh
+            if [ "$1" = fsck ] && [ "$2" = --objects ]; then
+                echo 'unknown flag: --objects' >&2
+                exit 129
+            fi
+            PATH="$GIT_LFS_TEST_ORIGINAL_PATH" exec git-lfs "$@"
+        "#})?;
+        fs_err::set_permissions(shim.path(), Permissions::from_mode(0o755))?;
+        let original_path =
+            std::env::var_os(EnvVars::PATH).ok_or_else(|| anyhow!("PATH is not set"))?;
+        let path = std::env::join_paths(
+            std::iter::once(shim_dir.path().to_path_buf())
+                .chain(std::env::split_paths(&original_path)),
+        )?;
+        lock()
+            .env(EnvVars::PATH, path)
+            .env("GIT_LFS_TEST_ORIGINAL_PATH", original_path)
+            .assert()
+            .success();
+        Command::new("git")
+            .args(["lfs", "fsck", "--objects", &revision])
+            .current_dir(db_root.path())
+            .output()?
+            .assert()
+            .success();
+    }
+    Ok(())
+}
+
 #[test]
 #[cfg(all(feature = "test-git-lfs", feature = "test-pypi"))]
 fn add_git_cache_recovery_lfs() -> Result<()> {
