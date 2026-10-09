@@ -741,6 +741,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 revision.into_hashes(),
                 cache_info,
                 build_info,
+                _lock,
             )
             .with_authority_digest(authorization.digest()));
         }
@@ -804,6 +805,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         let _ = write_authority_receipt(client.unmanaged, &metadata_entry).await?;
 
         Ok(BuiltWheelMetadata {
+            _source_lock: _lock,
             authority_digest,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(wheel_filename.stem()).into_boxed_path(),
@@ -1201,6 +1203,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 revision.into_hashes(),
                 cache_info,
                 build_info,
+                _lock,
             ));
         }
 
@@ -1240,6 +1243,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            _source_lock: _lock,
             authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
@@ -1530,6 +1534,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 revision.into_hashes(),
                 cache_info,
                 build_info,
+                _lock,
             ));
         }
 
@@ -1562,6 +1567,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            _source_lock: _lock,
             authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
@@ -1976,6 +1982,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
         );
 
+        // Hold the source shard stable while reading or building its wheel.
+        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
+
         // Fetch the revision for the source distribution.
         let revision = self
             .git_archive_revision(source, resource, &fetch, &cache_shard, hashes)
@@ -2017,6 +2026,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 revision.into_hashes(),
                 CacheInfo::default(),
                 build_info,
+                _lock,
             ));
         }
 
@@ -2049,6 +2059,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            _source_lock: _lock,
             authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
@@ -2086,6 +2097,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             CacheBucket::SourceDistributions,
             WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
         );
+
+        // Hold the source shard stable while reading or building its wheel.
+        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
         let revision = self
@@ -2286,7 +2300,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .filter(|file| file.matches(source.name(), source.version()))
         {
             return Ok(BuiltWheelMetadata::from_file(
-                file, hashes, cache_info, build_info,
+                file, hashes, cache_info, build_info, _lock,
             ));
         }
 
@@ -2318,6 +2332,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            _source_lock: _lock,
             authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),

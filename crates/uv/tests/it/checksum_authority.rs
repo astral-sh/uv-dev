@@ -20,7 +20,6 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_cache::{Cache, CacheBucket, WheelCache};
 use uv_checksum_authority::{ArtifactId, ChecksumRecord, Sha256Digest};
 use uv_checksum_authority_service::{AuthorityService, Catalog};
-use uv_client::DataWithCachePolicy;
 use uv_distribution::HttpArchivePointer;
 use uv_distribution_filename::WheelFilename;
 use uv_normalize::PackageName;
@@ -252,7 +251,7 @@ async fn checksum_authority_preserves_wheel_filename() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `checksum-example==1.0.0`
-      cause: Checksum authority has no trusted record for `Checksum_Example-1.0.0-py3-none-any.whl`
+      cause: Checksum authority has no trusted record for `Checksum_Example-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
     ");
     context.assert_command("import checksum_example").failure();
 
@@ -352,7 +351,7 @@ async fn checksum_authority_rejects_replacement_and_old_cache() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `checksum-example==1.0.0`
-      cause: Checksum authority mismatch for `checksum_example-1.0.0-py3-none-any.whl`: expected sha256:[HASH], received sha256:[HASH]
+      cause: Checksum authority mismatch for `checksum_example-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`: expected sha256:[HASH], received sha256:[HASH]
     ");
     context.assert_command("import checksum_example").failure();
     Ok(())
@@ -373,7 +372,7 @@ async fn checksum_authority_unknown_and_wrong_key() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `checksum-example==1.0.0`
-      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
+      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
     ");
     let authority = Authority::start(vec![record(&index_url, WHEEL, &bytes)?]).await?;
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
@@ -430,7 +429,7 @@ async fn checksum_authority_rejects_sdist_before_backend() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `checksum-example==1.0.0`
-      cause: Checksum authority mismatch for `checksum_example-1.0.0.tar.gz`: expected sha256:[HASH], received sha256:[HASH]
+      cause: Checksum authority mismatch for `checksum_example-1.0.0.tar.gz` from `http://[LOCALHOST]/simple`: expected sha256:[HASH], received sha256:[HASH]
     ");
     assert!(!marker.path().exists());
 
@@ -625,7 +624,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `checksum-example==1.0.0`
       cause: Failed to download `checksum-example==1.0.0`
-      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
+      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
     ");
     let authority = Authority::start(vec![
         source_record,
@@ -658,7 +657,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `checksum-source==1.0.0`
-      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
+      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
     ");
     context.assert_command("import checksum_source").failure();
     Ok(())
@@ -800,7 +799,7 @@ async fn checksum_authority_reuses_existing_wheel() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `checksum-example==1.0.0`
-      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
+      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
     ");
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
         .arg("--index-url")
@@ -844,14 +843,16 @@ async fn checksum_authority_repairs_legacy_wheel_cache() -> Result<()> {
         format!("{}.http", filename.cache_key()),
     );
     let original = fs_err::read(entry.path())?;
-    let data = DataWithCachePolicy::from_reader(Cursor::new(&original))?;
+    let mut reader = Cursor::new(&original);
+    let _: serde::de::IgnoredAny = rmp_serde::from_read(&mut reader)?;
+    let archive_length = usize::try_from(reader.position())?;
     let mut archive = HttpArchivePointer::read_from(entry.path())?
         .expect("cached wheel pointer")
         .into_archive();
     archive.hashes = HashDigests::empty();
     archive.size = None;
     let mut legacy = rmp_serde::to_vec(&archive)?;
-    legacy.extend_from_slice(&original[data.data.len()..]);
+    legacy.extend_from_slice(&original[archive_length..]);
     fs_err::write(entry.path(), legacy)?;
 
     Mock::given(method("GET"))
@@ -1047,7 +1048,7 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `checksum-example==1.0.0`
-      cause: Checksum authority has no trusted record for `checksum_example-1.0.0.tar.gz`
+      cause: Checksum authority has no trusted record for `checksum_example-1.0.0.tar.gz` from `http://[LOCALHOST]/simple`
     ");
     assert_eq!(fs_err::read_to_string(marker.path())?, repaired_builds);
     context.assert_command("import checksum_example").failure();
@@ -1127,5 +1128,127 @@ async fn checksum_authority_prunes_authority_only_source_revision() -> Result<()
     Installed 1 package in [TIME]
      + checksum-example==1.0.0
     "#);
+    Ok(())
+}
+
+/// A verified source wheel cannot be replaced while installation waits to extract it.
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_retains_source_lock_through_extraction() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "checksum_example-1.0.0.tar.gz";
+    let backend = formatdoc! {r"
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {WHEEL:?}).write_bytes(bytes.fromhex({wheel:?}))
+            return {WHEEL:?}
+        ", wheel = hex::encode(wheel()?),
+    };
+    let mut bytes = Vec::new();
+    write_tar_gz(
+        &mut bytes,
+        &[
+            (
+                "checksum_example-1.0.0/pyproject.toml",
+                "[build-system]\nrequires = []\nbuild-backend = 'backend'\nbackend-path = ['.']\n[project]\nname = 'checksum-example'\nversion = '1.0.0'\n",
+            ),
+            ("checksum_example-1.0.0/backend.py", backend.as_str()),
+        ],
+    )?;
+    index(&server, filename, &bytes, false).await;
+    let index_url = format!("{}/simple", server.uri());
+    let authority = Authority::start(vec![record(&index_url, filename, &bytes)?]).await?;
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+        .arg("--index-url").arg(&index_url)
+        .arg("--config-settings").arg("mode=custom")
+        .arg("checksum-example")), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + checksum-example==1.0.0
+    ");
+    context
+        .pip_uninstall()
+        .arg("checksum-example")
+        .assert()
+        .success();
+
+    let built_wheel = WalkDir::new(context.cache_dir.path())
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|entry| entry.file_name() == WHEEL)
+        .ok_or_else(|| anyhow!("missing cached source wheel"))?;
+    let filename = WheelFilename::from_str(WHEEL)?;
+    let wheel_entry = uv_cache::CacheEntry::from_path(built_wheel.path());
+    let digest = Sha256Digest::from_bytes(Sha256::digest(fs_err::read(built_wheel.path())?).into());
+    uv_fs::remove_symlink(
+        wheel_entry
+            .with_file(format!("{}-{digest}", filename.cache_key()))
+            .path(),
+    )?;
+    #[cfg(windows)]
+    let lock_name = format!("{}.lock", filename.stem());
+    #[cfg(not(windows))]
+    let lock_name = format!("{}.lock", filename.cache_key());
+    let wheel_lock = wheel_entry.with_file(&lock_name).lock().await?;
+    let source_lock_path = built_wheel
+        .path()
+        .ancestors()
+        .map(|path| path.join(".lock"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| anyhow!("missing source shard lock"))?;
+    let source_lock = fs_err::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(source_lock_path)?;
+
+    let stderr_path = context.temp_dir.child("install.log");
+    let mut command = context.pip_install();
+    authority
+        .configure(&mut command)
+        .arg("--index-url")
+        .arg(&index_url)
+        .arg("--config-settings")
+        .arg("mode=custom")
+        .arg("checksum-example")
+        .env(EnvVars::RUST_LOG, "uv_fs::locked_file=info")
+        .stderr(std::process::Stdio::from(
+            fs_err::File::create(stderr_path.path())?.into_file(),
+        ));
+    let mut child = tokio::process::Command::from(command)
+        .kill_on_drop(true)
+        .spawn()?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let stderr = fs_err::read_to_string(&stderr_path)?;
+            if stderr.contains("Waiting to acquire exclusive lock") && stderr.contains(&lock_name) {
+                return Ok::<_, anyhow::Error>(());
+            }
+            if let Some(status) = child.try_wait()? {
+                return Err(anyhow!(
+                    "install exited before extraction: {status}: {stderr}"
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    let retained = matches!(
+        source_lock.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    );
+    drop(source_lock);
+    drop(wheel_lock);
+    let output = child.wait_with_output().await?;
+    output.assert().success();
+    assert!(
+        retained,
+        "the source shard must stay locked while extraction is pending"
+    );
+    context.assert_command("import checksum_example").success();
     Ok(())
 }
