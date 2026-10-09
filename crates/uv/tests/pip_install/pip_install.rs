@@ -9094,32 +9094,22 @@ fn require_hashes_missing_local_dependency() -> Result<()> {
     let leaf_path = links.child(leaf_filename);
     fs::write(leaf_path.path(), &leaf_wheel)?;
     let requirements = context.temp_dir.child("requirements.txt");
-    let command = || {
-        let mut command = context.pip_install();
-        command
-            .arg("--offline")
-            .arg("--no-index")
-            .arg("--no-build")
-            .arg("--no-cache")
-            .arg("--dry-run")
-            .arg("--require-hashes")
-            .arg("--find-links")
-            .arg(links.path())
-            .arg("-r")
-            .arg(requirements.path());
-        command
-    };
-
     // A directly requested package is still rejected before resolution.
     requirements.write_str("hash-parent==1.0.0")?;
-    uv_snapshot!(context.filters(), command(), @"
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--offline", "--no-index", "--no-build", "--no-cache", "--dry-run", "--require-hashes"])
+        .arg("--find-links").arg(links.path())
+        .arg("-r").arg(requirements.path()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: hash-parent==1.0.0
     ");
 
     requirements.write_str(&format!("hash-parent==1.0.0 --hash=sha256:{parent_hash}"))?;
-    let missing_hash = uv_snapshot!(context.filters(), command(), @"
+    let missing_hash = uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--offline", "--no-index", "--no-build", "--no-cache", "--dry-run", "--require-hashes"])
+        .arg("--find-links").arg(links.path())
+        .arg("-r").arg(requirements.path()), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `hash-leaf`
@@ -9130,7 +9120,21 @@ fn require_hashes_missing_local_dependency() -> Result<()> {
     // The dependency chain comes from the resolver state, not the rejected artifact.
     let malformed_wheel = b"not a wheel";
     fs::write(leaf_path.path(), malformed_wheel)?;
-    let unread_wheel = command().output()?;
+    let unread_wheel = context
+        .pip_install()
+        .args([
+            "--offline",
+            "--no-index",
+            "--no-build",
+            "--no-cache",
+            "--dry-run",
+            "--require-hashes",
+        ])
+        .arg("--find-links")
+        .arg(links.path())
+        .arg("-r")
+        .arg(requirements.path())
+        .output()?;
     assert_eq!(unread_wheel.status.code(), Some(1));
     assert_eq!(unread_wheel.stderr, missing_hash.stderr);
 
@@ -9139,7 +9143,10 @@ fn require_hashes_missing_local_dependency() -> Result<()> {
     requirements.write_str(&format!(
         "hash-parent==1.0.0 --hash=sha256:{parent_hash}\nhash-leaf==2.0.0 --hash=sha256:{malformed_hash}"
     ))?;
-    uv_snapshot!(context.filters(), command(), @"
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--offline", "--no-index", "--no-build", "--no-cache", "--dry-run", "--require-hashes"])
+        .arg("--find-links").arg(links.path())
+        .arg("-r").arg(requirements.path()), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
@@ -9154,7 +9161,10 @@ fn require_hashes_missing_local_dependency() -> Result<()> {
     requirements.write_str(&format!(
         "hash-parent==1.0.0 --hash=sha256:{parent_hash}\nhash-leaf==2.0.0 --hash=sha256:{leaf_hash}"
     ))?;
-    uv_snapshot!(context.filters(), command(), @"
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--offline", "--no-index", "--no-build", "--no-cache", "--dry-run", "--require-hashes"])
+        .arg("--find-links").arg(links.path())
+        .arg("-r").arg(requirements.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
