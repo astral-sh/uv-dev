@@ -10329,6 +10329,7 @@ fn add_index() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--index").arg("https://pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     Resolved 5 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
@@ -10381,7 +10382,7 @@ fn add_index() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
-        indexes = [{ url = "https://pypi.org/simple" }, { url = "https://test.pypi.org/simple" }]
+        indexes = [{ url = "https://test.pypi.org/simple" }, { url = "https://pypi.org/simple" }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -10517,7 +10518,7 @@ fn add_index() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
-        indexes = [{ url = "https://pypi.org/simple" }, { url = "https://test.pypi.org/simple" }]
+        indexes = [{ url = "https://test.pypi.org/simple" }, { url = "https://pypi.org/simple" }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
