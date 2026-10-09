@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::fmt::Write;
-#[cfg(windows)]
-use std::{io, path::Path};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, bail};
 use itertools::Itertools;
@@ -207,6 +209,12 @@ async fn uninstall_tool(
     receipt: &Tool,
     tools: &InstalledTools,
 ) -> Result<Vec<ToolEntrypoint>> {
+    let destinations = receipt
+        .entrypoints()
+        .iter()
+        .map(|entrypoint| executable_destination(&entrypoint.install_path))
+        .collect::<io::Result<Vec<_>>>()?;
+    let removed_destinations = destinations.iter().collect::<HashSet<_>>();
     let mut retained_entrypoints = HashSet::new();
     for (tool_name, other_receipt) in tools.tools()? {
         if tool_name == *name {
@@ -219,6 +227,10 @@ async fn uninstall_tool(
         #[cfg(windows)]
         let tool_directory = tools.tool_dir(&tool_name);
         for entrypoint in other_receipt.entrypoints() {
+            let destination = executable_destination(&entrypoint.install_path)?;
+            if !removed_destinations.contains(&destination) {
+                continue;
+            }
             #[cfg(unix)]
             if !fs_err::canonicalize(&entrypoint.install_path)
                 .is_ok_and(|target| target.starts_with(&tool_directory))
@@ -231,7 +243,7 @@ async fn uninstall_tool(
                 continue;
             }
 
-            retained_entrypoints.insert(entrypoint.install_path.clone());
+            retained_entrypoints.insert(destination);
         }
     }
 
@@ -244,8 +256,8 @@ async fn uninstall_tool(
     // Remove the tool's entrypoints.
     let entrypoints = receipt.entrypoints();
     let mut removed_entrypoints = Vec::with_capacity(entrypoints.len());
-    for entrypoint in entrypoints {
-        if retained_entrypoints.contains(&entrypoint.install_path) {
+    for (entrypoint, destination) in entrypoints.iter().zip(destinations) {
+        if retained_entrypoints.contains(&destination) {
             debug!(
                 "Retaining executable claimed by another tool: {}",
                 entrypoint.install_path.user_display()
@@ -282,6 +294,18 @@ async fn uninstall_tool(
     }
 
     Ok(removed_entrypoints)
+}
+
+/// Identify the destination directory without following the executable's own symlink.
+fn executable_destination(path: &Path) -> io::Result<PathBuf> {
+    let (Some(parent), Some(filename)) = (path.parent(), path.file_name()) else {
+        return Ok(path.to_path_buf());
+    };
+    match fs_err::canonicalize(parent) {
+        Ok(parent) => Ok(parent.join(filename)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Windows entrypoints are copied from the owning environment's Scripts directory.

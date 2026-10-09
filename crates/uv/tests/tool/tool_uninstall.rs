@@ -1,5 +1,7 @@
 #[cfg(unix)]
-use std::{os::unix::fs::symlink, process::Command};
+use fs_err::os::unix::fs::symlink;
+#[cfg(unix)]
+use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -111,41 +113,57 @@ fn tool_uninstall_preserves_replaced_executable() {
     ----- stderr -----
     Uninstalled 2 executables: basic-app, simple_launcher
     ");
+}
 
-    {
-        context
-            .tool_install()
-            .arg(&launcher)
-            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-            .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
-            .assert()
-            .success();
+/// A stale original receipt must not retain a launcher owned by the replacement being removed.
+#[test]
+fn tool_uninstall_removes_replacement_before_stale_owner() {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let launcher_requirement = format!(
+        "simple-launcher @ {}",
+        Url::from_file_path(&launcher).expect("Failed to convert launcher path to file URL")
+    );
 
-        context
-            .tool_install()
-            .arg(&app)
-            .arg("--with-executables-from")
-            .arg(&launcher_requirement)
-            .arg("--force")
-            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-            .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
-            .assert()
-            .success();
+    context
+        .tool_install()
+        .arg(&launcher)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
 
-        uv_snapshot!(context.filters(), context.tool_uninstall().arg("basic-app")
-            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-            .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
-        exit_code: 0 (success)
-        ----- stderr -----
-        Uninstalled 2 executables: basic-app, simple_launcher
-        ");
+    context
+        .tool_install()
+        .arg(&app)
+        .arg("--with-executables-from")
+        .arg(&launcher_requirement)
+        .arg("--force")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
 
-        assert!(
-            !bin_dir
-                .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
-                .exists()
-        );
-    }
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("basic-app")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 2 executables: basic-app, simple_launcher
+    ");
+
+    assert!(
+        !bin_dir
+            .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+            .exists()
+    );
 }
 
 #[test]
@@ -262,6 +280,58 @@ fn tool_uninstall_preserves_replacement_with_symlinked_tool_directory() -> Resul
 
     uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher")
         .env(EnvVars::UV_TOOL_DIR, tools.as_os_str()).env(EnvVars::XDG_BIN_HOME, bin.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed environment for `simple-launcher`
+    ");
+    assert!(tools.child("basic-app").exists());
+    uv_snapshot!(context.filters(), Command::new(bin.child("simple_launcher").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+    Ok(())
+}
+
+/// Bin-directory aliases identify the same destination without conflating different commands.
+#[test]
+#[cfg(unix)]
+fn tool_uninstall_preserves_replacement_with_symlinked_bin_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    bin.create_dir_all()?;
+    let alias = context.temp_dir.child("linked-bin");
+    symlink(bin.path(), alias.path())?;
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let requirement = format!(
+        "simple-launcher @ {}",
+        Url::from_file_path(&launcher).expect("launcher file URL")
+    );
+    context
+        .tool_install()
+        .arg(&launcher)
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin.as_os_str())
+        .assert()
+        .success();
+    context
+        .tool_install()
+        .arg(&app)
+        .arg("--with-executables-from")
+        .arg(requirement)
+        .arg("--force")
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, alias.as_os_str())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Removed environment for `simple-launcher`
