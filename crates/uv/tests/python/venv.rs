@@ -2,6 +2,8 @@ use std::assert_matches;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+#[cfg(unix)]
+use assert_cmd::Command as AssertCommand;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
@@ -19,7 +21,12 @@ use uv_virtualenv::{
 #[cfg(unix)]
 use fs_err::os::unix::fs::symlink;
 #[cfg(unix)]
-use std::{ffi::OsStr, os::unix::ffi::OsStrExt, os::unix::fs::PermissionsExt};
+use std::{
+    ffi::OsStr,
+    os::unix::ffi::OsStrExt,
+    os::unix::fs::{FileTypeExt, PermissionsExt},
+    time::Duration,
+};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
@@ -2800,4 +2807,100 @@ fn no_clear_conflicts_with_allow_existing() {
     For more information, try '--help'.
     "
     );
+}
+
+/// A FIFO is an invalid destination, not a file containing an environment path.
+#[cfg(unix)]
+#[test]
+fn create_venv_no_clear_rejects_fifo_without_reading() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .assert_command("import os; os.mkfifo('fifo')")
+        .success();
+
+    // A blocking FIFO read must fail this regression instead of hanging the suite.
+    AssertCommand::from_std(context.venv())
+        .args(["fifo", "--python", "3.12", "--no-clear"])
+        .timeout(Duration::from_secs(10))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Object already exists"));
+    assert!(
+        fs_err::symlink_metadata(context.temp_dir.child("fifo"))?
+            .file_type()
+            .is_fifo()
+    );
+    Ok(())
+}
+
+/// A FIFO is an invalid destination, not a file containing an environment path.
+#[cfg(unix)]
+#[test]
+fn create_venv_allow_existing_rejects_fifo_without_reading() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .assert_command("import os; os.mkfifo('fifo')")
+        .success();
+
+    // A blocking FIFO read must fail this regression instead of hanging the suite.
+    AssertCommand::from_std(context.venv())
+        .args(["fifo", "--python", "3.12", "--allow-existing"])
+        .timeout(Duration::from_secs(10))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Object already exists"));
+    assert!(
+        fs_err::symlink_metadata(context.temp_dir.child("fifo"))?
+            .file_type()
+            .is_fifo()
+    );
+    Ok(())
+}
+
+/// A FIFO is an invalid destination, not a file containing an environment path.
+#[cfg(unix)]
+#[test]
+fn create_venv_prompt_rejects_fifo_without_reading() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .assert_command("import os; os.mkfifo('fifo')")
+        .success();
+
+    // A blocking FIFO read must fail this regression instead of hanging the suite.
+    AssertCommand::from_std(context.venv())
+        .args(["fifo", "--python", "3.12"])
+        .timeout(Duration::from_secs(10))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Object already exists"));
+    assert!(
+        fs_err::symlink_metadata(context.temp_dir.child("fifo"))?
+            .file_type()
+            .is_fifo()
+    );
+    Ok(())
+}
+
+/// A FIFO is an invalid destination, not a file containing an environment path.
+#[cfg(unix)]
+#[test]
+fn create_venv_clear_rejects_fifo_without_reading() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .assert_command("import os; os.mkfifo('fifo')")
+        .success();
+
+    // A blocking FIFO read must fail this regression instead of hanging the suite.
+    AssertCommand::from_std(context.venv())
+        .args(["fifo", "--python", "3.12", "--clear"])
+        .timeout(Duration::from_secs(10))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Object already exists"));
+    assert!(
+        fs_err::symlink_metadata(context.temp_dir.child("fifo"))?
+            .file_type()
+            .is_fifo()
+    );
+    Ok(())
 }

@@ -445,8 +445,10 @@ fn read_environment_path_file(path: &Path) -> io::Result<PathBuf> {
 /// Return whether `path` refers to an environment in the current cache's environment bucket.
 pub fn is_centralized_environment_reference(path: &Path, cache: &Cache) -> bool {
     is_centralized_environment_link(path, cache)
-        || read_environment_path_file(path)
-            .is_ok_and(|target| is_centralized_environment_path(&target, cache))
+        // Special files cannot contain path references and may block when opened.
+        || (fs_err::metadata(path).is_ok_and(|metadata| metadata.is_file())
+            && read_environment_path_file(path)
+                .is_ok_and(|target| is_centralized_environment_path(&target, cache)))
 }
 
 /// Return the centralized environment path for a project and interpreter.
