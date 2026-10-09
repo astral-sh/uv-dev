@@ -260,15 +260,15 @@ enum DownloadListFormat {
 }
 
 #[derive(Debug, Clone)]
-struct DownloadListSource<'a> {
-    location: DownloadListLocation<'a>,
+struct DownloadListSource {
+    location: DownloadListLocation,
     format: DownloadListFormat,
     implicit: bool,
 }
 
 #[derive(Debug, Clone)]
-enum DownloadListLocation<'a> {
-    Path(Cow<'a, Path>),
+enum DownloadListLocation {
+    Path(PathBuf),
     Http(Vec<DisplaySafeUrl>),
 }
 
@@ -351,7 +351,7 @@ fn python_download_metadata_urls(
 fn resolve_download_list_source(
     python_downloads_json_url: Option<&str>,
     remote_metadata_enabled: bool,
-) -> Result<Option<DownloadListSource<'_>>, Error> {
+) -> Result<Option<DownloadListSource>, Error> {
     if python_downloads_json_url.is_none() && !remote_metadata_enabled {
         return Ok(None);
     }
@@ -377,13 +377,13 @@ fn resolve_download_list_source(
     let location = if let Ok(url) = DisplaySafeUrl::parse(&source) {
         match url.scheme() {
             "http" | "https" => DownloadListLocation::Http(vec![url]),
-            "file" => DownloadListLocation::Path(Cow::Owned(
+            "file" => DownloadListLocation::Path(
                 url.to_file_path().or(Err(Error::InvalidUrlFormat(url)))?,
-            )),
-            _ => DownloadListLocation::Path(Cow::Owned(PathBuf::from(source.as_ref()))),
+            ),
+            _ => DownloadListLocation::Path(PathBuf::from(source.as_ref())),
         }
     } else {
-        DownloadListLocation::Path(Cow::Owned(PathBuf::from(source.as_ref())))
+        DownloadListLocation::Path(PathBuf::from(source.as_ref()))
     };
 
     Ok(Some(DownloadListSource {
@@ -393,7 +393,7 @@ fn resolve_download_list_source(
     }))
 }
 
-impl DownloadListSource<'_> {
+impl DownloadListSource {
     fn merge_downloads(
         &self,
         downloads: Vec<ManagedPythonDownload>,
@@ -940,16 +940,12 @@ impl ManagedPythonDownloadList {
         };
 
         let result = match (&source.location, source.format) {
-            (DownloadListLocation::Path(path), DownloadListFormat::Json) => {
-                fs_err::read(path.as_ref())
-                    .map_err(Error::from)
-                    .and_then(|bytes| parse_json_download_bytes(&path.to_string_lossy(), &bytes))
-            }
-            (DownloadListLocation::Path(path), DownloadListFormat::Ndjson) => {
-                fs_err::read(path.as_ref())
-                    .map_err(Error::from)
-                    .and_then(|bytes| parse_ndjson_bytes(&path.to_string_lossy(), &bytes))
-            }
+            (DownloadListLocation::Path(path), DownloadListFormat::Json) => fs_err::read(path)
+                .map_err(Error::from)
+                .and_then(|bytes| parse_json_download_bytes(&path.to_string_lossy(), &bytes)),
+            (DownloadListLocation::Path(path), DownloadListFormat::Ndjson) => fs_err::read(path)
+                .map_err(Error::from)
+                .and_then(|bytes| parse_ndjson_bytes(&path.to_string_lossy(), &bytes)),
             (DownloadListLocation::Http(urls), DownloadListFormat::Json) => {
                 let url = &urls[0];
                 let client = CachedClient::new(
@@ -1008,11 +1004,9 @@ impl ManagedPythonDownloadList {
         };
         let result = match (&source.location, source.format) {
             (DownloadListLocation::Path(path), DownloadListFormat::Ndjson) => {
-                fs_err::read(path.as_ref())
-                    .map_err(Error::from)
-                    .and_then(|bytes| {
-                        parse_ndjson_bytes_filtered(&path.to_string_lossy(), &bytes, predicate)
-                    })
+                fs_err::read(path).map_err(Error::from).and_then(|bytes| {
+                    parse_ndjson_bytes_filtered(&path.to_string_lossy(), &bytes, predicate)
+                })
             }
             (DownloadListLocation::Http(urls), DownloadListFormat::Ndjson) => {
                 let client = client_builder
@@ -1238,7 +1232,7 @@ fn filter_downloads(
 }
 
 fn find_matching_or_implicit_embedded(
-    source: &DownloadListSource<'_>,
+    source: &DownloadListSource,
     download: Option<ManagedPythonDownload>,
     request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
@@ -1268,12 +1262,12 @@ fn find_in_embedded_downloads_with_prereleases(
 
 async fn find_matching_download(
     client_builder: &BaseClientBuilder<'_>,
-    source: &DownloadListSource<'_>,
+    source: &DownloadListSource,
     cache: &Cache,
     request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
     let result = match &source.location {
-        DownloadListLocation::Path(path) => fs_err::read(path.as_ref())
+        DownloadListLocation::Path(path) => fs_err::read(path)
             .map_err(Error::from)
             .and_then(|bytes| parse_ndjson_bytes_find(&path.to_string_lossy(), &bytes, request)),
         DownloadListLocation::Http(urls) => {
