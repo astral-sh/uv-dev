@@ -78,7 +78,7 @@ fn compile_interpreter_cache_across_linux_personalities() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let mut linux32 = Command::new("setarch");
+    let mut linux32 = context.external_command("setarch");
     linux32
         .arg("linux32")
         .arg(uv_test::get_bin!())
