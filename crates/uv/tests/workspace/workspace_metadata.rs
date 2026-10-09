@@ -779,40 +779,88 @@ fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
         .assert()
         .success();
 
-    let mut environment_checks = Vec::new();
-    for sync in [false, true] {
-        let mut command = context.workspace_metadata();
-        command
-            .arg("--script")
-            .arg(script.path())
-            .arg("--preview-features")
-            .arg("workspace-metadata")
-            .env(EnvVars::RUST_LOG, "uv_python::environment=debug");
-        if sync {
-            command.arg("--sync");
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .arg("--script").arg(script.path())
+        .arg("--preview-features").arg("workspace-metadata")
+        .env(EnvVars::RUST_LOG, "uv_python::environment=debug"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[CACHE_DIR]/environments-v2/script-[HASH]",
+        "python": {
+          "path": "[CACHE_DIR]/environments-v2/script-[HASH]/bin/python",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
         }
-
-        let output = command.assert().success();
-        let stderr = String::from_utf8(output.get_output().stderr.clone())?;
-        let checks = stderr
-            .lines()
-            .filter(|line| line.starts_with("DEBUG Checking for Python environment at:"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        environment_checks.push(format!(
-            "{}:\n{checks}",
-            if sync { "sync" } else { "read-only" }
-        ));
+      },
+      "script": {
+        "path": "[TEMP_DIR]/script.py",
+        "id": "script+[TEMP_DIR]/script.py"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "resolution": {
+        "script+[TEMP_DIR]/script.py": {
+          "kind": "script",
+          "path": "[TEMP_DIR]/script.py",
+          "dependencies": []
+        }
+      }
     }
 
-    insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(environment_checks.join("\n"), @r#"
-        read-only:
-        DEBUG Checking for Python environment at: [CACHE_DIR]/environments-v2/script-[HASH]
-        sync:
-        DEBUG Checking for Python environment at: [CACHE_DIR]/environments-v2/script-[HASH]
-        "#);
-    });
+    ----- stderr -----
+    DEBUG Checking for Python environment at: [CACHE_DIR]/environments-v2/script-[HASH]
+    Resolved in [TIME]
+    "#);
+
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .arg("--script").arg(script.path())
+        .arg("--sync")
+        .arg("--preview-features").arg("workspace-metadata")
+        .env(EnvVars::RUST_LOG, "uv_python::environment=debug"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[CACHE_DIR]/environments-v2/script-[HASH]",
+        "python": {
+          "path": "[CACHE_DIR]/environments-v2/script-[HASH]/bin/python",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "script": {
+        "path": "[TEMP_DIR]/script.py",
+        "id": "script+[TEMP_DIR]/script.py"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "resolution": {
+        "script+[TEMP_DIR]/script.py": {
+          "kind": "script",
+          "path": "[TEMP_DIR]/script.py",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    DEBUG Checking for Python environment at: [CACHE_DIR]/environments-v2/script-[HASH]
+    Resolved in [TIME]
+    "#);
 
     Ok(())
 }
@@ -1685,38 +1733,118 @@ dependencies = []
     )?;
     context.lock().assert().success();
 
-    let mut environment_checks = Vec::new();
-    for sync in [false, true] {
-        let mut command = context.workspace_metadata();
-        command
-            .arg("--preview-features")
-            .arg("workspace-metadata")
-            .env(EnvVars::RUST_LOG, "uv_python::environment=debug");
-        if sync {
-            command.arg("--sync");
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .arg("--preview-features").arg("workspace-metadata")
+        .env(EnvVars::RUST_LOG, "uv_python::environment=debug"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/bin/python",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
         }
-
-        let output = command.assert().success();
-        let stderr = String::from_utf8(output.get_output().stderr.clone())?;
-        let checks = stderr
-            .lines()
-            .filter(|line| line.starts_with("DEBUG Checking for Python environment at:"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        environment_checks.push(format!(
-            "{}:\n{checks}",
-            if sync { "sync" } else { "read-only" }
-        ));
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "project",
+          "path": "[TEMP_DIR]/",
+          "id": "project==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "project==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "project",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
     }
 
-    insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(environment_checks.join("\n"), @r#"
-        read-only:
-        DEBUG Checking for Python environment at: .venv
-        sync:
-        DEBUG Checking for Python environment at: .venv
-        "#);
-    });
+    ----- stderr -----
+    DEBUG Checking for Python environment at: .venv
+    Resolved 1 package in [TIME]
+    "#);
+
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .arg("--sync")
+        .arg("--preview-features").arg("workspace-metadata")
+        .env(EnvVars::RUST_LOG, "uv_python::environment=debug"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/bin/python",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "project",
+          "path": "[TEMP_DIR]/",
+          "id": "project==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "project==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "project",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    DEBUG Checking for Python environment at: .venv
+    Resolved 1 package in [TIME]
+    "#);
 
     Ok(())
 }
@@ -3331,6 +3459,211 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
     Resolved 5 packages in [TIME]
     "#
     );
+
+    Ok(())
+}
+
+/// Synchronizing a reused environment honors the workspace root pin from a subdirectory.
+#[test]
+fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.12")?;
+    let subdirectory = context.temp_dir.child("subdirectory");
+    subdirectory.child(".python-version").write_str("3.11")?;
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.11")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .current_dir(subdirectory.path())
+        .arg("--preview-features").arg("workspace-metadata"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/bin/python",
+          "version": "3.11.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.11",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "project",
+          "path": "[TEMP_DIR]/",
+          "id": "project==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "project==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "project",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .current_dir(subdirectory.path())
+        .arg("--sync")
+        .arg("--preview-features").arg("workspace-metadata"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/bin/python",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.11",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "project",
+          "path": "[TEMP_DIR]/",
+          "id": "project==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "project==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "project",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: [VENV]/
+    Creating virtual environment at: [VENV]/
+    "#);
+
+    fs_err::remove_dir_all(context.venv.path())?;
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .current_dir(subdirectory.path())
+        .arg("--sync")
+        .arg("--preview-features").arg("workspace-metadata"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/bin/python",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.11",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "project",
+          "path": "[TEMP_DIR]/",
+          "id": "project==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "project==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "project",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: [VENV]/
+    "#);
 
     Ok(())
 }
