@@ -10382,6 +10382,7 @@ fn requirements_txt_undefined_dependency_extra_conflict() -> Result<()> {
 }
 
 /// Scoped overrides can add an empty conflicting extra to an otherwise dependency-free root.
+#[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_scoped_override_adds_conflicting_empty_extra() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -14230,5 +14231,114 @@ fn frozen_lockfile_member_inside_project() -> Result<()> {
     -e ./nested/member
     ");
 
+    Ok(())
+}
+
+/// Registry declaration evidence distinguishes missing extras from declared empty extras.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_undefined_registry_extra_conflict() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "undefined-registry-conflict-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.child.versions."1"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[missing]"]
+
+        [project.optional-dependencies]
+        feature = []
+
+        [tool.uv]
+        conflicts = [[{ extra = "feature" }, { package = "child", extra = "missing" }]]
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--extra", "feature", "--no-header", "--no-hashes",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    child==1
+        # via project
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    warning: The package `child==1` does not have an extra named `missing`
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    child==1
+        # via project
+    ");
+    context
+        .lock()
+        .args(["--upgrade", "--preview-features", "lock-without-metadata"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    child==1
+        # via project
+    ");
+    context
+        .lock()
+        .args([
+            "--check",
+            "--offline",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let lock = context.read("uv.lock");
+    assert!(lock.contains("declared-extras = []"));
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.replace("declared-extras = []\n", ""))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `child`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    child==1
+        # via project
+    ");
     Ok(())
 }

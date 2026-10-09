@@ -14,8 +14,8 @@ use uv_resolver_types::graph_ops::{Reachable, marker_reachability};
 use uv_resolver_types::universal_marker::resolve_activated_extras;
 use uv_resolver_types::{ConflictMarker, UniversalMarker};
 
-use crate::lock::PackageIndex;
-use crate::{Lock, Package};
+use crate::lock::{LockErrorKind, PackageIndex};
+use crate::{Lock, LockError, Package};
 
 /// A request graph retains conflict guards until package and extra activation is known.
 pub(super) struct ConflictRequests<'lock> {
@@ -71,18 +71,8 @@ impl<'lock> ConflictRequests<'lock> {
         index: PackageIndex,
         extra: Option<ExtraName>,
         marker: MarkerTree,
-    ) {
+    ) -> Result<(), LockError> {
         let package = self.lock.package(index);
-        if !package.id.source.is_immutable()
-            && extra.as_ref().is_some_and(|extra| {
-                !package.optional_dependencies.contains_key(extra)
-                    && !package.metadata.provides_extra.contains(extra)
-            })
-        {
-            // Mutable sources record declared extras, including empty metadata-free sections.
-            // Immutable lock entries can omit that evidence, so absence is inconclusive for them.
-            return;
-        }
         let marker = if package.fork_markers.is_empty() {
             marker
         } else {
@@ -95,6 +85,27 @@ impl<'lock> ConflictRequests<'lock> {
                     }),
             )
         };
+        if marker.is_false() {
+            return Ok(());
+        }
+        if let Some(extra) = &extra {
+            if package.id.source.is_immutable() {
+                if self.lock.conflicts().contains(package.name(), extra) {
+                    let declared = package.declared_extras.as_deref().ok_or_else(|| {
+                        LockErrorKind::MissingExtraMetadata {
+                            package: package.name().clone(),
+                        }
+                    })?;
+                    if !declared.contains(extra) {
+                        return Ok(());
+                    }
+                }
+            } else if !package.optional_dependencies.contains_key(extra)
+                && !package.metadata.provides_extra.contains(extra)
+            {
+                return Ok(());
+            }
+        }
         let node = self.node(index, extra);
         self.graph.add_edge(
             parent,
@@ -104,6 +115,7 @@ impl<'lock> ConflictRequests<'lock> {
                 dep_extras: Vec::new(),
             },
         );
+        Ok(())
     }
 
     /// Resolve globally certain extra requests before evaluating guards on sibling paths.
@@ -433,4 +445,53 @@ pub(super) fn conflict_marker_reachability<'lock>(
     }
 
     reachability
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_pep508::MarkerTree;
+
+    use super::ConflictRequests;
+    use crate::Lock;
+
+    #[test]
+    fn impossible_legacy_extra_request_needs_no_metadata() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let lock: Lock = toml::from_str(
+            r#"
+            version = 1
+            revision = 5
+            requires-python = ">=3.12"
+            conflicts = [[
+                { package = "child", extra = "feature" },
+                { package = "project", extra = "feature" },
+            ]]
+
+            [[package]]
+            name = "child"
+            version = "1"
+            source = { registry = "https://pypi.org/simple" }
+            resolution-markers = ["sys_platform == 'win32'"]
+            "#,
+        )?;
+        let package = lock
+            .find_by_name(&"child".parse()?)?
+            .ok_or("missing child")?;
+        let index = lock.by_id[&package.id];
+        let mut requests = ConflictRequests::new(&lock);
+        requests.push(
+            requests.root,
+            index,
+            Some("feature".parse()?),
+            MarkerTree::FALSE,
+        )?;
+        requests.push(
+            requests.root,
+            index,
+            Some("feature".parse()?),
+            "sys_platform == 'linux'".parse()?,
+        )?;
+        assert!(requests.queue.is_empty());
+        Ok(())
+    }
 }

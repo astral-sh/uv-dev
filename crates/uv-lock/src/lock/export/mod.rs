@@ -111,7 +111,10 @@ impl<'lock> ExportableRequirements<'lock> {
 
                 // Push its dependencies on the queue.
                 queue.push_back((package_index, None));
-                for extra in extras.extra_names(dist.optional_dependencies.keys()) {
+                for extra in extras
+                    .extra_names(dist.optional_dependencies.keys())
+                    .filter(|extra| !dist.is_known_missing_extra(extra))
+                {
                     queue.push_back((package_index, Some(extra)));
                     activated_items.insert(
                         ConflictItem::from((dist.id.name.clone(), extra.clone())),
@@ -158,7 +161,7 @@ impl<'lock> ExportableRequirements<'lock> {
                     Edge::Dev {
                         group,
                         marker: dep.simplified_marker.as_simplified_marker_tree(),
-                        dep_extras: dep.extra.iter().collect(),
+                        dep_extras: target.lock().dependency_extras(dep).collect(),
                     },
                 );
 
@@ -166,7 +169,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 if seen.insert((dep.index, None)) {
                     queue.push_back((dep.index, None));
                 }
-                for extra in &dep.extra {
+                for extra in target.lock().dependency_extras(dep) {
                     if seen.insert((dep.index, Some(extra))) {
                         queue.push_back((dep.index, Some(extra)));
                     }
@@ -235,7 +238,11 @@ impl<'lock> ExportableRequirements<'lock> {
                         dep_index,
                         Edge::Prod {
                             marker,
-                            dep_extras: requirement.extras.iter().collect(),
+                            dep_extras: requirement
+                                .extras
+                                .iter()
+                                .filter(|extra| !dist.is_known_missing_extra(extra))
+                                .collect(),
                         },
                     );
 
@@ -243,7 +250,11 @@ impl<'lock> ExportableRequirements<'lock> {
                     if seen.insert((package_index, None)) {
                         queue.push_back((package_index, None));
                     }
-                    for extra in &requirement.extras {
+                    for extra in requirement
+                        .extras
+                        .iter()
+                        .filter(|extra| !dist.is_known_missing_extra(extra))
+                    {
                         if seen.insert((package_index, Some(extra))) {
                             queue.push_back((package_index, Some(extra)));
                         }
@@ -281,7 +292,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 let dep_index = *inverse[dep.index.0]
                     .get_or_insert_with(|| graph.add_node(Node::Package(dep_dist, None)));
 
-                let dep_extras = dep.extra.iter().collect::<Vec<_>>();
+                let dep_extras = target.lock().dependency_extras(dep).collect::<Vec<_>>();
                 graph.add_edge(
                     index,
                     dep_index,
@@ -303,7 +314,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 if seen.insert((dep.index, None)) {
                     queue.push_back((dep.index, None));
                 }
-                for extra in &dep.extra {
+                for extra in target.lock().dependency_extras(dep) {
                     if seen.insert((dep.index, Some(extra))) {
                         queue.push_back((dep.index, Some(extra)));
                     }
@@ -391,7 +402,7 @@ fn validate_requested_conflicts<'lock>(
         let index = lock.by_id[&package.id];
         if kind == InstallableRootKind::Production && groups.prod() {
             known_conflicts.insert(ConflictItem::from(name.clone()), root_marker);
-            requests.push(requests.root, index, None, root_marker);
+            requests.push(requests.root, index, None, root_marker)?;
             for extra in extras
                 .extra_names(
                     package
@@ -405,7 +416,7 @@ fn validate_requested_conflicts<'lock>(
                     ConflictItem::from((name.clone(), extra.clone())),
                     root_marker,
                 );
-                requests.push(requests.root, index, Some(extra.clone()), root_marker);
+                requests.push(requests.root, index, Some(extra.clone()), root_marker)?;
             }
         }
         for (group, dependencies) in &package.dependency_groups {
@@ -433,14 +444,14 @@ fn validate_requested_conflicts<'lock>(
                     dependency.index,
                     None,
                     root_marker.and(marker),
-                );
+                )?;
                 for (extra, marker) in extras {
                     requests.push(
                         requests.root,
                         dependency.index,
                         Some(extra),
                         root_marker.and(marker),
-                    );
+                    )?;
                 }
             }
         }
@@ -467,14 +478,14 @@ fn validate_requested_conflicts<'lock>(
                 continue;
             };
             let index = lock.by_id[&package.id];
-            requests.push(requests.root, index, None, root_marker.and(marker));
+            requests.push(requests.root, index, None, root_marker.and(marker))?;
             for extra in &requirement.extras {
                 requests.push(
                     requests.root,
                     index,
                     Some(extra.clone()),
                     root_marker.and(marker),
-                );
+                )?;
             }
         }
     }
@@ -495,9 +506,9 @@ fn validate_requested_conflicts<'lock>(
             }
             let (marker, extras) =
                 dependency.activation(requirements.as_deref(), target.install_path())?;
-            requests.push(parent, dependency.index, None, marker);
+            requests.push(parent, dependency.index, None, marker)?;
             for (extra, marker) in extras {
-                requests.push(parent, dependency.index, Some(extra), marker);
+                requests.push(parent, dependency.index, Some(extra), marker)?;
             }
         }
     }
