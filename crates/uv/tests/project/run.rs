@@ -264,8 +264,9 @@ fn run_with_broken_first_python_wrapper_reuses_environment() -> Result<()> {
     Ok(())
 }
 
+// System CPython can canonicalize executable symlinks; this snapshot observes the invoked path.
 #[test]
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python-managed"))]
 fn run_with_python_executable_name() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
@@ -315,6 +316,78 @@ fn run_with_python_executable_name() -> Result<()> {
     Checked in [TIME]
     ");
 
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_python_name_skips_virtualenv_candidate() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = []
+    "#})?;
+    context
+        .venv()
+        .arg("other-venv")
+        .args(["--python", "3.11"])
+        .assert()
+        .success();
+    context
+        .run()
+        .args(["--python", "3.12", "python", "--version"])
+        .assert()
+        .success();
+    let first = context.temp_dir.child("first");
+    let second = context.temp_dir.child("second");
+    first.create_dir_all()?;
+    second.create_dir_all()?;
+    first.child("requested-python").write_str(&formatdoc! {r#"
+        #!/bin/sh
+        exec "{python}" "$@"
+    "#, python = context.temp_dir.child("other-venv/bin/python").display()})?;
+    second.child("requested-python").write_str(&formatdoc! {r#"
+        #!/bin/sh
+        exec "{python}" "$@"
+    "#, python = context.python_versions[0].1.display()})?;
+    fs_err::set_permissions(
+        first.child("requested-python"),
+        Permissions::from_mode(0o755),
+    )?;
+    fs_err::set_permissions(
+        second.child("requested-python"),
+        Permissions::from_mode(0o755),
+    )?;
+    let search_path = std::env::join_paths([first.path(), second.path()])?;
+    context.temp_dir.child(".venv/keep").write_str("keep")?;
+    uv_snapshot!(context.filters(), context.run().args(["--python", "requested-python", "python", "--version"])
+        .env(EnvVars::PATH, &search_path).env(EnvVars::UV_PYTHON_SEARCH_PATH, &search_path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(context.read(".venv/keep"), "keep");
+    uv_snapshot!(context.filters(), context.run().args(["--python", "requested-python", "python", "--version"])
+        .env(EnvVars::PATH, &search_path).env(EnvVars::UV_PYTHON_SEARCH_PATH, &search_path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(context.read(".venv/keep"), "keep");
     Ok(())
 }
 

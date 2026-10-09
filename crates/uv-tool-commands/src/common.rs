@@ -705,6 +705,7 @@ pub(super) async fn refine_interpreter(
 
     debug!("Refining interpreter with: {requires_python_request}");
 
+    let original_interpreter = interpreter;
     let interpreter = PythonInstallation::find_or_download(
         Some(&requires_python_request),
         EnvironmentPreference::OnlySystem,
@@ -723,10 +724,15 @@ pub(super) async fn refine_interpreter(
     // If the user passed a `--python` request, and the refined interpreter is incompatible, we
     // can't use it.
     if let Some(python_request) = python_request {
-        if !interpreter.matches_request(
-            &python_request.with_default_arch(python_arch.map(PythonArchitecture::into_inner)),
-            cache,
-        ) {
+        let matches = if matches!(python_request, PythonRequest::ExecutableName(_)) {
+            interpreter.matches_resolved_interpreter(original_interpreter)
+        } else {
+            interpreter.matches_request(
+                &python_request.with_default_arch(python_arch.map(PythonArchitecture::into_inner)),
+                cache,
+            )
+        };
+        if !matches {
             return Ok(None);
         }
     }

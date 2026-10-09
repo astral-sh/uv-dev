@@ -816,7 +816,7 @@ impl Interpreter {
     }
 
     /// Compare the identity reported by a queried executable, including wrapper targets.
-    fn matches_resolved_interpreter(&self, other: &Self) -> bool {
+    pub fn matches_resolved_interpreter(&self, other: &Self) -> bool {
         let executable = other.sys_executable();
         if is_same_executable(executable, self.sys_executable())
             || self
@@ -957,7 +957,7 @@ pub struct UnexpectedResponseError {
     err: serde_json::Error,
     stdout: String,
     stderr: String,
-    pub(crate) path: PathBuf,
+    path: PathBuf,
 }
 
 impl Display for UnexpectedResponseError {
@@ -994,7 +994,7 @@ pub struct StatusCodeError {
     code: ExitStatus,
     stdout: String,
     stderr: String,
-    pub(crate) path: PathBuf,
+    path: PathBuf,
 }
 
 impl Display for StatusCodeError {
