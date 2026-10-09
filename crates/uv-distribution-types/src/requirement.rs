@@ -16,7 +16,7 @@ use uv_pep508::{
 use uv_redacted::policy::{Raw, Stripped};
 use uv_redacted::{SafeUrl, SafeUrlError};
 
-use crate::{IndexMetadata, IndexUrl};
+use crate::{IndexFormat, IndexMetadata, IndexUrl};
 
 use uv_pypi_types::{
     ConflictItem, HashError, Hashes, ParsedArchiveUrl, ParsedDirectoryUrl, ParsedGitDirectoryUrl,
@@ -938,6 +938,12 @@ enum RequirementSourceWire {
         #[serde(skip_serializing_if = "VersionSpecifiers::is_empty", default)]
         specifier: VersionSpecifiers,
         index: Option<SafeUrl<Stripped>>,
+        #[serde(
+            rename = "index-format",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        index_format: Option<IndexFormat>,
         conflict: Option<ConflictItem>,
     },
 }
@@ -950,10 +956,15 @@ impl From<RequirementSource> for RequirementSourceWire {
                 index,
                 conflict,
             } => {
+                let index_format = index
+                    .as_ref()
+                    .map(|index| index.format)
+                    .filter(|format| *format != IndexFormat::Simple);
                 let index = index.map(|index| index.url.into_url());
                 Self::Registry {
                     specifier,
                     index,
+                    index_format,
                     conflict,
                 }
             }
@@ -1116,11 +1127,14 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
             RequirementSourceWire::Registry {
                 specifier,
                 index,
+                index_format,
                 conflict,
             } => Ok(Self::Registry {
                 specifier,
-                index: index
-                    .map(|index| IndexMetadata::from(IndexUrl::from(VerbatimUrl::from_url(index)))),
+                index: index.map(|index| IndexMetadata {
+                    url: IndexUrl::from(VerbatimUrl::from_url(index)),
+                    format: index_format.unwrap_or_default(),
+                }),
                 conflict,
             }),
             RequirementSourceWire::Git { git } => {
@@ -1328,6 +1342,40 @@ mod tests {
         assert_eq!(source, resolved);
 
         Ok(())
+    }
+
+    #[test]
+    fn registry_source_legacy_index_format() {
+        let source: RequirementSource =
+            toml::from_str(r#"index = "https://example.com/simple""#).unwrap();
+        let RequirementSource::Registry {
+            index: Some(index), ..
+        } = source
+        else {
+            panic!("registry index");
+        };
+        assert_eq!(index.format, crate::IndexFormat::Simple);
+    }
+
+    #[test]
+    fn registry_source_flat_index_format() {
+        let source: RequirementSource = toml::from_str(
+            r#"
+            index = "https://example.com/wheels"
+            index-format = "flat"
+        "#,
+        )
+        .unwrap();
+        let raw = toml::to_string(&source).unwrap();
+        let roundtrip: RequirementSource = toml::from_str(&raw).unwrap();
+        assert_eq!(roundtrip, source);
+        let RequirementSource::Registry {
+            index: Some(index), ..
+        } = roundtrip
+        else {
+            panic!("registry index");
+        };
+        assert_eq!(index.format, crate::IndexFormat::Flat);
     }
 
     #[test]
