@@ -4,32 +4,161 @@ Issue: astral-sh/uv#22259
 
 Classification: bug
 
-Status checked: October 9, 2026. The issue is open. The four related open pull requests are drafts; none is a merged repair.
+Status checked: October 9, 2026. The issue is open. The four related open pull requests are drafts; none is a merged repair. These GitHub statuses come from the existing context review and were not refreshed during reproduction.
 
 ## Summary
 
-astral-sh/uv#22272 and astral-sh/uv#22295 are unmerged draft proposals with different fallback policies; astral-sh/uv#22258 supplies the reproductions. astral-sh/uv#21766 introduced the affected path, and astral-sh/uv#22304 addresses explicit macOS targets. Earlier string-ordering discussions provide context, not a duplicate.
+Both reported public `uv-pep508` API behaviors were independently reproduced against checkout `01b62808962d7abfe2d10f43d652f357d8038202` using Rust 1.99.0 on Linux x86_64, with Darwin explicitly selected in the marker environment:
 
-The report concerns two public `uv-pep508` API inconsistencies with a supplied Darwin marker environment:
+- For `platform_release = "not-a-version"`, `platform_release == '24'` and `marker.negate()` both evaluate false.
+- For `platform_release = "3-invalid"`, `platform_release >= '9'` and `platform_release < '24'` each evaluate false, but their parsed disjunction evaluates true. Its printed form includes an unconditional `sys_platform == 'darwin'` branch.
 
-- With `platform_release = "not-a-version"`, `platform_release == '24'` evaluates false and its logical negation also evaluates false. The negation should evaluate true.
-- With `platform_release = "3-invalid"`, `platform_release >= '9' or platform_release < '24'` evaluates true after numeric range reduction. Both comparisons would be false under lexical fallback: `3-invalid` sorts between `24` and `9`. They are also false under the current specification's opaque-string ordering rules.
+These observations establish logical inconsistencies independently of the broader opaque-string ordering policy. The reporter uses synthetic API inputs and does not claim failure on ordinary macOS releases or demonstrate an end-to-end installation failure. This reproduction likewise does not establish ordinary-host installation impact.
 
-The reporter explicitly uses synthetic API inputs and does not claim failure on ordinary macOS releases or demonstrate an end-to-end installation failure. The reported source base is `eaa0fb829a581ef50fd75c53b5ca964bc73d31c6`; the reproduction-only commit is `946e286a63dc6972e45bc2f43a80301439f2d7b7`, with Rust 1.99.0 on Darwin arm64. Python is not invoked.
+The report used source base `eaa0fb829a581ef50fd75c53b5ca964bc73d31c6`, reproduction-only commit `946e286a63dc6972e45bc2f43a80301439f2d7b7`, and Rust 1.99.0 on Darwin arm64. The independent run used the current checkout as a read-only library dependency, without checking out or executing the draft branch. Python does not participate in marker evaluation.
 
-## Draft response
-
-Your examples identify two correctness problems in the public marker API. The source confirms that failed version parsing bypasses negation, and numeric range simplification can erase the opaque-string case before evaluation.
-
-astral-sh/uv#22272 proposes preserving lexical fallback through composition and serialization. astral-sh/uv#22295 instead proposes treating unparseable releases as version zero, which would give your second example a different result. Both remain drafts. The next step is to settle the fallback contract and review it against both reproductions and printing/serialization round trips.
+astral-sh/uv#22258 supplies the original reproductions. astral-sh/uv#22272 and astral-sh/uv#22295 propose different fallback policies and remain unmerged drafts. astral-sh/uv#21766 introduced the affected path; astral-sh/uv#22304 concerns explicit macOS targets.
 
 ## Classification
 
-Source confirms incorrect behavior for opaque strings accepted by MarkerEnvironment: failed VersionString parsing bypasses complemented edges, while numeric-only range reduction can eliminate the opaque domain before evaluation. The broader fallback policy remains undecided, but these correctness failures are established. The companion reproduction and subsequent proposed fixes respond to this issue, so they do not make it a duplicate. No previous fix of these failures was established; astral-sh/uv#19808 explicitly excluded these fields.
+Bug: opaque strings are accepted by `MarkerEnvironment`, yet the observed results violate logical negation and disjunction consistency. The second case does not require choosing between lexical fallback and the current specification's opaque strict-ordering rules: both individual predicates actually evaluate false in this implementation, while their disjunction evaluates true.
 
-The issue was opened on October 6, 2026. astral-sh/uv#22258 is its companion reproduction, created minutes earlier; its body explicitly identifies this issue and says it contains intentionally failing tests. astral-sh/uv#22272 and astral-sh/uv#22295 were opened on October 7 and explicitly propose closing this issue. These are follow-up proposals, not independent canonical discussions.
+The broader fallback policy remains undecided. The companion reproduction and subsequent proposed fixes respond to this issue, so they do not make it a duplicate. No prior repair of these concrete failures was established. astral-sh/uv#19808 deliberately excluded Version | String fields from its string-ordering change.
 
-astral-sh/uv#21766 introduced the implicated code on September 17, 2026. The June string-ordering change in astral-sh/uv#19808 deliberately left Version | String fields outside its scope. The evidence therefore does not establish recurrence of a previously fixed bug. The earlier closed fallback discussion does not resolve the concrete logical inconsistencies reported here.
+The issue was opened on October 6, 2026. astral-sh/uv#22258 is its companion reproduction, created minutes earlier; its body explicitly identifies this issue and says it contains intentionally failing tests. astral-sh/uv#22272 and astral-sh/uv#22295 were opened on October 7 and explicitly propose closing this issue. These are follow-up proposals, not independent canonical discussions. The introducing change, astral-sh/uv#21766, merged September 17, 2026. The evidence does not establish recurrence of a previously fixed bug.
+
+## Reproduction
+
+Outcome: **reproducible**. Two independently reconstructed public-API tests failed at the same assertions as the report; Cargo exited 101 with zero passed and two failed.
+
+### Environment and isolation
+
+- Host: Linux x86_64. The supplied environment uses `sys_platform = "darwin"`, `platform_system = "Darwin"`, and `platform_machine = "arm64"`; no macOS host is required for these API calls.
+- Tested library: `uv-pep508 0.0.92` from checkout `01b62808962d7abfe2d10f43d652f357d8038202` (workspace uv version 0.13.0).
+- Compiler: `rustc 1.99.0 (b940084d7 2026-09-28)`; Cargo `1.99.0 (5f94df478 2026-08-27)`. The installed stable toolchain was invoked directly because the checkout's named-toolchain invocation attempted to write to read-only rustup state.
+- Installed executable on PATH: `uv 0.12.13 (x86_64-unknown-linux-gnu)`, checked with `uv --version`. It was not rebuilt or substituted. The reported methods are Rust library APIs, so this run evaluates them through a standalone Rust test harness, not through the installed CLI.
+- Python 3.12.3 was available and used only to prepare the temporary files. The tests supply Python marker values `3.12.0` / `3.12`; no Python process is used for their evaluation.
+- Harness, Cargo home, dependency downloads, lockfile, and build output are all under `/home/runner/work/_temp/uv-22259-0rxk_pva`. No checkout files or existing user state were modified, and no GitHub writes were made. No release build was performed.
+
+### Minimal fixture and command
+
+Create a standalone temporary Cargo project with empty `src/lib.rs` and this `Cargo.toml` (adjust the checkout path as needed):
+
+```toml
+[package]
+name = "darwin-release-repro"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+uv-pep508 = { path = "/home/runner/work/uv/uv/crates/uv-pep508" }
+
+[profile.dev]
+debug = "line-tables-only"
+```
+
+The checkout's `Cargo.lock` was copied into the temporary project before running, to retain its dependency versions. The independently written `tests/darwin_release_fallback.rs` is:
+
+```rust
+use std::error::Error;
+
+use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder, MarkerTree};
+
+#[test]
+fn darwin_unparseable_release_negation() -> Result<(), Box<dyn Error>> {
+    let environment = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+        implementation_name: "cpython",
+        implementation_version: "3.12.0",
+        os_name: "posix",
+        platform_machine: "arm64",
+        platform_python_implementation: "CPython",
+        platform_release: "not-a-version",
+        platform_system: "Darwin",
+        platform_version: "",
+        python_full_version: "3.12.0",
+        python_version: "3.12",
+        sys_platform: "darwin",
+    })?;
+    let marker: MarkerTree = "platform_release == '24'".parse()?;
+    println!(
+        "equality={}, negation={}",
+        marker.evaluate(&environment, &[]),
+        marker.negate().evaluate(&environment, &[])
+    );
+    assert!(!marker.evaluate(&environment, &[]));
+    assert!(marker.negate().evaluate(&environment, &[]));
+    Ok(())
+}
+
+#[test]
+fn invalid_darwin_release_is_not_a_numeric_tautology() -> Result<(), Box<dyn Error>> {
+    let environment = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+        implementation_name: "cpython",
+        implementation_version: "3.12.0",
+        os_name: "posix",
+        platform_machine: "arm64",
+        platform_python_implementation: "CPython",
+        platform_release: "3-invalid",
+        platform_system: "Darwin",
+        platform_version: "",
+        python_full_version: "3.12.0",
+        python_version: "3.12",
+        sys_platform: "darwin",
+    })?;
+    let lower: MarkerTree = "platform_release >= '9'".parse()?;
+    let upper: MarkerTree = "platform_release < '24'".parse()?;
+    let marker: MarkerTree = "platform_release >= '9' or platform_release < '24'".parse()?;
+    println!(
+        "lower={}, upper={}, disjunction={}",
+        lower.evaluate(&environment, &[]),
+        upper.evaluate(&environment, &[]),
+        marker.evaluate(&environment, &[])
+    );
+    println!("simplified={:?}", marker.try_to_string());
+    assert!(!marker.evaluate(&environment, &[]));
+    Ok(())
+}
+```
+
+Exact invocation from the temporary project:
+
+```sh
+cd /home/runner/work/_temp/uv-22259-0rxk_pva
+CARGO_HOME="$PWD/cargo-home" \
+CARGO_TARGET_DIR="$PWD/target" \
+RUSTC=/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc \
+/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo \
+  test --test darwin_release_fallback -- --nocapture
+```
+
+On a normally configured machine with the requested compiler available, the equivalent test command is `cargo +1.99.0 test --test darwin_release_fallback -- --nocapture` from that standalone project, with Cargo home and target directory redirected to temporary storage.
+
+### Observed result
+
+```text
+running 2 tests
+equality=false, negation=false
+assertion failed: marker.negate().evaluate(&environment, &[])
+test darwin_unparseable_release_negation ... FAILED
+lower=false, upper=false, disjunction=true
+simplified=Some("platform_release < '24' or platform_release >= '9' or sys_platform == 'darwin'")
+assertion failed: !marker.evaluate(&environment, &[])
+test invalid_darwin_release_is_not_a_numeric_tautology ... FAILED
+test result: FAILED. 0 passed; 2 failed
+```
+
+The equality's logical negation should evaluate true. The disjunction should evaluate false when both operands evaluate false. For `3-invalid`, ordinary lexical comparisons also give false for both predicates because it sorts between `24` and `9`. The printed expression provides additional observed evidence that the release condition has disappeared for Darwin. Serialization/reparse round trips were not separately tested.
+
+### Existing test coverage
+
+Searched `crates/uv/tests/`, `crates/uv-client/tests/it/`, and `crates/uv-pep508/` for `platform_release` and the exact opaque values and reproduction names. No existing checkout test exercises these two opaque Darwin cases.
+
+- `crates/uv-pep508/src/marker/tree.rs`, `darwin_platform_release`: inspected setup and assertions. Uses releases `24.0.0` and `24.10.0`; covers numeric equivalence with `24`, disjointness, ordering against `24.9.0`, negation, and printed round trips. It does not supply an unparseable release.
+- `crates/uv/tests/lock/lock.rs`, `lock_required_environment_macos_release`: requires Darwin release `24.0.0` and uses macOS wheel tags to check numeric release splits and wheel availability. It is gated by `test-universal` and does not evaluate opaque values.
+- The adjacent `lock_required_environment_macos_release_python_fork`, also gated by `test-universal`, checks that wheels for another Python version do not determine the Darwin release split. Its required release is again `24.0.0`.
+- `crates/uv-client/tests/it/user_agent_version.rs`, `test_user_agent_has_linehaul`: constructs a Linux environment with release `6.5.0-1016-azure` to test user-agent metadata; it is not a Darwin marker-comparison test.
+
+The temporary public-API harness needs no `test-*` feature gate or Python fixture. No repository tests were added or modified, and the existing suites were not run.
 
 ## Related
 
@@ -43,22 +172,27 @@ astral-sh/uv#21766 introduced the implicated code on September 17, 2026. The Jun
 
 ## Supporting evidence
 
-Source inspection used checkout `01b62808962d7abfe2d10f43d652f357d8038202`.
+Source inspection used the same checkout as the independent reproduction, `01b62808962d7abfe2d10f43d652f357d8038202`.
 
-- `crates/uv-pep508/src/marker/environment.rs:301`: `MarkerEnvironmentBuilder` converts `platform_release` directly to a string while parsing the actual version fields. Opaque release inputs are accepted, rather than rejected during environment construction. The setter at line 220 also accepts arbitrary strings.
-- `crates/uv-pep508/src/marker/tree.rs:836`: the public `negate()` contract returns the logical negation by complementing the node. At line 1094, the `VersionString` evaluator returns false immediately on a failed version parse, before following a child edge that incorporates the complement.
-- `crates/uv-pep508/src/marker/algebra.rs:324`: a parseable release constant is lowered to numeric `VersionString` edges in the Darwin branch, with string edges restricted to non-Darwin environments. The decision does not depend on whether the runtime environment's release is parseable.
-- `crates/uv-pep508/src/marker/algebra.rs:1445` and line 1588: numeric specifiers become version ranges, and composition merges intersecting ranges. The union of `>= 9` and `< 24` covers the numeric domain. `create_node` at line 131 removes a parent when every child is the same, so the Darwin release check can disappear before runtime evaluation. Changing only the parse-error return cannot retain the lost opaque case.
-- `crates/uv-pep508/src/marker/simplify.rs:94`: printing reconstructs string marker expressions from numeric version bounds. A repair must preserve the chosen opaque semantics through simplification and printing/serialization, not only direct evaluation.
-- `crates/uv-pep508/src/marker/tree.rs:1888`: the existing Darwin test covers valid numeric releases, negation, and printed round trips. It does not cover the two opaque values in the report. The diff of astral-sh/uv#22258 adds two separate public-API tests and no production code.
-- The diff of astral-sh/uv#22295 explicitly expects `3-invalid < 24` to be true by mapping it to version zero. It restores consistency with numeric algebra but does not satisfy the report's requested opaque-string result. The tests in astral-sh/uv#22272 instead retain the false union and exercise round trips.
-- `crates/uv-configuration/src/target_triple.rs:1533`: explicit macOS and Apple Darwin targets currently supply an empty release. astral-sh/uv#22304 proposes deriving a Darwin baseline from the deployment target. This is a separate CLI trigger documented by the follow-up proposals, not an ordinary-host macOS failure demonstrated by the original report.
+- `crates/uv-pep508/src/marker/environment.rs:301`: `MarkerEnvironmentBuilder` converts `platform_release` directly to a string while parsing actual version fields. Environment construction accepted both opaque release values during the run.
+- `crates/uv-pep508/src/marker/tree.rs:836`: `negate()` is documented as logical negation and complements the node. At line 1094, the `VersionString` evaluator returns false immediately when parsing the environment value as a version fails, before following a child edge. This matches the observed false equality and false negation.
+- `crates/uv-pep508/src/marker/algebra.rs:324`: a parseable release constant is lowered to numeric `VersionString` edges in the Darwin branch, with string edges restricted to non-Darwin environments. This decision does not depend on whether the runtime release is parseable.
+- `crates/uv-pep508/src/marker/algebra.rs:1445` and line 1588: numeric specifiers become ranges and composition merges ranges. The union of `>= 9` and `< 24` covers the numeric domain. `create_node` at line 131 removes a parent when every child is the same. Consistent with this path, the observed printed disjunction contains an unconditional Darwin branch; changing only the parse-error return would not retain the discarded condition.
+- `crates/uv-pep508/src/marker/simplify.rs:94`: printing reconstructs string expressions from numeric bounds. A repair should be checked through printing/serialization as well as direct evaluation.
+- The previously inspected diff of astral-sh/uv#22295 expects `3-invalid < 24` to be true by mapping it to version zero. It restores consistency with numeric algebra but differs from the report's requested opaque-string result. astral-sh/uv#22272 instead retains a false union and adds round-trip coverage.
+- `crates/uv-configuration/src/target_triple.rs:1533`: explicit macOS and Apple Darwin targets supply an empty release. astral-sh/uv#22304 proposes a Darwin baseline derived from the deployment target. This separate CLI trigger was not part of the independent reproduction.
 
-The latest related drafts have no maintainer reviews establishing an accepted fallback policy. astral-sh/uv#22272 retains legacy lexical ordering; astral-sh/uv#22295 chooses a numeric sentinel. Neither choice should be described as an accepted or released fix.
+The related draft review found no maintainer decision establishing an accepted fallback policy. Neither proposed policy should be described as an accepted or released fix.
+
+## Draft response
+
+Both examples reproduce with Rust 1.99.0 against the current checkout. With Darwin explicitly selected, the equality and its logical negation both return false for `not-a-version`; for `3-invalid`, each comparison returns false but their disjunction returns true. The printed disjunction includes an unconditional Darwin branch. These results confirm the public-API inconsistencies without requiring an ordinary macOS release or an installation scenario.
+
+astral-sh/uv#22272 proposes lexical fallback through composition and serialization. astral-sh/uv#22295 proposes version zero for unparseable releases, giving the second example a different intended result. Both remain drafts. The maintainer decision is the fallback contract; review the chosen design against negation, disjunction, and printing/serialization round trips. Keep explicit macOS target population distinct from the general public-API behavior.
 
 ## Search coverage and excluded candidates
 
-Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separate literal searches covered platform_release, not-a-version, 3-invalid, marker.negate().evaluate, darwin_release_fallback, and VersionString. Conceptual searches covered negation, boolean logic, tautologies/always-true markers, simplification, lexical/lexicographic and string comparisons, serialization, and area:rustlib. Fix-oriented searches covered Darwin release inference and string-ordering changes. REST PR searches hit a rate limit and indexed PR searches omitted known matches; supplemented them by filtering titles/bodies of the latest 3,000 PRs across all states, then inspecting relevant diffs, comments, reviews, and referenced discussions. Ruled out astral-sh/uv#12833 and astral-sh/uv#21309 and astral-sh/uv#21310 (invalid literal comparisons or version containment), astral-sh/uv#18971 and astral-sh/uv#19105 (dependency selection on ordinary macOS releases), astral-sh/uv#5044 and astral-sh/uv#5078 and astral-sh/uv#6295 leading to astral-sh/uv#5992 (simplification completeness/conciseness), and astral-sh/uv#22262 with merged astral-sh/uv#22234 (export extra-activation propagation).
+The prior context review searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separate literal searches covered platform_release, not-a-version, 3-invalid, marker.negate().evaluate, darwin_release_fallback, and VersionString. Conceptual searches covered negation, boolean logic, tautologies/always-true markers, simplification, lexical/lexicographic and string comparisons, serialization, and area:rustlib. Fix-oriented searches covered Darwin release inference and string-ordering changes. REST PR searches hit a rate limit and indexed PR searches omitted known matches; supplemented them by filtering titles/bodies of the latest 3,000 PRs across all states, then inspecting relevant diffs, comments, reviews, and referenced discussions. Ruled out astral-sh/uv#12833 and astral-sh/uv#21309 and astral-sh/uv#21310 (invalid literal comparisons or version containment), astral-sh/uv#18971 and astral-sh/uv#19105 (dependency selection on ordinary macOS releases), astral-sh/uv#5044 and astral-sh/uv#5078 and astral-sh/uv#6295 leading to astral-sh/uv#5992 (simplification completeness/conciseness), and astral-sh/uv#22262 with merged astral-sh/uv#22234 (export extra-activation propagation).
 
 The report was decomposed before searching into failed logical negation, incorrect disjunction after simplification, and preservation through printing/serialization. The subsystem is the public marker API, with Darwin selected in the supplied environment and a release value that cannot be parsed as a version. Searches for those observable failures were kept separate from searches for numeric-range lowering as a possible cause. Repository labels and maintainer terminology informed the Rust-library, comparison, and simplification searches.
 
@@ -72,9 +206,3 @@ The closest excluded discussions have materially different triggers:
 The historical comments in astral-sh/uv#3917 were followed to pypa/packaging#774, which concerns Linux `InvalidVersion` failures, and the specification background in astral-sh/uv#19808 was followed to merged pypa/packaging.python.org#1988. These explain the changing comparison contract; neither establishes a prior uv fix for the reported Darwin algebra problem.
 
 Search completeness is limited by the REST search rate limit and PR index omissions. Direct PR enumeration across all states recovered the reproduction, both competing repairs, the explicit-target proposal, and the introducing and string-ordering changes. No independent duplicate was found among the inspected results.
-
-## Validation and next step
-
-The reported command is `cargo +1.99.0 test -p uv-pep508 --test darwin_release_fallback` on the reproduction branch. Its reported result is zero passed and two failed, at the negated-equality and numeric-tautology assertions. That run was not independently repeated; the findings here are supported by source and diff inspection. No checkout changes or GitHub writes were made.
-
-The maintainer decision is the fallback contract for opaque Darwin releases. Review the selected design against both reported cases, composition and negation consistency, and printing/serialization round trips. Keep explicit macOS target population distinct from the general public-API behavior. No additional reproduction information is needed to classify these correctness failures.
