@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::process::Command;
 
 use anyhow::{Result, anyhow, bail};
@@ -1289,7 +1290,12 @@ fn tool_upgrade_refreshes_dependency_entrypoints() -> Result<()> {
         .assert()
         .success();
 
-    old.assert(predicate::path::missing());
+    assert_eq!(
+        fs_err::symlink_metadata(&old)
+            .expect_err("the old entrypoint must be removed")
+            .kind(),
+        ErrorKind::NotFound,
+    );
     new.assert(predicate::path::exists());
     bin_dir
         .child(format!("root{}", std::env::consts::EXE_SUFFIX))
