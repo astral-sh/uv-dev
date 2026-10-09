@@ -29,7 +29,7 @@ use uv_pypi_types::HashDigests;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::write_tar_gz;
-use uv_test::packse::generate_wheel;
+use uv_test::packse::{generate_wheel, generate_wheel_with_files};
 use uv_test::uv_snapshot;
 
 const WHEEL: &str = "checksum_example-1.0.0-py3-none-any.whl";
@@ -251,8 +251,8 @@ async fn checksum_authority_preserves_wheel_filename() -> Result<()> {
         .arg("checksum-example")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download `checksum-example==1.0.0`
-      ╰─▶ Checksum authority has no trusted record for `Checksum_Example-1.0.0-py3-none-any.whl`
+    error: Failed to download `checksum-example==1.0.0`
+      cause: Checksum authority has no trusted record for `Checksum_Example-1.0.0-py3-none-any.whl`
     ");
     context.assert_command("import checksum_example").failure();
 
@@ -351,8 +351,8 @@ async fn checksum_authority_rejects_replacement_and_old_cache() -> Result<()> {
         .arg("checksum-example")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download `checksum-example==1.0.0`
-      ╰─▶ Checksum authority mismatch for `checksum_example-1.0.0-py3-none-any.whl`: expected sha256:[HASH], received sha256:[HASH]
+    error: Failed to download `checksum-example==1.0.0`
+      cause: Checksum authority mismatch for `checksum_example-1.0.0-py3-none-any.whl`: expected sha256:[HASH], received sha256:[HASH]
     ");
     context.assert_command("import checksum_example").failure();
     Ok(())
@@ -372,8 +372,8 @@ async fn checksum_authority_unknown_and_wrong_key() -> Result<()> {
         .arg("checksum-example")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download `checksum-example==1.0.0`
-      ╰─▶ Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
+    error: Failed to download `checksum-example==1.0.0`
+      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
     ");
     let authority = Authority::start(vec![record(&index_url, WHEEL, &bytes)?]).await?;
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
@@ -383,8 +383,8 @@ async fn checksum_authority_unknown_and_wrong_key() -> Result<()> {
         .env(EnvVars::UV_CHECKSUM_AUTHORITY_KEY, "00".repeat(32)), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download `checksum-example==1.0.0`
-      ╰─▶ Checksum authority signature verification failed
+    error: Failed to download `checksum-example==1.0.0`
+      cause: Checksum authority signature verification failed
     ");
     Ok(())
 }
@@ -429,8 +429,8 @@ async fn checksum_authority_rejects_sdist_before_backend() -> Result<()> {
         .arg("requirements.in")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download and build `checksum-example==1.0.0`
-      ╰─▶ Checksum authority mismatch for `checksum_example-1.0.0.tar.gz`: expected sha256:[HASH], received sha256:[HASH]
+    error: Failed to download and build `checksum-example==1.0.0`
+      cause: Checksum authority mismatch for `checksum_example-1.0.0.tar.gz`: expected sha256:[HASH], received sha256:[HASH]
     ");
     assert!(!marker.path().exists());
 
@@ -456,14 +456,14 @@ async fn checksum_authority_rejects_sdist_before_backend() -> Result<()> {
         .arg("requirements.txt")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download and build `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0.tar.gz`
-      ╰─▶ Hash mismatch for `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0.tar.gz`
+    error: Failed to download and build `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0.tar.gz`
+      cause: Hash mismatch for `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0.tar.gz`
 
-          Expected:
-            sha256:[HASH]
+             Expected:
+               sha256:[HASH]
 
-          Computed:
-            sha256:[HASH]
+             Computed:
+               sha256:[HASH]
     ");
     assert!(!marker.path().exists());
     Ok(())
@@ -530,15 +530,14 @@ async fn checksum_authority_direct_url_keeps_required_hashes() -> Result<()> {
         .arg("requirements.txt")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 1 package in [TIME]
-      × Failed to download `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0-py3-none-any.whl`
-      ╰─▶ Hash mismatch for `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0-py3-none-any.whl`
+    error: Failed to download `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0-py3-none-any.whl`
+      cause: Hash mismatch for `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0-py3-none-any.whl`
 
-          Expected:
-            sha256:0000000000000000000000000000000000000000000000000000000000000000
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
 
-          Computed:
-            sha256:de957d73d37350560035ae6ac5ff08831f3b910331970a929255dc2f85162a93
+             Computed:
+               sha256:de957d73d37350560035ae6ac5ff08831f3b910331970a929255dc2f85162a93
     ");
     context.assert_command("import checksum_example").failure();
     context
@@ -622,11 +621,11 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
         .arg("checksum-source")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download and build `checksum-source==1.0.0`
-      ├─▶ Failed to resolve requirements from `build-system.requires`
-      ├─▶ No solution found when resolving: `checksum-example==1.0.0`
-      ├─▶ Failed to download `checksum-example==1.0.0`
-      ╰─▶ Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
+    error: Failed to download and build `checksum-source==1.0.0`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: No solution found when resolving: `checksum-example==1.0.0`
+      cause: Failed to download `checksum-example==1.0.0`
+      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
     ");
     let authority = Authority::start(vec![
         source_record,
@@ -658,8 +657,8 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
         .arg("checksum-source")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download and build `checksum-source==1.0.0`
-      ╰─▶ Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
+    error: Failed to download and build `checksum-source==1.0.0`
+      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
     ");
     context.assert_command("import checksum_source").failure();
     Ok(())
@@ -685,8 +684,8 @@ async fn checksum_authority_unavailable_fails_closed() -> Result<()> {
         .env(EnvVars::UV_CHECKSUM_AUTHORITY_KEY, "00".repeat(32)), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download `checksum-example==1.0.0`
-      ╰─▶ Checksum authority returned HTTP 503 Service Unavailable
+    error: Failed to download `checksum-example==1.0.0`
+      cause: Checksum authority returned HTTP 503 Service Unavailable
     ");
     context.assert_command("import checksum_example").failure();
     Ok(())
@@ -720,8 +719,8 @@ async fn checksum_authority_remote_index_cannot_use_local_archive() -> Result<()
         .arg("checksum-example")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download `checksum-example==1.0.0`
-      ╰─▶ Checksum authority does not support a local archive supplied by a remote index: file://[TEMP_DIR]/checksum_example-1.0.0-py3-none-any.whl
+    error: Failed to download `checksum-example==1.0.0`
+      cause: Checksum authority does not support a local archive supplied by a remote index: file://[TEMP_DIR]/checksum_example-1.0.0-py3-none-any.whl
     ");
     context.assert_command("import checksum_example").failure();
     Ok(())
@@ -788,8 +787,8 @@ async fn checksum_authority_reuses_existing_wheel() -> Result<()> {
         .env(EnvVars::UV_CHECKSUM_AUTHORITY_KEY, &authority.public_key), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download `checksum-example==1.0.0`
-      ╰─▶ Checksum authority verification is unavailable in offline mode
+    error: Failed to download `checksum-example==1.0.0`
+      cause: Checksum authority verification is unavailable in offline mode
     ");
 
     // An earlier approval must not authorize a later invocation with a different catalog or key.
@@ -800,8 +799,8 @@ async fn checksum_authority_reuses_existing_wheel() -> Result<()> {
         .arg("checksum-example")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download `checksum-example==1.0.0`
-      ╰─▶ Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
+    error: Failed to download `checksum-example==1.0.0`
+      cause: Checksum authority has no trusted record for `checksum_example-1.0.0-py3-none-any.whl`
     ");
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
         .arg("--index-url")
@@ -810,8 +809,8 @@ async fn checksum_authority_reuses_existing_wheel() -> Result<()> {
         .env(EnvVars::UV_CHECKSUM_AUTHORITY_KEY, "00".repeat(32)), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download `checksum-example==1.0.0`
-      ╰─▶ Checksum authority signature verification failed
+    error: Failed to download `checksum-example==1.0.0`
+      cause: Checksum authority signature verification failed
     ");
     context.assert_command("import checksum_example").failure();
     Ok(())
@@ -892,15 +891,25 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
     let server = MockServer::start().await;
     let filename = "checksum_example-1.0.0.tar.gz";
     let marker = context.temp_dir.child("builds");
+    let (_, rebuilt_wheel) = generate_wheel_with_files(
+        &"checksum-example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("checksum_example/rebuilt.py", "VALUE = 'rebuilt'\n")],
+    );
     let backend = formatdoc! {r"
         from pathlib import Path
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
             with Path({marker:?}).open('a') as file:
                 file.write('built\n')
-            Path(wheel_directory, {WHEEL:?}).write_bytes(bytes.fromhex({wheel:?}))
+            wheel = {rebuilt:?} if len(Path({marker:?}).read_text().splitlines()) >= 3 else {wheel:?}
+            Path(wheel_directory, {WHEEL:?}).write_bytes(bytes.fromhex(wheel))
             return {WHEEL:?}
-        ", marker = marker.path().to_string_lossy(), wheel = hex::encode(wheel()?),
+        ", marker = marker.path().to_string_lossy(), wheel = hex::encode(wheel()?), rebuilt = hex::encode(rebuilt_wheel),
     };
     let mut bytes = Vec::new();
     write_tar_gz(
@@ -1018,9 +1027,12 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
     built
     built
     ");
-    context
-        .assert_command("from checksum_example import __version__; assert __version__ == '1.0.0'")
-        .success();
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "from checksum_example.rebuilt import VALUE; print(VALUE)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    rebuilt
+    ");
     context
         .pip_uninstall()
         .arg("checksum-example")
@@ -1039,5 +1051,81 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
     ");
     assert_eq!(fs_err::read_to_string(marker.path())?, repaired_builds);
     context.assert_command("import checksum_example").failure();
+    Ok(())
+}
+
+/// Authority-only source revisions are pruned even without outer metadata from an ordinary build.
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_prunes_authority_only_source_revision() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "checksum_example-1.0.0.tar.gz";
+    let backend = formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {WHEEL:?}).write_bytes(bytes.fromhex({wheel:?}))
+            return {WHEEL:?}
+    ", wheel = hex::encode(wheel()?)};
+    let mut bytes = Vec::new();
+    write_tar_gz(
+        &mut bytes,
+        &[
+            (
+                "checksum_example-1.0.0/pyproject.toml",
+                "[build-system]\nrequires = []\nbuild-backend = 'backend'\nbackend-path = ['.']\n[project]\nname = 'checksum-example'\nversion = '1.0.0'\n",
+            ),
+            ("checksum_example-1.0.0/backend.py", &backend),
+        ],
+    )?;
+    index(&server, filename, &bytes, false).await;
+    let index_url = format!("{}/simple", server.uri());
+    let authority = Authority::start(vec![record(&index_url, filename, &bytes)?]).await?;
+    authority
+        .configure(
+            context
+                .pip_install()
+                .arg("--index-url")
+                .arg(&index_url)
+                .arg("checksum-example"),
+        )
+        .assert()
+        .success();
+    context
+        .pip_uninstall()
+        .arg("checksum-example")
+        .assert()
+        .success();
+    let source = WalkDir::new(context.cache_dir.path())
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|entry| entry.file_name() == "src")
+        .ok_or_else(|| anyhow!("expected extracted source tree"))?;
+    let source = context
+        .cache_dir
+        .child(source.path().strip_prefix(context.cache_dir.path())?);
+    source.assert(predicates::path::exists());
+    context
+        .command()
+        .args(["cache", "prune", "--ci"])
+        .assert()
+        .success();
+    source.assert(predicates::path::missing());
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(500))
+        .with_priority(1)
+        .expect(0)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+        .arg("--index-url").arg(&index_url).arg("checksum-example")), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + checksum-example==1.0.0
+    "#);
     Ok(())
 }
