@@ -20644,3 +20644,50 @@ fn include_build_dependencies_static_archive_build_policy() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Constraints for inactive backend declarations do not become unconditional compile roots.
+#[test]
+fn include_build_dependencies_inactive_requirement_constraint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::empty();
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(&format!(
+            r#"
+        [build-system]
+        requires = ["build-helper; sys_platform == '{inactive_platform}'"]
+        build-backend = "backend"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+    "#
+        ))?;
+    context
+        .temp_dir
+        .child("project/backend.py")
+        .write_str("def get_requires_for_build_wheel(config_settings=None):\n    return []\n")?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project")?;
+    context
+        .temp_dir
+        .child("build-constraints.txt")
+        .write_str("build-helper==9999")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--no-header", "--build-constraint", "build-constraints.txt"])
+        .arg("--index-url").arg(server.index_url()), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ./project
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
