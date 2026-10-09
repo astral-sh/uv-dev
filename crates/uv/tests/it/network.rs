@@ -1450,6 +1450,60 @@ fn direct_url_content_length_mismatch() -> Result<()> {
     Ok(())
 }
 
+/// Missing extracted files force a refetch without invalidating the retained HTTP pointer.
+#[test]
+fn direct_url_missing_archive_range_resume() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = Bytes::from(
+        context.read_bytes(
+            context
+                .workspace_root
+                .join("test/links/build_tag-1.0.0-1-py2.py3-none-any.whl"),
+        ),
+    );
+    let hash = hex::encode(Sha256::digest(&wheel));
+    let interrupt = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server_interrupt = interrupt.clone();
+    let requests = Arc::new(DownloadRequests::default());
+    let server_requests = requests.clone();
+    let (server, _guard) = streaming_server(move |request| {
+        if !server_interrupt.load(Ordering::Relaxed) {
+            return hyper::Response::builder()
+                .header(CONTENT_LENGTH, wheel.len())
+                .header(hyper::header::CACHE_CONTROL, "public, max-age=3600")
+                .body(http_body_util::Full::new(wheel.clone()).boxed());
+        }
+        wheel_response(&request, &wheel, RangeResponse::Supported, &server_requests)
+    });
+    write_wheel_lockfile(&context, &server, 932, &hash)?;
+    uv_snapshot!(context.filters(), context.pip_sync().args(["--preview", "pylock.toml"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    fs_err::remove_dir_all(context.cache_dir.join("archive-v0"))?;
+    interrupt.store(true, Ordering::Relaxed);
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["--preview", "pylock.toml", "--reinstall"])
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(requests.full.load(Ordering::Relaxed), 2);
+    assert_eq!(requests.resumed.load(Ordering::Relaxed), 1);
+    Ok(())
+}
+
 #[test]
 fn direct_url_range_resume() -> Result<()> {
     assert_wheel_download(RangeResponse::Supported, 1, 2, 1)

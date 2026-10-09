@@ -852,6 +852,24 @@ impl CachedClient {
         cache_control: CacheControl,
         response_callback: Callback,
     ) -> Result<Payload, CachedClientError<CallBackError>> {
+        self.skip_cache_with_retry_if(req, cache_entry, cache_control, response_callback, |_| true)
+            .await
+    }
+
+    /// Perform an uncached request, retrying callback errors only when the predicate permits.
+    pub async fn skip_cache_with_retry_if<
+        Payload: Serialize + DeserializeOwned + Send + 'static,
+        CallBackError: std::error::Error + 'static,
+        Callback: AsyncFn(Response, &mut RetryState) -> Result<Payload, CallBackError>,
+        RetryCallback: Fn(&CallBackError) -> bool,
+    >(
+        &self,
+        req: Request,
+        cache_entry: &CacheEntry,
+        cache_control: CacheControl,
+        response_callback: Callback,
+        retry_callback: RetryCallback,
+    ) -> Result<Payload, CachedClientError<CallBackError>> {
         let mut retry_state = RetryState::start(self.uncached().retry_policy(), req.url().clone());
         loop {
             let fresh_req = req.try_clone().expect("HTTP request must be cloneable");
@@ -870,12 +888,18 @@ impl CachedClient {
 
             match result {
                 Ok(ok) => return Ok(ok),
-                Err(err)
-                    if let Some(backoff) = retry_state.should_retry(err.error(), err.retries()) =>
-                {
-                    retry_state.sleep_backoff(backoff).await;
+                Err(err) => {
+                    if let CachedClientError::Callback { err: callback, .. } = &err
+                        && !retry_callback(callback)
+                    {
+                        return Err(err.with_retries(retry_state.total_retries()));
+                    }
+                    if let Some(backoff) = retry_state.should_retry(err.error(), err.retries()) {
+                        retry_state.sleep_backoff(backoff).await;
+                    } else {
+                        return Err(err.with_retries(retry_state.total_retries()));
+                    }
                 }
-                Err(err) => return Err(err.with_retries(retry_state.total_retries())),
             }
         }
     }

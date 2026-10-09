@@ -897,6 +897,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
+        // The file-download fallback can resume interrupted bodies. Repeating the streaming
+        // extraction would discard the bytes already transferred, including during a forced refetch.
+        let retry_callback =
+            |err: &Error| !matches!(err, Error::Extract(_, err) if err.is_http_streaming_failed());
         let archive = self
             .client
             .managed(|client| {
@@ -905,15 +909,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     &http_entry,
                     cache_control.clone(),
                     download,
-                    |err| {
-                        // The file-download fallback can resume interrupted bodies. Repeating the
-                        // streaming extraction would discard the bytes already transferred.
-                        if let Error::Extract(_, err) = err {
-                            !err.is_http_streaming_failed()
-                        } else {
-                            true
-                        }
-                    },
+                    retry_callback,
                 )
             })
             .await
@@ -945,11 +941,12 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .managed(async |client| {
                     client
                         .cached_client()
-                        .skip_cache_with_retry(
+                        .skip_cache_with_retry_if(
                             self.request(url)?,
                             &http_entry,
                             cache_control,
                             download,
+                            retry_callback,
                         )
                         .await
                         .map_err(|err| match err {
