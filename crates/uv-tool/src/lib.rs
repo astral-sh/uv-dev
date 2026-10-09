@@ -332,6 +332,15 @@ impl InstalledTools {
     ) -> Result<PythonEnvironment, Error> {
         let environment_path = self.tool_dir(name);
 
+        let prepared = uv_virtualenv::PreparedEnvironment::new(
+            interpreter,
+            uv_virtualenv::Prompt::None,
+            false,
+            false,
+            uv_virtualenv::Seed::Disabled,
+            UpgradePolicy::Fixed,
+        )?;
+
         // Remove any existing environment.
         match uv_fs::remove_virtualenv(&environment_path) {
             Ok(()) => {
@@ -350,15 +359,9 @@ impl InstalledTools {
         );
 
         // Create a virtual environment.
-        let venv = uv_virtualenv::create_venv(
+        let venv = prepared.create(
             &environment_path,
-            interpreter,
-            uv_virtualenv::Prompt::None,
-            false,
             uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::ManagedEnvironment),
-            false,
-            uv_virtualenv::Seed::Disabled,
-            UpgradePolicy::Fixed,
         )?;
         venv.cache_virtualenv(false, cache)?;
 

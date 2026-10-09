@@ -2602,3 +2602,109 @@ fn no_clear_conflicts_with_allow_existing() {
     "
     );
 }
+
+#[test]
+fn create_venv_rejects_prompt_carriage_return() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    uv_snapshot!(context.filters(), context.venv().args(["--python", "3.12", "--prompt", "bad\rprompt"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    error: Failed to create virtual environment
+      cause: invalid `prompt` value in `pyvenv.cfg`: newlines are not supported
+    "#);
+    context.venv.assert(predicate::path::missing());
+}
+
+#[test]
+#[cfg(unix)]
+fn create_venv_validates_prompt_before_removing_centralized_reference() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_centralized_environment_hashes();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .venv()
+        .args(["--preview-features", "centralized-project-envs"])
+        .assert()
+        .success();
+    let reference = context.temp_dir.child(".venv");
+    let target = fs_err::read_link(reference.path())?;
+    reference.child("marker").write_str("keep")?;
+    let config = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.venv().args(["--prompt", "bad\nprompt"]), @r#"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+        Creating virtual environment at: .venv
+        error: Failed to create virtual environment
+          cause: invalid `prompt` value in `pyvenv.cfg`: newlines are not supported
+        "#);
+    assert_eq!(fs_err::read_link(reference.path())?, target);
+    assert_eq!(context.read(".venv/marker"), "keep");
+    assert_eq!(context.read(".venv/pyvenv.cfg"), config);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn create_venv_validates_home_before_modifying_destination() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
+    context.temp_dir.child(".venv/marker").write_str("keep")?;
+    let config = context.read(".venv/pyvenv.cfg");
+    let python = context
+        .python_command()
+        .args(["-c", "import sys; print(sys._base_executable)"])
+        .output()?;
+    assert!(python.status.success());
+    let python = String::from_utf8(python.stdout)?.trim().to_owned();
+    let invalid_home = context.temp_dir.child("bad\nhome");
+    invalid_home.child("lib/python3.12/os.py").write_str("")?;
+    let base = invalid_home.child("python");
+    fs_err::copy(&python, base.path())?;
+    let wrapper = context.temp_dir.child("python-wrapper");
+    wrapper.write_str(&format!("#!{python}\nimport sys\nsys.executable = {base}\nsys._base_executable = {base}\nexec(sys.argv[sys.argv.index('-c') + 1])\n", base = serde_json::to_string(&base.path())?))?;
+    fs_err::set_permissions(wrapper.path(), std::fs::Permissions::from_mode(0o755))?;
+    uv_snapshot!(context.filters(), context.venv().arg("--allow-existing").arg("--python").arg(wrapper.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: bad-home/python
+    Creating virtual environment at: .venv
+    error: Failed to create virtual environment
+      cause: invalid `home` value in `pyvenv.cfg`: newlines are not supported
+    ");
+    assert_eq!(context.read(".venv/pyvenv.cfg"), config);
+    assert_eq!(context.read(".venv/marker"), "keep");
+    uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg(wrapper.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: bad-home/python
+    Creating virtual environment at: .venv
+    error: Failed to create virtual environment
+      cause: invalid `home` value in `pyvenv.cfg`: newlines are not supported
+    ");
+    assert_eq!(context.read(".venv/pyvenv.cfg"), config);
+    assert_eq!(context.read(".venv/marker"), "keep");
+    uv_snapshot!(context.filters(), context.venv().arg("new-venv").arg("--python").arg(wrapper.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: bad-home/python
+    Creating virtual environment at: new-venv
+    error: Failed to create virtual environment
+      cause: invalid `home` value in `pyvenv.cfg`: newlines are not supported
+    ");
+    context
+        .temp_dir
+        .child("new-venv")
+        .assert(predicate::path::missing());
+    Ok(())
+}
