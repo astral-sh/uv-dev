@@ -802,6 +802,16 @@ fn explicit_roots_rejects_unresolved_member_extras() -> Result<()> {
         .assert()
         .success();
     uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--package", "shared", "--only-dev", "--extra", "feature",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--only-dev", "--extra", "feature", "--no-header",
+    ]), @"exit_code: 0 (success)");
+    uv_snapshot!(context.filters(), context.sync().args([
         "--frozen", "--package", "shared", "--extra", "feature",
     ]), @"
     exit_code: 2 (failure)
@@ -830,6 +840,16 @@ fn explicit_roots_rejects_unresolved_member_extras() -> Result<()> {
         ])
         .assert()
         .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--package", "shared", "--only-dev", "--all-extras",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--only-dev", "--all-extras", "--no-header",
+    ]), @"exit_code: 0 (success)");
     uv_snapshot!(context.filters(), context.sync().args([
         "--frozen", "--package", "shared", "--all-extras",
     ]), @"
