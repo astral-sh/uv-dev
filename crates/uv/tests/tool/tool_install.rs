@@ -7994,7 +7994,45 @@ fn tool_install_locked_extra_build_dependency_source() -> Result<()> {
      ~ foo==0.1.0 (from file://[TEMP_DIR]/foo)
     Installed 1 executable: foo
     ");
-    assert_snapshot!(fs_err::read_to_string(project.child("builds"))?, @"
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("foo")
+        .args(["--reinstall", "--offline", "--no-cache"])
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified foo environment
+     ~ foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
+    [tool]
+    requirements = [{ name = "foo", directory = "[TEMP_DIR]/foo" }]
+    extra-build-requires = { foo = [{ requirement = { name = "build-helper", path = "[TEMP_DIR]/foo/build_helper-1.0.0-py3-none-any.whl" }, match_runtime = false }] }
+    entrypoints = [
+        { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
+    ]
+
+    [tool.options]
+    extra-build-dependencies = { foo = [{ requirement = "build-helper==1.0.0", match-runtime = false }] }
+    exclude-newer = "2024-03-25T00:00:00Z"
+    "#);
+    });
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("foo")
+        .args(["--reinstall", "--offline", "--no-cache", "--no-sources"])
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade foo
+      cause: Failed to build `foo @ file://[TEMP_DIR]/foo`
+      cause: Failed to resolve requirements from `build-system.requires` and `extra-build-dependencies`
+      cause: No solution found when resolving: `build-helper==1.0.0`
+      cause: Because build-helper was not found in the cache and you require build-helper==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    "#);
+
+    assert_snapshot!(context.read("foo/builds"), @"
+    built
     built
     built
     ");
@@ -8231,5 +8269,32 @@ fn tool_install_preserves_build_only_extra_requirements() -> Result<()> {
     ----- stdout -----
     Hello from foo!
     ");
+    Ok(())
+}
+
+/// A source subdirectory cannot inherit a matching project from an ancestor.
+#[test]
+fn tool_install_locked_rejects_matching_ancestor_project() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.temp_dir.child("src").create_dir_all()?;
+    context.lock().arg("--offline").assert().success();
+    let url = Url::from_directory_path(context.temp_dir.child("src").path())
+        .map_err(|()| anyhow::anyhow!("invalid source directory"))?;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(format!("foo @ {url}")).args(["--locked", "--offline"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `--locked` option for tool commands is experimental and may change without warning. Pass `--preview-features tool-install-locks` to disable this warning.
+    error: `--locked` requires a source tree with a `[project]` table for `foo`
+    "#);
     Ok(())
 }

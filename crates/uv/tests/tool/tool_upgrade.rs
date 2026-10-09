@@ -1640,14 +1640,17 @@ fn tool_upgrade_preserves_existing_lock_without_preview() -> Result<()> {
     let lock_path = tool_dir.child("foo").child("uv.lock");
     lock_path.assert(predicate::path::exists());
 
-    context
-        .tool_upgrade()
-        .arg("foo")
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["foo", "--reinstall"])
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .assert()
-        .success();
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified foo environment
+     ~ foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    "#);
 
     lock_path.assert(predicate::path::exists());
 

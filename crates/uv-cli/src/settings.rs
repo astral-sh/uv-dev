@@ -1178,7 +1178,6 @@ impl ToolInstallSettings {
             locked: resolve_lock_check(locked, false, LockedFlag::Locked, environment.locked),
             refresh: Refresh::try_from(refresh)?,
             options: ToolInstallOptions::new(
-                options,
                 cli_environment_options,
                 resolver_filesystem_options,
                 discover_project,

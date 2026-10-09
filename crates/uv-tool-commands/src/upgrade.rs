@@ -35,8 +35,8 @@ use uv_workspace::WorkspaceCache;
 use crate::common::{ToolLock, remove_entrypoints, tool_environment_spec};
 use uv_command_support::{ExitStatus, Printer, conjunction};
 use uv_environment_operations::{
-    EnvironmentResolution, EnvironmentUpdate, resolve_environment, sync_environment,
-    update_environment,
+    EnvironmentResolution, EnvironmentSpecification, EnvironmentUpdate, resolve_environment,
+    sync_environment, update_environment,
 };
 use uv_install_operations::loggers::{DefaultInstallLogger, UpgradeInstallLogger};
 use uv_python_discovery::PythonDownloadReporter;
@@ -350,8 +350,44 @@ async fn upgrade_tool(
     }
 
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
+    let receipt_extra_build_dependencies = receipt.extra_build_dependencies.clone();
     let options = args.clone().combine(receipt.combine(filesystem.clone()));
     let settings = ResolverInstallerSettings::from(options.clone());
+
+    // Persist source bindings only while the corresponding declared build requirements are unchanged.
+    let receipt_extra_build_requires: ExtraBuildRequires = existing_tool_receipt
+        .extra_build_requires()
+        .iter()
+        .filter(|(package, _)| {
+            receipt_extra_build_dependencies
+                .as_ref()
+                .and_then(|requirements| requirements.get(*package))
+                == settings.resolver.extra_build_dependencies.get(*package)
+        })
+        .map(|(package, requirements)| (package.clone(), requirements.clone()))
+        .collect();
+    let mut extra_build_requires = LoweredExtraBuildDependencies::from_non_lowered(
+        settings.resolver.extra_build_dependencies.clone(),
+    )
+    .into_inner();
+    for (package, stored) in receipt_extra_build_requires.iter() {
+        let restored = stored
+            .iter()
+            .filter(|entry| {
+                !settings
+                    .resolver
+                    .sources
+                    .for_package(&entry.requirement.name)
+            })
+            .collect::<Vec<_>>();
+        let requirements = extra_build_requires.entry(package.clone()).or_default();
+        requirements.retain(|entry| {
+            !restored
+                .iter()
+                .any(|stored| stored.requirement.name == entry.requirement.name)
+        });
+        requirements.extend(restored.into_iter().cloned());
+    }
 
     let build_constraints = existing_tool_receipt.build_constraints().to_vec();
     let manifest_constraints = existing_tool_receipt
@@ -395,7 +431,8 @@ async fn upgrade_tool(
             requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
         let site_packages = SitePackages::from_environment(environment.environment())?;
         let universal_resolution = resolve_environment(
-            tool_environment_spec(spec, None, Some(&site_packages)),
+            tool_environment_spec(spec, None, Some(&site_packages))
+                .with_extra_build_requires(&extra_build_requires),
             EnvironmentResolution::Universal,
             target_interpreter,
             python_platform,
@@ -425,6 +462,7 @@ async fn upgrade_tool(
             &settings.resolver.build_options,
         )?;
         let hash_strategy = HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
+        let extra_build_requires = extra_build_requires.match_runtime(&resolution)?;
 
         if requested_interpreter.is_some() {
             let environment =
@@ -436,7 +474,7 @@ async fn upgrade_tool(
                 Modifications::Exact,
                 build_constraints,
                 (&settings).into(),
-                None,
+                Some(&extra_build_requires),
                 client_builder,
                 &state,
                 Box::new(DefaultInstallLogger),
@@ -459,15 +497,11 @@ async fn upgrade_tool(
                     uv_settings::ResolverSettings {
                         config_setting,
                         config_settings_package,
-                        extra_build_dependencies,
                         extra_build_variables,
                         ..
                     },
                 ..
             } = &settings;
-            let extra_build_requires =
-                LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
-                    .into_inner();
             let tags = resolution_tags(
                 None,
                 python_platform,
@@ -510,7 +544,7 @@ async fn upgrade_tool(
                     Modifications::Exact,
                     build_constraints,
                     (&settings).into(),
-                    None,
+                    Some(&extra_build_requires),
                     client_builder,
                     &state,
                     Box::new(UpgradeInstallLogger::new(name.clone())),
@@ -526,7 +560,7 @@ async fn upgrade_tool(
         }
     } else if let Some(interpreter) = requested_interpreter {
         let resolution = resolve_environment(
-            spec.into(),
+            EnvironmentSpecification::from(spec).with_extra_build_requires(&extra_build_requires),
             EnvironmentResolution::Specific,
             interpreter,
             python_platform,
@@ -551,7 +585,7 @@ async fn upgrade_tool(
             Modifications::Exact,
             build_constraints,
             (&settings).into(),
-            None,
+            Some(&extra_build_requires),
             client_builder,
             &state,
             Box::new(DefaultInstallLogger),
@@ -575,7 +609,7 @@ async fn upgrade_tool(
             python_platform,
             SourceTreeEditablePolicy::Tool,
             build_constraints,
-            ExtraBuildRequires::default(),
+            extra_build_requires,
             &settings,
             client_builder,
             &state,
@@ -630,6 +664,7 @@ async fn upgrade_tool(
             existing_tool_receipt.overrides().to_vec(),
             existing_tool_receipt.excludes().to_vec(),
             existing_tool_receipt.build_constraints().to_vec(),
+            Some(&receipt_extra_build_requires),
             tool_lock.as_ref(),
             printer,
         )?;
@@ -639,7 +674,8 @@ async fn upgrade_tool(
             name,
             existing_tool_receipt
                 .clone()
-                .with_options(ToolOptions::from(options)),
+                .with_options(ToolOptions::from(options))
+                .with_extra_build_requires(receipt_extra_build_requires),
         )?;
     }
 

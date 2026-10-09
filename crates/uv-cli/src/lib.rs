@@ -5527,7 +5527,7 @@ pub struct ToolInstallArgs {
     ///
     /// This option is in preview and may change in any future release.
     #[arg(long)]
-    pub locked: bool,
+    locked: bool,
 
     /// Include the given packages in editable mode.
     #[arg(long, value_hint = ValueHint::DirPath)]

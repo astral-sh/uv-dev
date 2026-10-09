@@ -558,6 +558,10 @@ pub async fn install(
         .into_inner()
     };
 
+    let receipt_extra_build_requires = source_project_lock
+        .as_ref()
+        .map(|_| extra_build_requires.clone());
+
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let _lock = installed_tools.lock().await?;
     let tool_dir = installed_tools.tool_dir(package_name);
@@ -912,6 +916,9 @@ pub async fn install(
                         python,
                         existing_tool_receipt.entrypoints().iter().cloned(),
                         options.clone(),
+                    )
+                    .with_extra_build_requires(
+                        receipt_extra_build_requires.clone().unwrap_or_default(),
                     ),
                 )?;
                 writeln!(
@@ -1177,6 +1184,7 @@ pub async fn install(
         receipt_overrides,
         receipt_excludes,
         receipt_build_constraints,
+        receipt_extra_build_requires.as_ref(),
         tool_lock.as_ref(),
         printer,
     )?;

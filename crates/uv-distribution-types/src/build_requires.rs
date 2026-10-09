@@ -24,7 +24,8 @@ pub enum ExtraBuildRequiresError {
 }
 
 /// Lowered extra build dependencies with source resolution applied.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ExtraBuildRequires(BTreeMap<PackageName, Vec<ExtraBuildRequirement>>);
 
 impl std::ops::Deref for ExtraBuildRequires {

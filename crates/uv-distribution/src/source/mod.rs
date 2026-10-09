@@ -47,7 +47,7 @@ use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, PyProjectToml, Resol
 use uv_redacted::DisplaySafeUrl;
 use uv_types::{BuildContext, BuildKey, BuildStack, SourceBuildTrait};
 use uv_workspace::pyproject::ToolUvSources;
-use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
+use uv_workspace::{DiscoveryOptions, ProjectWorkspace, VirtualProject, WorkspaceCache};
 
 use crate::distribution_database::ManagedClient;
 use crate::error::Error;
@@ -183,7 +183,7 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
         let Some(source_tree) = self.materialize_source_tree(source).await? else {
             return Ok(None);
         };
-        let project = VirtualProject::discover(
+        let project = ProjectWorkspace::from_maybe_project_root(
             source_tree.path(),
             &DiscoveryOptions::default(),
             self.cache,
@@ -191,7 +191,7 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
         )
         .await
         .map_err(MetadataError::from)?;
-        Ok(Some(project))
+        Ok(project.map(VirtualProject::Project))
     }
 }
 

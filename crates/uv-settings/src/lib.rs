@@ -66,13 +66,13 @@ impl std::fmt::Debug for ToolInstallOptions {
 }
 
 impl ToolInstallOptions {
-    /// Create tool install options from the resolved and individual precedence layers.
+    /// Create tool install options from their precedence layers.
     pub fn new(
-        options: ResolverInstallerOptions,
         cli_environment: ResolverInstallerOptions,
         filesystem: ResolverInstallerOptions,
         discover_project: bool,
     ) -> Self {
+        let options = cli_environment.clone().combine(filesystem.clone());
         Self {
             options,
             cli_environment,
