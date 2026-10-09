@@ -242,7 +242,7 @@ impl PythonVariant {
         }
     }
 
-    fn is_freethreaded(self) -> bool {
+    pub fn is_freethreaded(self) -> bool {
         match self {
             Self::Default | Self::Debug | Self::Gil | Self::GilDebug => false,
             Self::Freethreaded | Self::FreethreadedDebug => true,
