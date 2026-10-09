@@ -105,12 +105,13 @@ jobs:
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
+          path: .ci-planner-schema
           sparse-checkout: .github/ci-changes.schema.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Save the planner schema
-        run: cp .github/ci-changes.schema.json "$RUNNER_TEMP/ci-changes.schema.json"
+        run: cp .ci-planner-schema/.github/ci-changes.schema.json "$RUNNER_TEMP/ci-changes.schema.json"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -167,6 +168,7 @@ jobs:
           changes=$(jq --compact-output --argjson uv_version_changed "$uv_version_changed" '
             . as $files
             | def changed($pattern): any($files[]; test($pattern));
+            def is_code_file: test("^(docs/|bin/|assets/|agents/|\\.claude/|\\.codex/)|^mkdocs.*\\.yml$|\\.md$") | not;
 
             {
               "rust-code-changed": changed("\\.rs$"),
@@ -192,8 +194,8 @@ jobs:
               "system-workflow-changed": changed("^\\.github/workflows/test-system\\.yml$"),
               "system-test-changed": changed("^scripts/(check_system_python|check_embedded_python)\\.py$"),
               "uv-version-changed": $uv_version_changed,
-              "any-code-changed": any($files[]; test("^(docs/|bin/|assets/|agents/|\\.claude/|\\.codex/)|^mkdocs.*\\.yml$|\\.md$") | not),
-              "non-test-code-changed": any($files[]; (test("^(docs/|bin/|assets/|agents/|\\.claude/|\\.codex/)|^mkdocs.*\\.yml$|\\.md$") or test("^(crates/[^/]+/tests/|crates/uv-test/|test/)")) | not)
+              "any-code-changed": any($files[]; is_code_file),
+              "non-test-code-changed": any($files[]; is_code_file and (test("^(crates/[^/]+/tests/|crates/uv-test/|test/)") | not))
             } as $changes
             | $changes + {
               "any-rust-changed": ($changes."rust-code-changed" or $changes."rust-deps-changed" or $changes."rust-config-changed"),
@@ -227,13 +229,14 @@ jobs:
           jq --null-input --raw-output --argjson changes "$CHANGES" --argjson labels "$LABELS" --argjson on_main "$ON_MAIN" --arg repository "$REPOSITORY" --arg event_name "$EVENT_NAME" --arg head_repository "$HEAD_REPOSITORY" --arg base_ref "$BASE_REF" '
             def has_label($label): ($labels // []) | map(ascii_downcase) | index($label) != null;
 
-            ((has_label("test:skip") | not) and (has_label("build:skip") | not) and (has_label("build:skip-release") | not) and ($changes."release-build-changed" or has_label("build:release"))) as $build_release_binaries
+            ($repository == "astral-sh/uv" and $event_name == "pull_request" and $head_repository == $repository and $base_ref == "main" and $changes."uv-version-changed") as $is_release_pr
+            | ((has_label("test:skip") | not) and (has_label("build:skip") | not) and (has_label("build:skip-release") | not) and ($changes."release-build-changed" or has_label("build:release"))) as $build_release_binaries
             | {
               test_code: ((has_label("test:skip") | not) and ($changes."any-code-changed" or $on_main)),
               review_security: $changes."any-code-changed",
               check_schema: $changes."schema-changed",
-              check_crates_policies: ($repository == "astral-sh/uv" and $event_name == "pull_request" and $head_repository == $repository and $base_ref == "main" and $changes."uv-version-changed"),
-              require_check_release: ($repository == "astral-sh/uv" and $event_name == "pull_request" and $head_repository == $repository and $base_ref == "main" and $changes."uv-version-changed"),
+              check_crates_policies: $is_release_pr,
+              require_check_release: $is_release_pr,
               build_release_binaries: $build_release_binaries,
               run_checks: (has_label("test:skip") | not),
               test_publish: ($changes."publish-changed" or has_label("test:publish") or has_label("test:extended") or $on_main),
