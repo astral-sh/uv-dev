@@ -451,11 +451,12 @@ impl FlatRequiresDist {
                     continue;
                 }
                 // Overrides can make an otherwise disjoint declaration reachable. Its annotation
-                // still describes the authored condition, while the effective marker controls expansion.
+                // retains the activating extras and authored condition, while effective markers
+                // control expansion.
                 let marker = if effective_marker == declared_marker {
                     marker
                 } else {
-                    declared_marker
+                    declared_marker.and(marker.only_extras())
                 };
                 let requirement = Requirement {
                     name: requirement.name.clone(),

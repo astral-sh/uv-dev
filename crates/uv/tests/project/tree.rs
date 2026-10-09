@@ -5686,13 +5686,13 @@ fn show_version_specifiers_overridden_recursive_child_marker() -> Result<()> {
     let scenario = toml::from_str(indoc! {r#"
         name = "tree-overridden-recursive-child-marker"
         [root]
-        requires = ["parent"]
+        requires = ["parent[base]"]
         [expected]
         satisfiable = true
         [packages.parent.versions."1.0.0"]
-        requires = ["parent[feature]; sys_platform == 'linux'"]
         sdist = false
         [packages.parent.versions."1.0.0".extras]
+        base = ["parent[feature]; sys_platform == 'linux'"]
         feature = ["child<2; sys_platform == 'win32'"]
         [packages.child.versions."3.0.0"]
         sdist = false
@@ -5706,7 +5706,7 @@ fn show_version_specifiers_overridden_recursive_child_marker() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["parent"]
+        dependencies = ["parent[base]"]
         [tool.uv]
         override-dependencies = ["child>=3"]
         [[tool.uv.index]]
@@ -5722,8 +5722,8 @@ fn show_version_specifiers_overridden_recursive_child_marker() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── parent v1.0.0 [required: *]
-        └── child v3.0.0 [declared: <2; sys_platform == 'win32'] [overridden]
+    └── parent[base] v1.0.0 [required: *]
+        └── child v3.0.0 (extra: base) [declared: <2; sys_platform == 'win32'] [overridden]
     "#);
     Ok(())
 }
