@@ -799,7 +799,7 @@ impl<'lock> InstallTarget<'lock> {
         let domain = implicit_constraints_marker(
             self.python_requirement(groups)?
                 .requires_python
-                .to_marker_tree(),
+                .to_exact_marker_tree(),
             lock.supported_environments(),
         );
         let available = |marker: MarkerTree| {
