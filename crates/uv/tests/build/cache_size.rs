@@ -1,10 +1,31 @@
-#[cfg(unix)]
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-#[cfg(unix)]
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
 use assert_fs::prelude::*;
 
-#[cfg(unix)]
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
 use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_test::uv_snapshot;
 
@@ -56,7 +77,14 @@ fn cache_size_with_packages_human() {
 }
 
 /// Physical cache sizing should count copy-on-write clones within the cache only once.
-#[cfg(unix)]
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
 #[test]
 fn cache_size_physical_cached_clones() -> Result<()> {
     let Some(context) = uv_test::test_context!("3.12").with_cache_on_cow_fs()? else {
@@ -97,7 +125,14 @@ fn cache_size_physical_cached_clones() -> Result<()> {
 }
 
 /// A clone retained outside the cache still contributes once to the cache's physical footprint.
-#[cfg(unix)]
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
 #[test]
 fn cache_size_physical_external_clone() -> Result<()> {
     let Some(context) = uv_test::test_context!("3.12").with_cache_on_cow_fs()? else {
@@ -130,7 +165,14 @@ fn cache_size_physical_external_clone() -> Result<()> {
 }
 
 /// Physical cache sizing should count hardlinked files once, including links retained elsewhere.
-#[cfg(unix)]
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
 #[test]
 fn cache_size_physical_hardlinked_files() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -226,7 +268,10 @@ fn cache_size_output_format_conflicts_with_human() {
 }
 
 /// Fresh allocations remain counted before the filesystem assigns final physical extents.
-#[cfg(target_os = "linux")]
+#[cfg(all(
+    target_os = "linux",
+    not(any(target_arch = "sparc", target_arch = "sparc64"))
+))]
 #[test]
 fn cache_size_physical_fresh_allocation() -> Result<()> {
     use std::os::unix::fs::MetadataExt;
@@ -247,7 +292,14 @@ fn cache_size_physical_fresh_allocation() -> Result<()> {
 }
 
 /// Missing read permission does not hide the allocation metadata available to cache sizing.
-#[cfg(unix)]
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
 #[test]
 fn cache_size_physical_unreadable_file() -> Result<()> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};

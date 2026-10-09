@@ -559,7 +559,17 @@ fn linux_file_extents(
     }
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+#[cfg(all(
+    test,
+    any(
+        all(
+            target_os = "linux",
+            not(any(target_arch = "sparc", target_arch = "sparc64"))
+        ),
+        target_os = "macos",
+        target_os = "ios"
+    )
+))]
 mod tests {
     use super::physical_disk_usage;
 
