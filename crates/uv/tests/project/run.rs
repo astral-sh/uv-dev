@@ -8405,11 +8405,11 @@ fn run_pep723_requirements_shared_index_policy() -> Result<()> {
         # /// script
         # dependencies = ["sniffio==1.3.1"]
         # [[tool.uv.index]]
-        # name = "private"
+        # name = "alias"
         # url = "{url}"
         # explicit = true
         # [tool.uv.sources]
-        # sniffio = {{ index = "private" }}
+        # sniffio = {{ index = "alias" }}
         # ///
     "#, url = server.index_url()})?;
     uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "import iniconfig, sniffio"]), @r#"
@@ -8575,6 +8575,119 @@ fn run_pep723_requirements_ignore_unused_index_alias() -> Result<()> {
     Installed 2 packages in [TIME]
      + iniconfig==2.0.0
      + sniffio==1.3.1
+    ");
+    Ok(())
+}
+
+/// URL-based clients cannot apply conflicting policies to aliases of the same endpoint.
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_alias_authentication() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "first"
+        # url = "{url}/simple"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "first" }}
+        # ///
+    "#, url = server.uri()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["b"]
+        # [[tool.uv.index]]
+        # name = "second"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # b = {{ index = "second" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.run().args([
+        "--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "pass",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Selected implicit indexes retain declaration priority for unpinned dependencies.
+#[test]
+fn run_pep723_requirements_preserves_index_declaration_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "first-source-index"
+        [root]
+        requires = ["first-only", "shared"]
+        [expected]
+        satisfiable = true
+        [packages.first-only.versions."1.0.0"]
+        sdist = false
+        [packages.shared.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let second = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "second-source-index"
+        [root]
+        requires = ["second-only", "shared"]
+        [expected]
+        satisfiable = true
+        [packages.second-only.versions."1.0.0"]
+        sdist = false
+        [packages.shared.versions."2.0.0"]
+        sdist = false
+    "#})?);
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["second-only", "first-only", "shared"]
+        # [[tool.uv.index]]
+        # name = "first"
+        # url = "{first}"
+        # [[tool.uv.index]]
+        # name = "second"
+        # url = "{second}"
+        # [tool.uv.sources]
+        # first-only = {{ index = "first" }}
+        # second-only = {{ index = "second" }}
+        # ///
+    "#, first = first.index_url(), second = second.index_url()})?;
+    uv_snapshot!(context.filters(), context.run().args([
+        "--with-requirements", "requirements.py", "python", "-c",
+        "from importlib.metadata import version; print(version('shared'))",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + first-only==1.0.0
+     + second-only==1.0.0
+     + shared==1.0.0
     ");
     Ok(())
 }

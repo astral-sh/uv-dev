@@ -34,6 +34,8 @@ pub enum SourceIndexError {
         "A default index from requirements sources conflicts with the command-line default index"
     )]
     ConfiguredDefault,
+    #[error("Conflicting policies for index URL `{0}` in requirements sources")]
+    ConflictingUrl(IndexUrl),
 }
 
 impl SourceIndexes {
@@ -63,8 +65,21 @@ impl SourceIndexes {
                 }
                 continue;
             }
-            if index.default && self.0.iter().any(|existing| existing.default) {
-                return Err(SourceIndexError::MultipleDefaults);
+            for existing in &self.0 {
+                if is_same_index(&existing.url, &index.url) {
+                    if existing.format != index.format
+                        || existing.authenticate != index.authenticate
+                        || existing.status_code_strategy() != index.status_code_strategy()
+                        || existing.simple_api_cache_control() != index.simple_api_cache_control()
+                        || existing.artifact_cache_control() != index.artifact_cache_control()
+                        || existing.hash_algorithm != index.hash_algorithm
+                        || existing.exclude_newer != index.exclude_newer
+                    {
+                        return Err(SourceIndexError::ConflictingUrl(index.url.clone()));
+                    }
+                } else if index.default && existing.default {
+                    return Err(SourceIndexError::MultipleDefaults);
+                }
             }
             self.0.push(index);
         }
