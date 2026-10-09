@@ -1562,8 +1562,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         // If the caller marked an environment as requiring artifact coverage, ensure it has
         // coverage.
         for marker in self.options.artifact_environments.iter().copied() {
-            // If the platform is part of the current environment...
-            if env.included_by_marker(marker) {
+            // Check the dependency's applicability before requesting metadata for this coverage.
+            let required_markers = marker.and(find_environments(id, pubgrub));
+            if env.included_by_marker(required_markers) {
                 let mut unavailable_wheel = None;
                 // But isn't supported by the distribution in this fork...
                 let supported_markers = if require_wheels
@@ -1576,7 +1577,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     if let Some(prioritized) = dist.prioritized() {
                         prioritized.implied_wheel_markers(
                             self.options.minimum_libc_version,
-                            marker.and(fork_markers),
+                            required_markers.and(fork_markers),
                             |wheel| match self
                                 .wheel_metadata_marker(wheel, id, pubgrub, requests)?
                             {
@@ -1595,9 +1596,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 } else {
                     artifact_markers
                 };
-                if !env.included_by_marker(supported_markers.and(marker))
-                    && env.included_by_marker(find_environments(id, pubgrub).and(marker))
-                {
+                if !env.included_by_marker(supported_markers.and(required_markers)) {
                     // Separate the required environment from the candidate's wheel coverage in
                     // this fork, allowing environments in neither set to fall on either side.
                     // For example, Darwin == 24 becomes Darwin < 25 when the wheels require
