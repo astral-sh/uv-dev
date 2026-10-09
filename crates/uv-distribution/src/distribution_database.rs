@@ -1110,7 +1110,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let progress_size_hint = progress_size_hint.or_else(|| content_length(&response));
         let mut download_size = content_length(&response).or(expected_size);
 
-        let progress = self
+        let mut progress = self
             .reporter
             .as_deref()
             .map(|reporter| DownloadGuard::new(reporter, dist.name(), progress_size_hint));
@@ -1168,6 +1168,15 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             let replaces_partial_download =
                 resumed_at.is_some() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT;
             if replaces_partial_download {
+                // A full replacement is a new attempt, not additional progress on discarded bytes.
+                drop(progress.take());
+                progress = self.reporter.as_deref().map(|reporter| {
+                    DownloadGuard::new(
+                        reporter,
+                        dist.name(),
+                        content_length(&response).or(progress_size_hint),
+                    )
+                });
                 writer
                     .get_mut()
                     .set_len(0)

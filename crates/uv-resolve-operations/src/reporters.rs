@@ -100,6 +100,10 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
             .on_build_complete(source, &source.color_display(), id);
     }
 
+    fn on_build_failed(&self, source: &BuildableSource, id: usize) {
+        self.reporter.on_build_failed(source, id);
+    }
+
     fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize {
         self.reporter.on_checkout_start(url, rev)
     }
@@ -134,6 +138,10 @@ impl uv_distribution::Reporter for ResolverReporter {
     fn on_build_complete(&self, source: &BuildableSource, id: usize) {
         self.reporter
             .on_build_complete(source, &source.color_display(), id);
+    }
+
+    fn on_build_failed(&self, source: &BuildableSource, id: usize) {
+        self.reporter.on_build_failed(source, id);
     }
 
     fn on_download_start(&self, name: &PackageName, size: Option<u64>) -> usize {

@@ -1562,3 +1562,59 @@ fn direct_url_range_resume_retry_limit() {
 fn direct_url_range_resume_success_does_not_reset_retries() {
     assert_wheel_download_timeout(RangeResponse::LimitedThenInterrupted, 1, 3, 2);
 }
+
+/// A server ignoring a resume request closes the partial attempt and starts fresh accounting.
+#[test]
+fn ignored_range_restarts_jsonl_download_progress() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let (server, _guard, _, _) = wheel_server(&context, RangeResponse::Ignored, 1);
+    let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["build-tag @ {wheel_url}"]
+    "#})?;
+    let mut filters = context.filters();
+    filters.push((
+        r#"(?m)^\{"type":"progress","phase":"download","status":"updated",[^\n]*\}\n"#,
+        "",
+    ));
+    uv_snapshot!(filters, context.sync()
+        .args(["--output-format", "jsonl", "--preview-features", "jsonl"])
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        , @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"download","status":"started","id":1,"name":"build-tag","total":932}
+    {"type":"progress","phase":"download","status":"failed","id":1,"name":"build-tag","completed":466,"total":932}
+    {"type":"progress","phase":"download","status":"started","id":2,"name":"build-tag","total":932}
+    {"type":"progress","phase":"download","status":"failed","id":2,"name":"build-tag","completed":466,"total":932}
+    {"type":"progress","phase":"download","status":"started","id":3,"name":"build-tag","total":932}
+    {"type":"progress","phase":"download","status":"failed","id":3,"name":"build-tag","completed":466,"total":932}
+    {"type":"progress","phase":"download","status":"started","id":4,"name":"build-tag","total":932}
+    {"type":"progress","phase":"download","status":"completed","id":4,"name":"build-tag","completed":932,"total":932}
+    {"type":"progress","phase":"resolve","status":"started"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"project","version":"0.1.0"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"build-tag","version":"1.0.0"}
+    {"type":"progress","phase":"resolve","status":"completed"}
+    {"type":"progress","phase":"install","status":"started","total":1}
+    {"type":"progress","phase":"install","status":"updated","name":"build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"completed","completed":1,"total":1}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[{"name":"build-tag","version":"1.0.0","action":"installed"}]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"create"},"dry_run":false}
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    "#);
+    Ok(())
+}

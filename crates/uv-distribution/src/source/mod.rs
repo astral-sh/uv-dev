@@ -51,6 +51,7 @@ use uv_workspace::pyproject::ToolUvSources;
 use crate::distribution_database::ManagedClient;
 use crate::error::Error;
 use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata};
+use crate::reporter::BuildGuard;
 use crate::source::built_wheel_metadata::{BuiltWheelFile, BuiltWheelMetadata};
 use crate::source::revision::Revision;
 use crate::source::validated_archive::{ArchiveValidation, ValidatedSourceArchive};
@@ -738,10 +739,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             }
         }
 
-        let task = self
+        let build = self
             .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
+            .as_deref()
+            .map(|reporter| BuildGuard::new(reporter, source));
 
         // Build the source distribution.
         let (disk_filename, wheel_filename, metadata) = self
@@ -754,10 +755,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             )
             .await?;
 
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
+        if let Some(build) = build {
+            build.complete();
         }
 
         // Store the metadata.
@@ -921,10 +920,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             });
         }
 
-        let task = self
+        let build = self
             .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
+            .as_deref()
+            .map(|reporter| BuildGuard::new(reporter, source));
 
         // Build the source distribution.
         let (_disk_filename, _wheel_filename, metadata) = self
@@ -937,10 +936,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             )
             .await?;
 
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
+        if let Some(build) = build {
+            build.complete();
         }
 
         // If necessary, mark the metadata as dynamic.
@@ -1143,10 +1140,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 .await?
         };
 
-        let task = self
+        let build = self
             .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
+            .as_deref()
+            .map(|reporter| BuildGuard::new(reporter, source));
 
         let (disk_filename, filename, metadata) = self
             .build_distribution(
@@ -1158,10 +1155,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             )
             .await?;
 
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
+        if let Some(build) = build {
+            build.complete();
         }
 
         // Store the metadata.
@@ -1296,10 +1291,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
+        let build = self
             .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
+            .as_deref()
+            .map(|reporter| BuildGuard::new(reporter, source));
 
         let (_disk_filename, _filename, metadata) = self
             .build_distribution(
@@ -1311,10 +1306,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             )
             .await?;
 
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
+        if let Some(build) = build {
+            build.complete();
         }
 
         // If necessary, mark the metadata as dynamic.
@@ -1464,10 +1457,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
+        let build = self
             .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
+            .as_deref()
+            .map(|reporter| BuildGuard::new(reporter, source));
 
         let (disk_filename, filename, metadata) = self
             .build_distribution(
@@ -1479,10 +1472,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             )
             .await?;
 
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
+        if let Some(build) = build {
+            build.complete();
         }
 
         // Store the metadata.
@@ -1668,10 +1659,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
+        let build = self
             .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
+            .as_deref()
+            .map(|reporter| BuildGuard::new(reporter, source));
 
         let (_disk_filename, _filename, metadata) = self
             .build_distribution(
@@ -1683,10 +1674,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             )
             .await?;
 
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
+        if let Some(build) = build {
+            build.complete();
         }
 
         // Store the metadata.
@@ -1950,10 +1939,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
+        let build = self
             .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
+            .as_deref()
+            .map(|reporter| BuildGuard::new(reporter, source));
 
         let (disk_filename, filename, metadata) = self
             .build_distribution(
@@ -1965,10 +1954,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             )
             .await?;
 
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
+        if let Some(build) = build {
+            build.complete();
         }
 
         // Store the metadata.
@@ -2107,10 +2094,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
+        let build = self
             .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
+            .as_deref()
+            .map(|reporter| BuildGuard::new(reporter, source));
 
         let (_disk_filename, _filename, metadata) = self
             .build_distribution(
@@ -2122,10 +2109,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             )
             .await?;
 
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
+        if let Some(build) = build {
+            build.complete();
         }
 
         // If necessary, mark the metadata as dynamic.
@@ -2218,10 +2203,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             ));
         }
 
-        let task = self
+        let build = self
             .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
+            .as_deref()
+            .map(|reporter| BuildGuard::new(reporter, source));
 
         let (disk_filename, filename, metadata) = self
             .build_distribution(
@@ -2233,10 +2218,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             )
             .await?;
 
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
+        if let Some(build) = build {
+            build.complete();
         }
 
         // Store the metadata.
@@ -2521,10 +2504,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
+        let build = self
             .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
+            .as_deref()
+            .map(|reporter| BuildGuard::new(reporter, source));
 
         let (_disk_filename, _filename, metadata) = self
             .build_distribution(
@@ -2536,10 +2519,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             )
             .await?;
 
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
+        if let Some(build) = build {
+            build.complete();
         }
 
         // If necessary, mark the metadata as dynamic.

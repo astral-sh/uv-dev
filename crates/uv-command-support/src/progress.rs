@@ -47,7 +47,7 @@ pub struct JsonlProgressEvent {
     status: ProgressStatus,
     /// A process-wide identifier shared by all events for one concurrent operation.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<usize>,
+    id: Option<usize>,
     /// The package, distribution, or source currently being processed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -59,7 +59,7 @@ pub struct JsonlProgressEvent {
     pub url: Option<String>,
     /// The Git revision associated with a checkout operation.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub revision: Option<String>,
+    revision: Option<String>,
     /// Completed bytes for transfers, or completed packages for package phases.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed: Option<u64>,
@@ -296,6 +296,28 @@ impl ProgressReporter {
         progress.finish_with_message(message);
     }
 
+    /// Close an abandoned build without presenting it as completed.
+    pub fn on_build_failed(&self, source: &dyn fmt::Display, id: usize) {
+        let ProgressMode::Multi { state, .. } = &self.mode else {
+            return;
+        };
+        let progress = {
+            let mut state = state.lock().unwrap();
+            let Some(progress) = state.bars.remove(&id) else {
+                return;
+            };
+            state.headers -= 1;
+            progress
+        };
+        if self.printer.emits_jsonl_progress() {
+            let mut event = JsonlProgressEvent::new("build", ProgressStatus::Failed);
+            event.id = Some(id);
+            event.name = Some(source.to_string());
+            self.emit_progress(&event);
+        }
+        progress.finish_and_clear();
+    }
+
     pub fn on_request_start(&self, direction: Direction, name: String, size: Option<u64>) -> usize {
         let ProgressMode::Multi {
             multi_progress,
@@ -419,11 +441,15 @@ impl ProgressReporter {
         }
     }
 
-    pub fn on_request_complete(&self, direction: Direction, id: usize) {
-        self.finish_request(direction, id, ProgressStatus::Completed);
+    pub fn on_request_complete(&self, id: usize) {
+        self.finish_request(id, ProgressStatus::Completed);
     }
 
-    fn finish_request(&self, direction: Direction, id: usize, status: ProgressStatus) {
+    pub fn on_request_failed(&self, id: usize) {
+        self.finish_request(id, ProgressStatus::Failed);
+    }
+
+    fn finish_request(&self, id: usize, status: ProgressStatus) {
         let ProgressMode::Multi {
             state,
             multi_progress,
@@ -433,7 +459,12 @@ impl ProgressReporter {
         };
 
         let mut state = state.lock().unwrap();
-        if let ProgressBarKind::Numeric { progress, size, .. } = state.bars.remove(&id).unwrap() {
+        if let ProgressBarKind::Numeric {
+            progress,
+            size,
+            direction,
+        } = state.bars.remove(&id).unwrap()
+        {
             if matches!(status, ProgressStatus::Completed)
                 && multi_progress.is_hidden()
                 && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS
@@ -472,11 +503,11 @@ impl ProgressReporter {
     }
 
     pub fn on_download_complete(&self, id: usize) {
-        self.on_request_complete(Direction::Download, id);
+        self.on_request_complete(id);
     }
 
     pub fn on_download_failed(&self, id: usize) {
-        self.finish_request(Direction::Download, id, ProgressStatus::Failed);
+        self.on_request_failed(id);
     }
 
     pub fn on_download_start(&self, name: String, size: Option<u64>) -> usize {
@@ -488,7 +519,7 @@ impl ProgressReporter {
     }
 
     pub fn on_upload_complete(&self, id: usize) {
-        self.on_request_complete(Direction::Upload, id);
+        self.on_request_complete(id);
     }
 
     pub fn on_upload_start(&self, name: String, size: Option<u64>) -> usize {
@@ -500,7 +531,7 @@ impl ProgressReporter {
     }
 
     pub fn on_hash_complete(&self, id: usize) {
-        self.on_request_complete(Direction::Hash, id);
+        self.on_request_complete(id);
     }
 
     pub fn on_hash_start(&self, name: String, size: Option<u64>) -> usize {

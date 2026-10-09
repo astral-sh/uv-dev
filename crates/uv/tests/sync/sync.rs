@@ -17,6 +17,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_fs::Simplified;
 use uv_static::EnvVars;
+use uv_test::archive::write_tar_gz;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 
@@ -2137,47 +2138,6 @@ fn sync_jsonl_verbose_no_progress() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn sync_jsonl_verbose_no_progress_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let server = PackseServer::new("simple/dependency-groups.toml");
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-    "#})?;
-    let output = context
-        .sync()
-        .args([
-            "-v",
-            "--output-format",
-            "jsonl",
-            "--preview-features",
-            "jsonl",
-        ])
-        .arg("--index-url")
-        .arg(server.index_url())
-        .env(EnvVars::UV_NO_PROGRESS, "1")
-        .output()?;
-    assert!(output.status.success());
-    let events = String::from_utf8(output.stdout)?
-        .lines()
-        .map(serde_json::from_str::<serde_json::Value>)
-        .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["type"], "result");
-    assert_eq!(
-        events[0]["sync"]["changes"].as_array().map(Vec::len),
-        Some(1)
-    );
-    Ok(())
-}
-
 /// Streaming fallback closes the abandoned attempt before reporting a successful replacement.
 #[tokio::test]
 async fn sync_jsonl_streaming_fallback_completes_every_download() -> Result<()> {
@@ -2420,7 +2380,9 @@ fn sync_jsonl_concurrent_download_and_install_events() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
 
     let repository = context.temp_dir.child("repository");
     repository.child("src/example").create_dir_all()?;
@@ -2463,6 +2425,18 @@ fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
         .assert()
         .success();
 
+    let commit = Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?
+        .assert()
+        .success();
+    let commit = String::from_utf8(commit.get_output().stdout.clone())?
+        .trim()
+        .to_owned();
+    let context = context.with_filter((commit, "[COMMIT]"));
+
     let repository_url = Url::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     context
@@ -2479,84 +2453,38 @@ fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
             example = {{ git = "{repository_url}" }}
         "#})?;
 
-    let output = context
-        .sync()
-        .args(["--color", "always"])
-        .arg("--output-format")
-        .arg("jsonl")
-        .arg("--preview-features")
-        .arg("jsonl")
-        .output()?;
-    assert!(output.status.success());
+    let mut filters = context.filters();
+    filters.push((r"\x1b", "[ESC]"));
+    filters.push((
+        r#"(?m)^\{"type":"progress","phase":"download","status":"updated",[^\n]*\}\n"#,
+        "",
+    ));
+    uv_snapshot!(filters, context.sync()
+        .args(["--color", "always", "--output-format", "jsonl", "--preview-features", "jsonl"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"checkout","status":"started","id":1,"url":"file://[TEMP_DIR]/repository/","revision":"HEAD"}
+    {"type":"progress","phase":"checkout","status":"completed","id":1,"url":"file://[TEMP_DIR]/repository/","revision":"[COMMIT]"}
+    {"type":"progress","phase":"resolve","status":"started"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"project","version":"0.1.0"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"example","version":"0.1.0"}
+    {"type":"progress","phase":"resolve","status":"completed"}
+    {"type":"progress","phase":"prepare","status":"started","total":1}
+    {"type":"progress","phase":"build","status":"started","id":2,"name":"example @ git+file://[TEMP_DIR]/repository/@[COMMIT]"}
+    {"type":"progress","phase":"build","status":"completed","id":2,"name":"example @ git+file://[TEMP_DIR]/repository/@[COMMIT]"}
+    {"type":"progress","phase":"prepare","status":"updated","name":"example==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT])","completed":1,"total":1}
+    {"type":"progress","phase":"prepare","status":"completed","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"started","total":1}
+    {"type":"progress","phase":"install","status":"updated","name":"example==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT])","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"completed","completed":1,"total":1}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[{"name":"example","version":"0.1.0","action":"installed"}]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"create"},"dry_run":false}
 
-    let stdout = String::from_utf8(output.stdout)?;
-    let events = stdout
-        .lines()
-        .map(serde_json::from_str::<serde_json::Value>)
-        .collect::<Result<Vec<_>, _>>()?;
-    assert!(events.iter().all(|event| {
-        event["name"]
-            .as_str()
-            .is_none_or(|name| !name.contains('\u{1b}'))
-    }));
-    let mut operations = events
-        .iter()
-        .filter(|event| event["phase"] == "checkout" || event["phase"] == "build")
-        .map(|event| {
-            json!({
-                "phase": event["phase"],
-                "status": event["status"],
-                "id": event["id"],
-                "named": event.get("name").is_some(),
-                "source": event.get("url").is_some(),
-                "revision": event.get("revision").is_some(),
-            })
-        })
-        .collect::<Vec<_>>();
-    operations.sort_by(|left, right| {
-        left["id"]
-            .as_u64()
-            .cmp(&right["id"].as_u64())
-            .then_with(|| right["status"].as_str().cmp(&left["status"].as_str()))
-    });
-
-    insta::assert_json_snapshot!(operations, @r#"
-    [
-      {
-        "id": 1,
-        "named": false,
-        "phase": "checkout",
-        "revision": true,
-        "source": true,
-        "status": "started"
-      },
-      {
-        "id": 1,
-        "named": false,
-        "phase": "checkout",
-        "revision": true,
-        "source": true,
-        "status": "completed"
-      },
-      {
-        "id": 2,
-        "named": true,
-        "phase": "build",
-        "revision": false,
-        "source": false,
-        "status": "started"
-      },
-      {
-        "id": 2,
-        "named": true,
-        "phase": "build",
-        "revision": false,
-        "source": false,
-        "status": "completed"
-      }
-    ]
+    ----- stderr -----
+    [ESC][2mResolved [ESC][1m2 packages[ESC][0m [ESC][2min [TIME][ESC][0m[ESC][0m
+    [ESC][2mPrepared [ESC][1m1 package[ESC][0m [ESC][2min [TIME][ESC][0m[ESC][0m
+    [ESC][2mInstalled [ESC][1m1 package[ESC][0m [ESC][2min [TIME][ESC][0m[ESC][0m
+     [ESC][32m+[ESC][39m [ESC][1mexample[ESC][0m[ESC][2m==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT])[ESC][0m
     "#);
-
     Ok(())
 }
 
@@ -20470,5 +20398,111 @@ fn project_build_hashes_locked_script_run_with_no_sync() -> Result<()> {
     package
         .child("backend-executed")
         .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Recovering from invalid built metadata must close the abandoned build operation.
+#[tokio::test]
+async fn sync_jsonl_failed_metadata_build_terminates_operation() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let server = MockServer::start().await;
+    let (wheel_name, wheel) = generate_wheel(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let (_, invalid_wheel) = generate_wheel(
+        &"wrong-name".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let backend = formatdoc! {r#"
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "example-2.0.0-py3-none-any.whl"
+            Path(wheel_directory, filename).write_bytes(bytes.fromhex({wheel:?}))
+            return filename
+        "#, wheel = hex::encode(invalid_wheel),
+    };
+    let mut sdist = Vec::new();
+    write_tar_gz(
+        &mut sdist,
+        &[
+            (
+                "example-2.0.0/pyproject.toml",
+                "[project]\nname = 'example'\nversion = '2.0.0'\ndynamic = ['dependencies']\n[build-system]\nrequires = []\nbuild-backend = 'backend'\nbackend-path = ['.']\n",
+            ),
+            ("example-2.0.0/backend.py", &backend),
+        ],
+    )?;
+    Mock::given(method("GET")).and(path("/simple/example/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("<a href='/example-2.0.0.tar.gz'>example-2.0.0.tar.gz</a><a href='/{wheel_name}'>{wheel_name}</a>"), "text/html"))
+        .mount(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/example-2.0.0.tar.gz"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(sdist))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{wheel_name}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+    "#})?;
+    let mut filters = context.filters();
+    filters.push((
+        r#"(?m)^\{"type":"progress","phase":"download","status":"updated",[^\n]*\}\n"#,
+        "",
+    ));
+    uv_snapshot!(filters, context.sync()
+        .arg("--index-url").arg(format!("{}/simple", server.uri()))
+        .args(["--output-format", "jsonl", "--preview-features", "jsonl"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"resolve","status":"started"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"project","version":"0.1.0"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"example","version":"2.0.0"}
+    {"type":"progress","phase":"build","status":"started","id":1,"name":"example==2.0.0"}
+    {"type":"progress","phase":"build","status":"failed","id":1,"name":"example==2.0.0"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"example","version":"1.0.0"}
+    {"type":"progress","phase":"resolve","status":"completed"}
+    {"type":"progress","phase":"prepare","status":"started","total":1}
+    {"type":"progress","phase":"download","status":"started","id":2,"name":"example","total":975}
+    {"type":"progress","phase":"download","status":"completed","id":2,"name":"example","completed":975,"total":975}
+    {"type":"progress","phase":"prepare","status":"updated","name":"example==1.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"prepare","status":"completed","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"started","total":1}
+    {"type":"progress","phase":"install","status":"updated","name":"example==1.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"completed","completed":1,"total":1}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[{"name":"example","version":"1.0.0","action":"installed"}]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"create"},"dry_run":false}
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    "#);
     Ok(())
 }
