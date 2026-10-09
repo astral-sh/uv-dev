@@ -839,13 +839,9 @@ impl EnvironmentOptions {
         #[cfg(unix)]
         let run_resource_limits = uv_unix::SUPPORTED_RESOURCE_LIMITS
             .iter()
-            .filter_map(|&(environment_variable, resource)| {
-                parse_integer_environment_variable(environment_variable, None)
-                    .map(|value| {
-                        value.map(|value| {
-                            uv_unix::ResourceLimit::new(environment_variable, resource, value)
-                        })
-                    })
+            .filter_map(|&resource| {
+                parse_integer_environment_variable(resource.environment_variable(), None)
+                    .map(|value| value.map(|value| uv_unix::ResourceLimit::new(resource, value)))
                     .transpose()
             })
             .collect::<Result<Vec<_>, _>>()?;

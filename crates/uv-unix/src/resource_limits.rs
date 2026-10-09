@@ -19,33 +19,33 @@ use thiserror::Error;
 use uv_static::EnvVars;
 
 /// The resource limits supported by the current Unix platform.
-pub const SUPPORTED_RESOURCE_LIMITS: &[(&str, RunResource)] = &[
+pub const SUPPORTED_RESOURCE_LIMITS: &[RunResource] = &[
     #[cfg(not(any(target_os = "freebsd", target_os = "netbsd", target_os = "openbsd")))]
-    (
-        EnvVars::UV_RUN_RLIMIT_AS,
-        RunResource::Nix(Resource::RLIMIT_AS),
-    ),
+    RunResource {
+        environment_variable: EnvVars::UV_RUN_RLIMIT_AS,
+        resource: PlatformResource::Nix(Resource::RLIMIT_AS),
+    },
     #[cfg(target_os = "freebsd")]
-    (
-        EnvVars::UV_RUN_RLIMIT_AS,
-        RunResource::Nix(Resource::RLIMIT_VMEM),
-    ),
-    (
-        EnvVars::UV_RUN_RLIMIT_CORE,
-        RunResource::Nix(Resource::RLIMIT_CORE),
-    ),
-    (
-        EnvVars::UV_RUN_RLIMIT_CPU,
-        RunResource::Nix(Resource::RLIMIT_CPU),
-    ),
-    (
-        EnvVars::UV_RUN_RLIMIT_FSIZE,
-        RunResource::Nix(Resource::RLIMIT_FSIZE),
-    ),
-    (
-        EnvVars::UV_RUN_RLIMIT_NOFILE,
-        RunResource::Nix(Resource::RLIMIT_NOFILE),
-    ),
+    RunResource {
+        environment_variable: EnvVars::UV_RUN_RLIMIT_AS,
+        resource: PlatformResource::Nix(Resource::RLIMIT_VMEM),
+    },
+    RunResource {
+        environment_variable: EnvVars::UV_RUN_RLIMIT_CORE,
+        resource: PlatformResource::Nix(Resource::RLIMIT_CORE),
+    },
+    RunResource {
+        environment_variable: EnvVars::UV_RUN_RLIMIT_CPU,
+        resource: PlatformResource::Nix(Resource::RLIMIT_CPU),
+    },
+    RunResource {
+        environment_variable: EnvVars::UV_RUN_RLIMIT_FSIZE,
+        resource: PlatformResource::Nix(Resource::RLIMIT_FSIZE),
+    },
+    RunResource {
+        environment_variable: EnvVars::UV_RUN_RLIMIT_NOFILE,
+        resource: PlatformResource::Nix(Resource::RLIMIT_NOFILE),
+    },
     #[cfg(any(
         target_os = "linux",
         target_os = "android",
@@ -54,20 +54,33 @@ pub const SUPPORTED_RESOURCE_LIMITS: &[(&str, RunResource)] = &[
         target_os = "openbsd",
         target_os = "aix"
     ))]
-    (
-        EnvVars::UV_RUN_RLIMIT_NPROC,
-        RunResource::Nix(Resource::RLIMIT_NPROC),
-    ),
+    RunResource {
+        environment_variable: EnvVars::UV_RUN_RLIMIT_NPROC,
+        resource: PlatformResource::Nix(Resource::RLIMIT_NPROC),
+    },
     #[cfg(target_vendor = "apple")]
-    (
-        EnvVars::UV_RUN_RLIMIT_NPROC,
-        RunResource::Apple(rustix::process::Resource::Nproc),
-    ),
+    RunResource {
+        environment_variable: EnvVars::UV_RUN_RLIMIT_NPROC,
+        resource: PlatformResource::Apple(rustix::process::Resource::Nproc),
+    },
 ];
 
-/// A platform-specific resource supported by the available safe Unix wrappers.
+/// A supported resource with its platform mapping and configuration name.
 #[derive(Debug, Clone, Copy)]
-pub enum RunResource {
+pub struct RunResource {
+    environment_variable: &'static str,
+    resource: PlatformResource,
+}
+
+impl RunResource {
+    /// Return the environment variable that configures this resource.
+    pub fn environment_variable(self) -> &'static str {
+        self.environment_variable
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PlatformResource {
     Nix(Resource),
     #[cfg(target_vendor = "apple")]
     Apple(rustix::process::Resource),
@@ -76,24 +89,19 @@ pub enum RunResource {
 /// A soft resource limit to apply while preserving the corresponding hard limit.
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceLimit {
-    environment_variable: &'static str,
     resource: RunResource,
     value: u64,
 }
 
 impl ResourceLimit {
-    /// Create a soft resource limit from its environment variable and parsed value.
-    pub fn new(environment_variable: &'static str, resource: RunResource, value: u64) -> Self {
-        Self {
-            environment_variable,
-            resource,
-            value,
-        }
+    /// Create a soft resource limit from a supported resource and parsed value.
+    pub fn new(resource: RunResource, value: u64) -> Self {
+        Self { resource, value }
     }
 
     /// Return the environment variable that configured this resource limit.
     pub fn environment_variable(self) -> &'static str {
-        self.environment_variable
+        self.resource.environment_variable()
     }
 
     /// Return the configured soft resource limit.
@@ -103,13 +111,13 @@ impl ResourceLimit {
 
     /// Validate the configured limit and prepare it for application in a child process.
     pub fn prepare(self) -> Result<PreparedResourceLimit, ResourceLimitError> {
-        let resource_name = self
-            .environment_variable
+        let environment_variable = self.environment_variable();
+        let resource_name = environment_variable
             .strip_prefix("UV_RUN_")
-            .unwrap_or(self.environment_variable);
+            .unwrap_or(environment_variable);
 
-        let prepared = match self.resource {
-            RunResource::Nix(resource) => {
+        let prepared = match self.resource.resource {
+            PlatformResource::Nix(resource) => {
                 let (_, hard) =
                     getrlimit(resource).map_err(|source| ResourceLimitError::GetLimitFailed {
                         resource: resource_name,
@@ -138,7 +146,7 @@ impl ResourceLimit {
                 }
             }
             #[cfg(target_vendor = "apple")]
-            RunResource::Apple(resource) => {
+            PlatformResource::Apple(resource) => {
                 let limit = rustix::process::getrlimit(resource);
                 if let Some(hard) = limit.maximum
                     && self.value > hard
