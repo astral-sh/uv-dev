@@ -148,7 +148,7 @@ impl OptionsBuilder {
     /// Builds the options.
     pub fn build(self) -> Options {
         let mut artifact_environments = self.artifact_environments.into_markers();
-        for marker in self.required_environments.iter() {
+        for marker in &self.required_environments {
             if !artifact_environments.contains(marker) {
                 artifact_environments.push(*marker);
             }
