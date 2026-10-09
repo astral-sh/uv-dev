@@ -35,6 +35,17 @@ pub(crate) struct CandidateSelector {
     minimum_libc_version: Option<MinimumLibcVersion>,
 }
 
+/// The soft wheel preference pass and the unfiltered resolution fallback.
+#[derive(Clone, Copy)]
+enum CandidateSelectionPass<'a> {
+    Preferred {
+        required_environments: &'a [MarkerTree],
+        environment: &'a ResolverEnvironment,
+        minimum_libc_version: Option<MinimumLibcVersion>,
+    },
+    Fallback,
+}
+
 impl CandidateSelector {
     /// Return a [`CandidateSelector`] for the given [`Manifest`].
     pub(crate) fn for_resolution(
@@ -561,8 +572,11 @@ impl CandidateSelector {
                     version_maps,
                     prerelease_candidates,
                     env,
-                    required_environments,
-                    true,
+                    CandidateSelectionPass::Preferred {
+                        required_environments,
+                        environment: env,
+                        minimum_libc_version: self.minimum_libc_version,
+                    },
                 )
             {
                 return Some(candidate);
@@ -573,8 +587,7 @@ impl CandidateSelector {
                 version_maps,
                 prerelease_candidates,
                 env,
-                required_environments,
-                false,
+                CandidateSelectionPass::Fallback,
             )
         };
         // Index priority takes precedence over the soft preference for wheels.
@@ -596,8 +609,7 @@ impl CandidateSelector {
         version_maps: &'a [VersionMap],
         prerelease_candidates: PrereleaseCandidates,
         env: &ResolverEnvironment,
-        required_environments: &[MarkerTree],
-        require_wheels: bool,
+        pass: CandidateSelectionPass<'_>,
     ) -> Option<Candidate<'a>> {
         trace!(
             "Selecting candidate for {package_name} with range {range} with {} remote versions",
@@ -631,11 +643,7 @@ impl CandidateSelector {
                     range,
                     prerelease_candidates,
                     highest,
-                    require_wheels.then_some((
-                        required_environments,
-                        env,
-                        self.minimum_libc_version,
-                    )),
+                    pass,
                 )
             } else {
                 Self::select_candidate(
@@ -661,11 +669,7 @@ impl CandidateSelector {
                     range,
                     prerelease_candidates,
                     highest,
-                    require_wheels.then_some((
-                        required_environments,
-                        env,
-                        self.minimum_libc_version,
-                    )),
+                    pass,
                 )
             }
         } else {
@@ -677,11 +681,7 @@ impl CandidateSelector {
                         range,
                         prerelease_candidates,
                         highest,
-                        require_wheels.then_some((
-                            required_environments,
-                            env,
-                            self.minimum_libc_version,
-                        )),
+                        pass,
                     )
                 })
             } else {
@@ -692,11 +692,7 @@ impl CandidateSelector {
                         range,
                         prerelease_candidates,
                         highest,
-                        require_wheels.then_some((
-                            required_environments,
-                            env,
-                            self.minimum_libc_version,
-                        )),
+                        pass,
                     )
                 })
             }
@@ -734,11 +730,7 @@ impl CandidateSelector {
         range: &Range<Version>,
         prerelease_candidates: PrereleaseCandidates,
         highest: bool,
-        required_environments: Option<(
-            &[MarkerTree],
-            &ResolverEnvironment,
-            Option<MinimumLibcVersion>,
-        )>,
+        pass: CandidateSelectionPass<'_>,
     ) -> Option<Candidate<'a>> {
         let segments = range.iter();
         let segments = if highest {
@@ -780,16 +772,18 @@ impl CandidateSelector {
                 let Some(dist) = maybe_dist.prioritized_dist() else {
                     continue;
                 };
-                if required_environments.is_some_and(
-                    |(required_environments, env, minimum_libc_version)| {
-                        !Self::supports_required_environments(
-                            dist,
-                            env,
-                            required_environments,
-                            minimum_libc_version,
-                        )
-                    },
-                ) {
+                if let CandidateSelectionPass::Preferred {
+                    required_environments,
+                    environment,
+                    minimum_libc_version,
+                } = pass
+                    && !Self::supports_required_environments(
+                        dist,
+                        environment,
+                        required_environments,
+                        minimum_libc_version,
+                    )
+                {
                     continue;
                 }
                 trace!(
@@ -838,8 +832,9 @@ impl CandidateSelector {
             // exists.
             if matches!(candidate.dist(), CandidateDist::Incompatible { .. }) {
                 // Soft ranking must leave hard incompatibilities to the unfiltered pass.
-                if required_environments.is_some() {
-                    continue;
+                match pass {
+                    CandidateSelectionPass::Preferred { .. } => continue,
+                    CandidateSelectionPass::Fallback => {}
                 }
                 if incompatible.is_none() {
                     incompatible = Some(candidate);
