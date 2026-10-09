@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use owo_colors::OwoColorize;
 use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Direction, Graph};
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_configuration::AnnotationStyle;
 use uv_distribution_types::{DistributionMetadata, Name, SourceAnnotation, SourceAnnotations};
@@ -102,10 +102,30 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
                 }
             }
 
+            let build_packages = if self.resolution.build_dependencies.requirements.is_empty() {
+                FxHashSet::default()
+            } else {
+                self.resolution.dependency_closure(
+                    self.resolution
+                        .build_dependencies
+                        .requirements
+                        .iter()
+                        .filter(|requirement| {
+                            requirement.evaluate_markers(self.env.marker_environment(), &[])
+                        }),
+                )
+            };
             for requirement in self
                 .resolution
                 .constraints
                 .requirements()
+                .chain(
+                    self.resolution
+                        .build_dependencies
+                        .constraints
+                        .requirements()
+                        .filter(|requirement| build_packages.contains(&requirement.name)),
+                )
                 .filter(|requirement| {
                     requirement.evaluate_markers(self.env.marker_environment(), &[])
                 })

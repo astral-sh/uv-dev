@@ -1572,6 +1572,7 @@ pub async fn resolve_environment(
     Ok(uv_resolve_operations::resolve(
         requirements,
         constraints,
+        None,
         overrides,
         override_dependencies,
         excludes,
@@ -1965,6 +1966,7 @@ pub async fn update_environment(
     let (resolution, hasher) = match uv_resolve_operations::resolve(
         requirements,
         constraints,
+        None,
         overrides,
         override_dependencies,
         excludes,
