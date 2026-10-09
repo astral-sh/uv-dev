@@ -3,7 +3,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use serde_json::json;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
@@ -2830,5 +2830,119 @@ async fn audit_sarif_project_artifact_uri() -> Result<()> {
     ]
     "#);
 
+    Ok(())
+}
+
+/// Audit follows selected root groups without activating groups on reached non-root members.
+#[tokio::test]
+async fn audit_explicit_roots_follow_selected_groups() -> Result<()> {
+    let index = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "audit-explicit-workspace-roots"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.leaf.versions."1.0.0"]
+        sdist = false
+        [packages.group-only-leaf.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12");
+    let index_url = index.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = ["shared"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        shared = {{ workspace = true }}
+        [tool.uv.workspace]
+        members = ["shared"]
+        roots = ["app", "shared"]
+        [[tool.uv.index]]
+        url = "{index_url}"
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf==1.0.0"]
+        [dependency-groups]
+        dev = ["group-only-leaf==1.0.0"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context.lock().assert().success();
+
+    // Frozen locks can retain resolved group data for members outside the root set.
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(r#"roots = ["app", "shared"]"#, r#"roots = ["app"]"#),
+    )?;
+    let mut lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let manifest = lock["manifest"].as_table_mut().expect("lockfile manifest");
+    manifest.insert(
+        "members".to_string(),
+        toml::Value::Array(vec![toml::Value::String("app".to_string())]),
+    );
+    manifest.insert(
+        "workspace-members".to_string(),
+        toml::Value::Array(vec![
+            toml::Value::String("app".to_string()),
+            toml::Value::String("shared".to_string()),
+        ]),
+    );
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&toml::to_string(&lock)?)?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .and(body_json(json!({
+            "queries": [{"package": {"name": "leaf", "ecosystem": "PyPI"}, "version": "1.0.0"}]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": []}]
+        })))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.audit().args([
+        "--frozen", "--no-default-groups", "--preview-features", "audit", "--service-url",
+    ]).arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Found no known vulnerabilities and no adverse project statuses in 0 packages
+    ");
+    assert!(server.received_requests().await.unwrap().is_empty());
+
+    uv_snapshot!(context.filters(), context.audit().args([
+        "--frozen", "--preview-features", "audit", "--service-url",
+    ]).arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Found no known vulnerabilities and no adverse project statuses in 1 package
+    ");
+    uv_snapshot!(context.filters(), context.audit().args([
+        "--frozen", "--only-group", "dev", "--preview-features", "audit", "--service-url",
+    ]).arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Found no known vulnerabilities and no adverse project statuses in 1 package
+    ");
     Ok(())
 }
