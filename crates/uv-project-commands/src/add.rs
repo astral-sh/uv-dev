@@ -771,13 +771,31 @@ pub async fn add(
                     .into_iter()
                     .flatten();
                 for member_index in member_indexes {
+                    if let Some(name) = member_index.name.as_ref()
+                        && let Some(root_index) = project
+                            .workspace()
+                            .pyproject_toml()
+                            .tool
+                            .as_ref()
+                            .and_then(|tool| tool.uv.as_ref())
+                            .and_then(|uv| uv.index.as_ref())
+                            .and_then(|indexes| {
+                                indexes
+                                    .iter()
+                                    .find(|index| index.name.as_ref() == Some(name))
+                            })
+                        && (member_index.url != root_index.url
+                            || member_index.format != root_index.format)
+                    {
+                        shadowed_names.insert(name.clone());
+                    }
                     for index in &indexes {
                         if let Some(name) = index.name.as_ref()
                             && member_index.name.as_ref() == Some(name)
                             && (member_index.url != index.url
                                 || member_index.format != index.format)
                         {
-                            shadowed_names.insert(name.to_string());
+                            shadowed_names.insert(name.clone());
                         }
                     }
                 }

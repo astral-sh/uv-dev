@@ -15762,3 +15762,91 @@ fn add_index_restored_name_retains_source() -> Result<()> {
     "#);
     Ok(())
 }
+
+#[test]
+fn add_index_retains_member_override_of_old_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = uv_test::packse::PackseServer::new("simple/dependency-groups.toml");
+    let shadow = uv_test::packse::PackseServer::new("simple/dependency-groups.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [tool.uv.workspace]
+        members = ["member"]
+        [tool.uv.sources]
+        sniffio = {{ index = "old" }}
+        [[tool.uv.index]]
+        name = "old"
+        url = "{index}"
+        explicit = true
+    "#, index = original.index_url()})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["sniffio==1.3.1"]
+        [[tool.uv.index]]
+        name = "old"
+        url = "{index}"
+        explicit = true
+    "#, index = shadow.index_url()})?;
+    context
+        .add()
+        .arg("iniconfig==2.0.0")
+        .arg("--index")
+        .arg(format!("new={}", original.index_url()))
+        .arg("--frozen")
+        .assert()
+        .success();
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "iniconfig==2.0.0",
+        ]
+        [tool.uv.workspace]
+        members = ["member"]
+        [tool.uv.sources]
+        sniffio = { index = "old" }
+        iniconfig = { index = "new" }
+        [[tool.uv.index]]
+        name = "new"
+        url = "http://[LOCALHOST]/simple/"
+        explicit = true
+        [[tool.uv.index]]
+        name = "old"
+        url = "http://[LOCALHOST]/simple/"
+        explicit = true
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.lock(), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    "#);
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let sniffio = lock["package"]
+        .as_array()
+        .expect("locked packages")
+        .iter()
+        .find(|package| package["name"].as_str() == Some("sniffio"))
+        .expect("locked sniffio");
+    assert_eq!(
+        sniffio["source"]["registry"].as_str(),
+        Some(shadow.index_url().as_str())
+    );
+    Ok(())
+}

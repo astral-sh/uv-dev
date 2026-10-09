@@ -14,7 +14,7 @@ use toml_edit::{
 
 use uv_cache_key::CanonicalUrl;
 use uv_configuration::AddBoundsKind;
-use uv_distribution_types::{Index, IndexFormat, IndexUrl};
+use uv_distribution_types::{Index, IndexFormat, IndexName, IndexUrl};
 use uv_fs::{PortablePath, is_same_file_allow_missing, try_relative_to_if};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionParseError};
@@ -307,15 +307,11 @@ impl PyProjectTomlMut {
         &mut self,
         indexes: &[&Index],
         root_dir: &Path,
-        shadowed_names: &BTreeSet<String>,
+        shadowed_names: &BTreeSet<IndexName>,
     ) -> Result<(), Error> {
         let mut renames = Vec::new();
         for index in indexes {
-            let retain_aliases = index
-                .name
-                .as_deref()
-                .is_some_and(|name| shadowed_names.contains(name));
-            let previous_names = self.edit_index(index, root_dir, retain_aliases)?;
+            let previous_names = self.edit_index(index, root_dir, shadowed_names)?;
             if let Some(name) = index.name.as_deref() {
                 renames.push((previous_names, name));
             }
@@ -344,7 +340,7 @@ impl PyProjectTomlMut {
         &mut self,
         index: &Index,
         root_dir: &Path,
-        retain_aliases: bool,
+        shadowed_names: &BTreeSet<IndexName>,
     ) -> Result<Vec<String>, Error> {
         let size = self.doc.len();
         let existing = self
@@ -512,7 +508,13 @@ impl PyProjectTomlMut {
             let replaced = same_name || replaced_default || same_url;
             if replaced && let Some(name) = table.get("name").and_then(Item::as_str) {
                 previous_names.push(name.to_owned());
-                if retain_aliases && index.name.as_deref() != Some(name) {
+                let incoming_shadowed = index
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| shadowed_names.contains(name));
+                let previous_shadowed =
+                    IndexName::from_str(name).is_ok_and(|name| shadowed_names.contains(&name));
+                if (incoming_shadowed || previous_shadowed) && index.name.as_deref() != Some(name) {
                     let mut alias = table.clone();
                     // Retained aliases are available to pinned sources, not implicit searches.
                     alias.remove("default");
