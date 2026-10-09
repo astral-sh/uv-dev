@@ -1,7 +1,7 @@
 use uv_configuration::{
-    BuildIsolation, BuildOptions, BuildPolicy, BuildPolicyPackage, ExcludeNewer,
-    ForkStrategy, HashCheckingMode, IndexStrategy, KeyringProviderType, NoBinary, NoBuild, NoSources,
-    Prerelease, PrereleaseMode, PrereleasePackage, Reinstall, ResolutionMode, Upgrade,
+    BuildIsolation, BuildOptions, BuildPolicy, BuildPolicyPackage, ExcludeNewer, ForkStrategy,
+    HashCheckingMode, IndexStrategy, KeyringProviderType, NoBinary, NoBuild, NoSources, Prerelease,
+    PrereleaseMode, PrereleasePackage, Reinstall, ResolutionMode, Upgrade,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, IndexLocations, PackageConfigSettings,
