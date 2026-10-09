@@ -7,6 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTimeError};
 use std::{env, io};
@@ -37,7 +38,7 @@ use uv_client::{
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
-use uv_fs::{Simplified, rename_with_retry};
+use uv_fs::{LockedFile, Simplified, rename_with_retry};
 use uv_macros::DebugNoInline;
 use uv_platform::{self as platform, Arch, Libc, Os, Platform};
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
@@ -497,6 +498,7 @@ impl ManagedPythonDownload {
         client: &BaseClient,
         retry_policy: &ExponentialBackoff,
         installation_dir: &Path,
+        installation_lock: &Arc<LockedFile>,
         scratch_dir: &Path,
         reinstall: bool,
         mirrors: PythonDownloadMirrors<'_>,
@@ -506,11 +508,18 @@ impl ManagedPythonDownload {
         if urls.is_empty() {
             return Err(Error::NoPythonDownloadUrlFound);
         }
+        crate::publication::recover(
+            installation_dir.join(self.key().to_string()),
+            scratch_dir.to_path_buf(),
+            Arc::clone(installation_lock),
+        )
+        .await?;
         fetch_with_url_fallback(&urls, *retry_policy, &format!("`{}`", self.key()), |url| {
             self.fetch_from_url(
                 url,
                 client,
                 installation_dir,
+                installation_lock,
                 scratch_dir,
                 reinstall,
                 reporter,
@@ -525,6 +534,7 @@ impl ManagedPythonDownload {
         url: DisplaySafeUrl,
         client: &BaseClient,
         installation_dir: &Path,
+        installation_lock: &Arc<LockedFile>,
         scratch_dir: &Path,
         reinstall: bool,
         reporter: Option<&dyn Reporter>,
@@ -699,25 +709,23 @@ impl ManagedPythonDownload {
             ManagedPythonInstallation::new(extracted.clone(), self).map_err(io::Error::other)?;
         installation.finalize_at(&path).map_err(io::Error::other)?;
 
-        // Keep an existing installation available if staging fails. Replacement of an existing
-        // directory still requires removing it before the final rename.
-        if path.is_dir() {
-            debug!("Removing existing directory: {}", path.user_display());
-            fs_err::tokio::remove_dir_all(&path).await?;
-        }
-
-        // Persist it to the target.
         debug!(
             "Moving `{}` to `{}`",
             extracted.display(),
             path.user_display()
         );
-        rename_with_retry(extracted, &path)
-            .await
-            .map_err(|err| Error::CopyError {
-                to: path.clone(),
-                err,
-            })?;
+        crate::publication::publish(
+            temp_dir,
+            extracted,
+            path.clone(),
+            scratch_dir.to_path_buf(),
+            Arc::clone(installation_lock),
+        )
+        .await
+        .map_err(|err| Error::CopyError {
+            to: path.clone(),
+            err,
+        })?;
 
         Ok(DownloadResult::Fetched(path))
     }

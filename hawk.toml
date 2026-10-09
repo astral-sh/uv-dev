@@ -144,12 +144,12 @@ reason = "used by Pixi to distinguish packages installed through its uv integrat
 
 [[override]]
 lint = "hawk::unnecessary_public"
-crate = "uv_fs"
-item = "with_retry_sync"
-kind = "function"
+crate = "uv_python_managed"
+item = "managed::ManagedPythonInstallation::ensure_dylib_patched_at"
+kind = "inherent_method"
 level = "expect"
-target = "cfg(not(windows))"
-reason = "used by the Windows installer path"
+target = "cfg(not(target_os = \"macos\"))"
+reason = "used by the macOS dylib benchmark"
 
 [[override]]
 lint = "hawk::dead_public"

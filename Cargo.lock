@@ -6013,6 +6013,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tar-codec",
+ "temp-env",
  "tempfile",
  "tokio",
  "tokio-util",

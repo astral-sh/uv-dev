@@ -4,6 +4,7 @@ use std::fmt::Write;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::{Context, Error, Result};
 use futures::{StreamExt, join};
@@ -329,7 +330,7 @@ async fn perform_install(
     let installations = ManagedPythonInstallations::from_settings(install_dir.clone())?.init()?;
     let installations_dir = installations.root();
     let scratch_dir = installations.scratch();
-    let _lock = installations.lock().await?;
+    let installation_lock = Arc::new(installations.lock().await?);
     let existing_installations: Vec<_> = installations
         .find_all()?
         .inspect(|installation| trace!("Found existing installation {}", installation.key()))
@@ -604,6 +605,7 @@ async fn perform_install(
                         &client,
                         &retry_policy,
                         installations_dir,
+                        &installation_lock,
                         &scratch_dir,
                         reinstall || replacements.contains(download.key()),
                         install_mirrors.mirrors(),
