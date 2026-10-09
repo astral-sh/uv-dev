@@ -7,7 +7,7 @@
         "title": "Add support for customizing Astral mirror URLs",
         "url": "https://github.com/astral-sh/uv/issues/18525",
         "state": "closed",
-        "reason": "The May 18–19 follow-up comments describe this exact unresolved gap: standalone installers ignore UV_ASTRAL_MIRROR_URL, while UV_DOWNLOAD_URL requires knowing the version even when fetching the latest installer through an Astral proxy. They include the same URL-selection branches for 0.11.14."
+        "reason": "Canonical discussion. Its May 18–19 follow-up comments identify the same missing UV_ASTRAL_MIRROR_URL branch in the 0.11.14 standalone installer and request installing the latest version through a releases.astral.sh mirror without hard-coding a version. The new report adds PowerShell evidence and organizational constraints to that unresolved request."
       },
       {
         "kind": "pull_request",
@@ -15,21 +15,21 @@
         "title": "Add Astral mirror URL override",
         "url": "https://github.com/astral-sh/uv/pull/19206",
         "state": "merged",
-        "reason": "Released in 0.11.14, this implemented the mirror setting and closed astral-sh/uv#18525. Self-update explicitly passes a versioned UV_DOWNLOAD_URL to the installer; the change did not add direct support to the shell or PowerShell templates."
+        "reason": "Merged May 12, 2026, closing astral-sh/uv#18525 and introducing the variable in uv 0.11.14. It implemented Rust-side mirror handling, including passing a version-specific UV_DOWNLOAD_URL to the installer during self-update. It did not add direct environment-variable handling to the standalone installer templates, so it does not establish a previously fixed installer regression."
       },
       {
-        "kind": "pull_request",
-        "number": 18725,
-        "title": "Publish installers to `/installers/uv/latest` on the mirror",
-        "url": "https://github.com/astral-sh/uv/pull/18725",
-        "state": "merged",
-        "reason": "Provides stable latest-installer URLs on releases.astral.sh, supporting installation without specifying a version. It changes script publication, not artifact URL selection inside the scripts, so it does not resolve the missing mirror override."
+        "kind": "issue",
+        "number": 22264,
+        "title": "uv self update does not use astral mirror value when logging",
+        "url": "https://github.com/astral-sh/uv/issues/22264",
+        "state": "open",
+        "reason": "Adjacent report from the same author explicitly confirms that self-update downloads use the configured mirror through UV_DOWNLOAD_URL. Its defect concerns the GitHub URL printed after success; this issue concerns actual artifact URL selection when running the standalone scripts directly."
       }
     ],
-    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs. Literal searches covered UV_ASTRAL_MIRROR_URL, UV_DOWNLOAD_URL, INSTALLER_DOWNLOAD_URL, UV_INSTALLER_GITHUB_BASE_URL, and UV_INSTALLER_GHE_BASE_URL. Conceptual searches covered installer mirrors, proxy repositories, base URLs, latest-version installation, self-update mirrors, and cargo-dist sources, without platform/version restrictions. Fix-oriented PR text searches returned no hits; issue timelines supplied the merged changes inspected directly. Reviewed candidate comments, referenced discussions, implementation diffs, release timing, published 0.12.23 installers, and cargo-dist templates. Ruled out astral-sh/uv#22264 (success-message URL) and astral-sh/uv#22265 (Windows NO_PROXY handling) as duplicates. Historical astral-sh/uv#9134, astral-sh/uv#16519, and astral-sh/uv#17255 concern earlier self-update metadata/server limitations; astral-sh/uv#18503 and astral-sh/uv#18682 concern adopting the default Astral mirror."
+    "search_scope": "Searched astral-sh/uv open/closed issues and open/closed/merged PRs with authenticated gh: UV_ASTRAL_MIRROR_URL, UV_DOWNLOAD_URL, UV_INSTALLER_GITHUB_BASE_URL, UV_INSTALLER_GHE_BASE_URL, installer mirror, self update mirror, proxy repositories, releases.astral.sh, and installer source code. Followed astral-sh/uv#18525 comments and timeline to astral-sh/uv#19206 and inspected historical mirror reports astral-sh/uv#9134, astral-sh/uv#16519, and astral-sh/uv#17255. PR keyword searches returned no matches even for the known implementation; supplemented them with referenced PRs and the latest 200 PRs, so historical PR coverage is limited. Ruled out astral-sh/uv#22264 and astral-sh/uv#22373 as duplicates because they concern success-message URLs, and astral-sh/uv#22265 because it concerns NO_PROXY. Verified both published 0.12.23 installers, cargo-dist templates, and current self-update source."
   },
   "type": "duplicate",
-  "type_reason": "The exact direct-installer problem and version-independent Astral-proxy requirement already appear in the post-closure discussion of astral-sh/uv#18525. That discussion can centralize this unresolved gap. This is not an established regression: the same omission was reported immediately after mirror support shipped in 0.11.14, and astral-sh/uv#19206 supported self-update by supplying UV_DOWNLOAD_URL rather than changing the standalone templates.",
-  "summary": "astral-sh/uv#18525 contains the same unresolved installer request. astral-sh/uv#19206 explains existing self-update support; astral-sh/uv#18725 provides stable latest-installer URLs. The required README update failed because /home/runner/work/_temp/issue-context/README.md is on a read-only filesystem.",
-  "draft_response": "You're right: both 0.12.23 standalone scripts omit UV_ASTRAL_MIRROR_URL. The same gap—including installing the latest version through a releases.astral.sh proxy without specifying the version—is discussed in the May 18–19 comments on astral-sh/uv#18525. Please continue the installer-specific discussion there; although the broader issue was closed, that follow-up remains unresolved.\n\nFor self-update, astral-sh/uv#19206 already passes a versioned UV_DOWNLOAD_URL to the installer. Directly invoking the scripts lacks that step.\n\nThe scripts are generated by cargo-dist. For your proposed contribution, the shell and PowerShell sources are installer.sh.j2 and installer.ps1.j2 under https://github.com/axodotdev/cargo-dist/tree/v0.32.0/cargo-dist/templates/installer. Those templates are the starting point for adding direct mirror support."
+  "type_reason": "The unresolved installer follow-up in astral-sh/uv#18525 already describes the same ignored variable and need for a version-independent Astral mirror base URL. Duplicate classification takes precedence despite the source-confirmed omission. This is not an established regression: astral-sh/uv#19206 added support inside uv, while the identical standalone-installer gap was documented immediately afterward in 0.11.14 and remains present in 0.12.23.",
+  "summary": "astral-sh/uv#18525 contains the exact unresolved installer discussion; astral-sh/uv#19206 implemented mirror support inside uv. astral-sh/uv#22264 concerns a separate logging defect.",
+  "draft_response": "The 0.12.23 standalone scripts do omit `UV_ASTRAL_MIRROR_URL`. The same gap and version-independent installation requirement are discussed in the May 18–19 comments on astral-sh/uv#18525. That issue was closed after astral-sh/uv#19206 added mirror support inside uv; direct installer support remained unimplemented. `uv self update` already passes a mirror-specific `UV_DOWNLOAD_URL` to the installer.\n\nPlease continue the installer discussion in astral-sh/uv#18525 so the remaining work stays together. For the source, these scripts are generated by cargo-dist: the templates are `installer.sh.j2` and `installer.ps1.j2` under https://github.com/axodotdev/cargo-dist/tree/main/cargo-dist/templates/installer."
 }
