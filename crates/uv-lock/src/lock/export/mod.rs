@@ -14,7 +14,7 @@ use uv_configuration::{
 };
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::{ExtraOperator, MarkerExpression, MarkerTree, MarkerValueExtra};
-use uv_pypi_types::{ConflictItem, ConflictSet, Conflicts};
+use uv_pypi_types::{ConflictItem, ConflictKindRef, ConflictSet, Conflicts};
 
 use uv_resolver_types::universal_marker::encode_conflict_item;
 
@@ -26,6 +26,7 @@ pub(crate) use crate::lock::export::metadata::{
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
 use crate::lock::{LockErrorKind, PackageIndex, Source};
+use crate::Lock;
 use crate::{Installable, InstallableRootKind, LockError, Package};
 
 pub mod cyclonedx_json;
@@ -339,6 +340,7 @@ impl<'lock> ExportableRequirements<'lock> {
 
         // Determine the reachability of each node in the graph.
         let mut reachability = conflict_marker_reachability(
+            target.lock(),
             &graph,
             root,
             &activated_items,
@@ -429,6 +431,7 @@ impl Edge<'_> {
 /// For example, if the only path requesting `foo[ssl]` has marker `sys_platform == 'linux'`,
 /// that condition replaces references to `foo[ssl]` throughout the graph, including on siblings.
 fn conflict_marker_reachability<'lock>(
+    lock: &Lock,
     graph: &Graph<Node<'lock>, Edge<'lock>>,
     root: NodeIndex,
     known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
@@ -469,11 +472,24 @@ fn conflict_marker_reachability<'lock>(
         solver.nodes[source].outgoing.push(edge.id());
     }
 
+    // Reaching a workspace package activates its production conflict item on the same paths.
+    for (index, node) in graph.node_references() {
+        if let Node::Package(package) = node
+            && lock
+                .conflicts()
+                .contains(package.name(), ConflictKindRef::Project)
+            && lock.is_workspace_package(package)
+        {
+            let item = ConflictItem::from(package.name().clone());
+            solver.nodes[index.index()].activation_fact = variables.by_item.get(&item).copied();
+        }
+    }
+
     // Link package-local extra nodes to their global facts, and seed the selected root items.
     for ((package_index, extra), extra_index) in extra_nodes {
         if let Node::Package(package) = graph[package_index] {
             let item = ConflictItem::from((package.name().clone(), extra.clone()));
-            solver.nodes[extra_index].extra_fact = variables.by_item.get(&item).copied();
+            solver.nodes[extra_index].activation_fact = variables.by_item.get(&item).copied();
             if let Some(&marker) = known_conflicts.get(&item) {
                 solver.add_reachability(extra_index, marker);
             }
@@ -632,7 +648,7 @@ fn resolve_marker_bindings(
     let mut requests = vec![Vec::new(); variables.len()];
     for (index, edge) in solver.edges.iter().enumerate() {
         for &target in &edge.targets {
-            if let Some(fact) = solver.nodes[target].extra_fact {
+            if let Some(fact) = solver.nodes[target].activation_fact {
                 requests[fact].push(EdgeIndex::new(index));
             }
         }
@@ -735,7 +751,7 @@ struct SymbolicExportReachability {
 struct ReachabilityNode {
     marker: MarkerTree,
     outgoing: Vec<EdgeIndex>,
-    extra_fact: Option<usize>,
+    activation_fact: Option<usize>,
     queued: bool,
 }
 
@@ -745,7 +761,7 @@ impl ReachabilityNode {
         Self {
             marker: MarkerTree::FALSE,
             outgoing: Vec::new(),
-            extra_fact: None,
+            activation_fact: None,
             queued: false,
         }
     }
@@ -792,7 +808,7 @@ impl SymbolicExportReachability {
             if mem::replace(&mut reached[source], true) {
                 continue;
             }
-            if let Some(fact) = self.nodes[source].extra_fact {
+            if let Some(fact) = self.nodes[source].activation_fact {
                 active[fact] = true;
             }
             for &edge in &self.nodes[source].outgoing {
@@ -828,7 +844,7 @@ impl SymbolicExportReachability {
         }
 
         for node in &self.nodes {
-            if let Some(fact) = node.extra_fact {
+            if let Some(fact) = node.activation_fact {
                 self.activations[fact] = self.activations[fact].or(node.marker);
             }
         }
