@@ -5952,6 +5952,9 @@ pub struct PythonListArgs {
     output_format: PythonListFormat,
 
     /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[arg(long, value_hint = ValueHint::Other)]
     python_downloads_json_url: Option<String>,
 }
@@ -6094,6 +6097,9 @@ pub struct PythonInstallArgs {
     pyodide_mirror: Option<String>,
 
     /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[arg(long, value_hint = ValueHint::Other)]
     python_downloads_json_url: Option<String>,
 
@@ -6221,6 +6227,9 @@ pub struct PythonUpgradeArgs {
     reinstall: bool,
 
     /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[arg(long, value_hint = ValueHint::Other)]
     python_downloads_json_url: Option<String>,
 
@@ -6318,6 +6327,9 @@ pub struct PythonFindArgs {
     pub resolve_links: bool,
 
     /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[arg(long, value_hint = ValueHint::Other)]
     pub python_downloads_json_url: Option<String>,
 }
@@ -6375,6 +6387,9 @@ pub struct PythonPinArgs {
     rm: bool,
 
     /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[arg(long, value_hint = ValueHint::Other)]
     python_downloads_json_url: Option<String>,
 }

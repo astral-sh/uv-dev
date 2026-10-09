@@ -504,7 +504,7 @@
       ]
     },
     "python-downloads-json-url": {
-      "description": "URL pointing to JSON or NDJSON describing custom Python installations.",
+      "description": "URL pointing to JSON or NDJSON describing custom Python installations.\n\nThe URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are\nparsed as JSON.",
       "type": ["string", "null"]
     },
     "python-install-mirror": {
