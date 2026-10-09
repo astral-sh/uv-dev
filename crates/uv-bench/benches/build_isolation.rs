@@ -1,3 +1,5 @@
+extern crate uv_performance_memory_allocator;
+
 use std::hint::black_box;
 use std::str::FromStr;
 
