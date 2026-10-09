@@ -21,7 +21,7 @@ use uv_python::{PythonInstallationKey, PythonInstallationMinorVersionKey, Python
 use crate::install::format_executables;
 use crate::{ChangeEvent, ChangeEventKind};
 use uv_command_support::Printer;
-use uv_command_support::{ExitStatus, elapsed};
+use uv_command_support::{ExitStatus, UvError, elapsed};
 
 /// Uninstall managed Python versions.
 pub async fn uninstall(
@@ -35,8 +35,27 @@ pub async fn uninstall(
     let _lock = installations.lock().await?;
 
     // Perform the uninstallation.
-    do_uninstall(&installations, targets, all, printer).await?;
+    let mut errors = do_uninstall(&installations, targets, all, printer).await?;
 
+    // Complete cleanup before returning any independent installation failures.
+    let cleanup = cleanup_empty_directories(&installations).await;
+    if errors.is_empty() {
+        cleanup?;
+        return Ok(ExitStatus::Success);
+    }
+
+    errors.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let mut errors = errors
+        .into_iter()
+        .map(|(key, error)| UvError::user(error.context(format!("Failed to uninstall {key}"))))
+        .collect::<Vec<_>>();
+    if let Err(error) = cleanup {
+        errors.push(UvError::unexpected(error));
+    }
+    Err(UvError::batch(errors).into())
+}
+
+async fn cleanup_empty_directories(installations: &ManagedPythonInstallations) -> Result<()> {
     // Clean up any empty directories.
     if uv_fs::directories(installations.root())?.all(|path| uv_fs::is_temporary(&path)) {
         fs_err::tokio::remove_dir_all(&installations.root()).await?;
@@ -55,7 +74,7 @@ pub async fn uninstall(
         }
     }
 
-    Ok(ExitStatus::Success)
+    Ok(())
 }
 
 /// Perform the uninstallation of managed Python installations.
@@ -64,7 +83,7 @@ async fn do_uninstall(
     targets: Vec<String>,
     all: bool,
     printer: Printer,
-) -> Result<ExitStatus> {
+) -> Result<Vec<(PythonInstallationKey, anyhow::Error)>> {
     let start = std::time::Instant::now();
 
     let requests = if all {
@@ -118,7 +137,7 @@ async fn do_uninstall(
 
             if matches!(requests.as_slice(), [PythonRequest::Default]) {
                 writeln!(printer.stderr(), "No Python installations found")?;
-                return Ok(ExitStatus::Failure);
+                return Ok(Vec::new());
             }
 
             writeln!(
@@ -134,12 +153,12 @@ async fn do_uninstall(
             printer.stderr(),
             "No Python installations found matching the requests"
         )?;
-        return Ok(ExitStatus::Failure);
+        return Ok(Vec::new());
     }
 
     // Remove registry entries first, so we don't have dangling entries between the file removal
     // and the registry removal.
-    let mut errors = vec![];
+    let mut errors = Vec::new();
     #[cfg(windows)]
     {
         uv_python::windows_registry::remove_registry_entry(
@@ -322,17 +341,5 @@ async fn do_uninstall(
         }
     }
 
-    if !errors.is_empty() {
-        for (key, err) in errors {
-            writeln!(
-                printer.stderr(),
-                "Failed to uninstall {}: {}",
-                key.green(),
-                err.to_string().trim()
-            )?;
-        }
-        return Ok(ExitStatus::Failure);
-    }
-
-    Ok(ExitStatus::Success)
+    Ok(errors)
 }

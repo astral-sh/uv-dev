@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::{env, path::Path, process::Command};
 
 use anyhow::Context;
+#[cfg(unix)]
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{
     assert::PathAssert,
@@ -12,12 +14,69 @@ use assert_fs::{
 use indoc::indoc;
 use predicates::prelude::predicate;
 use tracing::debug;
+#[cfg(unix)]
+use uv_test::ReadOnlyDirectoryGuard;
 use uv_test::{LATEST_PYTHON_3_12, uv_snapshot};
 
 use uv_fs::Simplified;
 use uv_python::managed::platform_key_from_env;
 use uv_static::EnvVars;
 use walkdir::WalkDir;
+
+#[test]
+#[cfg(unix)]
+fn python_uninstall_no_matches() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Searching for Python versions matching: Python 3.12
+    No existing installations found for: Python 3.12
+    No Python installations found matching the requests
+    ");
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("--all"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Searching for Python installations
+    No Python installations found
+    ");
+}
+
+#[test]
+#[cfg(unix)]
+fn python_uninstall_error_batches_quiet() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs();
+    let platform_key = platform_key_from_env()?;
+    let managed = context.temp_dir.child("managed");
+
+    let python_3_11 = managed.child(format!("cpython-3.11.1-{platform_key}"));
+    python_3_11.child("blocked").write_str("installed data")?;
+    let _python_3_11_guard = ReadOnlyDirectoryGuard::new(python_3_11.path())?;
+
+    let python_3_12 = managed.child(format!("cpython-3.12.1-{platform_key}"));
+    python_3_12.child("blocked").write_str("installed data")?;
+    let _python_3_12_guard = ReadOnlyDirectoryGuard::new(python_3_12.path())?;
+
+    let python_3_13 = managed.child(format!("cpython-3.13.1-{platform_key}"));
+    python_3_13.child("installed").write_str("installed data")?;
+
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("--all").arg("-q"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to uninstall cpython-3.11.1-[PLATFORM]
+      cause: failed to remove directory `[TEMP_DIR]/managed/cpython-3.11.1-[PLATFORM]`: Permission denied (os error 13)
+    error: Failed to uninstall cpython-3.12.1-[PLATFORM]
+      cause: failed to remove directory `[TEMP_DIR]/managed/cpython-3.12.1-[PLATFORM]`: Permission denied (os error 13)
+    ");
+
+    python_3_11.child("blocked").assert("installed data");
+    python_3_12.child("blocked").assert("installed data");
+    python_3_13.assert(predicate::path::missing());
+    Ok(())
+}
 
 #[test]
 fn python_install() {
