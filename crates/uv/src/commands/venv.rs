@@ -282,7 +282,11 @@ pub(crate) async fn venv(
     )
     .map_err(VenvError::Creation)?;
     let venv = if let Some(lock) = destination_lock.as_mut() {
-        lock.finish_creation()?;
+        // Centralized environments replace the project reference after seeding. Retain parent
+        // admission until that publication finishes, including its unlink-and-recreate interval.
+        if centralized_workspace.is_none() {
+            lock.finish_creation()?;
+        }
         venv.with_destination_lock(lock)
     } else {
         venv

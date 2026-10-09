@@ -9,6 +9,7 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use uv_cache::Cache;
+use uv_environment_operations::is_centralized_environment_reference;
 use uv_fs::Simplified;
 use uv_python_interpreter::{EnvironmentLock, PythonEnvironment};
 use uv_static::EnvVars;
@@ -507,5 +508,107 @@ async fn venv_creation_waits_through_missing_parent_component() -> Result<()> {
     drop(guard);
     creation.finish().await?;
     assert!(destination.join("pyvenv.cfg").is_file());
+    Ok(())
+}
+
+#[tokio::test]
+async fn centralized_venv_retains_parent_admission_through_reference_publication() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context.venv().arg("--no-project").assert().success();
+    let reference = context.temp_dir.child(".venv");
+    let marker = reference.child("local-owner");
+    marker.write_str("local environment")?;
+
+    let wheels = context.root.child("seed-wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel) = generate_wheel(
+        &"pip".parse()?,
+        &"24.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let index = format!("http://{}/empty/", listener.local_addr()?);
+    let mut command = context.venv();
+    command
+        .args([
+            "--preview-features",
+            "centralized-project-envs",
+            "--seed",
+            "--no-index",
+        ])
+        .arg("--find-links")
+        .arg(wheels.path())
+        .arg("--find-links")
+        .arg(&index);
+    let mut centralized = QueuedCommand::spawn(command)?;
+
+    let connection = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::select! {
+            connection = listener.accept() => connection.map(Some),
+            status = centralized.child.wait() => status.map(|_| None),
+        }
+    })
+    .await
+    .context("centralized seeding did not request the gated index")??;
+    let Some((connection, _)) = connection else {
+        centralized.finish().await?;
+        anyhow::bail!("centralized seeding exited before requesting the gated index");
+    };
+    let mut request = tokio::io::BufReader::new(connection);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            anyhow::ensure!(
+                request.read_line(&mut line).await? > 0,
+                "seed request ended before its headers"
+            );
+            if line == "\r\n" {
+                break;
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("reading the gated seed request")??;
+    // The cache environment has been created, but the local project reference is still pending.
+    assert!(marker.is_file());
+
+    let sibling = context.temp_dir.child("sibling");
+    let mut command = context.venv();
+    command.arg(sibling.path()).arg("--no-project");
+    let mut sibling_creation = QueuedCommand::spawn(command)?;
+    let parent = fs_err::canonicalize(context.temp_dir.path())?;
+    sibling_creation.wait_for_destination(&parent).await?;
+    assert!(sibling_creation.child.try_wait()?.is_none());
+    assert!(!sibling.exists());
+
+    let mut connection = request.into_inner();
+    connection.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
+    drop(connection);
+    centralized.finish().await?;
+    sibling_creation.finish().await?;
+    assert!(!marker.exists());
+    assert!(sibling.child("pyvenv.cfg").is_file());
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
+    assert!(is_centralized_environment_reference(
+        reference.path(),
+        &cache
+    ));
     Ok(())
 }
