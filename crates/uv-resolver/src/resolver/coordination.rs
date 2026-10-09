@@ -1247,6 +1247,10 @@ fn solve_trial<InstalledPackages: InstalledPackagesProvider>(
     visited: &mut FxHashSet<PackageName>,
     requests: &MetadataRequests,
 ) -> Option<Vec<ForkState>> {
+    if !sources_fixed_by_manifest(resolver, checkpoint) {
+        debug!("Abandoned coordinated backtracking without fixed manifest source policy");
+        return None;
+    }
     let trial_requests = requests.speculative();
     let mut remaining_steps = MAX_TRIAL_STEPS;
     let Some(state) = prepare_trial(checkpoint, agreements, &mut remaining_steps) else {
