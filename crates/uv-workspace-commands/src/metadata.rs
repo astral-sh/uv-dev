@@ -97,7 +97,7 @@ pub async fn metadata(
     let groups = DependencyGroupsWithDefaults::none();
     let state = UniversalState::default();
 
-    // Keep an existing environment discovered for locking so it can be reused after resolution.
+    // Keep an existing environment discovered for locking so read-only metadata can reuse it.
     // New environments must not be created until the lock operation has succeeded.
     let mut environment = None;
 
@@ -127,7 +127,9 @@ pub async fn metadata(
                     )
                     .await?
                     {
-                        discovered @ ScriptInterpreter::Interpreter(_) => discovered.into_interpreter(),
+                        discovered @ ScriptInterpreter::Interpreter(_) => {
+                            discovered.into_interpreter()
+                        }
                         ScriptInterpreter::Environment(discovered) => {
                             let interpreter = discovered.interpreter().clone();
                             environment = Some(discovered);
@@ -242,9 +244,11 @@ pub async fn metadata(
     {
         environment = None;
     }
+    // Synchronization revalidates under the initialization lock after resolution because another
+    // process may have replaced the environment.
     let environment = match environment {
-        Some(environment) => Some(environment),
-        None if sync.is_some() => Some(match &source {
+        Some(environment) if sync.is_none() => Some(environment),
+        _ if sync.is_some() => Some(match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(*workspace),
@@ -308,7 +312,7 @@ pub async fn metadata(
             .await?
             .into_environment()?,
         }),
-        None => match &source {
+        _ => match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
                 ProjectInterpreter::discover_existing(workspace.install_path(), active, cache)?
             }
