@@ -3333,7 +3333,7 @@ fn tool_install_fresh_multiple_short_executables() -> Result<()> {
         )
         .assert()
         .success()
-        .stdout(expected);
+        .stdout(predicate::str::diff(expected).normalize());
     }
     Ok(())
 }
