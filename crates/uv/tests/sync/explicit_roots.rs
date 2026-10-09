@@ -145,6 +145,103 @@ fn explicit_roots_membership_filters_and_freshness() -> Result<()> {
 }
 
 #[test]
+fn explicit_roots_removed_refreshes_workspace_membership() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "shared"]
+        roots = ["app"]
+
+        [tool.uv.sources]
+        shared = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/src/shared/__init__.py")
+        .touch()?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app"]
+
+        [tool.uv.sources]
+        shared = { path = "shared", editable = true }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-index", "--locked",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--dry-run", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 2 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + shared @ file://[TEMP_DIR]/shared
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--no-header", "--no-hashes", "--no-emit-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./shared
+        # via app
+    ");
+    Ok(())
+}
+
+#[test]
 fn explicit_roots_reuse_lock_with_omitted_group_metadata() -> Result<()> {
     let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
         name = "explicit-roots-freshness"
@@ -620,11 +717,31 @@ fn explicit_roots_rejects_unresolved_member_groups() -> Result<()> {
         .args([
             "--offline",
             "--no-index",
+            "--upgrade",
             "--preview-features",
             "lock-without-metadata",
         ])
         .assert()
         .success();
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let shared = lock["package"]
+        .as_array()
+        .expect("locked packages")
+        .iter()
+        .find(|package| package["name"].as_str() == Some("shared"))
+        .expect("shared package");
+    assert!(
+        shared
+            .get("metadata")
+            .and_then(|metadata| metadata.get("requires-dev"))
+            .is_none()
+    );
+    assert!(
+        shared["dev-dependencies"]["dev"]
+            .as_array()
+            .expect("group placeholder")
+            .is_empty()
+    );
     uv_snapshot!(context.filters(), context.sync().args([
         "--frozen", "--package", "shared", "--group", "dev", "--no-install-workspace",
     ]), @"
