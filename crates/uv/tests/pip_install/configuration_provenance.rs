@@ -206,7 +206,7 @@ fn hash_transitive_requirement() -> Result<()> {
     uv_snapshot!(context.pip_install().arg("-r").arg("requirements.txt"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `markupsafe`
+    error: Hash-checking is required, but no trusted hash was provided for: `markupsafe`
 
     hint: `--require-hashes` was enabled by `policy.txt` at line 1 (included from `requirements.txt` at line 1)
     ");
