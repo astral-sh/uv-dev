@@ -95,8 +95,7 @@ mod tests {
             b"Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: dependency @ ./scripts/path\n",
         )
         .expect_err("relative paths are invalid in package metadata");
-        let err = anyhow::Error::new(uv_distribution::Error::Metadata(metadata_error))
-            .context("Failed to read the source tree");
+        let err = anyhow::Error::new(uv_distribution::Error::Metadata(metadata_error));
         let err = anyhow::Error::new(uv_resolve_operations::Error::Anyhow(err));
 
         let hints = hints_for_error(&err);
@@ -113,8 +112,7 @@ mod tests {
             b"Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: dependency @ ./scripts/path\n",
         )
         .expect_err("relative paths are invalid in package metadata");
-        let err = anyhow::Error::new(uv_distribution::Error::PkgInfo(metadata_error))
-            .context("Failed to read the source tree");
+        let err = anyhow::Error::new(uv_distribution::Error::PkgInfo(metadata_error));
         let err = anyhow::Error::new(uv_resolve_operations::Error::Anyhow(err));
 
         let hints = hints_for_error(&err);
@@ -131,8 +129,7 @@ mod tests {
             b"Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: dependency @ ./scripts/path\n",
         )
         .expect_err("relative paths are invalid in package metadata");
-        let err = anyhow::Error::new(uv_distribution::Error::PyprojectToml(metadata_error))
-            .context("Failed to read the source tree");
+        let err = anyhow::Error::new(uv_distribution::Error::PyprojectToml(metadata_error));
         let err = anyhow::Error::new(uv_resolve_operations::Error::Anyhow(err));
 
         let hints = hints_for_error(&err);
