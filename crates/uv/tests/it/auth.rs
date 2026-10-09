@@ -276,7 +276,11 @@ async fn add_package_native_auth() -> Result<()> {
 }
 
 #[tokio::test]
-#[cfg(feature = "native-auth")]
+#[cfg(all(
+    feature = "native-auth",
+    feature = "test-python",
+    feature = "test-pypi"
+))]
 async fn native_auth_uses_path_specific_credentials_in_one_client() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_real_home();
     let proxy = crate::pypi_proxy::start().await;
