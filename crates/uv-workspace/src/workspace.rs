@@ -868,6 +868,52 @@ impl Workspace {
         for member in self.packages.values() {
             conflicting.append(&mut member.pyproject_toml.conflicts()?);
         }
+        let root_package = self
+            .pyproject_toml()
+            .project
+            .as_ref()
+            .map(|project| &project.name);
+        if let Some(package) = root_package
+            && let Some(groups) = &self.pyproject_toml().dependency_groups
+        {
+            conflicting.expand_transitive_group_includes(package, groups);
+        }
+
+        loop {
+            let initial_conflict_count = conflicting.iter().count();
+            for (package, member) in self.packages() {
+                if let Some(groups) = &member.pyproject_toml().dependency_groups {
+                    for (group, _) in groups {
+                        for (included_package, included_group) in
+                            member.pyproject_toml().workspace_group_includes(group)
+                        {
+                            let Some(included_package) = included_package.or(root_package) else {
+                                continue;
+                            };
+                            if let Some(included_member) = self.packages().get(included_package)
+                                && let Some(included_groups) =
+                                    &included_member.pyproject_toml().dependency_groups
+                            {
+                                conflicting.expand_transitive_group_includes(
+                                    included_package,
+                                    included_groups,
+                                );
+                            }
+                            conflicting.expand_workspace_group_include(
+                                included_package,
+                                included_group,
+                                package,
+                                group,
+                                groups,
+                            );
+                        }
+                    }
+                }
+            }
+            if conflicting.iter().count() == initial_conflict_count {
+                break;
+            }
+        }
         Ok(conflicting)
     }
 
