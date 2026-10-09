@@ -31,6 +31,27 @@ use crate::lock::{
 };
 use crate::{Lock, LockError, implicit_constraints_marker};
 
+/// Intersect one root's Python requirements without applying another root's groups to it.
+fn root_python_requirement(
+    lock: &Lock,
+    requirements: &RequiresPythonSources,
+    root: Option<&PackageName>,
+    inherited_group_root: Option<&PackageName>,
+) -> Result<RequiresPython, LockError> {
+    let specifiers = requirements
+        .iter()
+        .filter_map(|(source, specifiers)| match source {
+            RequiresPythonDeclaration::Member(package, group) => (Some(package) == root
+                || (group.is_some() && Some(package) == inherited_group_root))
+                .then_some(specifiers),
+            RequiresPythonDeclaration::Workspace(_) => Some(specifiers),
+        });
+    RequiresPython::intersection(
+        std::iter::once(lock.requires_python().specifiers()).chain(specifiers),
+    )
+    .ok_or_else(|| LockErrorKind::DisjointWorkspaceRequiresPython.into())
+}
+
 fn newly_activated_extras<'lock>(
     dep: &'lock Dependency,
     activated_extras: &[(&'lock PackageName, &'lock ExtraName)],
@@ -288,6 +309,25 @@ pub trait Installable<'lock> {
         Ok(group_requirements)
     }
 
+    /// Return the universal Python domain of the selected roots and their own dependency groups.
+    fn export_python_requirement(
+        &self,
+        groups: &DependencyGroupsWithDefaults,
+    ) -> Result<RequiresPython, LockError> {
+        let requirements = self.workspace_python_requirements(groups)?;
+        let group_root = self.group_root(groups);
+        let roots = self.roots().collect::<BTreeSet<_>>();
+        if roots.is_empty() {
+            return root_python_requirement(self.lock(), &requirements, None, group_root);
+        }
+        let domains = roots
+            .into_iter()
+            .map(|root| root_python_requirement(self.lock(), &requirements, Some(root), group_root))
+            .collect::<Result<Vec<_>, _>>()?;
+        RequiresPython::union(domains.iter().map(RequiresPython::specifiers))
+            .ok_or_else(|| LockErrorKind::UnrepresentableExportRequiresPython.into())
+    }
+
     /// Validate that selected non-root dependencies were resolved for the requested environment.
     fn validate_workspace_resolution(
         &self,
@@ -359,27 +399,28 @@ pub trait Installable<'lock> {
             }
         }
         let resolved = lock.resolved_workspace_reachability(self.install_path(), &activated)?;
-        let domain = if marker_environment.is_none() {
-            let requirements = self.workspace_python_requirements(groups)?;
-            let requires_python = RequiresPython::intersection(
-                std::iter::once(lock.requires_python().specifiers()).chain(requirements.values()),
-            )
-            .ok_or(LockErrorKind::DisjointWorkspaceRequiresPython)?;
-            implicit_constraints_marker(
-                requires_python.to_exact_marker_tree(),
-                lock.supported_environments(),
-            )
-        } else {
-            MarkerTree::TRUE
-        };
-        let available = |marker: MarkerTree| {
-            if let Some(environment) = marker_environment {
-                marker.evaluate(environment.markers(), &[])
-            } else {
-                domain.and(marker.negate()).is_false()
-            }
-        };
+        let requirements = marker_environment
+            .is_none()
+            .then(|| self.workspace_python_requirements(groups))
+            .transpose()?;
         for package in selected {
+            let domain = if let Some(requirements) = &requirements {
+                let requires_python =
+                    root_python_requirement(lock, requirements, Some(package.name()), group_root)?;
+                implicit_constraints_marker(
+                    requires_python.to_exact_marker_tree(),
+                    lock.supported_environments(),
+                )
+            } else {
+                MarkerTree::TRUE
+            };
+            let available = |marker: MarkerTree| {
+                if let Some(environment) = marker_environment {
+                    marker.evaluate(environment.markers(), &[])
+                } else {
+                    domain.and(marker.negate()).is_false()
+                }
+            };
             if groups.prod() {
                 let marker = resolved
                     .get(&(package.name(), None))

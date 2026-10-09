@@ -169,8 +169,6 @@ pub async fn sync_from_lock(
     target.validate_extras(extras)?;
     target.validate_groups(groups)?;
 
-    target.validate_workspace_resolution(extras, groups, Some(&marker_env))?;
-
     // Validate that the platform is supported by the lockfile.
     let environments = target.lock().supported_environments();
     if !environments.is_empty() {
