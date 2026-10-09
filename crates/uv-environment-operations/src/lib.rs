@@ -1398,7 +1398,8 @@ pub async fn resolve_environment(
 
     let source_index_locations = index_locations
         .clone()
-        .with_source_indexes(spec.requirements.indexes.clone());
+        .with_source_indexes(spec.requirements.indexes.clone())
+        .map_err(anyhow::Error::from)?;
     let index_locations = &source_index_locations;
 
     // Respect all requirements from the provided sources.
@@ -1803,7 +1804,8 @@ pub async fn update_environment(
 
     let source_index_locations = index_locations
         .clone()
-        .with_source_indexes(spec.indexes.clone());
+        .with_source_indexes(spec.indexes.clone())
+        .map_err(anyhow::Error::from)?;
     let index_locations = &source_index_locations;
 
     // Respect all requirements from the provided sources.

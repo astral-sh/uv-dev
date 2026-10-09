@@ -30,6 +30,10 @@ pub enum SourceIndexError {
     ConflictingName(crate::IndexName),
     #[error("Multiple default indexes in requirements sources")]
     MultipleDefaults,
+    #[error(
+        "A default index from requirements sources conflicts with the command-line default index"
+    )]
+    ConfiguredDefault,
 }
 
 impl SourceIndexes {
@@ -71,7 +75,7 @@ impl SourceIndexes {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, Index> {
+    fn iter(&self) -> std::slice::Iter<'_, Index> {
         self.0.iter()
     }
 }
@@ -366,10 +370,17 @@ impl IndexLocations {
     }
 
     /// Add index definitions from sources, retaining command-line precedence.
-    #[must_use]
-    pub fn with_source_indexes(mut self, indexes: SourceIndexes) -> Self {
+    pub fn with_source_indexes(mut self, indexes: SourceIndexes) -> Result<Self, SourceIndexError> {
         if indexes.is_empty() {
-            return self;
+            return Ok(self);
+        }
+        if indexes.iter().any(|index| index.default)
+            && self
+                .indexes
+                .iter()
+                .any(|index| index.default && index.origin == Some(Origin::Cli))
+        {
+            return Err(SourceIndexError::ConfiguredDefault);
         }
         let names = indexes
             .iter()
@@ -388,7 +399,7 @@ impl IndexLocations {
                     .filter(|index| index.name.as_ref().is_none_or(|name| !names.contains(name))),
             )
             .collect();
-        self
+        Ok(self)
     }
 
     /// Returns `true` if no index configuration is set, i.e., the [`IndexLocations`] matches the

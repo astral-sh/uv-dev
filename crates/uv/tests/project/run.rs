@@ -8479,3 +8479,102 @@ async fn run_pep723_requirements_conflicting_default_indexes() -> Result<()> {
     );
     Ok(())
 }
+
+/// An explicit CLI default must not discard a pinned script index's authentication policy.
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_cli_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let private = wiremock::MockServer::start().await;
+    let default = wiremock::MockServer::start().await;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # default = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = private.uri()})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--with-requirements", "requirements.py", "--default-index"])
+        .arg(format!("{}/simple", default.uri()))
+        .args(["python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: A default index from requirements sources conflicts with the command-line default index
+    ");
+    assert!(
+        private
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        default
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// An unused same-URL alias does not conflict with another script's selected definition.
+#[test]
+fn run_pep723_requirements_ignore_unused_index_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::new("simple/dependency-groups.toml");
+    let second = PackseServer::new("simple/dependency-groups.toml");
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # [[tool.uv.index]]
+        # name = "used"
+        # url = "{url}"
+        # explicit = true
+        # [[tool.uv.index]]
+        # name = "spare"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # iniconfig = {{ index = "used" }}
+        # ///
+    "#, url = first.index_url()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["sniffio==1.3.1"]
+        # [[tool.uv.index]]
+        # name = "spare"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # sniffio = {{ index = "spare" }}
+        # ///
+    "#, url = second.index_url()})?;
+    uv_snapshot!(context.filters(), context.run().args([
+        "--with-requirements", "first.py", "--with-requirements", "second.py",
+        "python", "-c", "import iniconfig, sniffio",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+    ");
+    Ok(())
+}

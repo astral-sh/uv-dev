@@ -66,6 +66,8 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
+    SourceIndex(#[from] uv_distribution_types::SourceIndexError),
+    #[error(transparent)]
     FindOrDownloadPython(#[from] uv_python_discovery::Error),
     #[error(transparent)]
     HashStrategy(#[from] uv_types::HashStrategyError),
@@ -594,7 +596,7 @@ async fn build_package(
     .await?;
     let index_locations = &index_locations
         .clone()
-        .with_source_indexes(command_line_constraints.indexes);
+        .with_source_indexes(command_line_constraints.indexes)?;
     let command_line_constraints = command_line_constraints.constraints;
     let build_constraints = Constraints::from_specifications(
         command_line_constraints

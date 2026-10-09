@@ -1,15 +1,13 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use rustc_hash::FxHashSet;
-
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::{NoSources, Override, PackageOverride};
 use uv_distribution::{LoweredExtraBuildDependencies, LoweredRequirement, LoweringError};
 use uv_distribution_types::{
-    ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, IndexMetadata, IndexUrlError,
-    Origin, Requirement, RequirementSource, SourceIndexError, SourceIndexes,
+    ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, IndexUrlError, Origin,
+    SourceIndexError, SourceIndexes,
 };
 use uv_scripts::{Pep723ItemRef, Pep723Metadata};
 use uv_workspace::WorkspaceCache;
@@ -85,6 +83,15 @@ pub(crate) async fn script_metadata_specification(
         .collect::<Result<Vec<_>, _>>()?;
     let script_sources = metadata.sources(sources);
 
+    let mut selected_indexes = Vec::new();
+    let mut into_requirement = |requirement: LoweredRequirement| {
+        if let Some(index) = requirement.selected_index()
+            && index.origin != Some(Origin::Cli)
+        {
+            selected_indexes.push(index.clone());
+        }
+        requirement.into_inner()
+    };
     let mut requirements = Vec::new();
     for requirement in metadata.dependencies.iter().flatten().cloned() {
         requirements.extend(
@@ -99,7 +106,7 @@ pub(crate) async fn script_metadata_specification(
                 credentials_cache,
             )
             .await
-            .map(|requirement| requirement.map(LoweredRequirement::into_inner))
+            .map(|requirement| requirement.map(&mut into_requirement))
             .collect::<Result<Vec<_>, _>>()?,
         );
     }
@@ -125,7 +132,7 @@ pub(crate) async fn script_metadata_specification(
                 credentials_cache,
             )
             .await
-            .map(|requirement| requirement.map(LoweredRequirement::into_inner))
+            .map(|requirement| requirement.map(&mut into_requirement))
             .collect::<Result<Vec<_>, _>>()?,
         );
     }
@@ -155,8 +162,9 @@ pub(crate) async fn script_metadata_specification(
                         )
                         .await
                         .map(|requirement| {
-                            requirement
-                                .map(|requirement| Override::Requirement(requirement.into_inner()))
+                            requirement.map(|requirement| {
+                                Override::Requirement(into_requirement(requirement))
+                            })
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                     );
@@ -176,7 +184,7 @@ pub(crate) async fn script_metadata_specification(
                                 credentials_cache,
                             )
                             .await
-                            .map(|requirement| requirement.map(LoweredRequirement::into_inner))
+                            .map(|requirement| requirement.map(&mut into_requirement))
                             .collect::<Result<Vec<_>, _>>()?,
                         );
                     }
@@ -199,40 +207,9 @@ pub(crate) async fn script_metadata_specification(
         .cloned()
         .collect::<Vec<_>>();
 
-    // Lowering selects an index URL, but clients also need its authentication and cutoff policy.
-    let mut selected_indexes = FxHashSet::default();
-    let mut record_index = |requirement: &Requirement| {
-        if let RequirementSource::Registry {
-            index: Some(index), ..
-        } = &requirement.source
-        {
-            selected_indexes.insert(index.clone());
-        }
-    };
-    for requirement in requirements.iter().chain(&constraints) {
-        record_index(requirement);
-    }
-    for entry in &overrides {
-        match entry {
-            Override::Requirement(requirement) => record_index(requirement),
-            Override::Package(package) => {
-                for requirement in &package.dependencies {
-                    record_index(requirement);
-                }
-            }
-        }
-    }
     let indexes = SourceIndexes::try_from_iter(
-        script_indexes
+        selected_indexes
             .into_iter()
-            .filter(|index| {
-                selected_indexes.contains(&IndexMetadata {
-                    url: index.url.clone(),
-                    format: index.format,
-                }) && !index_locations.defined_indexes().any(|configured| {
-                    configured.origin == Some(Origin::Cli) && configured.name == index.name
-                })
-            })
             .map(|index| index.with_origin(Origin::RequirementsTxt)),
     )?;
 

@@ -185,7 +185,7 @@ pub async fn install(
     settings.resolver.index_locations = settings
         .resolver
         .index_locations
-        .with_source_indexes(build_indexes.clone());
+        .with_source_indexes(build_indexes.clone())?;
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
 
@@ -422,7 +422,7 @@ pub async fn install(
     settings.resolver.index_locations = settings
         .resolver
         .index_locations
-        .with_source_indexes(spec.indexes.clone());
+        .with_source_indexes(spec.indexes.clone())?;
 
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
@@ -513,7 +513,7 @@ pub async fn install(
             Vec::new(),
             false,
         )
-        .with_source_indexes(spec.indexes.clone());
+        .with_source_indexes(spec.indexes.clone())?;
         options.indexes.index = Some(indexes.defined_indexes().cloned().collect());
     }
     let options = ToolOptions::from(options);

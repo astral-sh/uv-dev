@@ -854,7 +854,8 @@ async fn get_or_create_environment(
     settings_with_build_indexes.resolver.index_locations = settings_with_build_indexes
         .resolver
         .index_locations
-        .with_source_indexes(build_indexes.clone());
+        .with_source_indexes(build_indexes.clone())
+        .map_err(anyhow::Error::from)?;
     let settings = &settings_with_build_indexes;
 
     let from = match request {

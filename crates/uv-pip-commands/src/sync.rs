@@ -312,7 +312,7 @@ pub async fn pip_sync(
     };
 
     // Incorporate any index locations from the provided sources.
-    let index_locations = index_locations.with_source_indexes(indexes).combine(
+    let index_locations = index_locations.with_source_indexes(indexes)?.combine(
         extra_index_urls
             .into_iter()
             .map(Index::from_extra_index_url)
