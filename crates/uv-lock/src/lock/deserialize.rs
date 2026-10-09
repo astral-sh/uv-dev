@@ -907,7 +907,7 @@ mod tests {
     use indoc::{formatdoc, indoc};
     use serde::Deserialize;
 
-    use super::super::{LockParseError, VERSION};
+    use super::super::{LockParseError, WORKSPACE_GROUP_VERSION};
     use super::{Cursor, Error, Lock, ValueDeserializer, from_str};
 
     const CANONICAL_LOCK: &str = r#"version = 1
@@ -1000,31 +1000,43 @@ dev = [{ name = "dependency", specifier = ">=1" }]
 
     #[test]
     fn implicit_manifest_matches_toml() {
-        for subtable in [
-            r#"[manifest.dependency-groups]
+        for (version, subtable) in [
+            (
+                1,
+                r#"[manifest.dependency-groups]
 dev = [{ name = "dependency", specifier = ">=1" }]
 "#,
-            r#"[manifest.dependency-group-includes]
+            ),
+            (
+                2,
+                r#"[manifest.dependency-group-includes]
 dev = [{ package = "member", group = "test" }]
 "#,
-            r#"[[manifest.dependency-metadata]]
+            ),
+            (
+                1,
+                r#"[[manifest.dependency-metadata]]
 name = "dependency"
 version = "1.0.0"
 "#,
-            r#"[manifest.dependency-groups]
+            ),
+            (
+                1,
+                r#"[manifest.dependency-groups]
 dev = [{ name = "dependency", specifier = ">=1" }]
 
 [[manifest.dependency-metadata]]
 name = "dependency"
 version = "1.0.0"
 "#,
+            ),
         ] {
-            let input = String::from(indoc! {r#"
-                version = 1
+            let input = formatdoc! {r#"
+                version = {version}
                 revision = 3
                 requires-python = ">=3.12"
 
-            "#}) + subtable;
+                {subtable}"#};
             let expected: Lock =
                 toml::from_str(&input).expect("valid TOML lock with an implicit manifest");
             let actual = from_str(&input).expect("implicit manifest uses the direct parser");
@@ -1107,14 +1119,14 @@ version = "1.0.0"
 
     #[test]
     fn unsupported_lock_version_is_rejected() {
-        let version = VERSION + 1;
+        let version = WORKSPACE_GROUP_VERSION + 1;
         let input = CANONICAL_LOCK.replacen("version = 1", &format!("version = {version}"), 1);
         let error = Lock::from_toml(&input).expect_err("unsupported lock versions are rejected");
 
         assert_matches!(
             error,
             LockParseError::UnsupportedVersion {
-                supported: VERSION,
+                supported: WORKSPACE_GROUP_VERSION,
                 version: actual,
             } if actual == version
         );
@@ -1122,7 +1134,7 @@ version = "1.0.0"
 
     #[test]
     fn unparsable_unsupported_lock_version_is_identified() {
-        let version = VERSION + 1;
+        let version = WORKSPACE_GROUP_VERSION + 1;
         let input = CANONICAL_LOCK
             .replacen("version = 1", &format!("version = {version}"), 1)
             .replacen("name = \"dependency\"", "name = false", 1);
@@ -1132,7 +1144,7 @@ version = "1.0.0"
         assert_matches!(
             error,
             LockParseError::UnparsableVersion {
-                supported: VERSION,
+                supported: WORKSPACE_GROUP_VERSION,
                 version: actual,
                 ..
             } if actual == version
