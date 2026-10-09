@@ -623,6 +623,7 @@ fn is_endpoint_url(url: &Url, endpoint_url: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::future::{Future, ready};
 
     use crate::credentials::{Authentication, AuthenticationError};
     use reqsign::{FileRead, StaticEnv};
@@ -644,12 +645,12 @@ mod tests {
     }
 
     impl FileRead for TestFileRead {
-        async fn file_read(&self, path: &str) -> reqsign::Result<Vec<u8>> {
-            self.files.get(path).cloned().ok_or_else(|| {
+        fn file_read(&self, path: &str) -> impl Future<Output = reqsign::Result<Vec<u8>>> {
+            ready(self.files.get(path).cloned().ok_or_else(|| {
                 reqsign::Error::unexpected("test credential file not found").with_source(
                     std::io::Error::new(std::io::ErrorKind::NotFound, "test credential file"),
                 )
-            })
+            }))
         }
     }
 
