@@ -1998,6 +1998,106 @@ fn lock_wheel_url() -> Result<()> {
     Ok(())
 }
 
+/// Conflicting extras can select different archives without invalidating an unchanged lock.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_wheel_url_conflicting_extras_reuse_without_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/left/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/right/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    let index = server.uri();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+
+        [project.optional-dependencies]
+        left = ["basic-package"]
+        right = ["basic-package"]
+
+        [tool.uv]
+        conflicts = [[{{ extra = "left" }}, {{ extra = "right" }}]]
+
+        [tool.uv.sources]
+        basic-package = [
+            {{ url = "{index}/left/basic_package-0.1.0-py3-none-any.whl", extra = "left" }},
+            {{ url = "{index}/right/basic_package-0.1.0-py3-none-any.whl", extra = "right" }},
+        ]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Source checks use effective overrides in both production and dependency-group contexts.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_wheel_url_override_reuses_without_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/replacement/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    let index = server.uri();
+    context.temp_dir.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package @ {index}/original/basic_package-0.1.0-py3-none-any.whl"]
+
+        [dependency-groups]
+        dev = ["basic-package @ {index}/original/basic_package-0.1.0-py3-none-any.whl"]
+
+        [tool.uv]
+        override-dependencies = ["basic-package @ {index}/replacement/basic_package-0.1.0-py3-none-any.whl"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
 /// Reject a lockfile that redirects a direct path dependency to a different archive.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -2115,29 +2215,60 @@ fn lock_wheel_path_rejects_mismatched_optional_and_group_sources() -> Result<()>
 
     let lockfile = context.temp_dir.child("uv.lock");
     let lock = context.read("uv.lock");
-    let mut filters = context.filters();
-    filters.push((r"path\+(?:optional|group)/", "path+[SOURCE]/"));
-    insta::allow_duplicates! {
-        for directory in ["optional", "group"] {
-            let mismatched = lock.replace(
-                &format!(r#"source = {{ path = "{directory}/basic_package-0.1.0-py3-none-any.whl" }}"#),
-                r#"source = { path = "replacement/basic_package-0.1.0-py3-none-any.whl" }"#,
-            );
-            assert_ne!(lock, mismatched);
-            lockfile
-                .write_str(&mismatched)
-                .expect("write mismatched lockfile");
+    let mismatched_optional = lock.replace(
+        r#"source = { path = "optional/basic_package-0.1.0-py3-none-any.whl" }"#,
+        r#"source = { path = "replacement/basic_package-0.1.0-py3-none-any.whl" }"#,
+    );
+    assert_ne!(lock, mismatched_optional);
+    lockfile.write_str(&mismatched_optional)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-            uv_snapshot!(filters, context.lock().arg("--locked").arg("--no-index"), @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            Resolved 3 packages in [TIME]
-            error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+    hint: To update the lockfile, run `uv lock`.
+    ");
 
-            hint: To update the lockfile, run `uv lock`.
-            ");
-        }
-    }
+    let mismatched_group = lock.replace(
+        r#"source = { path = "group/basic_package-0.1.0-py3-none-any.whl" }"#,
+        r#"source = { path = "replacement/basic_package-0.1.0-py3-none-any.whl" }"#,
+    );
+    assert_ne!(lock, mismatched_group);
+    lockfile.write_str(&mismatched_group)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // Revision-zero locks do not record which extras the refreshed metadata provides.
+    let legacy = format!("{}\n", lock.lines()
+        .filter(|line| !line.starts_with("revision =") && !line.starts_with("provides-extras ="))
+        .collect::<Vec<_>>().join("\n"));
+    lockfile.write_str(&legacy)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let mismatched_legacy = legacy.replace(
+        r#"source = { path = "optional/basic_package-0.1.0-py3-none-any.whl" }"#,
+        r#"source = { path = "replacement/basic_package-0.1.0-py3-none-any.whl" }"#,
+    );
+    assert_ne!(legacy, mismatched_legacy);
+    lockfile.write_str(&mismatched_legacy)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
 
     Ok(())
 }

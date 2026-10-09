@@ -4018,12 +4018,23 @@ impl Lock {
             ));
         }
 
+        let effective_requirements = Self::preprocess_requirements(
+            &package.id.name,
+            package_version,
+            &expected_requirements,
+            DependencyContext::Production,
+            modifiers,
+        );
+
         // Validate that direct requirements still resolve to the archive they requested. Keep
         // production, optional, and group edges separate so same-name sources cannot be matched
         // against an unrelated edge set.
-        if let Some(dependency) =
-            mismatched_dependency_source(&actual_requirements, &package.dependencies, None, root)
-        {
+        if let Some(dependency) = mismatched_dependency_source(
+            &effective_requirements,
+            &package.dependencies,
+            DependencyContext::Production,
+            root,
+        )? {
             return Ok(SatisfiesResult::MismatchedPackageDependencySource(
                 &package.id.name,
                 package.id.version.as_ref(),
@@ -4031,14 +4042,17 @@ impl Lock {
             ));
         }
 
-        for extra in &package.metadata.provides_extra {
+        for extra in provides_extra {
             let dependencies = package
                 .optional_dependencies
                 .get(extra)
                 .map_or(&[][..], Vec::as_slice);
-            if let Some(dependency) =
-                mismatched_dependency_source(&actual_requirements, dependencies, Some(extra), root)
-            {
+            if let Some(dependency) = mismatched_dependency_source(
+                &effective_requirements,
+                dependencies,
+                DependencyContext::Extra(extra),
+                root,
+            )? {
                 return Ok(SatisfiesResult::MismatchedPackageDependencySource(
                     &package.id.name,
                     package.id.version.as_ref(),
@@ -4047,14 +4061,24 @@ impl Lock {
             }
         }
 
-        for (group, requirements) in &actual_groups {
+        for (group, requirements) in &expected_groups {
+            let requirements = Self::preprocess_requirements(
+                &package.id.name,
+                package_version,
+                requirements,
+                DependencyContext::Group(group),
+                modifiers,
+            );
             let dependencies = package
                 .dependency_groups
                 .get(group)
                 .map_or(&[][..], Vec::as_slice);
-            if let Some(dependency) =
-                mismatched_dependency_source(requirements, dependencies, None, root)
-            {
+            if let Some(dependency) = mismatched_dependency_source(
+                &requirements,
+                dependencies,
+                DependencyContext::Group(group),
+                root,
+            )? {
                 return Ok(SatisfiesResult::MismatchedPackageDependencySource(
                     &package.id.name,
                     package.id.version.as_ref(),
@@ -4542,15 +4566,11 @@ impl Lock {
             }
         }
 
-        let dependency_modifiers = if allow_missing_package_metadata {
-            DependencyModifiers::new(
-                Overrides::from_entries(normalized_overrides)
-                    .map_err(LockErrorKind::InvalidScopedOverride)?,
-                Excludes::from_entries(excludes.iter().cloned()),
-            )
-        } else {
-            DependencyModifiers::default()
-        };
+        let dependency_modifiers = DependencyModifiers::new(
+            Overrides::from_entries(normalized_overrides)
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(excludes.iter().cloned()),
+        );
         // Projectless workspace groups and scripts are root declarations, so apply only
         // global overrides and exclusions before using them for sources or validation.
         let root_requirements = dependency_modifiers
@@ -6080,20 +6100,19 @@ impl Lock {
 fn mismatched_dependency_source(
     requirements: &[Requirement],
     dependencies: &[Dependency],
-    extra: Option<&ExtraName>,
+    context: DependencyContext<'_>,
     root: &Path,
-) -> Option<PackageName> {
+) -> Result<Option<PackageName>, LockError> {
     for requirement in requirements {
-        if !matches!(
-            &requirement.source,
-            RequirementSource::Path { .. } | RequirementSource::Url { .. }
-        ) {
-            continue;
+        match &requirement.source {
+            RequirementSource::Path { .. } | RequirementSource::Url { .. } => {}
+            RequirementSource::Registry { .. }
+            | RequirementSource::GitDirectory { .. }
+            | RequirementSource::GitPath { .. }
+            | RequirementSource::Directory { .. } => continue,
         }
 
-        let marker = requirement
-            .marker
-            .simplify_extras_with(|candidate| extra.is_some_and(|extra| extra == candidate));
+        let marker = context.requirement_marker(requirement.marker);
         if marker.is_false() {
             continue;
         }
@@ -6104,31 +6123,17 @@ fn mismatched_dependency_source(
             {
                 continue;
             }
-
-            let source_matches = match (&requirement.source, &dependency.package_id.source) {
-                (RequirementSource::Path { install_path, .. }, Source::Path(path)) => {
-                    normalize_path(root.join(path)).as_ref() == install_path.as_ref()
-                }
-                (
-                    RequirementSource::Url {
-                        location,
-                        subdirectory,
-                        ..
-                    },
-                    Source::Direct(url, direct),
-                ) => {
-                    &normalize_url(location.clone()) == url && subdirectory == &direct.subdirectory
-                }
-                _ => false,
-            };
-
-            if !source_matches {
-                return Some(requirement.name.clone());
+            if !dependency
+                .package_id
+                .source
+                .satisfies_requirement_source(&requirement.source, root)?
+            {
+                return Ok(Some(requirement.name.clone()));
             }
         }
     }
 
-    None
+    Ok(None)
 }
 
 /// The set of lockfile packages that should be audited, materialized from a
