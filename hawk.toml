@@ -144,6 +144,15 @@ reason = "used by Pixi to distinguish packages installed through its uv integrat
 
 [[override]]
 lint = "hawk::unnecessary_public"
+crate = "uv_python_types"
+item = "request::VersionRequest::variant"
+kind = "inherent_method"
+level = "expect"
+target = "cfg(not(windows))"
+reason = "used by Windows Python discovery to select debug executable names"
+
+[[override]]
+lint = "hawk::unnecessary_public"
 crate = "uv_fs"
 item = "with_retry_sync"
 kind = "function"

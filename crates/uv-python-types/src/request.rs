@@ -222,7 +222,7 @@ impl PythonVariant {
     }
 
     /// Return the executable suffix for Windows, e.g., `_d` for `python_d.exe`.
-    pub fn windows_executable_suffix(self) -> &'static str {
+    pub(crate) fn windows_executable_suffix(self) -> &'static str {
         match self {
             Self::Debug | Self::GilDebug => "_d",
             Self::FreethreadedDebug => "t_d",
