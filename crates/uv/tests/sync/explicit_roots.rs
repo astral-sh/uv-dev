@@ -2133,6 +2133,7 @@ fn explicit_roots_project_conflicts_follow_locked_dependency_identity() -> Resul
         name = "app"
         version = "0.1.0"
         requires-python = ">=3.12"
+        dependencies = ["bridge"]
         [project.optional-dependencies]
         legacy = ["bridge<2"]
         modern = ["bridge>=2"]
@@ -2155,7 +2156,7 @@ fn explicit_roots_project_conflicts_follow_locked_dependency_identity() -> Resul
         .args(["--preview-features", "package-conflicts"])
         .assert()
         .success();
-    uv_snapshot!(context.filters(), context.sync().args([
+    uv_snapshot!(context.filters(), context.sync().args(["--package", "app"]).args([
         "--frozen", "--offline", "--dry-run", "--extra", "legacy", "--preview-features", "package-conflicts",
     ]), @"
     exit_code: 2 (failure)
@@ -2163,7 +2164,7 @@ fn explicit_roots_project_conflicts_follow_locked_dependency_identity() -> Resul
     Would use project environment at: .venv
     error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
     ");
-    uv_snapshot!(context.filters(), context.export().args([
+    uv_snapshot!(context.filters(), context.export().args(["--package", "app"]).args([
         "--frozen", "--offline", "--extra", "legacy", "--no-header", "--no-hashes", "--no-annotate",
         "--preview-features", "package-conflicts",
     ]), @"
@@ -2171,7 +2172,7 @@ fn explicit_roots_project_conflicts_follow_locked_dependency_identity() -> Resul
     ----- stderr -----
     error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
     ");
-    uv_snapshot!(context.filters(), context.export().args([
+    uv_snapshot!(context.filters(), context.export().args(["--package", "app"]).args([
         "--frozen", "--offline", "--extra", "modern", "--no-header", "--no-hashes", "--no-annotate",
         "--preview-features", "package-conflicts",
     ]), @"
@@ -2179,8 +2180,26 @@ fn explicit_roots_project_conflicts_follow_locked_dependency_identity() -> Resul
     ----- stdout -----
     bridge==2.0.0
     ");
-    uv_snapshot!(context.filters(), context.sync().args([
+    uv_snapshot!(context.filters(), context.sync().args(["--package", "app"]).args([
         "--frozen", "--offline", "--dry-run", "--extra", "modern", "--preview-features", "package-conflicts",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + bridge==2.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
+        "--package", "app", "--frozen", "--offline", "--no-header", "--no-hashes", "--no-annotate",
+        "--preview-features", "package-conflicts",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==2.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "app", "--frozen", "--offline", "--dry-run", "--preview-features", "package-conflicts",
     ]), @r#"
     exit_code: 0 (success)
     ----- stderr -----
@@ -2279,6 +2298,154 @@ fn explicit_roots_project_conflicts_include_manifest_group_overrides() -> Result
     ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    ");
+    Ok(())
+}
+
+/// Project conflict membership follows the concrete Python environment, including frozen locks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_project_conflicts_respect_dependency_markers() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .venv()
+        .arg(context.venv.path())
+        .args(["--python", "3.12"])
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "shared"]
+        roots = ["app"]
+        [tool.uv.sources]
+        shared = { workspace = true }
+        [tool.uv]
+        conflicts = [[{ package = "app" }, { package = "shared" }]]
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = ["shared; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--python",
+            "3.12",
+            "--preview-features",
+            "package-conflicts",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--python", "3.12", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--python", "3.13", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Would replace project environment at: .venv
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--no-header", "--no-hashes", "--no-annotate", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    ");
+
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--python",
+            "3.12",
+            "--preview-features",
+            "package-conflicts",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    assert!(
+        !context
+            .read("uv.lock")
+            .contains("[package.metadata.requires-dev]")
+    );
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--python", "3.12", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--python", "3.13", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Would replace project environment at: .venv
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    ");
+
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("app/pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("shared/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--python", "3.12", "--preview-features", "package-conflicts",
+        "--preview-features", "frozen-lockfile",
+    ]), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--python", "3.13", "--preview-features", "package-conflicts",
+        "--preview-features", "frozen-lockfile",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Would replace project environment at: .venv
     error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
     ");
     Ok(())

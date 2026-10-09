@@ -26,7 +26,9 @@ use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
+use uv_pypi_types::{
+    ConflictItem, ConflictKind, ConflictSet, Conflicts, ResolverMarkerEnvironment,
+};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
 use uv_python_interpreter::{BrokenLink, Interpreter, InvalidEnvironmentKind, PythonEnvironment};
@@ -2029,6 +2031,7 @@ pub fn detect_conflicts(
     target: &InstallTarget,
     extras: &ExtrasSpecification,
     groups: &DependencyGroupsWithDefaults,
+    marker_env: Option<&ResolverMarkerEnvironment>,
 ) -> Result<(), EnvironmentError> {
     // Validate that we aren't trying to install extras or groups that
     // are declared as conflicting. Note that we need to collect all
@@ -2042,7 +2045,7 @@ pub fn detect_conflicts(
         return Ok(());
     }
 
-    let packages = target.selected_workspace_members(extras, groups)?;
+    let packages = target.selected_workspace_members(extras, groups, marker_env)?;
     // CLI extras and groups apply to selected roots, independently of transitive production members.
     let roots = target.roots().collect::<BTreeSet<_>>();
     let group_root = target.group_root(groups);

@@ -78,7 +78,8 @@ pub use crate::lock::export::{
     Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, PythonReport, cyclonedx_json,
 };
 use crate::lock::inputs::ManifestFilter;
-pub use crate::lock::installable::{Installable, InstallableRootKind};
+pub use crate::lock::installable::Installable;
+pub(crate) use crate::lock::installable::InstallableRootKind;
 pub use crate::lock::map::PackageMap;
 pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
@@ -893,7 +894,9 @@ impl<'a> LockedDependencyBuilder<'a> {
                     // removing conflict predicates from the generated dependency edge.
                     let mut source_context = UniversalMarker::from_combined(source_marker);
                     source_context.assume_conflict_item(selected);
-                    expected.exclude_conflicting_items(&mut source_context, selected);
+                    expected
+                        .lock
+                        .exclude_conflicting_items(&mut source_context, selected);
                     if source_context.is_false() {
                         continue;
                     }
@@ -2044,19 +2047,6 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
         })
     }
 
-    /// Exclude conflict selections that cannot coexist with the selected item.
-    fn exclude_conflicting_items(&self, marker: &mut UniversalMarker, selected: &ConflictItem) {
-        for conflict_set in self.lock.conflicts.iter() {
-            if conflict_set.iter().any(|conflict| conflict == selected) {
-                for conflict in conflict_set.iter() {
-                    if conflict != selected {
-                        marker.assume_not_conflict_item(conflict);
-                    }
-                }
-            }
-        }
-    }
-
     /// Return selections that cannot coexist with a required conflict item.
     fn conflicting_alternatives(&self, required: &ConflictItem) -> UniversalMarker {
         let mut alternatives = UniversalMarker::FALSE;
@@ -3168,6 +3158,40 @@ impl Lock {
         &self.conflicts
     }
 
+    /// Restrict a marker to combinations permitted by the declared conflicts.
+    fn constrain_conflicts(&self, mut marker: UniversalMarker) -> UniversalMarker {
+        if self.conflicts.is_empty() || !marker.has_conflict_marker() {
+            return marker;
+        }
+        marker.and(UniversalMarker::new(
+            MarkerTree::TRUE,
+            ConflictMarker::from_relevant_conflicts(&self.conflicts, [marker]),
+        ));
+        marker
+    }
+
+    /// Exclude conflict selections that cannot coexist with the selected item.
+    fn exclude_conflicting_items(&self, marker: &mut UniversalMarker, selected: &ConflictItem) {
+        for conflict_set in self.conflicts.iter() {
+            if conflict_set.iter().any(|conflict| conflict == selected) {
+                for conflict in conflict_set.iter() {
+                    if conflict != selected {
+                        marker.assume_not_conflict_item(conflict);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Return the dependency overrides and exclusions recorded in the lockfile.
+    fn dependency_modifiers(&self) -> Result<DependencyModifiers, LockError> {
+        Ok(DependencyModifiers::new(
+            Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(self.manifest.excludes.iter().cloned()),
+        ))
+    }
+
     /// Returns the supported environments that were used to generate this lock.
     pub fn supported_environments(&self) -> &[MarkerTree] {
         &self.supported_environments
@@ -3301,11 +3325,7 @@ impl Lock {
                 queue.push_back((package, context, marker));
             }
         }
-        let modifiers = DependencyModifiers::new(
-            Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
-                .map_err(LockErrorKind::InvalidScopedOverride)?,
-            Excludes::from_entries(self.manifest.excludes.iter().cloned()),
-        );
+        let modifiers = self.dependency_modifiers()?;
         for (requirements, marker) in iter::once((&self.manifest.requirements, root_marker)).chain(
             self.manifest
                 .dependency_groups
@@ -7625,7 +7645,7 @@ impl Package {
     }
 
     /// Returns the dependencies of the package.
-    pub fn dependencies(&self) -> &[Dependency] {
+    pub(crate) fn dependencies(&self) -> &[Dependency] {
         &self.dependencies
     }
 
@@ -7645,6 +7665,48 @@ impl Package {
     /// Returns the resolved PEP 735 dependency groups of the package.
     pub fn resolved_dependency_groups(&self) -> &BTreeMap<GroupName, Vec<Dependency>> {
         &self.dependency_groups
+    }
+
+    /// Prepare effective declarations once for a dependency section, when metadata is available.
+    fn dependency_requirements(
+        &self,
+        context: DependencyContext<'_>,
+        modifiers: &DependencyModifiers,
+        root: &Path,
+        requires_python: &RequiresPython,
+    ) -> Result<Option<Vec<Requirement>>, LockError> {
+        // Resolved edges retain scoped policies for dynamic sources whose version is omitted.
+        if self.id.version.is_none() && modifiers.has_scoped_package(&self.id.name) {
+            return Ok(None);
+        }
+        let requirements = match context {
+            DependencyContext::Production | DependencyContext::Extra(_) => {
+                Some(&self.metadata.requires_dist)
+            }
+            DependencyContext::Group(group) => self.metadata.dependency_groups.get(group),
+        };
+        let Some(requirements) = requirements else {
+            return Ok(None);
+        };
+        let had_requirements = !requirements.is_empty();
+        let requirements = Lock::preprocess_requirements(
+            &self.id.name,
+            self.id.version.as_ref(),
+            &requirements.iter().cloned().collect::<Vec<_>>(),
+            context,
+            modifiers,
+        );
+        if !had_requirements && requirements.is_empty() {
+            return Ok(None);
+        }
+        requirements
+            .into_iter()
+            .map(|mut requirement| {
+                requirement.marker = context.requirement_marker(requirement.marker);
+                normalize_requirement(requirement, root, requires_python)
+            })
+            .collect::<Result<Vec<_>, LockError>>()
+            .map(Some)
     }
 
     /// Returns an [`InstallTarget`] view for filtering decisions.
@@ -9509,6 +9571,73 @@ impl Dependency {
     /// Returns the package name of this dependency.
     pub fn package_name(&self) -> &PackageName {
         &self.package_id.name
+    }
+
+    /// Return the conditions under which the effective declarations request this dependency.
+    fn activation_marker(
+        &self,
+        requirements: Option<&[Requirement]>,
+        lock: &Lock,
+        root: &Path,
+    ) -> Result<MarkerTree, LockError> {
+        let has_forks = lock
+            .packages_for_name(self.package_name())
+            .iter()
+            .any(|package| package.id != self.package_id);
+        let selection_marker = || {
+            let mut marker = lock.constrain_conflicts(self.complexified_marker);
+            let project = ConflictItem::from(self.package_name().clone());
+            marker.assume_conflict_item(&project);
+            lock.exclude_conflicting_items(&mut marker, &project);
+            for extra in &self.extra {
+                let item = ConflictItem::from((self.package_name().clone(), extra.clone()));
+                marker.assume_conflict_item(&item);
+                lock.exclude_conflicting_items(&mut marker, &item);
+            }
+            marker.combined()
+        };
+        let fallback = || {
+            if has_forks {
+                selection_marker()
+            } else {
+                lock.constrain_conflicts(self.complexified_marker)
+                    .combined()
+                    .without_extras()
+            }
+        };
+        let Some(requirements) = requirements else {
+            return Ok(fallback());
+        };
+        let package = lock.package(self.index);
+        let mut matched = Vec::new();
+        let mut marker = MarkerTree::FALSE;
+        for requirement in requirements {
+            if requirement.name == *self.package_name()
+                && Lock::package_satisfies_requirement(package, requirement, root)?
+            {
+                marker = marker.or(requirement.marker);
+                matched.push(requirement);
+            }
+        }
+        if matched.is_empty() {
+            return Ok(fallback());
+        }
+        // A merged edge may receive its extras from separate declarations.
+        for extra in &self.extra {
+            let extra_marker = matched
+                .iter()
+                .filter(|requirement| requirement.extras.contains(extra))
+                .fold(MarkerTree::FALSE, |marker, requirement| {
+                    marker.or(requirement.marker)
+                });
+            marker = marker.and(extra_marker);
+        }
+        marker = marker.and(self.complexified_marker.pep508());
+        if has_forks {
+            // Keep independent selectors until the caller applies its selected roots and options.
+            marker = marker.and(selection_marker());
+        }
+        Ok(marker)
     }
 
     /// Returns the extras specified on this dependency.
