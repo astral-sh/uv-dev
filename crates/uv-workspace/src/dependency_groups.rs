@@ -253,7 +253,9 @@ impl FlatDependencyGroups {
         // This is intentional, we want groups to be defined in a standard interoperable
         // way, and letting things include-group a group that isn't defined would be a
         // mess for other python tools.
-        if let Some(dev_dependencies) = dev_dependencies {
+        if let Some(dev_dependencies) = dev_dependencies
+            && selected_groups.is_none_or(|groups| groups.contains(&DEV_DEPENDENCIES))
+        {
             dependency_groups
                 .entry(DEV_DEPENDENCIES.clone())
                 .or_insert_with(FlatDependencyGroup::default)
