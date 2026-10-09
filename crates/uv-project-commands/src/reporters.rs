@@ -31,6 +31,6 @@ impl uv_bin_install::Reporter for BinaryDownloadReporter {
     }
 
     fn on_download_complete(&self, id: usize) {
-        self.reporter.on_request_complete(Direction::Download, id);
+        self.reporter.on_request_complete(id);
     }
 }
