@@ -1,13 +1,15 @@
 use std::fmt::{Debug, Formatter};
+use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
+use rustc_hash::FxHasher;
 use tokio::sync::{mpsc::Sender, oneshot};
 
 use uv_distribution_types::{
     Dist, DistributionId, Identifier, IndexMetadata, IndexUrl, Name, ResolutionRecorder,
 };
 use uv_normalize::PackageName;
-use uv_once_map::Registration;
+use uv_once_map::{RegisteredEntry, Registration};
 use uv_pep440::Version;
 
 use crate::pubgrub::Range;
@@ -73,25 +75,20 @@ impl Name for MetadataRequest<'_> {
     }
 }
 
+type RegisteredVersions<'a, K> =
+    RegisteredEntry<'a, K, Arc<VersionsResponse>, BuildHasherDefault<FxHasher>>;
+
 /// A registered version-list request, bound to its package and index scope.
-pub(crate) enum PendingVersions {
-    Implicit(InMemoryIndex, PackageName),
-    Explicit(InMemoryIndex, (PackageName, IndexUrl)),
+pub(crate) enum PendingVersions<'a> {
+    Implicit(RegisteredVersions<'a, PackageName>),
+    Explicit(RegisteredVersions<'a, (PackageName, IndexUrl)>),
 }
 
-impl PendingVersions {
+impl PendingVersions<'_> {
     pub(crate) fn wait(self) -> Arc<VersionsResponse> {
         match self {
-            Self::Implicit(index, name) => index
-                .implicit()
-                .get_registered(name)
-                .expect("a pending version request remains registered")
-                .wait_blocking(),
-            Self::Explicit(index, key) => index
-                .explicit()
-                .get_registered(key)
-                .expect("a pending version request remains registered")
-                .wait_blocking(),
+            Self::Implicit(entry) => entry.wait_blocking(),
+            Self::Explicit(entry) => entry.wait_blocking(),
         }
     }
 }
@@ -230,56 +227,48 @@ impl MetadataRequests {
         &self,
         name: &PackageName,
         index: Option<&IndexMetadata>,
-    ) -> Result<PendingVersions, ResolveError> {
+    ) -> Result<PendingVersions<'_>, ResolveError> {
         if let Some(recorder) = &self.recorder {
             recorder.exclude_newer(name);
         }
         if let Some(speculative) = &self.speculative {
             if let Some(index) = index {
                 let key = (name.clone(), index.url().clone());
-                if self.index.explicit().get_registered(key.clone()).is_some() {
-                    return Ok(PendingVersions::Explicit(self.index.clone(), key));
+                if let Some(entry) = self.index.explicit().get_registered(key.clone()) {
+                    return Ok(PendingVersions::Explicit(entry));
                 }
-                if speculative.explicit().get_registered(key.clone()).is_some() {
-                    return Ok(PendingVersions::Explicit(speculative.clone(), key));
+                if let Some(entry) = speculative.explicit().get_registered(key.clone()) {
+                    return Ok(PendingVersions::Explicit(entry));
                 }
                 self.request_speculative(Request::Package(name.clone(), Some(index.clone())))?;
-                if self.index.explicit().get_registered(key.clone()).is_some() {
-                    return Ok(PendingVersions::Explicit(self.index.clone(), key));
+                if let Some(entry) = self.index.explicit().get_registered(key.clone()) {
+                    return Ok(PendingVersions::Explicit(entry));
                 }
-                if speculative.explicit().get_registered(key.clone()).is_some() {
-                    return Ok(PendingVersions::Explicit(speculative.clone(), key));
+                if let Some(entry) = speculative.explicit().get_registered(key.clone()) {
+                    return Ok(PendingVersions::Explicit(entry));
                 }
                 return Err(ResolveError::UnregisteredTask(name.to_string()));
             }
 
-            if self.index.implicit().get_registered(name.clone()).is_some() {
-                return Ok(PendingVersions::Implicit(self.index.clone(), name.clone()));
+            if let Some(entry) = self.index.implicit().get_registered(name.clone()) {
+                return Ok(PendingVersions::Implicit(entry));
             }
-            if speculative
-                .implicit()
-                .get_registered(name.clone())
-                .is_some()
-            {
-                return Ok(PendingVersions::Implicit(speculative.clone(), name.clone()));
+            if let Some(entry) = speculative.implicit().get_registered(name.clone()) {
+                return Ok(PendingVersions::Implicit(entry));
             }
             self.request_speculative(Request::Package(name.clone(), None))?;
-            if self.index.implicit().get_registered(name.clone()).is_some() {
-                return Ok(PendingVersions::Implicit(self.index.clone(), name.clone()));
+            if let Some(entry) = self.index.implicit().get_registered(name.clone()) {
+                return Ok(PendingVersions::Implicit(entry));
             }
-            if speculative
-                .implicit()
-                .get_registered(name.clone())
-                .is_some()
-            {
-                return Ok(PendingVersions::Implicit(speculative.clone(), name.clone()));
+            if let Some(entry) = speculative.implicit().get_registered(name.clone()) {
+                return Ok(PendingVersions::Implicit(entry));
             }
             return Err(ResolveError::UnregisteredTask(name.to_string()));
         }
 
         if let Some(index) = index {
             let key = (name.clone(), index.url().clone());
-            let entry = match self.index.explicit().register_entry(key.clone()) {
+            let entry = match self.index.explicit().register_entry(key) {
                 Registration::New(entry) => {
                     self.sender.blocking_send(
                         Request::Package(name.clone(), Some(index.clone())).into(),
@@ -288,8 +277,7 @@ impl MetadataRequests {
                 }
                 Registration::Existing(entry) => entry,
             };
-            drop(entry);
-            Ok(PendingVersions::Explicit(self.index.clone(), key))
+            Ok(PendingVersions::Explicit(entry))
         } else {
             let entry = match self.index.implicit().register_entry(name.clone()) {
                 Registration::New(entry) => {
@@ -299,8 +287,7 @@ impl MetadataRequests {
                 }
                 Registration::Existing(entry) => entry,
             };
-            drop(entry);
-            Ok(PendingVersions::Implicit(self.index.clone(), name.clone()))
+            Ok(PendingVersions::Implicit(entry))
         }
     }
 
