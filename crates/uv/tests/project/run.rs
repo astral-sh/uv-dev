@@ -8464,3 +8464,59 @@ fn run_pep723_requirements_shared_index_policy() -> Result<()> {
     "#);
     Ok(())
 }
+
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_default_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = wiremock::MockServer::start().await;
+    let second = wiremock::MockServer::start().await;
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "first"
+        # url = "{url}/simple"
+        # default = true
+        # [tool.uv.sources]
+        # a = {{ index = "first" }}
+        # ///
+    "#, url = first.uri()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["b"]
+        # [[tool.uv.index]]
+        # name = "second"
+        # url = "{url}/simple"
+        # default = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # b = {{ index = "second" }}
+        # ///
+    "#, url = second.uri()})?;
+    uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Multiple default indexes in requirements sources
+    ");
+    assert!(
+        first
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        second
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}

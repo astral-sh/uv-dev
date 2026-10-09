@@ -6605,6 +6605,7 @@ fn tool_install_pep723_flat_index_receipt_upgrade() -> Result<()> {
         ]
 
         [tool.options]
+        index = [{ name = "flat", url = "file://[TEMP_DIR]/wheels", explicit = true, default = false, format = "flat", authenticate = "auto" }]
         exclude-newer = "2024-03-25T00:00:00Z"
         "#);
     });
@@ -6626,5 +6627,67 @@ fn tool_install_pep723_flat_index_receipt_upgrade() -> Result<()> {
      - dependency==1.0.0
      + dependency==2.0.0
     "#);
+    Ok(())
+}
+
+#[test]
+fn tool_install_pep723_index_cutoff_receipt_upgrade() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "script-index-cutoff"
+        [root]
+        requires = ["dependency"]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."1.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00Z" }
+        [packages.dependency.versions."2.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-02-01T00:00:00Z" }
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # exclude-newer = "2024-01-15T00:00:00Z"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # ///
+    "#, url = server.index_url()})?;
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    fs_err::remove_file(context.temp_dir.child("deps.py"))?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Setting `exclude-newer` on configured indexes is experimental and may change without warning. Pass `--preview-features index-exclude-newer` to disable this warning.
+    Nothing to upgrade
+    "#);
+    uv_snapshot!(context.filters(), Command::new(uv_test::venv_bin_path(context.temp_dir.child("tools/simple-launcher")).join(format!("python{}", std::env::consts::EXE_SUFFIX)))
+        .args(["-c", "import importlib.metadata; print(importlib.metadata.version('dependency'))"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    ");
     Ok(())
 }

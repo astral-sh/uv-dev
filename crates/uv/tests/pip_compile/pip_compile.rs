@@ -20116,3 +20116,61 @@ fn compile_pep723_stdin_exclusions_ignore_sources() -> Result<()> {
     "#);
     Ok(())
 }
+
+#[test]
+fn compile_pep723_constraints_ignore_override_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("iniconfig\n")?;
+    let input = context.temp_dir.child("constraints.stdin");
+    input.write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # [tool.uv]
+        # override-dependencies = ["workspace-only"]
+        # [tool.uv.sources]
+        # workspace-only = { workspace = true }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--constraint", "-", "--no-header", "--no-annotate"])
+        .stdin(File::open(input.path())?.into_file()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    Ok(())
+}
+
+#[test]
+fn compile_pep723_overrides_ignore_constraint_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("iniconfig==1.1.1\n")?;
+    let input = context.temp_dir.child("overrides.stdin");
+    input.write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # [tool.uv]
+        # constraint-dependencies = ["workspace-only"]
+        # [tool.uv.sources]
+        # workspace-only = { workspace = true }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--override", "-", "--no-header", "--no-annotate"])
+        .stdin(File::open(input.path())?.into_file()), @r#"
+        exit_code: 0 (success)
+        ----- stdout -----
+        iniconfig==2.0.0
+
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        "#);
+    Ok(())
+}
