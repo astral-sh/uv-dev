@@ -2442,6 +2442,7 @@ mod tests {
             &package_name,
             data.project_status,
             &base,
+            None,
         );
         let archived = OwnedArchive::from_unarchived(&metadata)?;
         let metadata = OwnedArchive::deserialize(&archived);

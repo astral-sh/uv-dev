@@ -19,7 +19,7 @@ use uv_distribution_types::{
 use uv_git::GitResolver;
 use uv_normalize::PackageName;
 use uv_pypi_types::{HashDigests, ResolutionMetadata};
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 
 const WHEEL: &str = "ok-1.0.0-py3-none-any.whl";
 const METADATA: &str = "Metadata-Version: 2.3\nName: ok\nVersion: 1.0.0\n\n";
@@ -312,22 +312,8 @@ async fn artifactory_metadata_rejects_cross_origin_wheel() -> Result<()> {
         .respond_with(
             simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
         )
+        .expect(1)
         .mount(&origin)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/redirect/ok/"))
-        .respond_with(
-            ResponseTemplate::new(302)
-                .insert_header("Location", format!("{}/simple/ok/", other.uri())),
-        )
-        .mount(&origin)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/simple/ok/"))
-        .respond_with(
-            simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
-        )
-        .mount(&other)
         .await;
     let client = client(Cache::temp()?.init().await?, &IndexUrl::from_str(&index)?)?;
     let BuiltDist::Registry(dist) = distribution(&client).await? else {
@@ -347,18 +333,12 @@ async fn artifactory_metadata_rejects_cross_origin_index_redirect() -> Result<()
     let index = format!("{}/redirect", origin.uri());
     let target = format!("{}/{WHEEL}", origin.uri());
     Mock::given(method("GET"))
-        .and(path("/simple/ok/"))
-        .respond_with(
-            simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
-        )
-        .mount(&origin)
-        .await;
-    Mock::given(method("GET"))
         .and(path("/redirect/ok/"))
         .respond_with(
             ResponseTemplate::new(302)
                 .insert_header("Location", format!("{}/simple/ok/", other.uri())),
         )
+        .expect(1)
         .mount(&origin)
         .await;
     Mock::given(method("GET"))
@@ -366,6 +346,7 @@ async fn artifactory_metadata_rejects_cross_origin_index_redirect() -> Result<()
         .respond_with(
             simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
         )
+        .expect(1)
         .mount(&other)
         .await;
     let client = client(Cache::temp()?.init().await?, &IndexUrl::from_str(&index)?)?;
@@ -769,7 +750,7 @@ async fn artifactory_metadata_redirect_does_not_forward_credentials() -> Result<
         .expect(1)
         .mount(&target)
         .await;
-    let mut url = DisplaySafeUrl::parse(&format!("{}/simple", origin.uri()))?;
+    let mut url = SafeUrl::parse(&format!("{}/simple", origin.uri()))?;
     url.set_username("user")
         .map_err(|()| anyhow::anyhow!("username"))?;
     url.set_password(Some("password"))
