@@ -2444,7 +2444,9 @@ fn groups_respect_supported_environments_when_filtering_wheels() -> Result<()> {
 /// universe for all dependency edges, even when conflicts are involved.
 #[test]
 fn extra_conflict_environments_omit_redundant_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-09-28T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_exclude_newer("2025-09-28T00:00:00Z")
+        .with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2621,6 +2623,177 @@ fn extra_conflict_environments_omit_redundant_markers() -> Result<()> {
     ----- stderr -----
     Resolved 8 packages in [TIME]
     ");
+
+    // The SBOM retains transitive dependencies when both conflicting extras are selected.
+    uv_snapshot!(context.filters(), context.export().args([
+        "--format", "cyclonedx1.5", "--all-extras", "--frozen", "--no-hashes",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "bomFormat": "CycloneDX",
+      "specVersion": "1.5",
+      "version": 1,
+      "serialNumber": "[SERIAL_NUMBER]",
+      "metadata": {
+        "timestamp": "[TIMESTAMP]",
+        "tools": [
+          {
+            "vendor": "Astral Software Inc.",
+            "name": "uv",
+            "version": "[VERSION]"
+          }
+        ],
+        "component": {
+          "type": "library",
+          "bom-ref": "bar-1@0.1.0",
+          "name": "bar",
+          "version": "0.1.0",
+          "properties": [
+            {
+              "name": "uv:package:is_project_root",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "library",
+          "bom-ref": "anyio-2@4.11.0",
+          "name": "anyio",
+          "version": "4.11.0",
+          "purl": "pkg:pypi/anyio@4.11.0",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "exceptiongroup-3@1.3.0",
+          "name": "exceptiongroup",
+          "version": "1.3.0",
+          "purl": "pkg:pypi/exceptiongroup@1.3.0",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "idna-4@3.10",
+          "name": "idna",
+          "version": "3.10",
+          "purl": "pkg:pypi/idna@3.10",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "sniffio-5@1.3.1",
+          "name": "sniffio",
+          "version": "1.3.1",
+          "purl": "pkg:pypi/sniffio@1.3.1",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "tqdm-6@1.0",
+          "name": "tqdm",
+          "version": "1.0",
+          "purl": "pkg:pypi/tqdm@1.0",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "tqdm-7@4.67.1",
+          "name": "tqdm",
+          "version": "4.67.1",
+          "purl": "pkg:pypi/tqdm@4.67.1",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "typing-extensions-8@4.15.0",
+          "name": "typing-extensions",
+          "version": "4.15.0",
+          "purl": "pkg:pypi/typing-extensions@4.15.0",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        }
+      ],
+      "dependencies": [
+        {
+          "ref": "anyio-2@4.11.0",
+          "dependsOn": [
+            "exceptiongroup-3@1.3.0",
+            "idna-4@3.10",
+            "sniffio-5@1.3.1",
+            "typing-extensions-8@4.15.0"
+          ]
+        },
+        {
+          "ref": "bar-1@0.1.0",
+          "dependsOn": [
+            "anyio-2@4.11.0",
+            "tqdm-6@1.0",
+            "tqdm-7@4.67.1"
+          ]
+        },
+        {
+          "ref": "exceptiongroup-3@1.3.0",
+          "dependsOn": [
+            "typing-extensions-8@4.15.0"
+          ]
+        },
+        {
+          "ref": "idna-4@3.10"
+        },
+        {
+          "ref": "sniffio-5@1.3.1"
+        },
+        {
+          "ref": "tqdm-6@1.0"
+        },
+        {
+          "ref": "tqdm-7@4.67.1"
+        },
+        {
+          "ref": "typing-extensions-8@4.15.0"
+        }
+      ]
+    }
+    ----- stderr -----
+    warning: `uv export --format=cyclonedx1.5` is experimental and may change without warning. Pass `--preview-features sbom-export` to disable this warning.
+    "#);
 
     Ok(())
 }
