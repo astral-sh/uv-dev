@@ -223,7 +223,7 @@ impl Hinted for LockError {
     fn hints(&self) -> Hints<'_> {
         match self {
             Self::LockMismatch(Some(previous), current, _)
-                if previous.omits_package_metadata() && !current.omits_package_metadata() =>
+                if current.only_adds_package_metadata(previous) =>
             {
                 let mut hints = Hints::from(
                     "The existing lockfile uses the `lock-without-metadata` preview format, but that preview feature is not enabled. To keep using this format, pass `--preview-features lock-without-metadata`.",
