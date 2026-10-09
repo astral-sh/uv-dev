@@ -2025,8 +2025,20 @@ pub async fn update_environment(
     })
 }
 
-/// Validate that we aren't trying to install extras or groups that
-/// are declared as conflicting.
+/// Validate selected roots, extras, and groups before discovering an environment.
+pub fn detect_root_conflicts(
+    target: &InstallTarget,
+    extras: &ExtrasSpecification,
+    groups: &DependencyGroupsWithDefaults,
+) -> Result<(), EnvironmentError> {
+    if target.lock().conflicts().is_empty() {
+        return Ok(());
+    }
+    let roots = target.roots().collect();
+    detect_conflicts_with_members(target, extras, groups, &roots)
+}
+
+/// Validate selected options and reachable production members against declared conflicts.
 pub fn detect_conflicts(
     target: &InstallTarget,
     extras: &ExtrasSpecification,
@@ -2055,6 +2067,16 @@ pub fn detect_conflicts(
     } else {
         BTreeSet::new()
     };
+    detect_conflicts_with_members(target, extras, groups, &packages)
+}
+
+fn detect_conflicts_with_members(
+    target: &InstallTarget,
+    extras: &ExtrasSpecification,
+    groups: &DependencyGroupsWithDefaults,
+    packages: &BTreeSet<&PackageName>,
+) -> Result<(), EnvironmentError> {
+    let conflicts = target.lock().conflicts();
     // CLI extras and groups apply to selected roots, independently of transitive production members.
     let roots = target.roots().collect::<BTreeSet<_>>();
     let group_root = target.group_root(groups);

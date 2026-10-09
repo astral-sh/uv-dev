@@ -2450,3 +2450,110 @@ fn explicit_roots_project_conflicts_respect_dependency_markers() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Invalid frozen root, extra, and group selections must not replace an existing environment.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_frozen_conflicts_preserve_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .venv()
+        .arg(context.venv.path())
+        .args(["--python", "3.12"])
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        first = []
+        second = []
+        [dependency-groups]
+        first = []
+        second = []
+        [tool.uv]
+        package = false
+        conflicts = [
+            [{ extra = "first" }, { extra = "second" }],
+            [{ group = "first" }, { group = "second" }],
+            [{ package = "app" }, { package = "shared" }],
+        ]
+        [tool.uv.workspace]
+        members = ["shared"]
+        roots = ["app", "shared"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--python",
+            "3.12",
+            "--preview-features",
+            "package-conflicts",
+        ])
+        .assert()
+        .success();
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("shared/pyproject.toml"))?;
+    let marker = uv_test::site_packages_path(context.venv.path(), "python3.12").join("retained.py");
+    fs_err::write(&marker, "value = 1")?;
+    let configuration = context.read(".venv/pyvenv.cfg");
+
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--python", "3.13", "--extra", "first", "--extra", "second",
+        "--preview-features", "frozen-lockfile", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extras `first` and `second` are incompatible with the declared conflicts: {`app[first]`, `app[second]`}
+    ");
+    assert!(
+        marker.exists(),
+        "invalid extras must not clear the existing environment"
+    );
+    assert_eq!(context.read(".venv/pyvenv.cfg"), configuration);
+
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--python", "3.13", "--group", "first", "--group", "second",
+        "--preview-features", "frozen-lockfile", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Groups `first` and `second` are incompatible with the conflicts: {`app:first`, `app:second`}
+    ");
+    assert!(
+        marker.exists(),
+        "invalid groups must not clear the existing environment"
+    );
+    assert_eq!(context.read(".venv/pyvenv.cfg"), configuration);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--python", "3.13", "--package", "app", "--package", "shared",
+        "--preview-features", "frozen-lockfile", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    ");
+    assert!(
+        marker.exists(),
+        "conflicting roots must not clear the existing environment"
+    );
+    assert_eq!(context.read(".venv/pyvenv.cfg"), configuration);
+    Ok(())
+}
