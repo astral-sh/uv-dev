@@ -1181,7 +1181,8 @@ pub(crate) struct InterpreterInfo {
 
 impl InterpreterInfo {
     /// Build metadata for virtual environment discovery without querying Python or using the cache.
-    pub(crate) fn from_virtualenv(interpreter: &Interpreter) -> Result<Self, Error> {
+    /// Return `None` when Python must be queried to determine fallback metadata.
+    pub(crate) fn from_virtualenv(interpreter: &Interpreter) -> Result<Option<Self>, Error> {
         // On Unix, CPython 3.11+ resolves the venv executable's symlinks when setting
         // `sys._base_executable`, but leaves symlinks in parent directories intact (including
         // managed minor-version directories). Match its readlink loop rather than canonicalizing.
@@ -1194,9 +1195,9 @@ impl InterpreterInfo {
             while let Ok(target) = fs::read_link(&executable) {
                 links += 1;
                 if links >= 40 {
-                    return Err(
-                        io::Error::other("Too many symbolic links in Python executable").into(),
-                    );
+                    // CPython may fall back to the configured home at its readlink limit.
+                    // Query the working venv instead of inferring this metadata.
+                    return Ok(None);
                 }
                 executable.pop();
                 executable = uv_fs::normalize_absolute_path(&executable.join(target))?;
@@ -1215,7 +1216,7 @@ impl InterpreterInfo {
             data: interpreter.scheme.data.simplified().components().collect(),
             include: interpreter.scheme.include.simplified().to_path_buf(),
         };
-        Ok(Self {
+        Ok(Some(Self {
             platform: interpreter.platform.clone(),
             markers: (*interpreter.markers).clone(),
             scheme,
@@ -1241,7 +1242,7 @@ impl InterpreterInfo {
             pointer_size: interpreter.pointer_size,
             gil_disabled: interpreter.gil_disabled,
             debug_enabled: interpreter.debug_enabled,
-        })
+        }))
     }
 
     /// Cache already prepared metadata for this executable.
