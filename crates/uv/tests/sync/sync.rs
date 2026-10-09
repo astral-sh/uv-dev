@@ -2097,6 +2097,75 @@ fn sync_jsonl() -> Result<()> {
     Ok(())
 }
 
+/// An unsatisfiable resolution ends the JSONL resolve phase with its failed outcome.
+#[test]
+fn sync_jsonl_unsatisfiable_resolution() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["unavailable-package"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--no-index", "--output-format", "jsonl", "--preview-features", "jsonl"]), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {"type":"progress","phase":"resolve","status":"started"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"project","version":"0.1.0"}
+    {"type":"progress","phase":"resolve","status":"failed"}
+
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because unavailable-package was not found in the provided package locations and your project depends on unavailable-package, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    "#);
+    Ok(())
+}
+
+/// A failed metadata request also terminates the resolve phase instead of leaving it open.
+#[tokio::test]
+async fn sync_jsonl_failed_index_request() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/unavailable-package/"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["unavailable-package"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--index-url").arg(format!("{}/simple", server.uri()))
+        .args(["--output-format", "jsonl", "--preview-features", "jsonl"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @r#"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    {"type":"progress","phase":"resolve","status":"started"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"project","version":"0.1.0"}
+    {"type":"progress","phase":"resolve","status":"failed"}
+
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/unavailable-package/
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/unavailable-package/)
+    "#);
+    Ok(())
+}
+
 #[test]
 fn sync_jsonl_verbose_no_progress() -> Result<()> {
     let context = uv_test::test_context!("3.12");

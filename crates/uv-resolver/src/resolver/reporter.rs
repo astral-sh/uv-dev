@@ -8,8 +8,8 @@ pub trait Reporter: Send + Sync {
     /// Callback to invoke when a dependency is resolved.
     fn on_progress(&self, name: &PackageName, version: &VersionOrUrlRef);
 
-    /// Callback to invoke when the resolution is complete.
-    fn on_complete(&self);
+    /// Callback to invoke when resolution finishes, including whether it succeeded.
+    fn on_complete(&self, success: bool);
 
     /// Callback to invoke when a source distribution build is kicked off.
     fn on_build_start(&self, source: &BuildableSource) -> usize;
