@@ -50,7 +50,7 @@ fn local_wheel_version_mismatch_precedes_dependency_build() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to read `demo @ file://[TEMP_DIR]/demo-1.0-py3-none-any.whl`
-      cause: Wheel metadata version `2.0` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+      cause: Wheel metadata version `2.0` for `demo` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
     ");
     assert_eq!(output.status.code(), Some(1));
     assert!(!marker.exists());
@@ -134,7 +134,7 @@ async fn streamed_wheel_version_mismatch() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `demo @ http://[LOCALHOST]/demo-1.0-py3-none-any.whl`
-      cause: Wheel metadata version `2.0` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+      cause: Wheel metadata version `2.0` for `demo` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
     ");
     assert_eq!(output.status.code(), Some(1));
     Ok(())
@@ -171,7 +171,7 @@ async fn range_wheel_version_mismatch() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `demo @ http://[LOCALHOST]/demo-1.0-py3-none-any.whl`
-      cause: Wheel metadata version `2.0` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+      cause: Wheel metadata version `2.0` for `demo` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
     ");
     assert_eq!(output.status.code(), Some(1));
     Ok(())
@@ -212,7 +212,7 @@ async fn mismatched_sidecar_is_not_cached() -> Result<()> {
         .arg("requirements.in").arg("--index-url").arg(server.index_url()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Wheel metadata version `2.0` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+    error: Wheel metadata version `2.0` for `demo` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
     ");
     assert_eq!(output.status.code(), Some(1));
 
@@ -221,7 +221,7 @@ async fn mismatched_sidecar_is_not_cached() -> Result<()> {
         .arg("requirements.in").arg("--index-url").arg(server.index_url()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Wheel metadata version `2.0` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+    error: Wheel metadata version `2.0` for `demo` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
     ");
     assert_eq!(output.status.code(), Some(1));
     Ok(())
@@ -272,7 +272,7 @@ async fn cached_sidecar_version_is_rechecked() -> Result<()> {
         .arg("--offline"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Wheel metadata version `2.0` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+    error: Wheel metadata version `2.0` for `demo` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
     ");
     assert_eq!(output.status.code(), Some(1));
 

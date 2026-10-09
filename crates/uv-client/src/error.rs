@@ -530,9 +530,10 @@ pub enum ErrorKind {
     },
 
     #[error(
-        "Wheel metadata version `{metadata}` does not match `{filename}` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`."
+        "Wheel metadata version `{metadata}` for `{package}` does not match `{filename}` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`."
     )]
     VersionMismatch {
+        package: PackageName,
         filename: Version,
         metadata: Version,
     },

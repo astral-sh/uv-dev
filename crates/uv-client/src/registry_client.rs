@@ -1046,6 +1046,7 @@ impl RegistryClient {
             && !metadata.matches_wheel_version(version)
         {
             return Err(ErrorKind::VersionMismatch {
+                package: name.clone(),
                 filename: version.clone(),
                 metadata: metadata.version,
             }
