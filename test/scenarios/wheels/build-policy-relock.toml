@@ -1,6 +1,9 @@
 name = "build-policy-relock"
 description = "Disabling wheels selects an older version with a source distribution."
 
+[testgen]
+disable = true
+
 [root]
 requires = ["a"]
 
