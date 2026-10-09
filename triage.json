@@ -7,15 +7,23 @@
         "title": "uv add with authentication appropriately doesn't store the secret, but should store the username",
         "url": "https://github.com/astral-sh/uv/issues/15034",
         "state": "open",
-        "reason": "Tracks the same username loss when `uv add` saves a Git source, preventing later access with the intended identity. Its reproduction uses HTTPS; this SSH case reaches the same credential-removal code."
+        "reason": "Tracks the same uv add behavior: a required username is removed from the Git URL saved in tool.uv.sources, preventing later authentication. Its reproduction uses HTTPS and .netrc on uv 0.8.4; this report adds a shared, non-git SSH account. Both use the same source credential-removal path."
       },
       {
         "kind": "pull_request",
-        "number": 6335,
-        "title": "Preserve Git username for SSH dependencies",
-        "url": "https://github.com/astral-sh/uv/pull/6335",
+        "number": 6074,
+        "title": "Redact Git credentials from `pyproject.toml`",
+        "url": "https://github.com/astral-sh/uv/pull/6074",
         "state": "merged",
-        "reason": "Introduced username preservation in Git serialization, including `uv add`. The implementation and maintainer explanation explicitly limit preservation to password-free SSH URLs with username `git`, leaving custom usernames outside the fix."
+        "reason": "Introduced default Git credential removal during uv add, closing astral-sh/uv#6056 on 2024-08-14. Its description explicitly preserves raw sources and uses an in-process store for the immediate lock operation. This establishes the persistence policy behind the symptom, rather than a fix for required SSH usernames."
+      },
+      {
+        "kind": "issue",
+        "number": 13795,
+        "title": "ssh username `git` obfuscated in 0.7.9",
+        "url": "https://github.com/astral-sh/uv/issues/13795",
+        "state": "closed",
+        "reason": "Historical SSH username corruption in uv export: uv 0.7.9 wrote **** instead of git into requirements.txt. Unlike the new report, it concerned export masking of the conventional git account, not removal of a custom username from pyproject.toml."
       },
       {
         "kind": "pull_request",
@@ -23,13 +31,13 @@
         "title": "Don't redact username `git` for SSH",
         "url": "https://github.com/astral-sh/uv/pull/13799",
         "state": "merged",
-        "reason": "Fixed astral-sh/uv#13795 in uv 0.7.10 by preserving literal `git` during SSH URL display and extending credential-removal handling to `git+ssh`. It did not preserve arbitrary SSH usernames."
+        "reason": "Merged 2025-06-03 to fix astral-sh/uv#13795 specifically for the literal username git. Its stated scope and the current username-only exception do not establish that arbitrary SSH usernames were previously supported, so the new report is not shown to regress this fix."
       }
     ],
-    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using authenticated gh. Literal searches covered SSH usernames being dropped, `uv add`, `mygituser`, and uv 0.12.23. Conceptual searches covered username storage/persistence, stripping/redaction, custom SSH users, Git authentication, and subsequent updates without package or platform constraints. Fix-oriented searches covered username preservation, `remove_credentials`, and `is_ssh_git_username`; inspected linked discussions, PR patches, and release notes. Ruled out astral-sh/uv#13795 and astral-sh/uv#14147 as exact duplicates because they concern historical masking of literal `git`; astral-sh/uv#6420 concerns old tool receipts, and astral-sh/uv#8529 requests broader authentication configuration."
+    "search_scope": "Used authenticated gh to search open and closed issues and all-state pull requests with literal terms ssh/username, drops username, mygituser and username removed; conceptual terms covered Git credential stripping, SSH authentication with pyproject, custom accounts, redaction and username preservation. Fix-oriented searches covered PR username/credentials terms and the historical 0.7.9 reports; inspected candidate bodies, comments, reviews and reference chains through astral-sh/uv#13791 to astral-sh/uv#13799 and from astral-sh/uv#6056 to astral-sh/uv#6074. Ruled out astral-sh/uv#6420 (tool receipts, confirmed fixed in 0.3.1), astral-sh/uv#14147 (stale **** in lockfiles, fixed by 0.7.13) and astral-sh/uv#8529 (broader authentication configuration) as canonical duplicates. PR search commands returned no matches and API searches did not reliably honor PR qualifiers; linked PRs were inspected directly. Further REST searches were rate-limited, so search coverage is incomplete."
   },
   "type": "duplicate",
-  "type_reason": "astral-sh/uv#15034 already tracks losing a required Git username when `uv add` saves a source URL. The SSH reproduction is another case of the same source-confirmed removal path and username-persistence request. Historical fixes in astral-sh/uv#6335 and astral-sh/uv#13799 only preserve literal `git`; no regression of custom-username support is established.",
-  "summary": "astral-sh/uv#15034 is the closest existing report; historical SSH fixes preserve only `git`. The requested README update could not be completed because $RUNNER_TEMP/issue-context/README.md is on a read-only filesystem.",
-  "draft_response": "This is the username-persistence problem tracked in astral-sh/uv#15034. That report uses HTTPS; your example shows the same problem with SSH. The source confirms that `uv add` removes custom SSH usernames when saving Git sources, preserving only the literal username `git`. The historical SSH fixes did not cover custom usernames. Let's track your SSH case in astral-sh/uv#15034."
+  "type_reason": "The open astral-sh/uv#15034 already tracks uv add discarding a required Git username when writing tool.uv.sources. Source inspection confirms that HTTPS and custom SSH usernames reach the same removal logic; the shared SSH account is an additional triggering condition. This is an underlying correctness problem despite intentional credential stripping and the current question label, but duplicate takes precedence. The historical astral-sh/uv#13799 fix covered only git and does not establish a regression for custom usernames.",
+  "summary": "astral-sh/uv#15034 is the closest existing discussion. astral-sh/uv#6074 explains default credential stripping; astral-sh/uv#13795 and astral-sh/uv#13799 concern the narrower, previously fixed git export-masking problem.",
+  "draft_response": "`uv add` currently removes custom SSH usernames from saved Git sources; it preserves the literal username `git` regardless of hostname. Your shared SSH account hits the same username-persistence problem tracked in astral-sh/uv#15034, whose example uses HTTPS. Please add your SSH case there so we can track these together.\n\nFor now, `uv add --raw 'some_package@git+ssh://mygituser@my-gitserver/myorg/some-package.git'` retains the URL in `project.dependencies` instead of creating a `tool.uv.sources` entry."
 }
