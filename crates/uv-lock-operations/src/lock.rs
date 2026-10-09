@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error as StdError;
 use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
@@ -7,7 +6,7 @@ use tracing::debug;
 
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
-use uv_command_support::Printer;
+use uv_command_support::{Printer, diagnostic_for_error};
 use uv_configuration::{
     Concurrency, ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
 };
@@ -17,7 +16,7 @@ use uv_distribution_types::{
     HashCollection, NameRequirementSpecification, RequiresPython, ResolutionRecorder,
     UnresolvedRequirementSpecification,
 };
-use uv_errors::{Diagnostic, ErrorOptions, Hints};
+use uv_errors::{ErrorOptions, Hints};
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{GroupMetadata, Lock, ResolverManifest};
 use uv_normalize::PackageName;
@@ -39,12 +38,6 @@ use uv_workspace::WorkspaceCache;
 
 use crate::lock_target::find_lock_format_error;
 use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
-
-fn diagnostic_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Option<Diagnostic<'a>> {
-    uv_settings::diagnostic_for_error(error)
-        .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
-        .or_else(|| uv_pypi_types::diagnostic_for_error(error))
-}
 
 /// The result of running a lock operation.
 #[derive(Debug, Clone)]

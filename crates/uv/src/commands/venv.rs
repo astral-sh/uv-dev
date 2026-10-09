@@ -54,7 +54,7 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::report_interpreter;
 
-use crate::commands::diagnostics::diagnostic_for_error;
+use uv_command_support::diagnostic_for_error;
 
 #[derive(Error, Debug)]
 enum VenvError {

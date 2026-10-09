@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use uv_errors::{Diagnostic, Hinted, Hints};
+use uv_errors::{Hinted, Hints};
 
 use crate::commands::pip::install::ExternallyManagedError;
 use crate::commands::project::ProjectError;
@@ -11,7 +11,7 @@ use crate::commands::python::install::InvalidUpgradeRequestError;
 use crate::commands::tool::NoExecutablesError;
 use crate::commands::tool::run::{ToolRunScriptError, ToolRunUsageError};
 use uv_build_commands::Error as BuildError;
-use uv_command_support::Printer;
+use uv_command_support::{Printer, diagnostic_for_error};
 
 /// Format an error chain with the default user-facing hints and output settings.
 pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::fmt::Result {
@@ -22,13 +22,6 @@ pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::f
             .with_diagnostic(diagnostic_for_error)
             .with_stream(printer.stderr_important()),
     )
-}
-
-/// Resolve presentation data without changing an error or its source chain.
-pub(crate) fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
-    uv_settings::diagnostic_for_error(error)
-        .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
-        .or_else(|| uv_pypi_types::diagnostic_for_error(error))
 }
 
 /// Walk an error chain and collect hint strings from all known error types.
