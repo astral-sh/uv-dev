@@ -382,14 +382,14 @@ fn lock_check_json_offline_metadata() -> Result<()> {
         "package": "a",
         "message": "Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`",
         "causes": [
-          "Network connectivity is disabled, but the requested data wasn't found in the cache for: `http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`"
+          "Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl"
         ]
       }
     }
 
     ----- stderr -----
-      × Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
-      ╰─▶ Network connectivity is disabled, but the requested data wasn't found in the cache for: `http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
+    error: Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl
     "#);
 
     // A subsequent metadata failure must not erase a proven requirement mismatch.
@@ -412,10 +412,10 @@ fn lock_check_json_offline_metadata() -> Result<()> {
         "code": "package_requirements_changed",
         "package": "member-demo",
         "expected": [
-          "a>=1.0.0"
+          "a>=1"
         ],
         "actual": [
-          "a>=0.1.0"
+          "a>=0.1"
         ]
       },
       "error": {
@@ -423,14 +423,14 @@ fn lock_check_json_offline_metadata() -> Result<()> {
         "package": "a",
         "message": "Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`",
         "causes": [
-          "Network connectivity is disabled, but the requested data wasn't found in the cache for: `http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`"
+          "Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl"
         ]
       }
     }
 
     ----- stderr -----
-      × Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
-      ╰─▶ Network connectivity is disabled, but the requested data wasn't found in the cache for: `http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
+    error: Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl
     "#);
     assert_eq!(context.read("uv.lock"), lock);
 
@@ -451,10 +451,10 @@ fn lock_check_json_offline_metadata() -> Result<()> {
         "code": "package_requirements_changed",
         "package": "member-demo",
         "expected": [
-          "a>=1.0.0"
+          "a>=1"
         ],
         "actual": [
-          "a>=0.1.0"
+          "a>=0.1"
         ]
       },
       "error": {
@@ -462,14 +462,14 @@ fn lock_check_json_offline_metadata() -> Result<()> {
         "package": "a",
         "message": "Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`",
         "causes": [
-          "Network connectivity is disabled, but the requested data wasn't found in the cache for: `http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`"
+          "Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl"
         ]
       }
     }
 
     ----- stderr -----
-      × Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
-      ╰─▶ Network connectivity is disabled, but the requested data wasn't found in the cache for: `http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
+    error: Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl
     "#);
     assert_eq!(context.read("uv.lock"), lock);
     Ok(())
@@ -520,13 +520,23 @@ async fn lock_check_json_authentication() -> Result<()> {
       "status": "indeterminate",
       "action": "check",
       "dry_run": false,
+      "validation_error": {
+        "code": "authentication",
+        "package": "a",
+        "http_status": 401,
+        "message": "Failed to generate package metadata for `a==1.0.0 @ direct+http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`",
+        "causes": [
+          "Failed to fetch: http://[LOCALHOST]/a-1.0.0-py3-none-any.whl",
+          "HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/a-1.0.0-py3-none-any.whl)"
+        ]
+      },
       "error": {
         "code": "authentication",
         "package": "a",
         "http_status": 401,
         "message": "Failed to generate package metadata for `a==1.0.0 @ direct+http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`",
         "causes": [
-          "Failed to fetch: `http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`",
+          "Failed to fetch: http://[LOCALHOST]/a-1.0.0-py3-none-any.whl",
           "HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/a-1.0.0-py3-none-any.whl)"
         ]
       }
@@ -534,8 +544,8 @@ async fn lock_check_json_authentication() -> Result<()> {
 
     ----- stderr -----
     error: Failed to generate package metadata for `a==1.0.0 @ direct+http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`
-      Caused by: Failed to fetch: `http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`
-      Caused by: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/a-1.0.0-py3-none-any.whl)
+      cause: Failed to fetch: http://[LOCALHOST]/a-1.0.0-py3-none-any.whl
+      cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/a-1.0.0-py3-none-any.whl)
     "#);
     assert_eq!(context.read("uv.lock"), lock);
     Ok(())
@@ -563,7 +573,7 @@ async fn lock_json_failed_create() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().args([
         "--output-format", "json", "--preview-features", "json-output", "--no-cache",
     ]), @r#"
-    exit_code: 1 (failure)
+    exit_code: 2 (failure)
     ----- stdout -----
     {
       "schema": {
@@ -581,16 +591,189 @@ async fn lock_json_failed_create() -> Result<()> {
         "http_status": 401,
         "message": "Failed to download `a @ http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`",
         "causes": [
-          "Failed to fetch: `http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`",
+          "Failed to fetch: http://[LOCALHOST]/a-1.0.0-py3-none-any.whl",
           "HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/a-1.0.0-py3-none-any.whl)"
         ]
       }
     }
 
     ----- stderr -----
-      × Failed to download `a @ http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`
-      ├─▶ Failed to fetch: `http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`
-      ╰─▶ HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/a-1.0.0-py3-none-any.whl)
+    error: Failed to download `a @ http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`
+      cause: Failed to fetch: http://[LOCALHOST]/a-1.0.0-py3-none-any.whl
+      cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/a-1.0.0-py3-none-any.whl)
+    "#);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn lock_json_registry_authentication() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(path("/simple/a/"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--output-format", "json", "--preview-features", "json-output", "--no-cache",
+        "--default-index",
+    ]).arg(format!("{}/simple", server.uri())), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/uv.lock",
+      "status": "stale",
+      "dry_run": false,
+      "reason": {
+        "code": "missing_lockfile"
+      },
+      "error": {
+        "code": "authentication",
+        "http_status": 401,
+        "message": "Because a was not found in the package registry and your project depends on a, we can conclude that your project's requirements are unsatisfiable.",
+        "hints": [
+          "An index URL (http://[LOCALHOST]/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)"
+        ]
+      }
+    }
+
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a was not found in the package registry and your project depends on a, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: An index URL (http://[LOCALHOST]/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+    "#);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
+#[test]
+fn lock_json_build_constraint_hash_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let manifest = context.temp_dir.child("pyproject.toml");
+    manifest.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+        build-constraint-dependencies = [
+            {{ requirement = "setuptools==70.0.0", hashes = ["sha256:{hash}"] }},
+        ]
+    "#, hash = "0".repeat(64)})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    let locked = context.read("uv.lock");
+    manifest.write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(&"0".repeat(64), &"1".repeat(64)),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--check", "--offline", "--no-index",
+        "--output-format", "json", "--preview-features", "json-output",
+    ]), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/uv.lock",
+      "status": "stale",
+      "action": "check",
+      "dry_run": false,
+      "reason": {
+        "code": "build_constraints_changed",
+        "expected": [
+          "setuptools==70.0.0 --hash=sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "actual": [
+          "setuptools==70.0.0 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        ]
+      }
+    }
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    "#);
+    assert_eq!(locked, context.read("uv.lock"));
+    Ok(())
+}
+
+#[test]
+fn lock_json_invalid_direct_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.child("a-1.0.0-py3-none-any.whl");
+    wheel.write_binary(b"invalid wheel archive")?;
+    let url = url::Url::from_file_path(wheel.path())
+        .map_err(|()| anyhow::anyhow!("wheel path is not absolute"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a @ {url}"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-index", "--output-format", "json", "--preview-features", "json-output",
+    ]), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/uv.lock",
+      "status": "stale",
+      "dry_run": false,
+      "reason": {
+        "code": "missing_lockfile"
+      },
+      "error": {
+        "code": "metadata_unavailable",
+        "package": "a",
+        "message": "Failed to read `a @ file://[TEMP_DIR]/a-1.0.0-py3-none-any.whl`",
+        "causes": [
+          "Failed to extract archive: a-1.0.0-py3-none-any.whl",
+          "Invalid zip file structure",
+          "Encountered an unexpected header (actual: 0x61766e69, expected: 0x4034b50)."
+        ]
+      }
+    }
+
+    ----- stderr -----
+    error: Failed to read `a @ file://[TEMP_DIR]/a-1.0.0-py3-none-any.whl`
+      cause: Failed to extract archive: a-1.0.0-py3-none-any.whl
+      cause: Invalid zip file structure
+      cause: Encountered an unexpected header (actual: 0x61766e69, expected: 0x4034b50).
     "#);
     assert!(!context.temp_dir.child("uv.lock").exists());
     Ok(())

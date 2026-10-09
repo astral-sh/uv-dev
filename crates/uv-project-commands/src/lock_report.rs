@@ -14,9 +14,10 @@ use uv_distribution_types::Name;
 use uv_fs::PortablePathBuf;
 use uv_lock_operations::{
     LockError, LockMode, LockReporter, LockResult, LockValidationError, LockValidationReason,
-    LockValidationReasonCode,
+    LockValidationReasonCode, LockValidationValues,
 };
 use uv_normalize::PackageName;
+use uv_resolver::{NoSolutionError, PubGrubHint};
 use uv_settings::{FrozenSource, LockCheck};
 
 /// This schema is intentionally experimental, like the `uv sync` JSON report.
@@ -266,9 +267,26 @@ impl From<LockValidationReason> for LockReason {
             code: reason.code.into(),
             package: reason.package,
             message: reason.message,
-            expected: reason.expected,
-            actual: reason.actual,
+            expected: reason.expected.map(render_values),
+            actual: reason.actual.map(render_values),
         }
+    }
+}
+
+fn render_values(values: LockValidationValues) -> Vec<String> {
+    match values {
+        LockValidationValues::Strings(values) => values,
+        LockValidationValues::BuildConstraints(constraints) => constraints
+            .into_iter()
+            .map(|constraint| {
+                let mut value = constraint.requirement.to_string();
+                for hash in constraint.hashes {
+                    value.push_str(" --hash=");
+                    value.push_str(&hash);
+                }
+                value
+            })
+            .collect(),
     }
 }
 
@@ -364,6 +382,8 @@ struct ErrorReport {
     message: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     causes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    hints: Vec<String>,
 }
 
 impl ErrorReport {
@@ -374,6 +394,7 @@ impl ErrorReport {
             http_status: None,
             message: plain(error),
             causes: Vec::new(),
+            hints: Vec::new(),
         };
         report.classify(error);
         let mut source = error.source();
@@ -387,6 +408,9 @@ impl ErrorReport {
 
     fn from_lock(error: &LockError) -> Self {
         let mut report = Self::new(error);
+        if let LockError::Resolve(error) = error {
+            report.resolution(error);
+        }
         if let LockError::Lock(error) = error
             && let Some(package) = error.resolution_package()
         {
@@ -411,7 +435,40 @@ impl ErrorReport {
         report
     }
 
+    fn resolution(&mut self, error: &uv_resolve_operations::Error) {
+        if let Some(error) = error.as_no_solution() {
+            self.resolver_hints(error);
+        }
+        if let uv_resolve_operations::Error::Requirements(error)
+        | uv_resolve_operations::Error::RequirementsWithContext { source: error, .. } = error
+        {
+            self.requirements(error);
+        }
+    }
+
+    fn resolver_hints(&mut self, error: &NoSolutionError) {
+        self.hints = error.resolution_hints().map(plain).collect();
+        for hint in error.resolution_hints() {
+            if let PubGrubHint::UnauthorizedIndex { .. } = hint {
+                self.code = ErrorCode::Authentication;
+                self.http_status = Some(401);
+                break;
+            }
+            if let PubGrubHint::ForbiddenIndex { .. } = hint {
+                self.code = ErrorCode::AccessDenied;
+                self.http_status = Some(403);
+                break;
+            }
+        }
+    }
+
     fn classify(&mut self, error: &(dyn Error + 'static)) {
+        if let Some(error) = error.downcast_ref::<uv_resolve_operations::Error>() {
+            self.resolution(error);
+        }
+        if let Some(error) = error.downcast_ref::<NoSolutionError>() {
+            self.resolver_hints(error);
+        }
         if let Some(error) = error.downcast_ref::<uv_requirements::Error>() {
             self.requirements(error);
         }

@@ -13,5 +13,7 @@ pub use error::{LockError, LockValidationError, MissingLockfileSource};
 pub use lock::{LockMode, LockOperation, LockResult};
 pub use lock_target::LockTarget;
 pub use lockfile::FrozenWorkspace;
-pub use reporter::{LockReporter, LockValidationReason, LockValidationReasonCode};
+pub use reporter::{
+    LockReporter, LockValidationReason, LockValidationReasonCode, LockValidationValues,
+};
 pub use validated_lock::ValidatedLock;

@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use uv_configuration::{ExcludeNewerChange, ExcludeNewerPackageChange};
+use uv_distribution_types::NameRequirementSpecification;
 use uv_lock::SatisfiesResult;
 use uv_normalize::PackageName;
 
@@ -21,8 +22,15 @@ pub struct LockValidationReason {
     pub code: LockValidationReasonCode,
     pub package: Option<PackageName>,
     pub message: Option<String>,
-    pub expected: Option<Vec<String>>,
-    pub actual: Option<Vec<String>>,
+    pub expected: Option<LockValidationValues>,
+    pub actual: Option<LockValidationValues>,
+}
+
+/// Values retained until the command chooses a diagnostic output format.
+#[derive(Debug)]
+pub enum LockValidationValues {
+    Strings(Vec<String>),
+    BuildConstraints(Vec<NameRequirementSpecification>),
 }
 
 impl LockValidationReason {
@@ -46,13 +54,15 @@ impl LockValidationReason {
         expected: impl IntoIterator<Item = impl Display>,
         actual: impl IntoIterator<Item = impl Display>,
     ) -> Self {
-        self.expected = Some(
+        self.expected = Some(LockValidationValues::Strings(
             expected
                 .into_iter()
                 .map(|value| value.to_string())
                 .collect(),
-        );
-        self.actual = Some(actual.into_iter().map(|value| value.to_string()).collect());
+        ));
+        self.actual = Some(LockValidationValues::Strings(
+            actual.into_iter().map(|value| value.to_string()).collect(),
+        ));
         self
     }
 
@@ -117,10 +127,14 @@ impl LockValidationReason {
                 Self::new(LockValidationReasonCode::ExcludesChanged)
             }
             SatisfiesResult::MismatchedBuildConstraints(expected, actual) => {
-                Self::new(LockValidationReasonCode::BuildConstraintsChanged).values(
-                    expected.iter().map(|constraint| &constraint.requirement),
-                    actual.iter().map(|constraint| &constraint.requirement),
-                )
+                let mut reason = Self::new(LockValidationReasonCode::BuildConstraintsChanged);
+                reason.expected = Some(LockValidationValues::BuildConstraints(
+                    expected.iter().cloned().collect(),
+                ));
+                reason.actual = Some(LockValidationValues::BuildConstraints(
+                    actual.iter().cloned().collect(),
+                ));
+                reason
             }
             SatisfiesResult::MismatchedDependencyGroups(..) => {
                 Self::new(LockValidationReasonCode::DependencyGroupsChanged)
