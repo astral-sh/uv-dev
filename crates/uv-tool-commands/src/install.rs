@@ -38,7 +38,7 @@ use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
-use uv_lock_operations::{LockError, LockValidationError};
+use uv_lock_operations::LockValidationError;
 
 use crate::common::{
     ToolLock, ToolPython, ValidatedToolLock, finalize_tool_install, locked_tool_project,
@@ -391,10 +391,7 @@ pub async fn install(
         .await
         {
             Ok((project, lock, options, settings)) => (Some((project, lock)), options, settings),
-            Err(ToolLockError::Lock(err @ LockError::LockMismatch(..))) => {
-                writeln!(printer.stderr(), "{}", err.to_string().bold())?;
-                return Ok(ExitStatus::Failure);
-            }
+            Err(ToolLockError::Lock(err)) => return Err(UvError::from(err).into()),
             Err(err) => return Err(err.into()),
         },
         LockCheck::Disabled => (None, tool_options.into_options(), settings),
@@ -542,6 +539,25 @@ pub async fn install(
         &settings.resolver.dependency_metadata,
     );
 
+    let extra_build_requires = if let Some((project, _)) = source_project_lock.as_ref() {
+        LoweredExtraBuildDependencies::from_workspace(
+            settings.resolver.extra_build_dependencies.clone(),
+            project.workspace(),
+            &settings.resolver.index_locations,
+            &settings.resolver.sources,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        )
+        .await?
+        .into_inner()
+    } else {
+        LoweredExtraBuildDependencies::from_non_lowered(
+            settings.resolver.extra_build_dependencies.clone(),
+        )
+        .into_inner()
+    };
+
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let _lock = installed_tools.lock().await?;
     let tool_dir = installed_tools.tool_dir(package_name);
@@ -678,18 +694,11 @@ pub async fn install(
                             config_setting,
                             config_settings_package,
                             dependency_metadata,
-                            extra_build_dependencies,
                             extra_build_variables,
                             ..
                         },
                     ..
                 } = &settings;
-
-                // Lower the extra build dependencies, if any.
-                let extra_build_requires = LoweredExtraBuildDependencies::from_non_lowered(
-                    extra_build_dependencies.clone(),
-                )
-                .into_inner();
 
                 // Determine the markers and tags to use for the resolution. We use the existing
                 // environment for markers here — above we filter the environment to `None` if
@@ -849,15 +858,11 @@ pub async fn install(
                     ResolverSettings {
                         config_setting,
                         config_settings_package,
-                        extra_build_dependencies,
                         extra_build_variables,
                         ..
                     },
                 ..
             } = &settings;
-            let extra_build_requires =
-                LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
-                    .into_inner();
             let tags = resolution_tags(None, python_platform.as_ref(), environment.interpreter())?;
             let hash_strategy =
                 HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
@@ -921,6 +926,7 @@ pub async fn install(
                     Modifications::Exact,
                     build_constraints.clone(),
                     (&settings).into(),
+                    Some(&extra_build_requires),
                     &client_builder,
                     &state,
                     Box::new(DefaultInstallLogger),
@@ -1122,6 +1128,7 @@ pub async fn install(
             Modifications::Exact,
             build_constraints.clone(),
             (&settings).into(),
+            Some(&extra_build_requires),
             &client_builder,
             &state,
             Box::new(DefaultInstallLogger),

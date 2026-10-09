@@ -325,6 +325,24 @@ pub(crate) async fn locked_tool_project(
             ))
         })?;
 
+    match project.project_name() {
+        Some(name) if name == &requirement.name => {}
+        Some(name) => {
+            return Err(anyhow::anyhow!(
+                "Expected project `{}`, but the source tree defines `{name}`",
+                requirement.name,
+            )
+            .into());
+        }
+        None => {
+            return Err(anyhow::anyhow!(
+                "`--locked` requires a source tree with a `[project]` table for `{}`",
+                requirement.name,
+            )
+            .into());
+        }
+    }
+
     let options = options.for_project(project.workspace().install_path())?;
     let mut project_settings = ResolverInstallerSettings::from(options.clone());
     project_settings.resolver.torch_backend = settings.resolver.torch_backend;

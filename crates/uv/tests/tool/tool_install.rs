@@ -15,11 +15,10 @@ use assert_fs::{
     assert::PathAssert,
     fixture::{FileTouch, FileWriteBin, FileWriteStr, PathChild, PathCreateDir},
 };
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
-#[cfg(feature = "test-git")]
 use url::Url;
 #[cfg(windows)]
 use uv_fs::Simplified;
@@ -5861,7 +5860,7 @@ fn tool_install_locked_warns_without_preview() -> Result<()> {
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     warning: The `--locked` option for tool commands is experimental and may change without warning. Pass `--preview-features tool-install-locks` to disable this warning.
     error: Unable to find lockfile at `uv.lock`, but `--locked` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
@@ -5891,7 +5890,7 @@ fn tool_install_locked_missing_lockfile() -> Result<()> {
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     error: Unable to find lockfile at `uv.lock`, but `--locked` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
     ");
@@ -5915,7 +5914,7 @@ fn tool_install_locked_environment_variable() -> Result<()> {
         .arg(project.as_os_str())
         .env(EnvVars::UV_LOCKED, "1")
         .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks"), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     error: Unable to find lockfile at `uv.lock`, but `UV_LOCKED=1` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
     ");
@@ -5970,6 +5969,7 @@ fn tool_install_locked_from_directory() -> Result<()> {
     context
         .lock()
         .current_dir(project.path())
+        .args(["--upgrade-package", "iniconfig==1.0.0"])
         .assert()
         .success();
 
@@ -5986,7 +5986,7 @@ fn tool_install_locked_from_directory() -> Result<()> {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + foo==0.1.0 (from file://[TEMP_DIR]/foo)
-     + iniconfig==1.1.1
+     + iniconfig==1.0.0
     Installed 1 executable: foo
     ");
 
@@ -6015,12 +6015,9 @@ fn tool_install_locked_from_directory() -> Result<()> {
 
         [[package]]
         name = "iniconfig"
-        version = "1.1.1"
+        version = "1.0.0"
         source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/23/a2/97899f6bd0e873fed3a7e67ae8d3a08b21799430fb4da15cfedf10d6e2c2/iniconfig-1.1.1.tar.gz", hash = "sha256:bc3af051d7d14b2ee5ef9969666def0cd1a000e121eaea580d4a313df4b37f32", size = 8104, upload-time = "2020-10-14T10:20:18.572Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl", hash = "sha256:011e24c64b7f47f6ebd835bb12a743f2fbe9a26d4cecaa7f53bc4f35ee9da8b3", size = 4990, upload-time = "2020-10-16T17:37:23.05Z" },
-        ]
+        sdist = { url = "https://files.pythonhosted.org/packages/9d/6f/7187ac1996add14e220e565cad9867eb0b90b5fda523357f5ba52ee16d31/iniconfig-1.0.0.tar.gz", hash = "sha256:aa0b40f50a00e72323cb5d41302f9c6165728fd764ac8822aa3fff00a40d56b4", size = 7807, upload-time = "2016-09-23T17:05:09.306Z" }
         "#);
     });
 
@@ -6864,7 +6861,9 @@ fn tool_install_locked_rejects_outdated_lockfile() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -7620,5 +7619,312 @@ fn tool_install_with_build_hashes() -> Result<()> {
             .child("backend-executed")
             .assert(predicate::path::exists());
     }
+    Ok(())
+}
+
+#[test]
+fn tool_install_locked_no_config_ignores_project_settings() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig>=1"]
+
+        [project.scripts]
+        foo = "foo:main"
+
+        [tool.uv]
+        resolution = "lowest"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project
+        .child("src")
+        .child("foo")
+        .child("__init__.py")
+        .write_str("def main(): pass\n")?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .arg("--no-config")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(project.as_os_str())
+        .arg("--locked")
+        .arg("--no-config")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+     + iniconfig==2.0.0
+    Installed 1 executable: foo
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_locked_explicit_config_precedes_project_settings() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig>=1"]
+
+        [project.scripts]
+        foo = "foo:main"
+
+        [tool.uv]
+        resolution = "lowest"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project
+        .child("src")
+        .child("foo")
+        .child("__init__.py")
+        .write_str("def main(): pass\n")?;
+    let configuration = context.temp_dir.child("custom.toml");
+    configuration.write_str("resolution = 'highest'\n")?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .arg("--config-file")
+        .arg(configuration.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(project.as_os_str())
+        .arg("--locked")
+        .arg("--config-file").arg(configuration.path())
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+     + iniconfig==2.0.0
+    Installed 1 executable: foo
+    ");
+
+    Ok(())
+}
+
+/// A named source requirement cannot select a different executable-bearing workspace package.
+#[test]
+fn tool_install_locked_rejects_source_name_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("bar");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "bar"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["foo"]
+        [tool.uv.workspace]
+        members = ["foo"]
+        [tool.uv.sources]
+        foo = { workspace = true }
+    "#})?;
+    project.child("foo/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.scripts]
+        foo = "foo:main"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project
+        .child("foo/src/foo/__init__.py")
+        .write_str("def main(): pass\n")?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    let url = Url::from_directory_path(project.path())
+        .map_err(|()| anyhow::anyhow!("invalid source directory URL"))?;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(format!("foo @ {url}"))
+        .args(["--locked", "--offline", "--preview-features", "tool-install-locks"]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Expected project `foo`, but the source tree defines `bar`
+    ");
+    Ok(())
+}
+
+/// A projectless source cannot use a named workspace member as its own project identity.
+#[test]
+fn tool_install_locked_rejects_projectless_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("workspace");
+    workspace.child("pyproject.toml").write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["foo"]
+    "#})?;
+    workspace.child("foo/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.scripts]
+        foo = "foo:main"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    workspace
+        .child("foo/src/foo/__init__.py")
+        .write_str("def main(): pass\n")?;
+    context
+        .lock()
+        .current_dir(workspace.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    let url = Url::from_directory_path(workspace.path())
+        .map_err(|()| anyhow::anyhow!("invalid source directory URL"))?;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(format!("foo @ {url}"))
+        .args(["--locked", "--offline", "--preview-features", "tool-install-locks"]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--locked` requires a source tree with a `[project]` table for `foo`
+    ");
+    Ok(())
+}
+
+/// Locked tool builds retain workspace source mappings for extra build dependencies.
+#[test]
+fn tool_install_locked_extra_build_dependency_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let project = context.temp_dir.child("foo");
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    let (helper_name, helper) = generate_wheel_with_files(
+        &"build-helper".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("build_helper/payload.py", "VALUE = 'local wheel'\n")],
+    );
+    project.child(&helper_name).write_binary(&helper)?;
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["foo".to_owned()],
+    );
+    project.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.scripts]
+        foo = "foo.cli:main"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv.extra-build-dependencies]
+        foo = ["build-helper==1.0.0"]
+        [tool.uv.sources]
+        build-helper = {{ path = "{helper_name}" }}
+    "#})?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            from build_helper import payload
+            assert payload.VALUE == "local wheel"
+            with Path(__file__).with_name("builds").open("a") as marker:
+                marker.write("built\n")
+            Path(wheel_directory, "{filename}").write_bytes(bytes.fromhex("{}"))
+            return "{filename}"
+    "#, hex::encode(&wheel)})?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
+        .args(["--locked", "--offline", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::UV_TOOL_DIR, tools.path()).env(EnvVars::XDG_BIN_HOME, bin.path())
+        .env(EnvVars::PATH, bin.path()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    ");
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
+        .args(["--locked", "--offline", "--no-cache", "--reinstall", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::UV_TOOL_DIR, tools.path()).env(EnvVars::XDG_BIN_HOME, bin.path())
+        .env(EnvVars::PATH, bin.path()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Uninstalled [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     ~ foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    ");
+    assert_snapshot!(fs_err::read_to_string(project.child("builds"))?, @"
+    built
+    built
+    ");
+    uv_snapshot!(context.filters(), Command::new("foo").env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from foo!
+    ");
     Ok(())
 }

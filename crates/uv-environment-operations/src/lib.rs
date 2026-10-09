@@ -1599,6 +1599,7 @@ pub async fn sync_environment(
     modifications: Modifications,
     build_constraints: Constraints,
     settings: InstallerSettingsRef<'_>,
+    extra_build_requires: Option<&ExtraBuildRequires>,
     client_builder: &BaseClientBuilder<'_>,
     state: &PlatformState,
     logger: Box<dyn InstallLogger>,
@@ -1666,9 +1667,14 @@ pub async fn sync_environment(
     let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
 
     // Lower the extra build dependencies, if any.
-    let extra_build_requires =
-        LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
-            .into_inner();
+    let extra_build_requires = extra_build_requires
+        .map(std::borrow::Cow::Borrowed)
+        .unwrap_or_else(|| {
+            std::borrow::Cow::Owned(
+                LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
+                    .into_inner(),
+            )
+        });
 
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(
