@@ -1443,7 +1443,9 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
 
 #[test]
 fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
 
     let locked = context
         .temp_dir
@@ -1506,12 +1508,103 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
         .get_output()
         .stdout
         .clone();
-    let assert = context
-        .workspace_metadata()
-        .arg("--frozen")
-        .assert()
-        .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let mut filters = context.filters();
+    filters.push((r#""sha256": "[0-9a-f]{64}""#, r#""sha256": "[SHA256]""#));
+    let output = uv_snapshot!(filters, context.workspace_metadata().arg("--frozen"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        },
+        "packages": {
+          "installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info": {
+            "name": "metadata-extra",
+            "version": "0.1.0",
+            "path": "[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info",
+            "editable": false
+          },
+          "installed+[SITE_PACKAGES]/metadata_required-0.2.0.dist-info": {
+            "name": "metadata-required",
+            "version": "0.2.0",
+            "path": "[SITE_PACKAGES]/metadata_required-0.2.0.dist-info",
+            "editable": false
+          }
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "module_owners": {
+        "required_module": [
+          {
+            "package_id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+          }
+        ]
+      },
+      "members": [
+        {
+          "name": "module-owner-root",
+          "path": "[TEMP_DIR]/",
+          "id": "module-owner-root==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl": {
+          "name": "metadata-required",
+          "version": "0.1.0",
+          "source": {
+            "path": "[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+          },
+          "kind": "package",
+          "dependencies": [],
+          "wheels": [
+            {
+              "hashes": {
+                "sha256": "[SHA256]"
+              },
+              "filename": "metadata_required-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "module-owner-root==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "module-owner-root",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": [
+            {
+              "id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    "#);
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     let packages = metadata["environment"]["packages"]
         .as_object()
         .context("missing installed package inventory")?;
@@ -1531,42 +1624,7 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
         .get_output()
         .stdout
         .clone();
-    let locked_versions = metadata["resolution"]
-        .as_object()
-        .context("missing resolution")?
-        .values()
-        .filter(|package| package["name"] == "metadata-required")
-        .map(|package| &package["version"])
-        .collect::<Vec<_>>();
-
-    insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(serde_json::json!({
-            "installed_packages": packages,
-            "inspection_changed_environment": before != after,
-            "locked_versions": locked_versions,
-        }), @r#"
-        {
-          "inspection_changed_environment": false,
-          "installed_packages": {
-            "installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info": {
-              "editable": false,
-              "name": "metadata-extra",
-              "path": "[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info",
-              "version": "0.1.0"
-            },
-            "installed+[SITE_PACKAGES]/metadata_required-0.2.0.dist-info": {
-              "editable": false,
-              "name": "metadata-required",
-              "path": "[SITE_PACKAGES]/metadata_required-0.2.0.dist-info",
-              "version": "0.2.0"
-            }
-          },
-          "locked_versions": [
-            "0.1.0"
-          ]
-        }
-        "#);
-    });
+    assert_eq!(before, after);
 
     Ok(())
 }
