@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use uv_configuration::{DependencyGroupsWithDefaults, ExtrasSpecification};
 use uv_pep508::MarkerTree;
@@ -52,13 +52,16 @@ pub fn activated_conflicts<'lock>(
                     ConflictKind::Extra(extra) => Some(extra),
                     ConflictKind::Project | ConflictKind::Group(_) => None,
                 });
-            for extra in extras.extra_names(
-                package
-                    .optional_dependencies
-                    .keys()
-                    .chain(package.metadata.provides_extra.iter())
-                    .chain(conflict_extras),
-            ) {
+            for extra in extras
+                .extra_names(
+                    package
+                        .optional_dependencies
+                        .keys()
+                        .chain(package.metadata.provides_extra.iter())
+                        .chain(conflict_extras),
+                )
+                .collect::<BTreeSet<_>>()
+            {
                 activated.insert(
                     ConflictItem::from((name.clone(), extra.clone())),
                     root_marker,
