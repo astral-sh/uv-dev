@@ -1792,7 +1792,7 @@ mod tests {
         Ok(())
     }
 
-    /// The v4 cache can contain an inferred base path that differs from Python's response.
+    /// Query Python instead of trusting an inferred base path from the v4 cache.
     #[tokio::test]
     async fn test_legacy_virtualenv_cache() -> Result<()> {
         let mock_dir = tempdir()?;
@@ -1830,7 +1830,7 @@ mod tests {
                 .strip_prefix(cache.bucket(CacheBucket::Interpreter))?,
         );
         let mut info = serde_json::from_value::<InterpreterInfo>(response)?;
-        info.sys_base_executable = Some(symlinked_python.clone());
+        info.sys_base_executable = Some(symlinked_python);
         fs::create_dir_all(legacy_entry.parent().context("Cache entry has no parent")?)?;
         fs::write(
             &legacy_entry,
@@ -1843,10 +1843,10 @@ mod tests {
         let interpreter = Interpreter::query(&executable, &cache)?;
         assert_eq!(
             interpreter.sys_base_executable(),
-            Some(symlinked_python.as_path())
+            Some(base_python.as_path())
         );
         assert_eq!(Interpreter::query(&executable, &cache)?, interpreter);
-        assert_eq!(fs::read_to_string(&query_log)?, "");
+        assert_eq!(fs::read_to_string(&query_log)?, ".");
         Ok(())
     }
 
