@@ -8,7 +8,7 @@ use uv_pep508::MarkerTree;
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 
 use crate::lock::{DependencyContext, LockErrorKind, PackageIndex};
-use crate::{Installable, InstallableRootKind, LockError, implicit_constraints_marker};
+use crate::{Installable, InstallableRootKind, Lock, LockError, implicit_constraints_marker};
 
 /// Return the conditions under which selected packages, extras, and groups are requested.
 ///
@@ -26,8 +26,10 @@ pub fn activated_conflicts<'lock>(
         lock.supported_environments(),
     );
     let mut requests = ConflictRequests {
+        lock,
         marker_environment,
-        ..ConflictRequests::default()
+        queue: VecDeque::new(),
+        markers: FxHashMap::default(),
     };
     let mut activated = BTreeMap::<ConflictItem, MarkerTree>::new();
     for (name, kind) in target
@@ -165,15 +167,28 @@ pub fn activated_conflicts<'lock>(
     Ok(activated)
 }
 
-#[derive(Default)]
-struct ConflictRequests<'env> {
+struct ConflictRequests<'lock, 'env> {
+    lock: &'lock Lock,
     queue: VecDeque<(PackageIndex, Option<ExtraName>, MarkerTree)>,
     markers: FxHashMap<(PackageIndex, Option<ExtraName>), MarkerTree>,
     marker_environment: Option<&'env ResolverMarkerEnvironment>,
 }
 
-impl ConflictRequests<'_> {
+impl ConflictRequests<'_, '_> {
     fn push(&mut self, index: PackageIndex, extra: Option<ExtraName>, marker: MarkerTree) {
+        let package = self.lock.package(index);
+        let marker = if package.fork_markers.is_empty() {
+            marker
+        } else {
+            marker.and(
+                package
+                    .fork_markers
+                    .iter()
+                    .fold(MarkerTree::FALSE, |combined, fork| {
+                        combined.or(fork.pep508())
+                    }),
+            )
+        };
         if marker.is_false()
             || self
                 .marker_environment
