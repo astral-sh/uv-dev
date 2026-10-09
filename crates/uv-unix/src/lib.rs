@@ -7,6 +7,6 @@
 mod resource_limits;
 
 pub use resource_limits::{
-    OpenFileLimitError, ResourceLimit, ResourceLimitError, RunResource, SUPPORTED_RESOURCE_LIMITS,
-    adjust_open_file_limit,
+    OpenFileLimitError, PreparedResourceLimit, ResourceLimit, ResourceLimitError, RunResource,
+    SUPPORTED_RESOURCE_LIMITS, adjust_open_file_limit,
 };

@@ -1262,14 +1262,30 @@ pub async fn run(
     }
 
     #[cfg(unix)]
-    for resource_limit in run_resource_limits {
-        resource_limit.apply().with_context(|| {
-            format!(
-                "Failed to apply `{}` value `{}`",
-                resource_limit.environment_variable(),
-                resource_limit.value()
-            )
-        })?;
+    if !run_resource_limits.is_empty() {
+        let resource_limits = run_resource_limits
+            .into_iter()
+            .map(|limit| {
+                limit.prepare().with_context(|| {
+                    format!(
+                        "Failed to apply `{}` value `{}`",
+                        limit.environment_variable(),
+                        limit.value()
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // SAFETY: Validation and allocation happen before the fork. The callback only
+        // invokes resource-limit system calls and constructs errors from OS error codes.
+        #[expect(unsafe_code)]
+        unsafe {
+            process.pre_exec(move || {
+                for limit in &resource_limits {
+                    limit.apply()?;
+                }
+                Ok(())
+            });
+        }
     }
 
     // Spawn and wait for completion

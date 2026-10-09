@@ -87,6 +87,26 @@ fn run_resource_limit_overrides() {
     ");
 }
 
+/// The command can use a memory limit smaller than uv's own address space.
+#[cfg(all(target_os = "linux", feature = "test-python"))]
+#[test]
+fn run_memory_limit_applies_only_to_child() {
+    let context = uv_test::test_context!("3.12");
+    let python = &context.python_versions[0].1;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no-project")
+        .arg("--")
+        .arg(python)
+        .arg("-c")
+        .arg("import resource; print(resource.getrlimit(resource.RLIMIT_AS)[0])")
+        .env(EnvVars::UV_RUN_RLIMIT_AS, "67108864"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    67108864
+    ");
+}
+
 #[cfg(target_vendor = "apple")]
 #[test]
 fn run_apple_process_limit_override() {

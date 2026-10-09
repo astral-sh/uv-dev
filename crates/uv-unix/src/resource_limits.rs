@@ -101,14 +101,14 @@ impl ResourceLimit {
         self.value
     }
 
-    /// Apply the configured soft limit without changing the hard limit.
-    pub fn apply(self) -> Result<(), ResourceLimitError> {
+    /// Validate the configured limit and prepare it for application in a child process.
+    pub fn prepare(self) -> Result<PreparedResourceLimit, ResourceLimitError> {
         let resource_name = self
             .environment_variable
             .strip_prefix("UV_RUN_")
             .unwrap_or(self.environment_variable);
 
-        match self.resource {
+        let prepared = match self.resource {
             RunResource::Nix(resource) => {
                 let (_, hard) =
                     getrlimit(resource).map_err(|source| ResourceLimitError::GetLimitFailed {
@@ -131,13 +131,11 @@ impl ResourceLimit {
                     });
                 }
 
-                setrlimit(resource, target, hard).map_err(|source| {
-                    ResourceLimitError::SetLimitFailed {
-                        resource: resource_name,
-                        target: self.value,
-                        source: source.into(),
-                    }
-                })?;
+                PreparedResource::Nix {
+                    resource,
+                    target,
+                    hard,
+                }
             }
             #[cfg(target_vendor = "apple")]
             RunResource::Apple(resource) => {
@@ -152,26 +150,58 @@ impl ResourceLimit {
                     });
                 }
 
-                rustix::process::setrlimit(
+                PreparedResource::Apple {
                     resource,
-                    rustix::process::Rlimit {
+                    limit: rustix::process::Rlimit {
                         current: Some(self.value),
                         maximum: limit.maximum,
                     },
-                )
-                .map_err(|source| ResourceLimitError::SetLimitFailed {
-                    resource: resource_name,
-                    target: self.value,
-                    source: source.into(),
-                })?;
+                }
             }
-        }
+        };
 
-        Ok(())
+        Ok(PreparedResourceLimit(prepared))
     }
 }
 
-/// Errors that can occur when applying a configured resource limit.
+/// A validated resource limit that can be applied without allocating.
+#[derive(Debug, Clone, Copy)]
+pub struct PreparedResourceLimit(PreparedResource);
+
+#[derive(Debug, Clone, Copy)]
+enum PreparedResource {
+    Nix {
+        resource: Resource,
+        target: rlim_t,
+        hard: rlim_t,
+    },
+    #[cfg(target_vendor = "apple")]
+    Apple {
+        resource: rustix::process::Resource,
+        limit: rustix::process::Rlimit,
+    },
+}
+
+impl PreparedResourceLimit {
+    /// Apply the prepared limit using only resource-limit system calls.
+    pub fn apply(self) -> std::io::Result<()> {
+        match self.0 {
+            PreparedResource::Nix {
+                resource,
+                target,
+                hard,
+            } => setrlimit(resource, target, hard)
+                .map_err(|error| std::io::Error::from_raw_os_error(error as i32)),
+            #[cfg(target_vendor = "apple")]
+            PreparedResource::Apple { resource, limit } => {
+                rustix::process::setrlimit(resource, limit)
+                    .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))
+            }
+        }
+    }
+}
+
+/// Errors that can occur when validating a configured resource limit.
 #[derive(Debug, Error)]
 pub enum ResourceLimitError {
     #[error("failed to get {resource} limit: {source}")]
@@ -188,13 +218,6 @@ pub enum ResourceLimitError {
         resource: &'static str,
         target: u64,
         hard: u64,
-    },
-
-    #[error("failed to set {resource} limit to {target}: {source}")]
-    SetLimitFailed {
-        resource: &'static str,
-        target: u64,
-        source: std::io::Error,
     },
 }
 
