@@ -2804,18 +2804,7 @@ fn sync_frozen_non_workspace_package() -> Result<()> {
     "#};
     context.temp_dir.child("uv.lock").write_str(lockfile)?;
 
-    let sync = || {
-        let mut command = context.sync();
-        command.args([
-            "--offline",
-            "--no-python-downloads",
-            "--frozen",
-            "--dry-run",
-        ]);
-        command
-    };
-
-    uv_snapshot!(context.filters(), sync().args(["--package", "split-dependency"]), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--no-python-downloads", "--frozen", "--dry-run"]).args(["--package", "split-dependency"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Would use project environment at: .venv
@@ -2823,7 +2812,7 @@ fn sync_frozen_non_workspace_package() -> Result<()> {
       cause: Found multiple packages matching `split-dependency`
     ");
 
-    uv_snapshot!(context.filters(), sync().args([
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--no-python-downloads", "--frozen", "--dry-run"]).args([
         "--package", "root-project", "--package", "split-dependency"
     ]), @"
     exit_code: 2 (failure)
@@ -2835,13 +2824,37 @@ fn sync_frozen_non_workspace_package() -> Result<()> {
 
     // A missing member file is intentional in frozen mode. Virtual packages avoid any builds.
     assert!(!context.temp_dir.child("member").exists());
-    sync().args(["--package", "member"]).assert().success();
-    sync()
+    context
+        .sync()
+        .args([
+            "--offline",
+            "--no-python-downloads",
+            "--frozen",
+            "--dry-run",
+        ])
+        .args(["--package", "member"])
+        .assert()
+        .success();
+    context
+        .sync()
+        .args([
+            "--offline",
+            "--no-python-downloads",
+            "--frozen",
+            "--dry-run",
+        ])
         .args(["--package", "root-project"])
         .assert()
         .success();
     // This diagnostic does not introduce a new membership check for an unambiguous package.
-    sync()
+    context
+        .sync()
+        .args([
+            "--offline",
+            "--no-python-downloads",
+            "--frozen",
+            "--dry-run",
+        ])
         .args(["--package", "unique-dependency"])
         .assert()
         .success();
@@ -2855,11 +2868,18 @@ fn sync_frozen_non_workspace_package() -> Result<()> {
             "[manifest]\nmembers = [\"root-project\", \"member\"]\n\n",
             "",
         ))?;
-    sync()
+    context
+        .sync()
+        .args([
+            "--offline",
+            "--no-python-downloads",
+            "--frozen",
+            "--dry-run",
+        ])
         .args(["--package", "root-project"])
         .assert()
         .success();
-    uv_snapshot!(context.filters(), sync().args(["--package", "split-dependency"]), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--no-python-downloads", "--frozen", "--dry-run"]).args(["--package", "split-dependency"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Would use project environment at: .venv
@@ -2875,7 +2895,7 @@ fn sync_frozen_non_workspace_package() -> Result<()> {
             "members = [\"root-project\", \"member\"]",
             "members = [\"root-project\", \"member\", \"split-dependency\"]",
         ))?;
-    uv_snapshot!(context.filters(), sync().args(["--package", "split-dependency"]), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--no-python-downloads", "--frozen", "--dry-run"]).args(["--package", "split-dependency"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Would use project environment at: .venv
