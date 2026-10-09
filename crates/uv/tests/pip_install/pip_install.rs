@@ -1680,6 +1680,8 @@ fn install_require_hashes_in_nested_constraints_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled by `constraints.txt` at line 1 (included from `requirements.txt` at line 1)
     "
     );
 
