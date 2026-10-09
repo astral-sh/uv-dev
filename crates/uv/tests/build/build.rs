@@ -881,6 +881,49 @@ async fn build_workspace_reads_shared_constraints_once() -> Result<()> {
         .temp_dir
         .child("dist/b-1.0.0-py3-none-any.whl")
         .assert(predicate::path::is_file());
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn build_workspace_reads_shared_invalid_constraints_once() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["a", "b"]
+    "#})?;
+    let a = context.temp_dir.child("a");
+    a.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
+    a.child(".python-version").write_str("3.11")?;
+    a.child("src/a/__init__.py").touch()?;
+
+    let b = context.temp_dir.child("b");
+    b.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
+    b.child(".python-version").write_str("3.12")?;
+    b.child("src/b/__init__.py").touch()?;
+
+    let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/invalid.txt"))
         .respond_with(ResponseTemplate::new(200).set_body_string("invalid requirement ???\n"))
