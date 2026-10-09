@@ -37,9 +37,9 @@ uv-static = { workspace = true }
 
 anstream = { workspace = true }
 anyhow = { workspace = true }
+either = { workspace = true }
 fs-err = { workspace = true, features = ["tokio"] }
 indicatif = { workspace = true }
 owo-colors = { workspace = true }
 rustc-hash = { workspace = true }
-tokio = { workspace = true }
 tracing = { workspace = true }

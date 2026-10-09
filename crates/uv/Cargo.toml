@@ -86,11 +86,6 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive", "string", "wrap_help"] }
 fs-err = { workspace = true, features = ["tokio"] }
 futures = { workspace = true }
-http = { workspace = true }
-jiff = { workspace = true }
-indexmap = { workspace = true }
-indoc = { workspace = true }
-itertools = { workspace = true }
 owo-colors = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
