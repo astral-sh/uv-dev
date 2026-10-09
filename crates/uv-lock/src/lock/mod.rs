@@ -6357,7 +6357,12 @@ impl ResolverIndex {
             .map(|index| (index, false))
             .chain(index_locations.flat_indexes().map(|index| (index, true)))
         {
-            let index = Self::from_index(index, find_links, root)?;
+            let mut policy = Self::from_index(index, find_links, root)?;
+            // The client selects URL policies before explicit/default index ordering is applied.
+            policy.ignore_error_codes = index_locations
+                .ignored_error_codes_for(index.url())
+                .map(|codes| codes.iter().copied().collect());
+            let index = policy;
             if Some(&index) != default_index.as_ref() && !indexes.contains(&index) {
                 indexes.push(index);
             }

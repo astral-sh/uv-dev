@@ -49707,3 +49707,58 @@ fn lock_index_policy_multiple_trailing_slashes() -> Result<()> {
     "#);
     Ok(())
 }
+
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_index_policy_shared_url_error_precedence() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let forbidden = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/simple/a/"))
+        .respond_with(wiremock::ResponseTemplate::new(403))
+        .mount(&forbidden)
+        .await;
+    let fallback = PackseServer::new("simple/single-package.toml");
+    let header = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#};
+    let implicit = formatdoc! {r#"
+        [[tool.uv.index]]
+        name = "implicit"
+        url = "{url}/simple"
+        ignore-error-codes = [403]
+    "#, url = forbidden.uri()};
+    let explicit = formatdoc! {r#"
+        [[tool.uv.index]]
+        name = "explicit"
+        url = "{url}/simple"
+        explicit = true
+        ignore-error-codes = []
+    "#, url = forbidden.uri()};
+    let fallback = formatdoc! {r#"
+        [[tool.uv.index]]
+        name = "fallback"
+        url = "{url}"
+        default = true
+    "#, url = fallback.index_url()};
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&format!("{header}{implicit}{explicit}{fallback}"))?;
+    context.lock().assert().success();
+    let lock = context.read("uv.lock");
+    pyproject.write_str(&format!("{header}{explicit}{implicit}{fallback}"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    error: No solution found when resolving dependencies
+      cause: Because a was not found in the package registry and your project depends on a, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: An index (http://[LOCALHOST]/simple) returned a 403 Forbidden error. Check that the index URL is correct and the credentials are valid.
+    "#);
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
