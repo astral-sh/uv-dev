@@ -1426,6 +1426,11 @@ fn fetch_lfs(
     // Explicit object fetches do not inherit smudge suppression.
     cmd.env_remove(EnvVars::GIT_LFS_SKIP_SMUDGE).cwd(&repo.path);
     if offline {
+        // A named reference can require Git refreshes while all of its LFS objects are cached.
+        // Only a completed validation proves that no endpoint access is necessary.
+        if repo.lfs_fsck_objects(revision.as_str()) == LfsValidation::Passed {
+            return Ok(true);
+        }
         // Git LFS has its own HTTP client and does not honor GIT_ALLOW_PROTOCOL. Ask its
         // configuration loader which download endpoint the named remote actually selects.
         let output = cmd.clone().arg("env").exec_with_output()?;

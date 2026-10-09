@@ -1443,6 +1443,45 @@ async fn add_git_lfs_offline_http_endpoint() -> Result<()> {
             .await
             .is_some_and(|requests| requests.is_empty())
     );
+
+    // Populate the shared object cache through a revision with a local endpoint.
+    let project = context.read("pyproject.toml");
+    repository
+        .child(".lfsconfig")
+        .write_str(&format!("[lfs]\nurl = {url}\n"))?;
+    git(&["add", ".lfsconfig"])?;
+    git(&["commit", "-m", "Use a local LFS endpoint"])?;
+    let local_revision = git(&["rev-parse", "HEAD"])?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&project.replace(&revision, &local_revision))?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+
+    // A named branch still permits offline reuse of the cached HTTP revision's objects.
+    git(&["branch", "cached", &revision])?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&project.replace(&format!("rev = \"{revision}\""), "branch = \"cached\""))?;
+    let mut filters = context.filters();
+    filters.push((r"\([0-9a-f]{8}\)", "([COMMIT])"));
+    uv_snapshot!(filters, context.lock().args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated dependency v0.1.0 ([COMMIT]) -> v0.1.0 ([COMMIT])
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.is_empty())
+    );
     Ok(())
 }
 
