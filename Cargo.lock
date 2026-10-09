@@ -5857,6 +5857,7 @@ dependencies = [
  "uv-install-operations",
  "uv-install-wheel",
  "uv-installer",
+ "uv-keyring",
  "uv-lock",
  "uv-lock-operations",
  "uv-logging",
@@ -5968,7 +5969,9 @@ dependencies = [
  "astral-reqwest-middleware",
  "async-trait",
  "base64 0.22.1",
+ "etcetera",
  "fs-err",
+ "hex",
  "http",
  "insta",
  "percent-encoding",
@@ -5977,6 +5980,8 @@ dependencies = [
  "rustc-hash",
  "schemars",
  "serde",
+ "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "test-log",
  "thiserror",
@@ -5984,6 +5989,7 @@ dependencies = [
  "toml",
  "tracing",
  "url",
+ "uv-cache-key",
  "uv-fs",
  "uv-keyring",
  "uv-netrc",
@@ -5995,6 +6001,7 @@ dependencies = [
  "uv-static",
  "uv-warnings",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]

@@ -1,9 +1,10 @@
 use std::fmt::{self, Display, Formatter};
+use std::future::Future;
 use std::hash::BuildHasherDefault;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use rustc_hash::{FxHashMap, FxHasher};
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard, OnceCell};
 use tracing::trace;
 use url::Url;
 
@@ -11,33 +12,119 @@ use uv_once_map::OnceMap;
 use uv_redacted::DisplaySafeUrl;
 
 use crate::credentials::{Authentication, CredentialsFromUrlError, Username};
+use crate::matching::{self, AmbiguousCredential};
+use crate::persistent::PersistentCredential;
 use crate::{Credentials, Realm};
 
 type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
+type RealmCredentials = RwLock<FxHashMap<(Realm, Username), Arc<Authentication>>>;
+type NativeRealmCredentials = Result<StoredCredentials, Arc<crate::keyring::Error>>;
+
+/// Shared realm contents retained by both pending requests and the authenticated cache.
+#[derive(Debug, Clone)]
+pub(crate) struct StoredCredentials(Arc<StoredCredentialsInner>);
+
+#[derive(Debug)]
+struct StoredCredentialsInner {
+    credentials: RwLock<Arc<[PersistentCredential]>>,
+    /// Serialize native lookups through publication of their updated realm contents.
+    native_lookup: AsyncMutex<()>,
+}
+
+impl From<Vec<PersistentCredential>> for StoredCredentials {
+    fn from(credentials: Vec<PersistentCredential>) -> Self {
+        Self(Arc::new(StoredCredentialsInner {
+            credentials: RwLock::new(Arc::from(credentials)),
+            native_lookup: AsyncMutex::new(()),
+        }))
+    }
+}
+
+impl StoredCredentials {
+    fn snapshot(&self) -> Arc<[PersistentCredential]> {
+        self.0
+            .credentials
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Serialize native migration and publication before another lookup can start.
+    pub(crate) async fn lock_native_lookup(&self) -> NativeLookup<'_> {
+        NativeLookup {
+            credentials: self,
+            _guard: self.0.native_lookup.lock().await,
+        }
+    }
+}
+
+/// Exclusive permission to publish the result of a native lookup.
+#[derive(Debug)]
+pub(crate) struct NativeLookup<'a> {
+    credentials: &'a StoredCredentials,
+    _guard: MutexGuard<'a, ()>,
+}
+
+impl NativeLookup<'_> {
+    pub(crate) fn replace(&self, credentials: Vec<PersistentCredential>) {
+        *self
+            .credentials
+            .0
+            .credentials
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Arc::from(credentials);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum FetchUrl {
-    /// A full index URL
+    /// A configured index URL.
     Index(DisplaySafeUrl),
-    /// A realm URL
+    /// An authentication realm.
     Realm(Realm),
 }
 
 impl Display for FetchUrl {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter) -> std::fmt::Result {
         match self {
-            Self::Index(index) => Display::fmt(index, f),
-            Self::Realm(realm) => Display::fmt(realm, f),
+            Self::Index(url) => Display::fmt(url, formatter),
+            Self::Realm(realm) => Display::fmt(realm, formatter),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum CredentialsCacheScope {
+    /// Cache credentials for the entire realm and the request URL.
+    Realm,
+    /// Cache subprocess credentials as a fallback after path-scoped stores.
+    KeyringFallback,
+    /// Cache the complete stored credential snapshot and match by service path.
+    Stored(StoredCredentials),
+    /// Do not add credentials to the eager authentication cache.
+    FetchOnly,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FetchedCredentials {
+    pub(crate) credentials: Arc<Authentication>,
+    pub(crate) cache_scope: CredentialsCacheScope,
 }
 
 #[derive(Debug)] // All internal types are redacted.
 pub struct CredentialsCache {
     /// A cache per realm and username
-    realms: RwLock<FxHashMap<(Realm, Username), Arc<Authentication>>>,
-    /// A cache tracking the result of realm or index URL fetches from external services
-    pub(crate) fetches: FxOnceMap<(FetchUrl, Username), Option<Arc<Authentication>>>,
+    realms: RealmCredentials,
+    /// Successfully authenticated subprocess credentials, consulted after path-scoped stores.
+    keyring_realms: RealmCredentials,
+    /// Cached realm- or index-scoped provider lookups.
+    pub(crate) fetches: FxOnceMap<(FetchUrl, Username), Option<FetchedCredentials>>,
+    /// Cached subprocess keyring lookups.
+    pub(crate) keyring_fetches: FxOnceMap<(FetchUrl, Username), Option<FetchedCredentials>>,
+    /// Native credential snapshots, loaded at most once per realm.
+    native_realms: RwLock<FxHashMap<Realm, Arc<OnceCell<NativeRealmCredentials>>>>,
+    /// Successfully authenticated credential snapshots, matched by service path.
+    stored: RwLock<FxHashMap<Realm, StoredCredentials>>,
     /// A cache per URL, uses a trie for efficient prefix queries.
     urls: RwLock<UrlTrie<Arc<Authentication>>>,
 }
@@ -53,9 +140,34 @@ impl CredentialsCache {
     pub fn new() -> Self {
         Self {
             fetches: FxOnceMap::default(),
+            keyring_fetches: FxOnceMap::default(),
+            native_realms: RwLock::new(FxHashMap::default()),
             realms: RwLock::new(FxHashMap::default()),
+            keyring_realms: RwLock::new(FxHashMap::default()),
+            stored: RwLock::new(FxHashMap::default()),
             urls: RwLock::new(UrlTrie::new()),
         }
+    }
+
+    /// Load and share native credentials for a realm across clients.
+    pub(crate) async fn native_realm<F, Fut>(
+        &self,
+        realm: &Realm,
+        initialize: F,
+    ) -> NativeRealmCredentials
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = NativeRealmCredentials>,
+    {
+        let cell = self
+            .native_realms
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(realm.clone())
+            .or_default()
+            .clone();
+        // Cancelled native operations leave the cell available for a later initializer.
+        cell.get_or_init(initialize).await.clone()
     }
 
     /// Populate the global authentication store with credentials on a URL, if there are any.
@@ -88,7 +200,23 @@ impl CredentialsCache {
         realm: Realm,
         username: Username,
     ) -> Option<Arc<Authentication>> {
-        let realms = self.realms.read().unwrap();
+        Self::get_realm_from(&self.realms, realm, username)
+    }
+
+    pub(crate) fn get_keyring_realm(
+        &self,
+        realm: Realm,
+        username: Username,
+    ) -> Option<Arc<Authentication>> {
+        Self::get_realm_from(&self.keyring_realms, realm, username)
+    }
+
+    fn get_realm_from(
+        cache: &RealmCredentials,
+        realm: Realm,
+        username: Username,
+    ) -> Option<Arc<Authentication>> {
+        let realms = cache.read().unwrap_or_else(PoisonError::into_inner);
         let given_username = username.is_some();
         let key = (realm, username);
         let realm_username = fmt::from_fn(|f| {
@@ -142,6 +270,61 @@ impl CredentialsCache {
         None
     }
 
+    /// Return the best credential from a successfully authenticated realm snapshot.
+    pub(crate) fn get_stored(
+        &self,
+        url: &DisplaySafeUrl,
+        username: &Username,
+    ) -> Result<Option<Arc<Authentication>>, AmbiguousCredential> {
+        let Some(credentials) = self.get_stored_snapshot(&Realm::from(url)) else {
+            return Ok(None);
+        };
+        Self::select_stored(&credentials, url, username)
+    }
+
+    /// Borrow the shared contents of an authenticated realm snapshot.
+    pub(crate) fn get_stored_snapshot(&self, realm: &Realm) -> Option<StoredCredentials> {
+        self.stored
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(realm)
+            .cloned()
+    }
+
+    /// Select the most specific service and account in a complete realm snapshot.
+    pub(crate) fn select_stored(
+        credentials: &StoredCredentials,
+        url: &DisplaySafeUrl,
+        username: &Username,
+    ) -> Result<Option<Arc<Authentication>>, AmbiguousCredential> {
+        let credentials = credentials.snapshot();
+        matching::select_credential(
+            credentials.iter().map(|credential| {
+                (
+                    &credential.service,
+                    credential.credentials.username(),
+                    &credential.credentials,
+                )
+            }),
+            url,
+            username.as_deref(),
+        )
+        .map(|credentials| credentials.cloned().map(Authentication::from).map(Arc::new))
+    }
+
+    /// Remember a complete realm snapshot after its credentials authenticate successfully.
+    pub(crate) fn insert_stored(&self, url: &DisplaySafeUrl, credentials: StoredCredentials) {
+        if credentials.snapshot().is_empty() {
+            return;
+        }
+        let realm = Realm::from(url);
+        trace!("Caching path-scoped credentials for realm {realm}");
+        self.stored
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(realm, credentials);
+    }
+
     /// Update the cache with the given credentials.
     pub(crate) fn insert(&self, url: &DisplaySafeUrl, credentials: Arc<Authentication>) {
         // Do not cache empty credentials
@@ -153,22 +336,47 @@ impl CredentialsCache {
         let username = credentials.to_username();
         if username.is_some() {
             let realm = (Realm::from(url), username);
-            self.insert_realm(realm, &credentials);
+            Self::insert_realm(&self.realms, realm, &credentials);
         }
 
         // Insert an entry for requests with no username
-        self.insert_realm((Realm::from(url), Username::none()), &credentials);
+        Self::insert_realm(
+            &self.realms,
+            (Realm::from(url), Username::none()),
+            &credentials,
+        );
 
-        // Insert an entry for the URL
+        // Insert an entry for the URL.
         let mut urls = self.urls.write().unwrap();
         urls.insert(url, credentials);
+    }
+
+    /// Retain subprocess credentials without letting them mask path-scoped stores.
+    pub(crate) fn insert_keyring_realm(
+        &self,
+        url: &DisplaySafeUrl,
+        credentials: &Arc<Authentication>,
+    ) {
+        let username = credentials.to_username();
+        if username.is_some() {
+            Self::insert_realm(
+                &self.keyring_realms,
+                (Realm::from(url), username),
+                credentials,
+            );
+        }
+        Self::insert_realm(
+            &self.keyring_realms,
+            (Realm::from(url), Username::none()),
+            credentials,
+        );
     }
 
     /// Private interface to update a realm cache entry.
     ///
     /// Returns replaced credentials, if any.
     fn insert_realm(
-        &self,
+        cache: &RealmCredentials,
         key: (Realm, Username),
         credentials: &Arc<Authentication>,
     ) -> Option<Arc<Authentication>> {
@@ -177,7 +385,7 @@ impl CredentialsCache {
             return None;
         }
 
-        let mut realms = self.realms.write().unwrap();
+        let mut realms = cache.write().unwrap_or_else(PoisonError::into_inner);
 
         // Always replace existing entries if we have a password or token
         if credentials.is_authenticated() {

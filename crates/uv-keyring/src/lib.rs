@@ -119,11 +119,8 @@ pub use credential::Credential;
 use credential::CredentialBuilder;
 pub use error::{Error, Result};
 
-#[cfg(any(
-    all(target_os = "macos", feature = "apple-native"),
-    all(target_os = "windows", feature = "windows-native"),
-))]
 mod blocking;
+pub use blocking::with_operation_guard;
 #[cfg(test)]
 mod mock;
 
@@ -152,7 +149,7 @@ mod macos;
 //
 #[cfg(all(target_os = "windows", feature = "windows-native"))]
 #[cfg_attr(docsrs, doc(cfg(target_os = "windows")))]
-mod windows;
+pub mod windows;
 
 mod credential;
 mod error;
@@ -220,8 +217,8 @@ impl Entry {
     }
 
     /// Create an entry from a credential that may be in any credential store.
-    #[cfg(test)]
-    fn new_with_credential(credential: Box<Credential>) -> Self {
+    #[cfg(any(test, all(target_os = "windows", feature = "windows-native")))]
+    pub fn new_with_credential(credential: Box<Credential>) -> Self {
         Self { inner: credential }
     }
 
