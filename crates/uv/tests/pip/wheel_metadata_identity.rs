@@ -10,10 +10,10 @@ use anyhow::{Context, Result, bail};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use serde_json::json;
-use url::Url;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
 use uv_test::package_server::PackageServer;
@@ -31,7 +31,7 @@ fn local_wheel_version_mismatch_precedes_dependency_build() -> Result<()> {
         "",
         Some(marker.path()),
     )?)?;
-    let dependency_url = Url::from_file_path(dependency.path()).expect("absolute fixture path");
+    let dependency_url = SafeUrl::from_file_path(dependency.path()).expect("absolute fixture path");
     let (_, bytes) = generate_wheel(
         &"demo".parse()?,
         &"2.0".parse()?,
@@ -48,7 +48,7 @@ fn local_wheel_version_mismatch_precedes_dependency_build() -> Result<()> {
         .child("requirements.in")
         .write_str(&format!(
             "demo @ {}",
-            Url::from_file_path(wheel.path()).expect("absolute fixture path")
+            SafeUrl::from_file_path(wheel.path()).expect("absolute fixture path")
         ))?;
 
     let output = uv_snapshot!(context.filters(), context.pip_compile()
@@ -75,7 +75,7 @@ fn complete_local_wheel_version_mismatch_precedes_dependency_build() -> Result<(
         "",
         Some(marker.path()),
     )?)?;
-    let dependency_url = Url::from_file_path(dependency.path()).expect("absolute fixture path");
+    let dependency_url = SafeUrl::from_file_path(dependency.path()).expect("absolute fixture path");
     let (_, bytes) = generate_wheel(
         &"demo".parse()?,
         &"2.0".parse()?,
@@ -92,7 +92,7 @@ fn complete_local_wheel_version_mismatch_precedes_dependency_build() -> Result<(
         .child("requirements.in")
         .write_str(&format!(
             "demo @ {}",
-            Url::from_file_path(wheel.path()).expect("absolute fixture path")
+            SafeUrl::from_file_path(wheel.path()).expect("absolute fixture path")
         ))?;
 
     let output = uv_snapshot!(context.filters(), context.pip_compile()
@@ -241,6 +241,63 @@ async fn mismatched_sidecar_is_not_cached() -> Result<()> {
     Ok(())
 }
 
+/// Retry context must not hide the inconsistent metadata or its corrective guidance.
+#[tokio::test]
+async fn retried_sidecar_version_mismatch_preserves_cause() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = "demo".parse()?;
+    let server = PackageServer::new(&name).await;
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    server
+        .serve_with(&filename, &bytes, None, json!({ "core-metadata": true }))
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}.metadata")))
+        .respond_with(ResponseTemplate::new(503))
+        .with_priority(1)
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(server.mock_server())
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}.metadata")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("Metadata-Version: 2.3\nName: demo\nVersion: 2.0\n"),
+        )
+        .with_priority(2)
+        .expect(1)
+        .mount(server.mock_server())
+        .await;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("demo==1.0")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url").arg(server.index_url())
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because demo==1.0 has inconsistent metadata and you require demo==1.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Metadata for `demo` (v1.0) was inconsistent:
+      Request failed after 1 retry in [TIME]: Wheel metadata version `2.0` for `demo` does not match `1.0` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+    ");
+    Ok(())
+}
+
 #[tokio::test]
 async fn cached_sidecar_version_is_rechecked() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -339,7 +396,7 @@ fn wheel_metadata_can_omit_local_version() -> Result<()> {
         .child("requirements.in")
         .write_str(&format!(
             "demo @ {}",
-            Url::from_file_path(wheel.path()).expect("absolute fixture path")
+            SafeUrl::from_file_path(wheel.path()).expect("absolute fixture path")
         ))?;
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in")
@@ -376,7 +433,7 @@ fn complete_wheel_metadata_can_omit_local_version() -> Result<()> {
         .child("requirements.in")
         .write_str(&format!(
             "demo @ {}",
-            Url::from_file_path(wheel.path()).expect("absolute fixture path")
+            SafeUrl::from_file_path(wheel.path()).expect("absolute fixture path")
         ))?;
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in")
