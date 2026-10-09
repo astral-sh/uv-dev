@@ -31,6 +31,8 @@ use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
 use uv_fs::{PortablePath, Simplified};
 use uv_install_wheel::validate_and_heal_record;
 use uv_static::EnvVars;
+#[cfg(all(unix, feature = "test-python-managed"))]
+use uv_test::ReadOnlyDirectoryGuard;
 use uv_test::archive::write_tar_gz;
 #[cfg(feature = "test-git")]
 use uv_test::decode_token;
@@ -18572,5 +18574,56 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
     assert!(stdlib_sources > site_packages_sources);
     assert!(compiled <= site_packages_sources);
 
+    Ok(())
+}
+
+#[cfg(all(unix, feature = "test-python-managed"))]
+#[test]
+fn system_install_read_only_destination_hint() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "system-install-permissions"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.permission-test.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_managed_python_dirs()
+        .with_filtered_python_keys()
+        .with_filtered_latest_python_versions();
+    context.python_install().arg("3.12").assert().success();
+    let found = context
+        .python_find()
+        .args(["--system", "3.12"])
+        .assert()
+        .success();
+    let python = std::str::from_utf8(&found.get_output().stdout)?.trim();
+    let queried = context
+        .external_command(python)
+        .args([
+            "-c",
+            "import sysconfig; print(sysconfig.get_path('purelib'))",
+        ])
+        .assert()
+        .success();
+    let site_packages = std::str::from_utf8(&queried.get_output().stdout)?.trim();
+    let _guard = ReadOnlyDirectoryGuard::new(site_packages)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--system").arg("--break-system-packages").arg("--python").arg(python)
+        .arg("--index-url").arg(server.index_url())
+        .arg("permission-test"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using Python 3.12.[LATEST] environment at: managed/cpython-3.12.[LATEST]-[PLATFORM]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: permission_test-1.0.0-py3-none-any.whl (permission-test==1.0.0)
+      cause: Failed to create directory `[TEMP_DIR]/managed/cpython-3.12.[LATEST]-[PLATFORM]/[PYTHON-LIB]/site-packages/permission_test`
+      cause: failed to create directory `[TEMP_DIR]/managed/cpython-3.12.[LATEST]-[PLATFORM]/[PYTHON-LIB]/site-packages/permission_test`: Permission denied (os error 13)
+
+    hint: It looks like you do not have permission to write to the system Python environment. Create a virtual environment with `uv venv`, then install into it using `--python .venv`; remove `--system` and unset `UV_SYSTEM_PYTHON` if set
+    "#);
     Ok(())
 }

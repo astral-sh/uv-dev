@@ -118,7 +118,7 @@ impl uv_errors::Hinted for Error {
                 dist_hints(dist.name(), dist.version(), chain, error.hints())
             }
             Self::SystemInstallPermissions(_) => uv_errors::Hints::from(
-                "It looks like you do not have permission to write to the system Python environment. Consider creating a virtual environment with `uv venv`, then retry the installation",
+                "It looks like you do not have permission to write to the system Python environment. Create a virtual environment with `uv venv`, then install into it using `--python .venv`; remove `--system` and unset `UV_SYSTEM_PYTHON` if set",
             ),
             Self::Plan(_)
             | Self::Prepare(_)
@@ -198,16 +198,6 @@ mod tests {
                 install_error(destination_error(io::ErrorKind::PermissionDenied))?,
             ),
             (
-                "target",
-                false,
-                install_error(destination_error(io::ErrorKind::PermissionDenied))?,
-            ),
-            (
-                "prefix",
-                false,
-                install_error(destination_error(io::ErrorKind::PermissionDenied))?,
-            ),
-            (
                 "cached wheel read",
                 true,
                 install_error(WheelError::Io(io::Error::new(
@@ -253,10 +243,8 @@ mod tests {
             ));
         }
         insta::assert_snapshot!(outcomes.join("\n"), @"
-        system destination: It looks like you do not have permission to write to the system Python environment. Consider creating a virtual environment with `uv venv`, then retry the installation
+        system destination: It looks like you do not have permission to write to the system Python environment. Create a virtual environment with `uv venv`, then install into it using `--python .venv`; remove `--system` and unset `UV_SYSTEM_PYTHON` if set
         virtual environment: none
-        target: none
-        prefix: none
         cached wheel read: none
         ambiguous copy: none
         missing destination: none
