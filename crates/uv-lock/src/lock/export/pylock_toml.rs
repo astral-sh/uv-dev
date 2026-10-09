@@ -816,8 +816,9 @@ impl<'lock> PylockToml {
 
         // Convert each node to a `pylock.toml`-style package.
         let mut packages = Vec::with_capacity(nodes.len());
+        let python_environment = requires_python.to_exact_marker_tree();
         for node in nodes {
-            let marker = requires_python.simplify_markers(node.marker);
+            let marker = requires_python.simplify_markers(node.marker.restrict(python_environment));
             if marker.is_false() {
                 continue;
             }

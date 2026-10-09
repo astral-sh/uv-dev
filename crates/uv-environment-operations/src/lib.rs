@@ -2073,15 +2073,28 @@ pub fn detect_conflicts(
     } else {
         BTreeMap::new()
     };
-    let root_markers = marker_env.is_none().then(|| {
+    let root_markers = if marker_env.is_none() {
+        let requirements = target.selected_root_python_requirements(groups)?;
         let domain = implicit_constraints_marker(
             requires_python.to_exact_marker_tree(),
             lock.supported_environments(),
         );
-        lock.workspace_packages()
-            .map(|package| (package.name(), package.environment_marker().and(domain)))
-            .collect::<BTreeMap<_, _>>()
-    });
+        Some(
+            lock.workspace_packages()
+                .map(|package| {
+                    let marker = package.environment_marker().and(domain);
+                    let marker = requirements
+                        .get(package.name())
+                        .map_or(marker, |requirement| {
+                            marker.and(requirement.to_exact_marker_tree())
+                        });
+                    (package.name(), marker)
+                })
+                .collect::<BTreeMap<_, _>>(),
+        )
+    } else {
+        None
+    };
     detect_conflicts_with_members(target, extras, groups, &packages, root_markers.as_ref())
 }
 

@@ -309,23 +309,43 @@ pub trait Installable<'lock> {
         Ok(group_requirements)
     }
 
+    /// Retain each selected root's Python domain, including its own and inherited groups.
+    fn selected_root_python_requirements(
+        &self,
+        groups: &DependencyGroupsWithDefaults,
+    ) -> Result<BTreeMap<&PackageName, RequiresPython>, LockError> {
+        let requirements = self.workspace_python_requirements(groups)?;
+        let group_root = self.group_root(groups);
+        self.roots()
+            .chain(group_root)
+            .map(|root| {
+                root_python_requirement(self.lock(), &requirements, Some(root), group_root)
+                    .map(|requires_python| (root, requires_python))
+            })
+            .collect()
+    }
+
     /// Return the universal Python domain of the selected roots and their own dependency groups.
     fn export_python_requirement(
         &self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<RequiresPython, LockError> {
-        let requirements = self.workspace_python_requirements(groups)?;
-        let group_root = self.group_root(groups);
-        let roots = self.roots().collect::<BTreeSet<_>>();
-        if roots.is_empty() {
-            return root_python_requirement(self.lock(), &requirements, None, group_root);
+        if self.roots().next().is_none() {
+            let requirements = self.workspace_python_requirements(groups)?;
+            return root_python_requirement(
+                self.lock(),
+                &requirements,
+                None,
+                self.group_root(groups),
+            );
         }
-        let domains = roots
-            .into_iter()
-            .map(|root| root_python_requirement(self.lock(), &requirements, Some(root), group_root))
-            .collect::<Result<Vec<_>, _>>()?;
-        RequiresPython::union(domains.iter().map(RequiresPython::specifiers))
-            .ok_or_else(|| LockErrorKind::UnrepresentableExportRequiresPython.into())
+        let requirements = self.selected_root_python_requirements(groups)?;
+        RequiresPython::union(
+            self.roots()
+                .filter_map(|root| requirements.get(root))
+                .map(RequiresPython::specifiers),
+        )
+        .ok_or_else(|| LockErrorKind::UnrepresentableExportRequiresPython.into())
     }
 
     /// Validate that selected non-root dependencies were resolved for the requested environment.
@@ -466,8 +486,18 @@ pub trait Installable<'lock> {
         let modifiers = lock.dependency_modifiers()?;
         let roots = self.roots().collect::<FxHashSet<_>>();
         let group_root = self.group_root(groups);
+        let root_requirements = marker_env
+            .is_none()
+            .then(|| self.selected_root_python_requirements(groups))
+            .transpose()?;
+        let root_domain = |name: &PackageName| {
+            root_requirements
+                .as_ref()
+                .and_then(|requirements| requirements.get(name))
+                .map_or(MarkerTree::TRUE, RequiresPython::to_exact_marker_tree)
+        };
         let root_marker = UniversalMarker::from_combined(implicit_constraints_marker(
-            requires_python.to_marker_tree(),
+            requires_python.to_exact_marker_tree(),
             lock.supported_environments(),
         ));
         let known_conflicts = lock
@@ -498,7 +528,7 @@ pub trait Installable<'lock> {
                     },
                     |selected| {
                         if selected {
-                            MarkerTree::TRUE
+                            root_domain(item.package())
                         } else {
                             MarkerTree::FALSE
                         }
@@ -560,7 +590,9 @@ pub trait Installable<'lock> {
             };
             let package = lock.package(index);
             let mut root_marker = root_marker;
-            root_marker.and(UniversalMarker::from_combined(package.environment_marker()));
+            root_marker.and(UniversalMarker::from_combined(
+                package.environment_marker().and(root_domain(name)),
+            ));
             if root_kind == InstallableRootKind::Production && groups.prod() {
                 if add_reachability(&mut reachability, (index, None), root_marker) {
                     queue.push_back((index, None));

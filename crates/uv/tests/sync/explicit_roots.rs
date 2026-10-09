@@ -1,5 +1,6 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
+#[cfg(feature = "test-universal")]
 use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
 use indoc::{formatdoc, indoc};
@@ -2948,9 +2949,10 @@ fn explicit_roots_pylock_conflicts_use_selected_python_domain() -> Result<()> {
         "--frozen", "--offline", "--package", "shared", "--group", "dev", "--format", "requirements.txt",
         "--no-header", "--preview-features", "package-conflicts",
     ]), @r"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Package `legacy` and package `shared` are incompatible with the declared conflicts: {legacy, shared}
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./legacy ; python_full_version < '3.13'
+    -e ./shared ; python_full_version >= '3.13'
     ");
 
     context
@@ -3965,11 +3967,11 @@ fn explicit_roots_pylock_scopes_group_python_requirements() -> Result<()> {
         [project]
         name = "root-a"
         version = "0.1.0"
-        requires-python = ">=3.12,<3.14"
+        requires-python = ">=3.12,<3.16"
         [dependency-groups]
         dev = []
         [tool.uv.dependency-groups]
-        dev = { requires-python = ">=3.13" }
+        dev = { requires-python = "==3.13.*" }
         [build-system]
         requires = []
         build-backend = "uv_build"
@@ -3985,11 +3987,11 @@ fn explicit_roots_pylock_scopes_group_python_requirements() -> Result<()> {
         [project]
         name = "root-b"
         version = "0.1.0"
-        requires-python = ">=3.14,<3.16"
+        requires-python = ">=3.12,<3.16"
         [dependency-groups]
         dev = []
         [tool.uv.dependency-groups]
-        dev = { requires-python = ">=3.15" }
+        dev = { requires-python = "==3.15.*" }
         [build-system]
         requires = []
         build-backend = "uv_build"
@@ -4014,13 +4016,104 @@ fn explicit_roots_pylock_scopes_group_python_requirements() -> Result<()> {
 
     [[packages]]
     name = "root-a"
-    marker = "python_full_version < '3.14'"
+    marker = "python_full_version < '3.15'"
     directory = { path = "root-a", editable = true }
 
     [[packages]]
     name = "root-b"
-    marker = "python_full_version >= '3.14'"
+    marker = "python_full_version >= '3.15'"
     directory = { path = "root-b", editable = true }
     "#);
+    Ok(())
+}
+
+/// Mutually exclusive roots can coexist in pylock when selected groups make their domains disjoint.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_pylock_allows_disjoint_group_domains() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        conflicts = [[{ package = "root-a" }, { package = "root-b" }]]
+        [tool.uv.workspace]
+        members = ["root-a", "root-b"]
+        roots = ["root-a", "root-b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.16"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { requires-python = "==3.13.*" }
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/src/root_a/__init__.py")
+        .touch()?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.16"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { requires-python = "==3.15.*" }
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/src/root_b/__init__.py")
+        .touch()?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index", "--preview-features", "package-conflicts"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--all-packages", "--format", "pylock.toml", "--no-header",
+        "--preview-features", "package-conflicts",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.13, !=3.14.*, <3.16"
+
+    [[packages]]
+    name = "root-a"
+    marker = "python_full_version < '3.15'"
+    directory = { path = "root-a", editable = true }
+
+    [[packages]]
+    name = "root-b"
+    marker = "python_full_version >= '3.15'"
+    directory = { path = "root-b", editable = true }
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--all-packages", "--no-default-groups", "--format", "pylock.toml", "--no-header",
+        "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `root-a` and package `root-b` are incompatible with the declared conflicts: {root-a, root-b}
+    ");
     Ok(())
 }
