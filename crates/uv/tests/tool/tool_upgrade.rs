@@ -155,7 +155,8 @@ fn check_staged_python_upgrade(lock: bool) -> Result<()> {
         assert!(
             fs_err::canonicalize(path.parent().expect("path parent"))?
                 .starts_with(fs_err::canonicalize(root.path())?),
-            "{key}: {path:?}"
+            "{key}: {}",
+            path.display()
         );
         assert!(!path.to_string_lossy().contains(".uv-tool-staging-"));
     }

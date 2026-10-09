@@ -35,7 +35,7 @@ impl fmt::Debug for PythonEnvironmentShared {
             .debug_struct("PythonEnvironmentShared")
             .field("root", &self.root)
             .field("interpreter", &self.interpreter)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

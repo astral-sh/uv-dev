@@ -1,6 +1,6 @@
 //! Owned staging and recovery for interpreter-changing tool upgrades.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::fmt;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
@@ -306,8 +306,9 @@ fn stage_exports(
         let directory = path.parent().context("Executable has no parent")?;
         fs_err::create_dir_all(directory)?;
         let directory = fs_err::canonicalize(directory)?;
-        if !directories.contains_key(&directory) {
-            let staging = private_staging_directory(&directory, JOURNAL_PREFIX)?;
+        if let Entry::Vacant(entry) = directories.entry(directory) {
+            let directory = entry.key();
+            let staging = private_staging_directory(directory, JOURNAL_PREFIX)?;
             let files = ExportDirectory {
                 directory: directory.clone(),
                 staging: staging
@@ -318,16 +319,13 @@ fn stage_exports(
                 staging_identity: ExportIdentity::directory(staging.path())?,
                 exports: Vec::new(),
             };
-            directories.insert(
-                directory,
-                (
-                    DirectoryChanges {
-                        files,
-                        removals: Vec::new(),
-                    },
-                    staging,
-                ),
-            );
+            entry.insert((
+                DirectoryChanges {
+                    files,
+                    removals: Vec::new(),
+                },
+                staging,
+            ));
         }
     }
     for export in &plan.exports {
@@ -491,7 +489,7 @@ impl fmt::Display for RecoveryErrors {
 
 impl std::error::Error for RecoveryErrors {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.0.first().map(|error| error.as_ref())
+        self.0.first().map(AsRef::as_ref)
     }
 }
 
