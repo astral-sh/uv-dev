@@ -452,23 +452,6 @@ fn cached_client() -> Result<CachedClient> {
     ))
 }
 
-async fn get_text(
-    client: &CachedClient,
-    url: &Url,
-    cache_entry: &CacheEntry,
-    cache_control: CacheControl,
-) -> Result<String> {
-    client
-        .get_serde_with_retry(
-            HttpRequest::new(Method::GET, url.clone()),
-            cache_entry,
-            cache_control,
-            async |response, _retry_state| response.text().await,
-        )
-        .await
-        .map_err(|error| anyhow!("{error:?}"))
-}
-
 /// Store a valid policy with a payload whose schema is incompatible with `String`.
 async fn seed_numeric_cache(
     client: &CachedClient,
@@ -510,21 +493,20 @@ async fn heal_malformed_cache_policy() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let cache_entry = CacheEntry::new(directory.path(), "metadata.http");
     let client = cached_client()?;
-    let url = Url::parse(&format!("{}/metadata", server.uri()))?;
 
-    // The cache envelope ends in an eight-byte policy length, so this cannot contain a policy.
+    // This seven-byte fixture is shorter than the cache-policy footer.
     let invalid = [0_u8; 7];
     let error = DataWithCachePolicy::from_reader(&invalid[..]).expect_err("invalid cache policy");
     assert_matches!(error.kind(), ErrorKind::ArchiveRead(_));
     fs_err::write(cache_entry.path(), invalid)?;
 
     assert_eq!(
-        get_text(&client, &url, &cache_entry, CacheControl::None).await?,
+        cached_text(&client, &server, &cache_entry, CacheControl::None).await?,
         "recovered",
     );
     assert_eq!(cached_payload::<String>(&cache_entry)?, "recovered");
     assert_eq!(
-        get_text(&client, &url, &cache_entry, CacheControl::None).await?,
+        cached_text(&client, &server, &cache_entry, CacheControl::None).await?,
         "recovered",
     );
     server.verify().await;
@@ -671,12 +653,12 @@ async fn heal_fresh_cache_payload() -> Result<()> {
 
     seed_numeric_cache(&client, &url, &cache_entry).await?;
     assert_eq!(
-        get_text(&client, &url, &cache_entry, CacheControl::None).await?,
+        cached_text(&client, &server, &cache_entry, CacheControl::None).await?,
         "recovered",
     );
     assert_eq!(cached_payload::<String>(&cache_entry)?, "recovered");
     assert_eq!(
-        get_text(&client, &url, &cache_entry, CacheControl::None).await?,
+        cached_text(&client, &server, &cache_entry, CacheControl::None).await?,
         "recovered",
     );
     server.verify().await;
@@ -703,12 +685,12 @@ async fn heal_allowed_stale_cache_payload() -> Result<()> {
 
     seed_numeric_cache(&client, &url, &cache_entry).await?;
     assert_eq!(
-        get_text(&client, &url, &cache_entry, CacheControl::AllowStale).await?,
+        cached_text(&client, &server, &cache_entry, CacheControl::AllowStale).await?,
         "recovered",
     );
     assert_eq!(cached_payload::<String>(&cache_entry)?, "recovered");
     assert_eq!(
-        get_text(&client, &url, &cache_entry, CacheControl::AllowStale).await?,
+        cached_text(&client, &server, &cache_entry, CacheControl::AllowStale).await?,
         "recovered",
     );
     server.verify().await;
@@ -748,12 +730,12 @@ async fn heal_revalidated_cache_payload() -> Result<()> {
 
     seed_numeric_cache(&client, &url, &cache_entry).await?;
     assert_eq!(
-        get_text(&client, &url, &cache_entry, CacheControl::MustRevalidate).await?,
+        cached_text(&client, &server, &cache_entry, CacheControl::MustRevalidate).await?,
         "recovered",
     );
     assert_eq!(cached_payload::<String>(&cache_entry)?, "recovered");
     assert_eq!(
-        get_text(&client, &url, &cache_entry, CacheControl::None).await?,
+        cached_text(&client, &server, &cache_entry, CacheControl::None).await?,
         "recovered",
     );
     server.verify().await;
