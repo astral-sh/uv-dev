@@ -61,10 +61,10 @@ fn compile_interpreter_cache_across_linux_personalities() -> Result<()> {
     context
         .temp_dir
         .child("requirements.in")
-        .write_str(indoc! {r#"
+        .write_str(indoc! {r"
         machine-x86-64; platform_machine == 'x86_64'
         machine-i686; platform_machine == 'i686'
-    "#})?;
+    "})?;
     let python = context.venv.join("bin/python");
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in").arg("--python").arg(&python)
