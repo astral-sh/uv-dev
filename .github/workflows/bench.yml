@@ -54,9 +54,6 @@ jobs:
           cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
           cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
 
-      - name: "Prepare immutable benchmark fixtures"
-        run: python3 scripts/benchmark/prepare-fixtures.py
-
       - name: "Build benchmarks"
         run: |
           # cargo-codspeed resolves metadata before passing --locked to Cargo.
@@ -190,9 +187,6 @@ jobs:
           # Resolve benchmark fixtures without the repository's tooling build policy.
           cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
           cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
-
-      - name: "Prepare immutable benchmark fixtures"
-        run: python3 scripts/benchmark/prepare-fixtures.py
 
       - name: "Build benchmarks"
         run: |
