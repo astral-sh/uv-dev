@@ -5815,6 +5815,7 @@ dependencies = [
  "predicates",
  "regex",
  "reqwest",
+ "same-file",
  "self-replace",
  "serde",
  "serde_json",

@@ -89,6 +89,7 @@ http = { workspace = true }
 indicatif = { workspace = true }
 itertools = { workspace = true }
 owo-colors = { workspace = true }
+same-file = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -161,7 +162,7 @@ performance-memory-allocator = ["dep:uv-performance-memory-allocator"]
 
 # Adds self-update functionality. This feature is only enabled for uv's cargo-dist installer
 # and should be left unselected when building uv for package managers.
-self-update = ["axoupdater", "uv-cli/self-update"]
+self-update = ["axoupdater", "dep:same-file", "uv-cli/self-update"]
 
 # Features for development only.
 tracing-durations-export = ["dep:tracing-durations-export", "uv-resolver/tracing-durations-export", "uv-settings/tracing-durations-export", "uv-test/tracing-durations-export"]

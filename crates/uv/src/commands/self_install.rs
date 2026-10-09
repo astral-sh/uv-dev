@@ -2,6 +2,7 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use same_file::Handle;
 use serde::{Deserialize, Serialize};
 use uv_cli::SelfInstallArgs;
 use uv_command_support::{ExitStatus, Printer, update_shell};
@@ -239,13 +240,16 @@ fn replace_windows_binary(source: &Path, target: &Path) -> Result<()> {
 }
 
 /// Copy a complete distribution before replacing any installed executable.
-fn install_binaries(executable: &Path, destination: &Path) -> Result<()> {
+fn install_binaries(executable: &Path, identity: &Handle, destination: &Path) -> Result<()> {
     let source = executable
         .parent()
         .context("Executable has no parent directory")?;
     let uv_name = format!("uv{}", std::env::consts::EXE_SUFFIX);
+    let source_uv = source.join(&uv_name);
+    let source_identity = Handle::from_path(&source_uv)
+        .with_context(|| format!("Failed to identify executable at `{}`", source_uv.display()))?;
     anyhow::ensure!(
-        uv_fs::is_same_file_allow_missing(&source.join(&uv_name), executable) == Some(true),
+        &source_identity == identity,
         "Cannot install from `{}`: `{uv_name}` does not identify the running executable `{}`",
         source.display(),
         executable.display()
@@ -276,9 +280,7 @@ fn install_binaries(executable: &Path, destination: &Path) -> Result<()> {
         // Keep renames synchronous under the installation lock so cancellation cannot leave a
         // queued filesystem operation running after its guard is released.
         #[cfg(not(windows))]
-        uv_fs::with_retry_sync(&source, &target, "renaming", || {
-            fs_err::rename(&source, &target)
-        })?;
+        fs_err::rename(&source, &target)?;
     }
     Ok(())
 }
@@ -297,6 +299,12 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
         .context("Could not determine the uv installation directory")?;
     let destination = std::path::absolute(destination)?;
     let executable = std::env::current_exe()?;
+    let executable_identity = Handle::from_path(&executable).with_context(|| {
+        format!(
+            "Failed to identify running executable at `{}`",
+            executable.display()
+        )
+    })?;
     fs_err::create_dir_all(&destination)?;
     let lock = LockedFile::acquire(
         destination.join(".uv-install.lock"),
@@ -312,7 +320,7 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
             .ok()
             .map(|(_, receipt)| receipt.source)
     };
-    install_binaries(&executable, &destination)?;
+    install_binaries(&executable, &executable_identity, &destination)?;
     let modify_path = !unmanaged
         && !args.no_modify_path
         && std::env::var_os("INSTALLER_NO_MODIFY_PATH").is_none();

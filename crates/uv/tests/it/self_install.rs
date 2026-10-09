@@ -1,4 +1,9 @@
 #[cfg(unix)]
+use std::thread;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
 use anyhow::Context;
 #[cfg(any(not(windows), feature = "windows-gui-bin"))]
 use anyhow::Result;
@@ -26,7 +31,10 @@ fn requires_preview() {
 #[cfg(any(not(windows), feature = "windows-gui-bin"))]
 fn installs_running_distribution_with_numeric_no_modify_path() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
-        .with_filter((r"uv [0-9]+\.[0-9]+\.[0-9]+[^ ]*", "uv [VERSION]"))
+        .with_filter((
+            regex::escape(&format!("uv {}", env!("CARGO_PKG_VERSION"))),
+            "uv [VERSION]",
+        ))
         .with_filter((r"\([a-z0-9_]+-[a-z0-9_-]+\)", "([TARGET])"));
     let bin = context.temp_dir.child("bin");
     uv_snapshot!(context.filters(), context.command().args([
@@ -333,7 +341,10 @@ fn rejects_different_adjacent_distribution() -> Result<()> {
 #[test]
 fn installs_linked_running_distribution() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
-        .with_filter((r"uv [0-9]+\.[0-9]+\.[0-9]+[^ ]*", "uv [VERSION]"))
+        .with_filter((
+            regex::escape(&format!("uv {}", env!("CARGO_PKG_VERSION"))),
+            "uv [VERSION]",
+        ))
         .with_filter((r"\([a-z0-9_]+-[a-z0-9_-]+\)", "([TARGET])"));
     let source = context.temp_dir.child("source");
     source.create_dir_all()?;
@@ -362,5 +373,71 @@ fn installs_linked_running_distribution() -> Result<()> {
     let receipt: serde_json::Value =
         serde_json::from_str(&context.read("destination/.uv-receipt.json"))?;
     assert_eq!(receipt["version"], env!("CARGO_PKG_VERSION"));
+    Ok(())
+}
+
+/// A queued installer must not copy a different executable installed while it waits.
+#[cfg(unix)]
+#[test]
+fn rejects_executable_replaced_during_lock_wait() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let bin = context.temp_dir.child("bin");
+    bin.create_dir_all()?;
+    let executable = bin.child("uv");
+    let built = uv_test::get_bin!();
+    fs_err::copy(&built, executable.path())?;
+    fs_err::copy(
+        built.parent().context("binary directory")?.join("uvx"),
+        bin.child("uvx").path(),
+    )?;
+    let replacement = bin.child("replacement");
+    replacement.write_str("replacement executable")?;
+    let lock = LockedFile::acquire_no_wait(
+        bin.child(".uv-install.lock"),
+        LockedFileMode::Exclusive,
+        "fixture installation",
+    )
+    .context("fixture installation lock")?;
+    let stderr_path = context.temp_dir.child("installer.stderr");
+    let stderr = fs_err::File::create(stderr_path.path())?;
+    let watched_stderr = stderr_path.path().to_path_buf();
+    let replacement = replacement.path().to_path_buf();
+    let installed = executable.path().to_path_buf();
+    thread::scope(|scope| -> Result<()> {
+        let worker = scope.spawn(move || -> Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                if fs_err::read_to_string(&watched_stderr)?
+                    .contains("Waiting to acquire exclusive lock for `uv installation`")
+                {
+                    break;
+                }
+                anyhow::ensure!(
+                    Instant::now() < deadline,
+                    "installer did not wait for the held lock"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            fs_err::rename(replacement, installed)?;
+            drop(lock);
+            Ok(())
+        });
+        uv_snapshot!(context.filters(), context.external_command(executable.path()).args([
+            "self", "install", "--preview-features", "self-management", "--no-modify-path", "--install-dir",
+        ]).arg(bin.path()).env(EnvVars::RUST_LOG, "uv_fs=info").stderr(stderr.into_file()), @"exit_code: 2 (failure)");
+        worker
+            .join()
+            .map_err(|_| anyhow::anyhow!("installer replacement worker panicked"))??;
+        Ok(())
+    })?;
+    insta::with_settings!({filters => context.filters()}, {
+        insta::assert_snapshot!(context.read("installer.stderr"), @"
+        INFO Waiting to acquire exclusive lock for `uv installation` at `bin/.uv-install.lock`
+        error: Cannot install from `[TEMP_DIR]/bin`: `uv` does not identify the running executable `[TEMP_DIR]/bin/uv`
+        ");
+    });
+    assert_eq!(context.read("bin/uv"), "replacement executable");
+    bin.child(".uv-receipt.json")
+        .assert(predicates::path::missing());
     Ok(())
 }
