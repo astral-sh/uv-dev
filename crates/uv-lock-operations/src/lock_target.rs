@@ -204,24 +204,23 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
-    /// Return the list of members to include in the [`Lock`].
-    pub(crate) fn members(self) -> Vec<PackageName> {
+    /// Return the resolution roots to record in the [`Lock`].
+    pub(crate) fn resolution_roots(self) -> Vec<PackageName> {
         match self {
             Self::Workspace(workspace) => {
                 if let Some(roots) = workspace.resolution_roots() {
                     return roots.iter().cloned().collect();
                 }
-                let mut members = workspace.packages().keys().cloned().collect::<Vec<_>>();
-                members.sort();
+                let mut roots = workspace.packages().keys().cloned().collect::<Vec<_>>();
+                roots.sort();
 
-                // If this is a non-virtual project with a single member, we can omit it from the lockfile.
-                // If any members are added or removed, it will inherently mismatch. If the member is
-                // renamed, it will also mismatch.
-                if members.len() == 1 && !workspace.is_non_project() {
-                    members.clear();
+                // A workspace with one project can infer its root from the package source.
+                // Adding, removing, or renaming a member still invalidates the lockfile.
+                if roots.len() == 1 && !workspace.is_non_project() {
+                    roots.clear();
                 }
 
-                members
+                roots
             }
             Self::Script(_) => Vec::new(),
         }

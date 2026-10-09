@@ -328,7 +328,7 @@ async fn do_lock(
     } = settings;
 
     // Collect the requirements, etc.
-    let members = target.members();
+    let resolution_roots = target.resolution_roots();
     let workspace_member_names = match target {
         LockTarget::Workspace(workspace) => workspace
             .resolution_roots()
@@ -785,7 +785,7 @@ async fn do_lock(
             existing_lock,
             target.install_path(),
             packages,
-            &members,
+            &resolution_roots,
             workspace_member_names.as_ref(),
             required_members,
             &requirements,
@@ -991,7 +991,7 @@ async fn do_lock(
             uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
             let manifest = ResolverManifest::new(
-                members,
+                resolution_roots,
                 requirements,
                 constraints,
                 overrides,

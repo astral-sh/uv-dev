@@ -85,20 +85,15 @@ impl<'env> TreeDisplay<'env> {
         invert: bool,
         show_sizes: bool,
     ) -> Self {
-        // Identify any workspace members.
-        //
-        // These include:
-        // - The members listed in the lockfile.
-        // - The root package, if it's not in the list of members. (The root package is omitted from
-        //   the list of workspace members for single-member workspaces with a `[project]` section,
-        //   to avoid cluttering the lockfile.
-        let members: BTreeSet<&PackageId> = if lock.members().is_empty() {
+        // Identify the resolution roots. A workspace with one project can infer its root from the
+        // package source, so its lockfile omits the explicit root list.
+        let roots: BTreeSet<&PackageId> = if lock.resolution_roots().is_empty() {
             lock.root().into_iter().map(|package| &package.id).collect()
         } else {
             lock.packages
                 .iter()
                 .filter_map(|package| {
-                    if lock.members().contains(&package.id.name) {
+                    if lock.resolution_roots().contains(&package.id.name) {
                         Some(&package.id)
                     } else {
                         None
@@ -125,7 +120,7 @@ impl<'env> TreeDisplay<'env> {
         let root = graph.add_node(Node::Root);
 
         // Add the root packages to the graph.
-        for id in members.iter().copied() {
+        for id in roots.iter().copied() {
             if prune.contains(&id.name) {
                 continue;
             }
@@ -398,9 +393,7 @@ impl<'env> TreeDisplay<'env> {
             let mut reachable = graph
                 .node_indices()
                 .filter(|index| match graph[*index] {
-                    Node::Package(package_index) => {
-                        members.contains(&lock.package(package_index).id)
-                    }
+                    Node::Package(package_index) => roots.contains(&lock.package(package_index).id),
                     Node::Root => true,
                 })
                 .collect::<FxHashSet<_>>();
