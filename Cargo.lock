@@ -7442,6 +7442,7 @@ dependencies = [
  "anyhow",
  "insta",
  "itertools 0.14.0",
+ "rustc-hash",
  "thiserror",
  "toml",
  "toml_edit",
