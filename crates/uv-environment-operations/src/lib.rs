@@ -2045,7 +2045,16 @@ pub fn detect_conflicts(
         return Ok(());
     }
 
-    let packages = target.selected_workspace_members(extras, groups, marker_env)?;
+    let packages = if groups.prod()
+        && conflicts
+            .iter()
+            .flat_map(ConflictSet::iter)
+            .any(|item| matches!(item.kind(), ConflictKind::Project))
+    {
+        target.selected_workspace_members(extras, groups, marker_env)?
+    } else {
+        BTreeSet::new()
+    };
     // CLI extras and groups apply to selected roots, independently of transitive production members.
     let roots = target.roots().collect::<BTreeSet<_>>();
     let group_root = target.group_root(groups);
