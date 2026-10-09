@@ -3746,7 +3746,7 @@ impl Lock {
     /// Walk the auditable dependency graph, invoking `visit` once per
     /// non-workspace package with version information.
     ///
-    /// The traversal is seeded from workspace members, lock-level requirements
+    /// The traversal is seeded from resolution roots, lock-level requirements
     /// (e.g. PEP 723 scripts), and lock-level dependency groups, then follows
     /// each reachable dependency exactly once per `(package, extra)` pair,
     /// respecting the provided extras and dependency-group filters. The same
@@ -3778,14 +3778,24 @@ impl Lock {
         let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
         let mut seen: FxHashSet<(PackageIndex, Option<&ExtraName>)> = FxHashSet::default();
 
-        // Seed from workspace members. Always queue with `None` so that we can traverse
-        // their dependency groups; only queue extras when prod mode is active.
+        // Seed selected groups from resolution roots, including an implicit single-project root.
         for &index in self.workspace_members.values() {
             let package = self.package(index);
-            if seen.insert((index, None)) {
-                queue.push_back((index, None));
+            if !self.is_resolution_root(package) {
+                continue;
+            }
+            for dep in package
+                .dependency_groups
+                .iter()
+                .filter(|(group, _)| groups.contains(group))
+                .flat_map(|(_, deps)| deps)
+            {
+                enqueue_dep(&mut seen, &mut queue, dep);
             }
             if groups.prod() {
+                if seen.insert((index, None)) {
+                    queue.push_back((index, None));
+                }
                 for extra in extras.extra_names(package.optional_dependencies.keys()) {
                     if seen.insert((index, Some(extra))) {
                         queue.push_back((index, Some(extra)));
@@ -3857,27 +3867,13 @@ impl Lock {
                 }
             }
 
-            // Follow allowed dependency groups.
-            if is_member && extra.is_none() {
-                for dep in package
-                    .dependency_groups
-                    .iter()
-                    .filter(|(group, _)| groups.contains(group))
-                    .flat_map(|(_, deps)| deps)
-                {
-                    enqueue_dep(&mut seen, &mut queue, dep);
-                }
-            }
-
-            // Follow the regular/extra dependencies for this (package, extra) pair.
-            // For workspace members in only-group mode, skip regular dependencies.
+            // Reached dependencies contribute their production edges even in only-group mode.
             let dependencies: &[Dependency] = match extra {
                 Some(extra) => package
                     .optional_dependencies
                     .get(extra)
                     .map(Vec::as_slice)
                     .unwrap_or_default(),
-                None if is_member && !groups.prod() => &[],
                 None => &package.dependencies,
             };
 
