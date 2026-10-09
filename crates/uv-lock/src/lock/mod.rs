@@ -3922,10 +3922,21 @@ impl Lock {
     pub fn package_reachability(
         &self,
         root: &Path,
+        requires_python: &RequiresPython,
     ) -> Result<impl Iterator<Item = (&Package, MarkerTree)>, LockError> {
         let mut package_markers = PackageMarkers::default();
         let mut pending = VecDeque::new();
-        let root_marker = self.fork_markers_union();
+        // Stored edges include the old Python bounds. Remove those bounds before applying the
+        // current scope; conditions erased by the old range remain conservatively reachable.
+        let current_marker = |marker| {
+            requires_python.complexify_markers(self.requires_python.simplify_markers(marker))
+        };
+        let root_marker = current_marker(self.fork_markers_union());
+        let modifiers = DependencyModifiers::new(
+            Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(self.manifest.excludes.iter().cloned()),
+        );
 
         for package in self.workspace_packages() {
             pending.push_back((package, None, root_marker));
@@ -3935,13 +3946,14 @@ impl Lock {
         }
 
         // Scripts and projectless roots keep their direct requirements in the manifest.
-        for requirement in self
-            .manifest
-            .requirements
-            .iter()
-            .chain(self.manifest.dependency_groups.values().flatten())
-        {
-            let requirement = requirement.clone().into_absolute(root);
+        for requirement in modifiers.apply(
+            DependencyModifierScope::Global,
+            self.manifest
+                .requirements
+                .iter()
+                .chain(self.manifest.dependency_groups.values().flatten()),
+        ) {
+            let requirement = requirement.into_owned().into_absolute(root);
             for package in self.packages_for_name(&requirement.name) {
                 if !Self::package_satisfies_requirement(package, &requirement, root)? {
                     continue;
@@ -3949,7 +3961,7 @@ impl Lock {
                 let Some(marker) = self.root_requirement_marker(&requirement, package) else {
                     continue;
                 };
-                let marker = root_marker.and(marker);
+                let marker = root_marker.and(current_marker(marker));
                 pending.push_back((package, None, marker));
                 for extra in &requirement.extras {
                     if let Some((extra, _)) = package.optional_dependencies.get_key_value(extra) {
@@ -3977,7 +3989,8 @@ impl Lock {
                     .map(DependencyContext::Group),
             ) {
                 for dependency in context.dependencies(package) {
-                    let marker = marker.and(dependency.complexified_marker.pep508());
+                    let marker =
+                        marker.and(current_marker(dependency.complexified_marker.pep508()));
                     if marker.is_false() {
                         continue;
                     }

@@ -878,6 +878,7 @@ async fn do_lock(
                         lock,
                         target.install_path(),
                         upgrade,
+                        &requires_python,
                         lock_required_environments.as_markers(),
                         minimum_libc_version,
                     )
