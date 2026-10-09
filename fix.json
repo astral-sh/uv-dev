@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "Nested checkouts inherit parent metadata through documented ancestor configuration discovery. The parent regression passed, and temporarily asserting a portable lockfile failed on the inherited metadata. Correcting this requires deciding which discovery boundary should replace the current sharing behavior. The checkout was restored unchanged, and the investigation was recorded in the README.",
+  "validation": [],
+  "pull_request": null
+}

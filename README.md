@@ -8,7 +8,7 @@ Classification: bug (reported configuration-isolation concern; behavior reproduc
 
 Two independent Python repositories normally live side by side, but GitLab CI requires the second checkout to live inside the first. Both have their own `pyproject.toml`. The parent declares `[[tool.uv.dependency-metadata]]`; the child has no `[tool.uv]` table. The reporter expects the child's independently generated lockfile to remain valid when the checkout is nested, but reports that `uv lock --check` rejects it. Adding an empty `[tool.uv]` to the child avoids the failure. The title says `uv.tool`; the actual configuration table is `tool.uv`.
 
-The behavior was reproduced using installed uv 0.12.13 on Linux with CPython 3.12.3. A dependency-free child passes lock validation as a sibling and fails after being moved inside a separate parent Git repository. Verbose output identifies the parent configuration and a static-metadata mismatch. An empty child `[tool.uv]` table and `--no-config` independently restore success without changing the child's lockfile.
+The behavior was reproduced using installed uv 0.12.13 on Linux with CPython 3.12.3. The subsequent fix investigation also confirmed the parent regression on a debug build of uv 0.13.0 with CPython 3.12.9; no fix was retained because changing the configuration-discovery boundary requires a design decision. A dependency-free child passes lock validation as a sibling and fails after being moved inside a separate parent Git repository. Verbose output identifies the parent configuration and a static-metadata mismatch. An empty child `[tool.uv]` table and `--no-config` independently restore success without changing the child's lockfile.
 
 The report lists uv 0.11 and 0.12, with continued behavior through 0.12.23 explicitly described as an assumption. Platform and Python version are reported as independent. Exact project files and command output were not supplied. The reproduction demonstrates a minimal sufficient configuration; it does not verify every reported version or platform.
 
@@ -22,6 +22,7 @@ No exact duplicate was identified in the retained issue search. Configuration is
 
 ## Related
 
+- astral-sh/uv-dev#2581 — Parent regression pull request. Adds `lock_dependency_metadata_nested_project` in `crates/uv/tests/lock/lock.rs`, covering lock creation inside an independent nested Git checkout and rejection of that lock after moving the child out. The regression passes while asserting the undesirable behavior; the fix investigation left it unchanged.
 - astral-sh/uv#5931 — Search beyond workspace root when discovering configuration (pull request, merged). Introduced configuration discovery above workspace roots. Maintainers explicitly discussed ignoring parent pyproject.toml files while continuing to read parent uv.toml files, but deferred that change. This explains the relevant history; it did not fix independent-checkout isolation.
 - astral-sh/uv#5929 — Parent uv.toml configuration not used when pyproject.toml present (issue, closed). A child pyproject.toml without uv settings incorrectly blocked intentional parent uv.toml discovery; astral-sh/uv#5931 fixed it in August 2024. The new report concerns unwanted parent pyproject.toml settings crossing independent checkout boundaries, so it is neither a duplicate nor a regression of that opposite failure.
 - astral-sh/uv#21894 — Omit unused dependency-metadata entries from lockfiles (pull request, closed). Proposed preventing unused static-metadata declarations from invalidating lockfiles, directly relevant if the inherited entries are unused by the child. Closed without merging before this report; it does not restrict configuration discovery, and the report does not establish that every inherited entry is unused.
@@ -108,21 +109,21 @@ hint: To update the lockfile, run `uv lock`.
 
 With the empty child table, verbose output instead selects `<repro>/parent/child/pyproject.toml` and reports `Existing uv.lock satisfies workspace requirements` (the actual log puts backticks around `uv.lock`). The child's lockfile remained byte-for-byte unchanged after the failing check and both successful workaround checks. The child has no dependencies, so the inherited metadata is demonstrably unused in this fixture. The child's Git repository boundary did not stop configuration discovery.
 
-The fixture and complete command output remain in the temporary directory above. `results.json` records all seven invocations, exit codes, stdout, and stderr; `child-original.lock` preserves the original child lockfile. No runtime check was made with uv 0.11, uv 0.12.23, another operating system, or preview options. No comparison with a last known-good version applies because none was reported.
+The initial fixture and logs were written to the temporary directory above, including `results.json` for all seven invocations and `child-original.lock` for the unchanged child lockfile. That temporary directory is no longer present in the fix-session environment; the evidence above is retained from the completed reproduction. The fix session independently verified the parent integration regression with the checkout debug binary. No runtime check was made with uv 0.11, uv 0.12.23, another operating system, or preview options. No comparison with a last known-good version applies because none was reported.
 
 ### Existing test coverage
 
-The following test setup and assertions were read; these repository tests were not executed or modified:
+The following related test setup and assertions were read. These related tests were not executed or modified; the separate parent regression was executed as detailed under Fix:
 
 - `crates/uv/tests/sync/show_settings.rs`, `resolve_skip_empty`: creates a parent `uv.toml` setting pip resolution to `lowest-direct` and a child `pyproject.toml` without `[tool.uv]`; snapshots show inherited resolution. Adding an empty child table restores baseline settings. It covers the general discovery rule and empty-table behavior, not parent `pyproject.toml` metadata or independent nested Git repositories. The module requires `test-python` and `test-pypi`; this test is ignored on Windows.
 - `crates/uv/tests/lock/lock.rs`, `lock_dependency_metadata`: records an `anyio` metadata override in the lock manifest, accepts unchanged metadata with `--locked` (including offline validation), and updates the dependency graph when metadata changes or is removed. It does not test ancestor configuration discovery. The test additionally requires `test-universal`.
 - `crates/uv/tests/lock/lock.rs`, `lock_resolution_inputs_prune_unused_inputs`: with the `resolution-inputs` preview enabled when creating the lock, snapshots omit unused metadata and other irrelevant settings, and later locked/offline validation succeeds after those unused settings change. Removing a relevant exclusion fails. This is opt-in pruning coverage in the inspected checkout, not evidence that nested configuration discovery is bounded or that the default reproduction is fixed. The test additionally requires `test-universal`.
 
-Searches covered `crates/uv/tests/` and `crates/uv-client/tests/it/`. No inspected test combines independent nested repositories, parent static metadata, and the child's independently created lockfile. No new test was added because this task is reproduction only.
+The initial searches covered `crates/uv/tests/` and `crates/uv-client/tests/it/` and found no existing test combining independent nested repositories and inherited static metadata. The parent regression pull request subsequently added exactly that coverage, using the nested-to-sibling direction. No additional regression was added during the fix investigation.
 
 ## Supporting implementation and documentation
 
-Source and tests were inspected at checkout commit `01b62808962d7abfe2d10f43d652f357d8038202`; the runtime experiment used the separately installed uv 0.12.13 executable.
+The initial source and test inspection used checkout commit `01b62808962d7abfe2d10f43d652f357d8038202`; the initial runtime experiment used the separately installed uv 0.12.13 executable. The fix investigation used parent-regression commit `2cdf48bbdd77d1b6ea9c46adfe124eb3e36c91a1` and its uv 0.13.0 debug binary.
 
 - `crates/uv/src/lib.rs:339` starts settings discovery at the discovered workspace's install path. Project/workspace discovery and settings discovery are separate operations.
 - `crates/uv-settings/src/lib.rs:102` traverses `path.ancestors()` until configuration is found, without a Git boundary check. `from_directory` skips a `pyproject.toml` without `[tool.uv]`; an empty table supplies an options object and stops ancestor lookup.
@@ -150,6 +151,31 @@ Other inspected candidates do not establish a duplicate or regression:
 - astral-sh/uv#18053 and astral-sh/uv#18087 concern named-index visibility and a diagnostic hint, not inherited static metadata. astral-sh/uv#21284 improves requirement-mismatch diagnostics after metadata collection fails, rather than identifying or bounding inherited configuration.
 - astral-sh/uv#20652 was closed explicitly as a duplicate of astral-sh/uv#19196, so the latter is the canonical adjacent discussion for user-level cooldown configuration in lockfiles.
 
+## Fix
+
+**Outcome: not_fixed.** The checkout is unchanged, including the parent regression. No production patch was implemented.
+
+### Confirmed cause and scope
+
+`FilesystemOptions::find` in `crates/uv-settings/src/lib.rs` searches ancestors after skipping a child `pyproject.toml` without `[tool.uv]`. `crates/uv/src/lib.rs` starts that search at the child's discovered workspace root but imposes no upper boundary. This selects the parent's metadata even though the child is a separate Git repository.
+
+Both lock paths use the selected settings consistently. The producer in `crates/uv-lock-operations/src/lock.rs` passes configured dependency metadata to `ResolverManifest::new`; without opt-in pruning, the parent entry appears in the child's lock manifest. The consumer in `crates/uv-lock/src/lock/mod.rs` compares the configured metadata with the retained manifest entries, and `validated_lock.rs` reports the mismatch. This accounts for both the initial sibling-to-nested reproduction and the parent regression's nested-to-sibling round trip. No distinct producer/consumer inconsistency was found that could be corrected without changing configuration selection or retention policy.
+
+Nearby coverage was inspected in `crates/uv/tests/lock/lock.rs` and `crates/uv/tests/sync/show_settings.rs`. The parent regression explicitly snapshots the unwanted inherited entry and subsequent failed check. `lock_dependency_metadata` separately verifies intentional metadata overrides and re-resolution when they change. `resolve_skip_empty` verifies intentional parent `uv.toml` lookup through a child project without `[tool.uv]`; it covers another configuration format and was not changed or treated as another bug manifestation. `resolve_pyproject_toml` verifies local configuration precedence, not independent-checkout isolation. The `resolution-inputs` preview's unused-input pruning has its own producer/filter implementation and tests; enabling that policy by default would be a separate change and would not prevent inheritance of metadata the child actually uses.
+
+### Focused validation
+
+- The unmodified parent regression passed in the debug/test profile: `cargo test --locked -p uv --test lock lock::lock_dependency_metadata_nested_project -- --exact` (1 passed, 457 filtered out). It verifies lock creation and validation while nested, then rejection after moving the same lockfile out, without changing its contents.
+- The parent regression was temporarily updated to expect no inherited manifest entry and successful validation after the move. With unchanged production code, `INSTA_UPDATE=no cargo test --locked -p uv --test lock lock::lock_dependency_metadata_nested_project -- --exact` failed at the lockfile snapshot: actual output contained `[[manifest.dependency-metadata]]`, `name = "unused"`, and `version = "1.0.0"`. This confirmed the failure before any production change; the test stopped at that first mismatch.
+- The original test file was restored byte-for-byte and the same focused command passed again (1 passed, 457 filtered out). `git diff --exit-code` succeeded and `git status --short` was empty.
+- `cargo fmt --all` was attempted during the temporary assertion change, but this environment lacks `cargo-fmt` for Rust 1.99.0. It made no formatting changes. No Rust edits remain, so there is no unformatted patch or claimed formatting pass.
+
+### Limitation and required decision
+
+The documented discovery contract permits ancestor configuration and explicitly skips projects without `[tool.uv]`. The evidence does not select a replacement boundary: stopping at Git repositories, stopping at project/workspace roots, or excluding only ancestor `pyproject.toml` files would affect intentional sharing differently. The historical discussion in astral-sh/uv#5931 considered the last option but deferred it. Choosing one here would change policy beyond a mechanically determined correction.
+
+Discarding unused metadata alone could hide this minimal fixture's symptom but would not fix the reported cross-project inheritance when metadata is relevant to the child. A maintainer decision on the discovery boundary and compatibility requirements is needed before retaining a production change and revised regression. The confirmed empty-table and `--no-config` workarounds remain available.
+
 ## Maintainer next step and verification limits
 
 The reported failure and empty-table workaround are confirmed. Keep the independent-checkout discovery question distinct from unused-input pruning: a discovery change would need to account for intentional sharing of parent `uv.toml` configuration, while pruning cannot isolate parent settings that actually affect the child.
@@ -158,4 +184,4 @@ An empty child `[tool.uv]` table stops ancestor project lookup but still allows 
 
 A maintainer can now assess the intended configuration boundary and diagnostics using the concrete fixture. The reported platform independence and additional uv versions remain unverified. Existing preview pruning tests should be considered before claiming that all current configurations invalidate locks for unused metadata.
 
-No checkout files or existing user state were modified, no builds were performed, and no GitHub changes were made. Only temporary reproduction artifacts and this issue-context README were written. The pre-existing modifications to `agents/codex/config.toml` and untracked `.issue-triage-event.json` were left untouched.
+The initial reproduction made no checkout or GitHub changes. The fix investigation performed a focused debug build and temporarily changed only the parent regression expectations, then restored that file exactly. The checkout is clean, no production changes remain, and no GitHub changes, commits, pushes, or Git configuration changes were made. Only this README was updated within the issue-context directory.
