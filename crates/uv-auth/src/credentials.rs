@@ -21,6 +21,68 @@ use uv_netrc::Netrc;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 
+/// Credentials embedded in a URL, without protocol-specific authentication constraints.
+///
+/// Git transports reapply these to a remote URL, while HTTP clients must convert them to
+/// validated [`Credentials`] before constructing an Authorization header.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UrlCredentials {
+    username: Username,
+    password: Option<Password>,
+}
+
+impl UrlCredentials {
+    /// Parse URL credentials from a URL, if any.
+    ///
+    /// Returns [`None`] if both [`Url::username`] and [`Url::password`] are not populated.
+    pub fn from_url(url: &Url) -> Result<Option<Self>, CredentialsFromUrlError> {
+        if url.username().is_empty() && url.password().is_none() {
+            return Ok(None);
+        }
+
+        // Remove percent-encoding from URL credentials.
+        // See <https://github.com/pypa/pip/blob/06d21db4ff1ab69665c22a88718a4ea9757ca293/src/pip/_internal/utils/misc.py#L497-L499>
+        let username = if url.username().is_empty() {
+            None
+        } else {
+            Some(
+                percent_encoding::percent_decode_str(url.username())
+                    .decode_utf8()
+                    .map_err(CredentialsFromUrlError::InvalidUsernameUtf8)?
+                    .into_owned(),
+            )
+        };
+        let password = url
+            .password()
+            .map(|password| {
+                percent_encoding::percent_decode_str(password)
+                    .decode_utf8()
+                    .map(Cow::into_owned)
+                    .map_err(CredentialsFromUrlError::InvalidPasswordUtf8)
+            })
+            .transpose()?;
+
+        Ok(Some(Self {
+            username: Username::new(username),
+            password: password.map(Password),
+        }))
+    }
+
+    /// Apply the credentials to the given URL.
+    ///
+    /// Any existing credentials will be overridden.
+    #[must_use]
+    pub fn apply(&self, mut url: DisplaySafeUrl) -> DisplaySafeUrl {
+        if let Some(username) = self.username.as_deref() {
+            let _ = url.set_username(username);
+        }
+        if let Some(password) = self.password.as_ref().map(Password::as_str) {
+            let _ = url.set_password(Some(password));
+        }
+        url
+    }
+}
+
 /// Validated authentication credentials.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Credentials(CredentialsKind);
@@ -280,38 +342,11 @@ impl Credentials {
         Self::basic(Some(entry.login.clone()), Some(entry.password.clone())).map(Some)
     }
 
-    /// Parse [`Credentials`] from a URL, if any.
-    ///
-    /// Returns [`None`] if both [`Url::username`] and [`Url::password`] are not populated.
+    /// Parse and validate HTTP Basic credentials from a URL, if any.
     pub fn from_url(url: &Url) -> Result<Option<Self>, CredentialsFromUrlError> {
-        if url.username().is_empty() && url.password().is_none() {
-            return Ok(None);
-        }
-
-        // Remove percent-encoding from URL credentials.
-        // See <https://github.com/pypa/pip/blob/06d21db4ff1ab69665c22a88718a4ea9757ca293/src/pip/_internal/utils/misc.py#L497-L499>
-        let username = if url.username().is_empty() {
-            None
-        } else {
-            Some(
-                percent_encoding::percent_decode_str(url.username())
-                    .decode_utf8()
-                    .map_err(CredentialsFromUrlError::InvalidUsernameUtf8)?
-                    .into_owned(),
-            )
-        };
-        let password = url
-            .password()
-            .map(|password| {
-                percent_encoding::percent_decode_str(password)
-                    .decode_utf8()
-                    .map(Cow::into_owned)
-                    .map_err(CredentialsFromUrlError::InvalidPasswordUtf8)
-            })
-            .transpose()?;
-
-        Self::basic(username, password)
-            .map(Some)
+        UrlCredentials::from_url(url)?
+            .map(|credentials| Self::from_basic_parts(credentials.username, credentials.password))
+            .transpose()
             .map_err(CredentialsFromUrlError::from)
     }
 
@@ -450,20 +485,6 @@ impl Credentials {
         let mut header = HeaderValue::from_bytes(&header_bytes)?;
         header.set_sensitive(true);
         Ok(header)
-    }
-
-    /// Apply the credentials to the given URL.
-    ///
-    /// Any existing credentials will be overridden.
-    #[must_use]
-    pub fn apply(&self, mut url: DisplaySafeUrl) -> DisplaySafeUrl {
-        if let Some(username) = self.username() {
-            let _ = url.set_username(username);
-        }
-        if let Some(password) = self.password() {
-            let _ = url.set_password(Some(password));
-        }
-        url
     }
 
     /// Attach the credentials to the given request.

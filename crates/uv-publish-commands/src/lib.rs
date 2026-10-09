@@ -354,12 +354,7 @@ async fn gather_credentials(
     .await?
     {
         TrustedPublishResult::Configured(token) => {
-            let credentials =
-                Credentials::basic(Some("__token__".to_string()), Some(token.to_string()))?;
-            return Ok((
-                publish_url,
-                PublishingCredentials::TrustedPublishing { token, credentials },
-            ));
+            return Ok((publish_url, PublishingCredentials::TrustedPublishing(token)));
         }
         TrustedPublishResult::Skipped => None,
         TrustedPublishResult::Ignored(err) => Some(err),
@@ -482,7 +477,9 @@ mod tests {
             Printer::Quiet,
         )
         .await
-        .map(|(publish_url, credentials)| (publish_url, credentials.as_credentials().into_owned()))
+        .and_then(|(publish_url, credentials)| {
+            Ok((publish_url, credentials.as_credentials()?.into_owned()))
+        })
     }
 
     #[tokio::test]

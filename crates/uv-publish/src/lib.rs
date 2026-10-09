@@ -179,18 +179,18 @@ pub enum PublishingCredentials {
     /// Credentials supplied by the user or resolved by the authentication middleware.
     Supplied(Credentials),
     /// A short-lived token obtained through trusted publishing.
-    TrustedPublishing {
-        token: TrustedPublishingToken,
-        credentials: Credentials,
-    },
+    TrustedPublishing(TrustedPublishingToken),
 }
 
 impl PublishingCredentials {
     /// Return the HTTP credentials to use for uploads.
-    pub fn as_credentials(&self) -> Cow<'_, Credentials> {
+    pub fn as_credentials(&self) -> Result<Cow<'_, Credentials>, InvalidCredentialsError> {
         match self {
-            Self::Supplied(credentials) => Cow::Borrowed(credentials),
-            Self::TrustedPublishing { credentials, .. } => Cow::Borrowed(credentials),
+            Self::Supplied(credentials) => Ok(Cow::Borrowed(credentials)),
+            Self::TrustedPublishing(token) => {
+                Credentials::basic(Some("__token__".to_string()), Some(token.to_string()))
+                    .map(Cow::Owned)
+            }
         }
     }
 }
@@ -937,7 +937,7 @@ impl<'a> PublishSession<'a> {
         debug!("Finalizing publishing session: {outcome}");
         match self.credentials {
             PublishingCredentials::Supplied(_) => Ok(()),
-            PublishingCredentials::TrustedPublishing { token, .. } => {
+            PublishingCredentials::TrustedPublishing(token) => {
                 PyPIPublishingService::new(&self.publish_url, self.oidc_client)
                     .burn_token(&token)
                     .await
@@ -1275,7 +1275,7 @@ impl PublishSession<'_> {
         registry: &DisplaySafeUrl,
         reporter: Arc<impl Reporter>,
     ) -> Result<(RequestBuilder<'_>, usize), PublishPrepareError> {
-        let credentials = self.credentials.as_credentials();
+        let credentials = self.credentials.as_credentials()?;
         let mut form = Form::new();
         for (key, value) in form_metadata.iter() {
             form = form.text(*key, value.clone());

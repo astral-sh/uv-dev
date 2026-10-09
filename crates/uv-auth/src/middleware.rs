@@ -671,7 +671,7 @@ impl AuthMiddleware {
             (FetchUrl::Realm(Realm::from(&**url)), username)
         };
         if let Some(credentials) = self.cache().fetches.register_or_wait(&key).await {
-            if credentials.is_some() {
+            if credentials.as_ref().is_ok_and(Option::is_some) {
                 trace!("Using credentials from previous fetch for {}", key.0);
             } else {
                 trace!(
@@ -680,7 +680,7 @@ impl AuthMiddleware {
                 );
             }
 
-            return Ok(credentials);
+            return credentials.map_err(Error::middleware);
         }
 
         // Support for known providers, like Hugging Face and S3.
@@ -689,7 +689,9 @@ impl AuthMiddleware {
             .map(Arc::new)
         {
             debug!("Found Hugging Face credentials for `{url}`");
-            self.cache().fetches.done(key, Some(credentials.clone()));
+            self.cache()
+                .fetches
+                .done(key, Ok(Some(credentials.clone())));
             return Ok(Some(credentials));
         }
 
@@ -710,7 +712,9 @@ impl AuthMiddleware {
 
             if let Some(credentials) = credentials {
                 debug!("Found S3 credentials for `{url}`");
-                self.cache().fetches.done(key, Some(credentials.clone()));
+                self.cache()
+                    .fetches
+                    .done(key, Ok(Some(credentials.clone())));
                 return Ok(Some(credentials));
             }
         }
@@ -732,7 +736,9 @@ impl AuthMiddleware {
 
             if let Some(credentials) = credentials {
                 debug!("Found GCS credentials for `{url}`");
-                self.cache().fetches.done(key, Some(credentials.clone()));
+                self.cache()
+                    .fetches
+                    .done(key, Ok(Some(credentials.clone())));
                 return Ok(Some(credentials));
             }
         }
@@ -754,7 +760,9 @@ impl AuthMiddleware {
 
             if let Some(credentials) = credentials {
                 debug!("Found Azure credentials for `{url}`");
-                self.cache().fetches.done(key, Some(credentials.clone()));
+                self.cache()
+                    .fetches
+                    .done(key, Ok(Some(credentials.clone())));
                 return Ok(Some(credentials));
             }
         }
@@ -771,8 +779,9 @@ impl AuthMiddleware {
             ) {
                 Ok(credentials) => credentials,
                 Err(err) => {
-                    self.cache().fetches.done(key, None);
-                    return Err(err.into());
+                    let err = Arc::new(err);
+                    self.cache().fetches.done(key, Err(err.clone()));
+                    return Err(Error::middleware(err));
                 }
             }
         } else {
@@ -885,7 +894,7 @@ impl AuthMiddleware {
         let credentials = credentials.map(Authentication::from).map(Arc::new);
 
         // Register the fetch for this key
-        self.cache().fetches.done(key, credentials.clone());
+        self.cache().fetches.done(key, Ok(credentials.clone()));
 
         Ok(credentials)
     }
@@ -1252,6 +1261,13 @@ mod tests {
             error,
             @"HTTP Basic Authentication username cannot contain a colon"
         );
+
+        let repeated_error = client
+            .get(server.uri())
+            .send()
+            .await
+            .expect_err("invalid netrc remains an error");
+        insta::assert_snapshot!(repeated_error, @"HTTP Basic Authentication username cannot contain a colon");
 
         Ok(())
     }
