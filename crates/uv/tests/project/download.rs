@@ -590,23 +590,54 @@ async fn download_refresh_other_package() -> Result<()> {
 async fn download_refresh_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;
-    let wheel = wheel("original")?;
-    let hash = digest(&wheel);
+    let original = wheel("original")?;
+    let hash = digest(&original);
     let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
-    write_project(
-        &context,
-        &formatdoc! {r#"
-        [[package]]
-        name = "basic-package"
-        version = "0.1.0"
-        source = {{ url = "{url}" }}
-        wheels = [{{ url = "{url}", hash = "sha256:{hash}" }}]
-    "#},
-    )?;
+    write_locked_wheel(&context, &format!("url = \"{url}\""), &url, &hash)?;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(original),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    server.verify().await;
+    server.reset().await;
+
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let (filename, dependency) = uv_test::packse::generate_wheel(
+        &"dependency".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &std::collections::BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    links.child(filename).write_binary(&dependency)?;
+    let (_, replacement) = uv_test::packse::generate_wheel(
+        &"basic-package".parse()?,
+        &"0.1.0".parse()?,
+        &["dependency==1".parse()?],
+        &std::collections::BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
     Mock::given(method("HEAD"))
         .and(path("/basic_package-0.1.0-py3-none-any.whl"))
         .respond_with(
-            ResponseTemplate::new(200).insert_header("Content-Length", wheel.len().to_string()),
+            ResponseTemplate::new(200)
+                .insert_header("Content-Length", replacement.len().to_string()),
         )
         .expect(1)
         .mount(&server)
@@ -616,28 +647,61 @@ async fn download_refresh_metadata() -> Result<()> {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("cache-control", "public, max-age=3600")
-                .set_body_bytes(wheel),
+                .set_body_bytes(replacement),
         )
-        .expect(2)
+        .expect(1)
         .mount(&server)
         .await;
-    download(&context).assert().success();
     context
         .temp_dir
         .child("requirements.in")
         .write_str(&format!("basic-package @ {url}"))?;
-    // Metadata resolution races with the refreshed archive download. If the archive arrives first,
-    // the range-request fallback is unnecessary and its warning is omitted.
+    // The fixture server falls back from range requests to a full metadata read.
     let mut filters = context.filters();
     filters.push((r"(?m)^WARN Range requests not supported[^\n]*\n", ""));
-    uv_snapshot!(filters, context.pip_compile().arg("requirements.in").args(["--refresh", "--no-header"]), @"
+    uv_snapshot!(filters, context.pip_compile().args([
+        "requirements.in", "--refresh", "--no-header", "--no-index", "--find-links", "links",
+    ]), @"
     exit_code: 0 (success)
     ----- stdout -----
     basic-package @ http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
         # via -r requirements.in
+    dependency==1.0.0
+        # via basic-package
 
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
+    ");
+    let shard = packed_url_shard(&context, &url)?;
+    context
+        .cache_dir
+        .child(shard.join("0.1.0-py3-none-any.whl.http"))
+        .assert(predicates::path::missing());
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--no-header", "--no-index", "--find-links", "links",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package @ http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+        # via -r requirements.in
+    dependency==1.0.0
+        # via basic-package
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--no-header", "--no-index", "--find-links", "links", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package @ http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+        # via -r requirements.in
+    dependency==1.0.0
+        # via basic-package
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
     ");
     server.verify().await;
     Ok(())

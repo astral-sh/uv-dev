@@ -43,6 +43,7 @@ use crate::base_client::{BaseClientBuilder, ClientBuildError, ExtraMiddleware, R
 use crate::cached_client::CacheControl;
 use crate::flat_index::FlatIndexEntry;
 use crate::html::SimpleDetailHTML;
+use crate::packed::PackedArchiveRead;
 use crate::remote_metadata::wheel_metadata_from_remote_zip;
 use crate::rkyvutil::OwnedArchive;
 use crate::{
@@ -1109,7 +1110,7 @@ impl RegistryClient {
         filename: &WheelFilename,
         url: &DisplaySafeUrl,
         index: Option<&IndexUrl>,
-    ) -> Result<Option<ResolutionMetadata>, Error> {
+    ) -> Result<PackedWheelMetadata, Error> {
         let entry = PackedArchiveEntry::wheel(&self.cache, index, url, filename);
         let request = self
             .uncached_client(url)
@@ -1122,8 +1123,12 @@ impl RegistryClient {
         let control = entry
             .cache_control(self)
             .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?;
-        let Some((archive, _)) = entry.read_http(&request, &control).await? else {
-            return Ok(None);
+        let archive = match entry.read_http(&request, &control).await? {
+            PackedArchiveRead::Fresh(archive, _) => archive,
+            PackedArchiveRead::Stale(hash) => {
+                return Ok(PackedWheelMetadata::Stale { entry, hash });
+            }
+            PackedArchiveRead::Missing => return Ok(PackedWheelMetadata::Missing),
         };
         let file = archive.into_file().into_std().await;
         let filename = filename.clone();
@@ -1132,7 +1137,7 @@ impl RegistryClient {
             let contents = read_archive_metadata(&filename, BufReader::new(file))
                 .map_err(|err| ErrorKind::Metadata(url.clone(), err))?;
             ResolutionMetadata::parse_metadata(&contents)
-                .map(Some)
+                .map(PackedWheelMetadata::Found)
                 .map_err(|err| ErrorKind::MetadataParseError(filename, url, Box::new(err)).into())
         })
         .await
@@ -1155,10 +1160,10 @@ impl RegistryClient {
 
         // If the metadata file is available at its own url (PEP 658), download it from there.
         if let Some(hashes) = &file.dist_info_metadata {
-            if let Some(metadata) = self
+            let packed = self
                 .packed_wheel_metadata(filename, url, Some(index))
-                .await?
-            {
+                .await?;
+            if let PackedWheelMetadata::Found(metadata) = packed {
                 return Ok(metadata);
             }
             let mut url = url.clone();
@@ -1227,10 +1232,12 @@ impl RegistryClient {
                 .map_err(|err| {
                     ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
                 })?;
-            Ok(self
+            let metadata = self
                 .cached_client()
                 .get_serde_with_retry(req, &cache_entry, cache_control, response_callback)
-                .await?)
+                .await?;
+            packed.invalidate_stale().await?;
+            Ok(metadata)
         } else {
             // If we lack PEP 658 support, try using HTTP range requests to read only the
             // `.dist-info/METADATA` file from the zip, and if that also fails, download the whole wheel
@@ -1255,7 +1262,8 @@ impl RegistryClient {
         cache_shard: WheelCache<'data>,
         capabilities: &'data IndexCapabilities,
     ) -> Result<ResolutionMetadata, Error> {
-        if let Some(metadata) = self.packed_wheel_metadata(filename, url, index).await? {
+        let packed = self.packed_wheel_metadata(filename, url, index).await?;
+        if let PackedWheelMetadata::Found(metadata) = packed {
             return Ok(metadata);
         }
         let cache_entry = self.cache.entry(
@@ -1354,7 +1362,10 @@ impl RegistryClient {
                 .map_err(crate::Error::from);
 
             match result {
-                Ok(metadata) => return Ok(metadata),
+                Ok(metadata) => {
+                    packed.invalidate_stale().await?;
+                    return Ok(metadata);
+                }
                 Err(err) => {
                     if err.is_http_range_requests_unsupported(url, index) {
                         if self.metadata_range_request == MetadataRangeRequest::Require {
@@ -1411,10 +1422,13 @@ impl RegistryClient {
             .instrument(info_span!("read_metadata_stream", wheel = %filename))
         };
 
-        self.cached_client()
+        let metadata = self
+            .cached_client()
             .get_serde_with_retry(req, &cache_entry, cache_control, read_metadata_stream)
             .await
-            .map_err(crate::Error::from)
+            .map_err(crate::Error::from)?;
+        packed.invalidate_stale().await?;
+        Ok(metadata)
     }
 
     /// Handle a specific `reqwest` error, and convert it to [`io::Error`].
@@ -1430,6 +1444,24 @@ impl RegistryClient {
             )
         } else {
             std::io::Error::other(err)
+        }
+    }
+}
+
+enum PackedWheelMetadata {
+    Found(ResolutionMetadata),
+    Missing,
+    Stale {
+        entry: PackedArchiveEntry,
+        hash: HashDigest,
+    },
+}
+
+impl PackedWheelMetadata {
+    async fn invalidate_stale(self) -> Result<(), Error> {
+        match self {
+            Self::Stale { entry, hash } => entry.invalidate(&hash).await,
+            Self::Found(_) | Self::Missing => Ok(()),
         }
     }
 }
