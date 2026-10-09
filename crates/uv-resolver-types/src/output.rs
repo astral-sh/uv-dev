@@ -139,9 +139,16 @@ impl ResolverOutput {
             }
         }
         BuildOptions::new(
-            NoBinary::from_args(None, no_binary.into_iter().collect()),
-            NoBuild::from_args(None, no_build.into_iter().collect()),
+            build_options
+                .no_binary()
+                .clone()
+                .combine(NoBinary::from_args(None, no_binary.into_iter().collect())),
+            build_options
+                .no_build()
+                .clone()
+                .combine(NoBuild::from_args(None, no_build.into_iter().collect())),
         )
+        .normalized()
     }
 
     /// Retain registry hashes only for artifacts permitted by package-specific build options.

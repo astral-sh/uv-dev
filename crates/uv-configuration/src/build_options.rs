@@ -13,7 +13,7 @@ pub enum BuildOutput {
     Quiet,
 }
 
-#[derive(Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct BuildOptions {
     no_binary: NoBinary,
@@ -29,19 +29,6 @@ pub struct BuildOptions {
     build_policy: Option<BuildPolicy>,
     #[serde(default, skip_serializing_if = "BuildPolicyPackage::is_empty")]
     build_policy_package: BuildPolicyPackage,
-}
-
-/// Custom `Debug` to hide runtime-only provenance from `--show-settings` output.
-#[expect(clippy::missing_fields_in_debug)]
-impl std::fmt::Debug for BuildOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BuildOptions")
-            .field("no_binary", &self.no_binary)
-            .field("no_build", &self.no_build)
-            .field("build_policy", &self.build_policy)
-            .field("build_policy_package", &self.build_policy_package)
-            .finish()
-    }
 }
 
 impl BuildOptions {
@@ -176,6 +163,19 @@ impl BuildOptions {
         build_policy_package: BuildPolicyPackage,
     ) -> Self {
         self.build_policy = build_policy;
+        self.build_policy_package = build_policy_package;
+        self
+    }
+
+    /// Fill in policies not already configured by command-line or project settings.
+    #[must_use]
+    pub fn with_fallback_build_policy(
+        mut self,
+        build_policy: Option<BuildPolicy>,
+        mut build_policy_package: BuildPolicyPackage,
+    ) -> Self {
+        self.build_policy = self.build_policy.or(build_policy);
+        build_policy_package.extend(self.build_policy_package);
         self.build_policy_package = build_policy_package;
         self
     }

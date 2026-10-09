@@ -36,6 +36,7 @@ Ok(
             build_options: BuildOptions {
                 no_binary: None,
                 no_build: None,
+                no_build_unnamed_editable: None,
                 build_policy: None,
                 build_policy_package: BuildPolicyPackage(
                     {},
