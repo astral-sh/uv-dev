@@ -5,6 +5,7 @@ mod env_vars;
 mod known_stdlib;
 
 use std::borrow::Cow;
+use std::ffi::OsStr;
 
 use thiserror::Error;
 
@@ -70,6 +71,17 @@ pub struct InvalidEnvironmentVariable {
 pub fn parse_boolish_environment_variable(
     name: &'static str,
 ) -> Result<Option<bool>, InvalidEnvironmentVariable> {
+    std::env::var_os(name)
+        .as_deref()
+        .map(|value| parse_boolish_environment_value(name, value))
+        .transpose()
+}
+
+/// Parse a captured boolean environment value using the same literals as Clap.
+pub fn parse_boolish_environment_value(
+    name: &'static str,
+    value: &OsStr,
+) -> Result<bool, InvalidEnvironmentVariable> {
     // See `clap_builder/src/util/str_to_bool.rs`
     // We want to match Clap's accepted values
 
@@ -95,10 +107,6 @@ pub fn parse_boolish_environment_variable(
         }
     }
 
-    let Some(value) = std::env::var_os(name) else {
-        return Ok(None);
-    };
-
     let Some(value) = value.to_str() else {
         return Err(InvalidEnvironmentVariable {
             name: name.to_string(),
@@ -115,5 +123,5 @@ pub fn parse_boolish_environment_variable(
         });
     };
 
-    Ok(Some(value))
+    Ok(value)
 }

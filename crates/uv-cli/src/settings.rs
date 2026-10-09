@@ -976,7 +976,7 @@ impl ToolRunSettings {
                     .unwrap_or_default(),
             )?,
             &environment,
-        )
+        )?
         .combine(ResolverInstallerOptions::from(
             filesystem_options
                 .as_ref()
@@ -1105,7 +1105,7 @@ impl ToolInstallSettings {
                     .unwrap_or_default(),
             )?,
             &environment,
-        )
+        )?
         .combine(ResolverInstallerOptions::from(
             filesystem_options
                 .as_ref()
@@ -1232,7 +1232,7 @@ impl ToolUpgradeSettings {
         let args = resolver_installer_options_with_environment(
             resolver_installer_options(installer, build, configured_indexes(filesystem.as_ref()))?,
             environment,
-        );
+        )?;
         let filesystem = filesystem.map(FilesystemOptions::into_options);
         let filesystem_install_mirrors = filesystem
             .as_ref()
@@ -2109,7 +2109,7 @@ impl UpgradeSettings {
             .unwrap_or_default();
         let (packages, exclude, options) =
             upgrade_options(args, configured_indexes(filesystem.as_ref()))?;
-        let mut settings = combine_resolver_settings(options, filesystem, &environment);
+        let mut settings = combine_resolver_settings(options, filesystem, &environment)?;
         settings.upgrade = if packages.is_empty() {
             Upgrade::default()
         } else {
@@ -2467,7 +2467,7 @@ impl AddSettings {
             extras: extra.unwrap_or_default(),
             refresh,
             indexes,
-            settings: combine_resolver_installer_settings(options, filesystem, &environment),
+            settings: combine_resolver_installer_settings(options, filesystem, &environment)?,
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
@@ -3503,7 +3503,7 @@ impl PipCompileSettings {
                 )?,
                 filesystem.as_ref(),
                 &environment,
-            ),
+            )?,
             overrides: requirement_files(overrides, environment.overrides.clone()),
             excludes: requirement_files(excludes, environment.excludes.clone()),
             constraints_from_workspace,
@@ -3642,7 +3642,7 @@ impl PipSyncSettings {
                 )?,
                 filesystem.as_ref(),
                 &environment,
-            ),
+            )?,
             dry_run: if check {
                 DryRun::Check
             } else {
@@ -3835,7 +3835,7 @@ impl PipInstallSettings {
                 )?,
                 filesystem.as_ref(),
                 &environment,
-            ),
+            )?,
             dry_run: if check {
                 DryRun::Check
             } else {
@@ -4421,7 +4421,7 @@ fn resolve_pip_build_hash_checking(
     require_build_hashes: Option<bool>,
     filesystem: Option<&FilesystemOptions>,
     environment: &EnvironmentOptions,
-) -> HashCheckingMode {
+) -> Result<HashCheckingMode> {
     let configured = filesystem.and_then(|filesystem| {
         filesystem
             .pip
@@ -4429,11 +4429,11 @@ fn resolve_pip_build_hash_checking(
             .and_then(|pip| pip.require_build_hashes)
             .or(filesystem.top_level.require_build_hashes)
     });
-    resolve_build_hash_checking(
-        require_build_hashes
-            .or(environment.require_build_hashes)
+    Ok(resolve_build_hash_checking(
+        environment
+            .require_build_hashes(require_build_hashes)?
             .or(configured),
-    )
+    ))
 }
 
 /// Return the indexes from the effective filesystem configuration.
@@ -4452,7 +4452,7 @@ fn resolve_resolver_settings(
 ) -> Result<ResolverSettings> {
     let args = resolver_options(args, build, configured_indexes(filesystem.as_ref()))?;
 
-    Ok(combine_resolver_settings(args, filesystem, environment))
+    combine_resolver_settings(args, filesystem, environment)
 }
 
 /// Resolve the [`ResolverSettings`] from the CLI and filesystem configuration.
@@ -4460,10 +4460,8 @@ fn combine_resolver_settings(
     mut args: ResolverOptions,
     filesystem: Option<FilesystemOptions>,
     environment: &EnvironmentOptions,
-) -> ResolverSettings {
-    args.require_build_hashes = args
-        .require_build_hashes
-        .or(environment.require_build_hashes);
+) -> Result<ResolverSettings> {
+    args.require_build_hashes = environment.require_build_hashes(args.require_build_hashes)?;
     args.no_binary_package = args
         .no_binary_package
         .or(environment.no_binary_package.clone());
@@ -4483,11 +4481,11 @@ fn combine_resolver_settings(
             .unwrap_or_default(),
     ));
 
-    ResolverSettings {
+    Ok(ResolverSettings {
         cuda_driver_version: environment.cuda_driver_version.clone(),
         amd_gpu_architecture: environment.amd_gpu_architecture,
         ..ResolverSettings::from(options)
-    }
+    })
 }
 
 /// Resolve the [`ResolverInstallerSettings`] from CLI, environment, and filesystem options.
@@ -4499,11 +4497,7 @@ fn resolve_resolver_installer_settings(
 ) -> Result<ResolverInstallerSettings> {
     let args = resolver_installer_options(args, build, configured_indexes(filesystem.as_ref()))?;
 
-    Ok(combine_resolver_installer_settings(
-        args,
-        filesystem,
-        environment,
-    ))
+    combine_resolver_installer_settings(args, filesystem, environment)
 }
 
 /// Reconcile the [`ResolverInstallerSettings`] from the CLI and filesystem configuration.
@@ -4511,8 +4505,8 @@ fn combine_resolver_installer_settings(
     args: ResolverInstallerOptions,
     filesystem: Option<FilesystemOptions>,
     environment: &EnvironmentOptions,
-) -> ResolverInstallerSettings {
-    let options = resolver_installer_options_with_environment(args, environment).combine(
+) -> Result<ResolverInstallerSettings> {
+    let options = resolver_installer_options_with_environment(args, environment)?.combine(
         ResolverInstallerOptions::from(
             filesystem
                 .map(FilesystemOptions::into_options)
@@ -4522,23 +4516,22 @@ fn combine_resolver_installer_settings(
     );
 
     let base = ResolverInstallerSettings::from(options);
-    ResolverInstallerSettings {
+    Ok(ResolverInstallerSettings {
         resolver: ResolverSettings {
             cuda_driver_version: environment.cuda_driver_version.clone(),
             amd_gpu_architecture: environment.amd_gpu_architecture,
             ..base.resolver
         },
         ..base
-    }
+    })
 }
 
 fn resolver_installer_options_with_environment(
     mut options: ResolverInstallerOptions,
     environment: &EnvironmentOptions,
-) -> ResolverInstallerOptions {
-    options.require_build_hashes = options
-        .require_build_hashes
-        .or(environment.require_build_hashes);
+) -> Result<ResolverInstallerOptions> {
+    options.require_build_hashes =
+        environment.require_build_hashes(options.require_build_hashes)?;
     options.no_binary_package = options
         .no_binary_package
         .or(environment.no_binary_package.clone());
@@ -4548,7 +4541,7 @@ fn resolver_installer_options_with_environment(
     options.no_sources_package = options
         .no_sources_package
         .or(environment.no_sources_package.clone());
-    options
+    Ok(options)
 }
 
 /// The resolved settings to use for an invocation of the `pip` CLI.
