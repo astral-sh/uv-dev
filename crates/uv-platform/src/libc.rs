@@ -65,13 +65,12 @@ impl Libc {
     ///
     /// Environments without a supported Linux libc use [`Self::None`].
     pub(crate) fn from_cargo_dist(environment: &str) -> Self {
-        match environment {
-            "gnu" | "gnuabi64" => Self::Some(target_lexicon::Environment::Gnu),
-            "gnueabi" => Self::Some(target_lexicon::Environment::Gnueabi),
-            "gnueabihf" => Self::Some(target_lexicon::Environment::Gnueabihf),
-            "musl" | "muslabi64" => Self::Some(target_lexicon::Environment::Musl),
-            _ => Self::None,
-        }
+        Self::from_str(match environment {
+            "gnuabi64" => "gnu",
+            "muslabi64" => "musl",
+            environment => environment,
+        })
+        .unwrap_or(Self::None)
     }
 
     pub(crate) fn from_env() -> Result<Self, crate::Error> {
