@@ -6,15 +6,17 @@ use uv_cache_info::CacheInfo;
 use uv_checksum_authority::Sha256Digest;
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{BuildInfo, Hashed};
-use uv_fs::files;
+use uv_fs::{LockedFile, files};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_pypi_types::{HashDigest, HashDigests};
 
 /// The information about the wheel we either just built or got from the cache.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct BuiltWheelMetadata {
+    /// Keep verified wheel bytes stable until extraction finishes.
+    pub(super) _source_lock: LockedFile,
     /// The path to the built wheel.
     pub(crate) path: Box<Path>,
     /// The expected path to the downloaded wheel's entry in the cache.
@@ -38,8 +40,10 @@ impl BuiltWheelMetadata {
         hashes: HashDigests,
         cache_info: CacheInfo,
         build_info: BuildInfo,
+        source_lock: LockedFile,
     ) -> Self {
         Self {
+            _source_lock: source_lock,
             path: file.path,
             target: file.target,
             filename: file.filename,
