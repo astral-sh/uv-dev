@@ -25,6 +25,7 @@ use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_normalize::PackageName;
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{
     ConflictItem, ConflictKind, ConflictSet, Conflicts, ResolverMarkerEnvironment,
@@ -2035,7 +2036,10 @@ pub fn detect_root_conflicts(
     if target.lock().conflicts().is_empty() {
         return Ok(());
     }
-    let roots = target.roots().collect();
+    let roots = target
+        .roots()
+        .map(|name| (name, MarkerTree::TRUE))
+        .collect();
     detect_conflicts_with_members(target, extras, groups, &roots)
 }
 
@@ -2067,7 +2071,7 @@ pub fn detect_conflicts(
     {
         target.selected_workspace_members(extras, groups, requires_python, marker_env)?
     } else {
-        BTreeSet::new()
+        BTreeMap::new()
     };
     detect_conflicts_with_members(target, extras, groups, &packages)
 }
@@ -2076,29 +2080,60 @@ fn detect_conflicts_with_members(
     target: &InstallTarget,
     extras: &ExtrasSpecification,
     groups: &DependencyGroupsWithDefaults,
-    packages: &BTreeSet<&PackageName>,
+    packages: &BTreeMap<&PackageName, MarkerTree>,
 ) -> Result<(), EnvironmentError> {
     let conflicts = target.lock().conflicts();
     // CLI extras and groups apply to selected roots, independently of transitive production members.
     let roots = target.roots().collect::<BTreeSet<_>>();
     let group_root = target.group_root(groups);
     for set in conflicts.iter() {
-        let mut conflicts: Vec<ConflictItem> = vec![];
+        let mut selected = Vec::new();
         for item in set.iter() {
-            let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod() && packages.contains(item.package()),
+            let marker = match item.kind() {
+                ConflictKind::Project => {
+                    if groups.prod() {
+                        packages
+                            .get(item.package())
+                            .copied()
+                            .unwrap_or(MarkerTree::FALSE)
+                    } else {
+                        MarkerTree::FALSE
+                    }
+                }
                 ConflictKind::Extra(extra) => {
-                    groups.prod() && roots.contains(item.package()) && extras.contains(extra)
+                    if groups.prod() && roots.contains(item.package()) && extras.contains(extra) {
+                        MarkerTree::TRUE
+                    } else {
+                        MarkerTree::FALSE
+                    }
                 }
                 ConflictKind::Group(group) => {
-                    (roots.contains(item.package()) || group_root == Some(item.package()))
+                    if (roots.contains(item.package()) || group_root == Some(item.package()))
                         && target.includes_group(Some(item.package()), group, groups)
+                    {
+                        MarkerTree::TRUE
+                    } else {
+                        MarkerTree::FALSE
+                    }
                 }
             };
-            if is_conflicting {
-                conflicts.push(item.clone());
+            if !marker.is_false() {
+                selected.push((item, marker));
             }
         }
+        let conflicts = selected
+            .iter()
+            .enumerate()
+            .filter(|(index, (_, marker))| {
+                selected
+                    .iter()
+                    .enumerate()
+                    .any(|(other_index, (_, other))| {
+                        *index != other_index && !marker.is_disjoint(*other)
+                    })
+            })
+            .map(|(_, (item, _))| (*item).clone())
+            .collect::<Vec<_>>();
         if conflicts.len() >= 2 {
             return Err(EnvironmentError::Conflict(ConflictError {
                 set: set.clone(),

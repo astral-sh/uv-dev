@@ -2909,6 +2909,26 @@ fn explicit_roots_pylock_conflicts_use_selected_python_domain() -> Result<()> {
         .success();
 
     uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "app", "--group", "dev", "--format", "pylock.toml",
+        "--no-header", "--preview-features", "package-conflicts",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "legacy"
+    marker = "python_full_version < '3.13'"
+    directory = { path = "legacy", editable = true }
+
+    [[packages]]
+    name = "shared"
+    marker = "python_full_version >= '3.13'"
+    directory = { path = "shared", editable = true }
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
         "--frozen", "--offline", "--package", "shared", "--group", "dev", "--format", "pylock.toml",
         "--no-header", "--preview-features", "package-conflicts",
     ]), @r#"
@@ -3375,5 +3395,81 @@ fn explicit_roots_excluded_by_supported_environments() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
     assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// A selected non-root only needs coverage over Python versions included in the lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_export_preserves_python_gaps() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["root-a", "root-b", "shared"]
+        roots = ["root-a", "root-b"]
+        [tool.uv.sources]
+        shared = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        dependencies = ["shared"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = "==3.14.*"
+        dependencies = ["shared"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/src/shared/__init__.py")
+        .touch()?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12, !=3.13.*, <3.15"
+
+    [[packages]]
+    name = "shared"
+    directory = { path = "shared", editable = true }
+    "#);
     Ok(())
 }

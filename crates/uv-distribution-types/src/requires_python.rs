@@ -246,8 +246,22 @@ impl RequiresPython {
         })
     }
 
-    /// Returns this `Requires-Python` specifier as an equivalent
-    /// [`MarkerTree`] utilizing the `python_full_version` marker field.
+    /// Return the complete Python domain, including excluded versions and disjoint intervals.
+    pub fn to_exact_marker_tree(&self) -> MarkerTree {
+        self.specifiers
+            .iter()
+            .fold(MarkerTree::TRUE, |marker, specifier| {
+                marker.and(MarkerTree::expression(MarkerExpression::Version {
+                    key: MarkerValueVersion::PythonFullVersion,
+                    specifier: specifier.clone(),
+                }))
+            })
+    }
+
+    /// Return the bounding Python range as a [`MarkerTree`] using `python_full_version`.
+    ///
+    /// Excluded versions and gaps are not retained. Use [`Self::to_exact_marker_tree`] when
+    /// validating coverage over the complete declared domain.
     ///
     /// This is useful for comparing a `Requires-Python` specifier with
     /// arbitrary marker expressions. For example, one can ask whether the
@@ -742,6 +756,10 @@ mod tests {
         assert!(!requirement.contains(&"3.13.4".parse()?));
         assert!(requirement.contains(&"3.14.4".parse()?));
         assert!(!requirement.contains(&"3.15.0".parse()?));
+        assert_eq!(
+            requirement.to_exact_marker_tree(),
+            "python_full_version == '3.12.*' or python_full_version == '3.14.*'".parse()?,
+        );
         Ok(())
     }
 
