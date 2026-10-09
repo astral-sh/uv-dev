@@ -2,12 +2,20 @@
   "related": {
     "items": [
       {
+        "kind": "pull_request",
+        "number": 22240,
+        "title": "Add opt-in Git ignore filtering to `uv_build`",
+        "url": "https://github.com/astral-sh/uv/pull/22240",
+        "state": "open",
+        "reason": "Direct implementation proposal opened in response to astral-sh/uv#22183. Adds disabled-by-default respect-ignore filtering for sdists and wheels. It excludes global Git rules and .git/info/exclude and does not add warning-only behavior. This responding PR does not make the issue a duplicate."
+      },
+      {
         "kind": "issue",
         "number": 19403,
         "title": "uv-build includes .mypy_cache in subdirectories by default",
         "url": "https://github.com/astral-sh/uv/issues/19403",
         "state": "open",
-        "reason": "Closest symptom and policy discussion: uv_build includes an untracked cache directory inside the module tree, the reporter proposed respecting Git ignores, and a maintainer confirmed that VCS-independent selection is intentional."
+        "reason": "Earlier report of unwanted module-tree files entering distributions. Maintainer comments explicitly confirm that avoiding gitignore and limiting default exclusions are intentional. That discussion concerns default filtering; this issue requests optional filtering or warnings."
       },
       {
         "kind": "issue",
@@ -15,7 +23,15 @@
         "title": "Option to include vcs tracked files in source distribution with uv build backend",
         "url": "https://github.com/astral-sh/uv/issues/16075",
         "state": "open",
-        "reason": "Closest capability discussion: it proposes opt-in VCS-aware source selection, but would broaden the sdist to all tracked repository files rather than filter ignored package-tree files or warn about them."
+        "reason": "Related optional VCS-based selection, but requests adding tracked files, including documentation and tests, to sdists. This issue instead requests excluding ignored files from sdists and wheels or warning about their inclusion."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19438,
+        "title": "fix(build): exclude dotfiles by default to match setuptools",
+        "url": "https://github.com/astral-sh/uv/pull/19438",
+        "state": "closed",
+        "reason": "Unmerged proposal addressing astral-sh/uv#19403 by excluding all dotfiles by default. A maintainer rejected matching setuptools defaults. It neither implements optional Git-ignore filtering nor establishes a previous fix that has regressed."
       },
       {
         "kind": "issue",
@@ -23,13 +39,13 @@
         "title": "Build backend tracking issue",
         "url": "https://github.com/astral-sh/uv/issues/8779",
         "state": "closed",
-        "reason": "The original uv_build design review compares other backends’ VCS-ignore behavior and documents the inclusion/exclusion design context."
+        "reason": "Reporter-cited design history surveys other backends' VCS-ignore behavior and links the include/exclude implementation. It tracks the overall backend and stabilization, rather than this specific optional capability."
       }
     ],
-    "search_scope": "Searched open and closed issues plus open, closed, and merged pull requests for `.gitignore`, `git-ignored`, `VCS ignore`, `ignore-vcs`, tracked files, ignored files, hidden or sensitive files, `.mypy_cache`, `source-exclude`, and `wheel-exclude`. Conceptual searches covered VCS-aware selection, accidental publication, default exclusions, and Hatchling/Poetry behavior. No pull request implements VCS-aware uv_build selection; astral-sh/uv#9525 and astral-sh/uv#9013 establish the current explicit-glob model. astral-sh/uv#12970 and astral-sh/uv#10556 were ruled out because both incidents used Hatchling rather than uv_build."
+    "search_scope": "Used authenticated gh to search open/closed issues and open/closed/merged PRs in astral-sh/uv. Searched exclusion and warning requests separately using gitignore/build, VCS/ignore, respect-vcs-ignore, warn-vcs-ignored-files, respect-gitignore, uv_build/exclude, tracked files, sensitive files, packaging warnings, and area:build-backend. Read candidate discussions and followed references and timelines to astral-sh/uv#22240 and astral-sh/uv#19438. Inspected merged astral-sh/uv#9013, astral-sh/uv#9525, astral-sh/uv#9523, astral-sh/uv#9610, and astral-sh/uv#19991 for existing support. Ruled out astral-sh/uv#12970 (Hatchling/global excludes), astral-sh/uv#8833 (missing Hatchling artifacts), and astral-sh/uv#19990 with astral-sh/uv#19991 (uv-cache containment). REST rate limits and PR-filtered GraphQL searches returning issue nodes limited search coverage; linked PRs were inspected directly, and empty searches were not treated as proof of absence."
   },
   "type": "enhancement",
-  "type_reason": "uv_build’s documented implementation deliberately selects the module tree independently of VCS state, using three default exclusions plus configured source and wheel exclusions. An opt-in VCS filter or warning would add functionality. The nearest issues differ materially in their default-versus-opt-in behavior, selection scope, or warning semantics, so this is not a duplicate.",
-  "summary": "This is an enhancement to intentional uv_build behavior. astral-sh/uv#19403 is the closest symptom and policy discussion, astral-sh/uv#16075 is the closest opt-in VCS-selection proposal, and astral-sh/uv#8779 provides the original design comparison.",
-  "draft_response": "Thanks for raising this. uv_build currently selects files independently of Git state by design: it includes the configured module tree, applies the built-in `__pycache__`, `*.pyc`, and `*.pyo` exclusions, and then applies `source-exclude` and `wheel-exclude`. We discussed the same risk from untracked files in astral-sh/uv#19403; the VCS-independent model avoids checkout-dependent builds and allows ignored generated data to be packaged. astral-sh/uv#16075 is related, but proposes including all VCS-tracked files in the sdist rather than filtering ignored files from normal package selection. An opt-in filter or warning would be a new build-backend feature. For now, `source-exclude` and `wheel-exclude` are the available controls; evaluating this proposal would require clear semantics for builds outside a VCS checkout and for explicitly included or generated ignored files."
+  "type_reason": "The report requests new optional exclusion or warning behavior. Source and maintainer comments confirm that current VCS-independent selection is deliberate; no regression or failure of existing exclusion settings is established. Earlier default-filtering and tracked-file-inclusion discussions have different scopes. astral-sh/uv#22240 was created in response to this issue and therefore does not make it a duplicate.",
+  "summary": "astral-sh/uv#22240 directly proposes the requested filtering and remains open. astral-sh/uv#19403 and astral-sh/uv#19438 explain the existing defaults; astral-sh/uv#16075 concerns distinct VCS inclusion behavior, and astral-sh/uv#8779 provides design history.",
+  "draft_response": "Your requested opt-in filtering is proposed in astral-sh/uv#22240, opened in response to this issue. It adds `tool.uv.build-backend.respect-ignore = true` for `.gitignore` filtering in sdists and wheels. The PR is still open; it does not include a warning-only mode or support global Git excludes.\n\nThe current defaults are intentional, as discussed in astral-sh/uv#19403. For now, add the files to `tool.uv.build-backend.source-exclude` to exclude them from both sdists and wheels; `wheel-exclude` alone leaves them eligible for the sdist. You can follow astral-sh/uv#22240 for the proposed option's review and scope."
 }
