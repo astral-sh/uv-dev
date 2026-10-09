@@ -48,7 +48,7 @@ use uv_settings::{
     ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
     ResolverSettings, resolve_prerelease,
 };
-use uv_static::{EnvVars, parse_boolish_environment_variable};
+use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
 use uv_warnings::warn_user_once;
 use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies, OverrideDependency};
@@ -687,7 +687,7 @@ fn check_resolution_policy_conflicts(
     locked: LockCheck,
     frozen: Option<FrozenSource>,
     upgrade: bool,
-    no_sources: bool,
+    no_sources: Flag,
 ) -> Result<()> {
     let locked = Flag::from(locked);
     let frozen = frozen.map_or(Flag::Disabled, Flag::from);
@@ -699,19 +699,7 @@ fn check_resolution_policy_conflicts(
         check_conflicts(locked, upgrade)?;
         check_conflicts(frozen, upgrade)?;
     }
-    if no_sources {
-        let no_sources = if parse_boolish_environment_variable(EnvVars::UV_NO_SOURCES)
-            .is_ok_and(|value| value == Some(true))
-        {
-            Flag::Enabled {
-                source: FlagSource::Env(EnvVars::UV_NO_SOURCES),
-                name: "no-sources",
-            }
-        } else {
-            Flag::from_cli("no-sources")
-        };
-        check_conflicts(frozen, no_sources)?;
-    }
+    check_conflicts(frozen, no_sources)?;
     Ok(())
 }
 
@@ -825,7 +813,11 @@ impl RunSettings {
             locked,
             frozen,
             installer.upgrade,
-            installer.sources.no_sources,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
         )?;
 
         let (dev, no_dev) = resolve_flag_pair(
@@ -1937,7 +1929,11 @@ impl SyncSettings {
             locked,
             frozen,
             installer.upgrade,
-            installer.sources.no_sources,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
         )?;
 
         let settings =
@@ -2458,7 +2454,11 @@ impl AddSettings {
             locked,
             frozen,
             installer.upgrade,
-            installer.sources.no_sources,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
         )?;
 
         // Check for conflicts between no_sync and frozen.
@@ -2631,7 +2631,11 @@ impl RemoveSettings {
             locked,
             frozen,
             installer.upgrade,
-            installer.sources.no_sources,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
         )?;
 
         // Check for conflicts between no_sync and frozen.
@@ -2727,7 +2731,11 @@ impl VersionSettings {
             locked,
             frozen,
             installer.upgrade,
-            installer.sources.no_sources,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
         )?;
 
         // Check for conflicts between no_sync and frozen.
@@ -2834,7 +2842,11 @@ impl TreeSettings {
             locked,
             frozen,
             resolver.upgrade,
-            resolver.sources.no_sources,
+            resolve_flag(
+                resolver.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
         )?;
 
         let (dev, no_dev) = resolve_flag_pair(
@@ -2990,7 +3002,11 @@ impl ExportSettings {
             locked,
             frozen,
             resolver.upgrade,
-            resolver.sources.no_sources,
+            resolve_flag(
+                resolver.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
         )?;
 
         let (dev, no_dev) = resolve_flag_pair(
@@ -3208,7 +3224,11 @@ impl CheckSettings {
             locked,
             frozen,
             installer.upgrade,
-            installer.sources.no_sources,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
         )?;
         check_conflicts(no_install_project, no_sync)?;
         if script.is_some() {
@@ -3348,7 +3368,11 @@ impl AuditSettings {
             locked,
             frozen,
             resolver.upgrade,
-            resolver.sources.no_sources,
+            resolve_flag(
+                resolver.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
         )?;
 
         // Audit includes all groups by default, regardless of `tool.uv.default-groups`.
@@ -4528,6 +4552,7 @@ fn combine_resolver_settings(
     args.no_build_package = args
         .no_build_package
         .or(environment.no_build_package.clone());
+    args.no_sources = args.no_sources.or(environment.no_sources.value);
     args.no_sources_package = args
         .no_sources_package
         .or(environment.no_sources_package.clone());
@@ -4600,6 +4625,7 @@ fn resolver_installer_options_with_environment(
     options.no_build_package = options
         .no_build_package
         .or(environment.no_build_package.clone());
+    options.no_sources = options.no_sources.or(environment.no_sources.value);
     options.no_sources_package = options
         .no_sources_package
         .or(environment.no_sources_package.clone());
@@ -4991,7 +5017,9 @@ impl PipSettings {
                 .combine(compile_bytecode)
                 .unwrap_or_default(),
             sources: NoSources::from_args(
-                args.no_sources.combine(no_sources),
+                args.no_sources
+                    .or(environment.no_sources.value)
+                    .combine(no_sources),
                 args_no_sources_package
                     .combine(no_sources_package)
                     .unwrap_or_default(),

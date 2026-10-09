@@ -7799,6 +7799,12 @@ fn lock_policy_env_var_conflicts() {
     error: the argument `UV_FROZEN` (environment variable) cannot be used with `UV_NO_SOURCES` (environment variable)
     ");
 
+    uv_snapshot!(context.filters(), context.sync().arg("--no-sources").env(EnvVars::UV_FROZEN, "1").env(EnvVars::UV_NO_SOURCES, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `UV_FROZEN` (environment variable) cannot be used with `--no-sources`
+    ");
+
     uv_snapshot!(context.filters(), context.sync().arg("--no-sources").env(EnvVars::UV_FROZEN, "1").env(EnvVars::UV_NO_SOURCES, "0"), @"
     exit_code: 2 (failure)
     ----- stderr -----

@@ -795,6 +795,7 @@ pub struct EnvironmentOptions {
     pub no_group: Option<Vec<GroupName>>,
     pub no_binary_package: Option<Vec<PackageName>>,
     pub no_build_package: Option<Vec<PackageName>>,
+    pub no_sources: EnvFlag,
     pub no_sources_package: Option<Vec<PackageName>>,
     pub venv_seed: EnvFlag,
     pub venv_clear: EnvFlag,
@@ -941,6 +942,7 @@ impl EnvironmentOptions {
             no_group: parse_name_list_environment_variable(EnvVars::UV_NO_GROUP)?,
             no_binary_package: parse_name_list_environment_variable(EnvVars::UV_NO_BINARY_PACKAGE)?,
             no_build_package: parse_name_list_environment_variable(EnvVars::UV_NO_BUILD_PACKAGE)?,
+            no_sources: EnvFlag::new(EnvVars::UV_NO_SOURCES)?,
             no_sources_package: parse_name_list_environment_variable(
                 EnvVars::UV_NO_SOURCES_PACKAGE,
             )?,
