@@ -120,7 +120,7 @@ pub async fn read_requirements_with_pylock_constraints(
         let RequirementsSource::PylockToml(input) = source else {
             continue;
         };
-        let pylock = read_pylock_toml_constraint(input, client_builder).await?;
+        let pylock = read_pylock_toml(input, client_builder).await?;
         specification.constraints.extend(
             pylock
                 .to_constraints()
@@ -132,7 +132,8 @@ pub async fn read_requirements_with_pylock_constraints(
     Ok(specification)
 }
 
-async fn read_pylock_toml_constraint(
+/// Read and parse a local, remote, or stdin `pylock.toml` file.
+pub async fn read_pylock_toml(
     input: &RequirementsInput,
     client_builder: &BaseClientBuilder<'_>,
 ) -> anyhow::Result<PylockToml> {
@@ -144,7 +145,7 @@ async fn read_pylock_toml_constraint(
             response.error_for_status_ref()?;
             response.text().await?
         }
-        RequirementsInput::Local(path) => uv_fs::read_to_string_transcode(path).await?,
+        RequirementsInput::Local(path) => fs_err::tokio::read_to_string(path).await?,
     };
 
     let path = input.user_display();

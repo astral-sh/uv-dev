@@ -1457,11 +1457,15 @@ impl<'lock> PylockToml {
             .iter()
             .filter_map(|package| {
                 let version = package.version.as_ref()?;
+                let marker = package.marker.simplify_pep751(&[], &self.default_groups);
+                if marker.is_false() {
+                    return None;
+                }
                 Some(Requirement {
                     name: package.name.clone(),
                     extras: Box::new([]),
                     groups: Box::new([]),
-                    marker: package.marker,
+                    marker,
                     scope: RequirementScope::Global,
                     source: RequirementSource::Registry {
                         specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(

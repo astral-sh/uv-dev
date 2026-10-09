@@ -16326,8 +16326,43 @@ fn pep_751_constraint_conflict() -> Result<()> {
         .arg("pylock.toml"), @r"
     exit_code: 1 (failure)
     ----- stderr -----
-      × No solution found when resolving dependencies:
-      ╰─▶ Because you require iniconfig==1.1.1 and iniconfig==2.0.0, we can conclude that your requirements are unsatisfiable.
+    error: No solution found when resolving dependencies
+      cause: Because you require iniconfig==1.1.1 and iniconfig==2.0.0, we can conclude that your requirements are unsatisfiable.
+    "
+    );
+
+    Ok(())
+}
+
+/// Default PEP 751 groups must activate version constraints.
+#[test]
+fn pep_751_constraint_default_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pylock_toml = context.temp_dir.child("pylock.toml");
+    pylock_toml.write_str(r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        requires-python = ">=3.12"
+        dependency-groups = ["default"]
+        default-groups = ["default"]
+
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        marker = "'default' in dependency_groups and python_version >= '3.12'"
+        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", upload-time = 2023-01-07T11:08:11Z, size = 4646, hashes = { sha256 = "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3" } }
+        wheels = [{ url = "https://files.pythonhosted.org/packages/ef/a6/62565a0e578d1d0a3b25ba01b2a8e30fd9091acf58c00f3ec0ac6d13a7ac/iniconfig-2.0.0-py3-none-any.whl", upload-time = 2023-01-07T11:08:09Z, size = 5892, hashes = { sha256 = "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374" } }]
+    "#)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("iniconfig==1.1.1")
+        .arg("-c")
+        .arg("pylock.toml"), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because you require iniconfig==1.1.1 and iniconfig==2.0.0, we can conclude that your requirements are unsatisfiable.
     "
     );
 
