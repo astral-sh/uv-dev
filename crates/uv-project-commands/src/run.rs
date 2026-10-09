@@ -52,7 +52,6 @@ use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::PythonVersionFile;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::VersionFileDiscoveryOptions;
-use uv_python_discovery::project_python_roots;
 use uv_python_interpreter::{Interpreter, PyVenvConfiguration, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
@@ -647,12 +646,9 @@ pub async fn run(
             let default_extras = DefaultExtras::default();
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);
-            let python_roots = project_python_roots(
-                project.workspace(),
-                project.project_name(),
-                all_packages,
-                &[],
-            );
+            let python_roots =
+                PackageSelection::from_args(all_packages, &[], project.project_name())
+                    .python_roots(project.workspace());
 
             let venv = if isolated {
                 debug!("Creating isolated virtual environment");

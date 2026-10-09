@@ -365,23 +365,6 @@ fn find_workspace_python_requirement_for_roots(
     }
 }
 
-/// Select the members whose Python requirements must hold in a project environment.
-pub fn project_python_roots(
-    workspace: &Workspace,
-    current: Option<&PackageName>,
-    all_packages: bool,
-    packages: &[PackageName],
-) -> Option<Vec<PackageName>> {
-    let roots = workspace.resolution_roots()?;
-    if all_packages || (packages.is_empty() && current.is_none()) {
-        Some(roots.iter().cloned().collect())
-    } else if packages.is_empty() {
-        Some(current.into_iter().cloned().collect())
-    } else {
-        Some(packages.to_vec())
-    }
-}
-
 /// The requirements that exclude a Python version, and where they were read.
 ///
 /// Formats as an optional suffix to a Python incompatibility diagnostic.
