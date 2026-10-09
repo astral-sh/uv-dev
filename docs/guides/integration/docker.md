@@ -410,8 +410,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked
 ```
 
-Only the `uv.lock` file is mounted for the first sync. Docker copies `pyproject.toml` and the project
-_contents_ into the image before the final `uv sync` command.
+Only the `uv.lock` file is mounted for the first sync. Docker copies `pyproject.toml` and the
+project _contents_ into the image before the final `uv sync` command.
 
 !!! tip
 
