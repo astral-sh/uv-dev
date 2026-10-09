@@ -1998,3 +1998,129 @@ fn tool_upgrade_renames_case_equivalent_entrypoint() -> Result<()> {
     assert_eq!(entrypoints[0]["name"].as_str(), Some("foo"));
     Ok(())
 }
+
+#[test]
+fn tool_upgrade_repair_preserves_entrypoints_with_invalid_bin_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix()
+        .with_filter((r"(?:File exists|Cannot create a file when that file already exists\.?) \(os error \d+\)", "[ALREADY EXISTS]"));
+    let bin = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    let invalid_bin = context.temp_dir.child("not-a-directory");
+    invalid_bin.write_str("occupied")?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_BIN_DIR, invalid_bin.path())
+        .env(EnvVars::PATH, bin.path()), @r#"
+        exit_code: 1 (failure)
+        ----- stderr -----
+        error: Failed to upgrade simple-launcher
+          cause: Failed to create executable directory
+          cause: failed to create directory `[TEMP_DIR]/not-a-directory`: [ALREADY EXISTS]
+        "#);
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert_eq!(context.read("not-a-directory"), "occupied");
+    Command::new(bin.join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn tool_upgrade_migration_to_unwritable_directory_preserves_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    let destination = context.temp_dir.child("read-only-bin");
+    destination.create_dir_all()?;
+    let _guard = uv_test::ReadOnlyDirectoryGuard::new(destination.path())?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination.path()).env(EnvVars::PATH, bin.path()), @r#"
+            exit_code: 1 (failure)
+            ----- stderr -----
+            error: Failed to upgrade simple-launcher
+              cause: Failed to install executable
+              cause: failed to symlink file from [TEMP_DIR]/read-only-bin/simple_launcher to [TEMP_DIR]/tools/simple-launcher/bin/simple_launcher: Permission denied (os error 13)
+            "#);
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert_eq!(fs_err::read_dir(destination.path())?.count(), 0);
+    Command::new(bin.join("simple_launcher")).assert().success();
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn tool_upgrade_migrates_hardlinked_bin_directory() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let original = context.temp_dir.child("bin");
+    let destination = context.temp_dir.child("new-bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .env(EnvVars::PATH, original.path())
+        .assert()
+        .success();
+    destination.create_dir_all()?;
+    fs_err::hard_link(
+        original.child("simple_launcher"),
+        destination.child("simple_launcher"),
+    )?;
+    let old = fs_err::symlink_metadata(original.child("simple_launcher"))?;
+    let new = fs_err::symlink_metadata(destination.child("simple_launcher"))?;
+    assert_eq!((old.dev(), old.ino()), (new.dev(), new.ino()));
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination.path()).env(EnvVars::PATH, destination.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 executable: simple_launcher
+    Nothing to upgrade
+    "#);
+    original
+        .child("simple_launcher")
+        .assert(predicate::path::missing());
+    let receipt: toml::Value =
+        toml::from_str(&context.read("tools/simple-launcher/uv-receipt.toml"))?;
+    assert_eq!(
+        receipt["tool"]["entrypoints"][0]["install-path"].as_str(),
+        destination.child("simple_launcher").path().to_str()
+    );
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 executable: simple_launcher
+    ");
+    destination
+        .child("simple_launcher")
+        .assert(predicate::path::missing());
+    Ok(())
+}

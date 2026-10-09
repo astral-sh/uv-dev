@@ -39,8 +39,8 @@ use uv_workspace::WorkspaceCache;
 use uv_lock_operations::LockValidationError;
 
 use crate::common::{
-    EntrypointConflictPolicy, ToolLock, ToolPython, check_entrypoint_conflicts,
-    finalize_tool_install, prepare_tool_executable_dir, refine_interpreter, remove_entrypoints,
+    EntrypointConflictPolicy, ToolLock, ToolPython, finalize_tool_install,
+    prepare_tool_executable_dir, refine_interpreter, remove_entrypoints,
     tool_entrypoints_are_fresh, tool_environment_spec,
 };
 use crate::error::ToolLockError;
@@ -905,14 +905,6 @@ pub async fn install(
             };
             (update.environment, None)
         };
-
-        check_entrypoint_conflicts(
-            &environment,
-            package_name,
-            entrypoints,
-            existing_tool_receipt.as_ref(),
-            force || invalid_tool_receipt,
-        )?;
 
         if let Some(existing_receipt) = existing_tool_receipt.as_ref() {
             previous_entrypoints.extend(existing_receipt.entrypoints().iter().cloned());

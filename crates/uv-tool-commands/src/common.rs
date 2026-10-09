@@ -820,54 +820,6 @@ pub(super) fn prepare_tool_executable_dir() -> anyhow::Result<PathBuf> {
     Ok(executable_directory)
 }
 
-/// Check destination conflicts before removing an existing tool's executables.
-pub(super) fn check_entrypoint_conflicts(
-    environment: &PythonEnvironment,
-    name: &PackageName,
-    entrypoints: &[PackageName],
-    receipt: Option<&Tool>,
-    force: bool,
-) -> anyhow::Result<()> {
-    let executable_directory = prepare_tool_executable_dir()?;
-    if force {
-        return Ok(());
-    }
-    let site_packages = SitePackages::from_environment(environment)?;
-    let mut conflicts = BTreeSet::new();
-    for package in entrypoints.iter().chain(std::iter::once(name)) {
-        let Some(targets) =
-            package_entrypoint_targets(&site_packages, package, &executable_directory)?
-        else {
-            continue;
-        };
-        for (_, _, target) in targets {
-            if target.exists()
-                && !receipt.is_some_and(|receipt| {
-                    receipt.entrypoints().iter().any(|entrypoint| {
-                        same_entrypoint_destination(&entrypoint.install_path, &target)
-                    })
-                })
-            {
-                if let Some(filename) = target.file_name() {
-                    conflicts.insert(filename.to_string_lossy().into_owned());
-                }
-            }
-        }
-    }
-    if !conflicts.is_empty() {
-        let (suffix, verb) = if conflicts.len() == 1 {
-            ("", "exists")
-        } else {
-            ("s", "exist")
-        };
-        bail!(
-            "Executable{suffix} already {verb}: {} (use `--force` to overwrite)",
-            conflicts.iter().map(|name| name.bold()).join(", ")
-        );
-    }
-    Ok(())
-}
-
 /// Finalizes a tool installation, after creation of an environment.
 ///
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -927,16 +879,57 @@ pub(super) fn finalize_tool_install(
         .into_iter()
         .chain(std::iter::once(name));
 
-    for package in ordered_packages {
+    let package_entrypoints = ordered_packages
+        .map(|package| {
+            Ok((
+                package,
+                package_entrypoint_targets(&site_packages, package, &executable_directory)?,
+            ))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    if conflict_policy != EntrypointConflictPolicy::Overwrite {
+        let conflicts = package_entrypoints
+            .iter()
+            .filter_map(|(_, entrypoints)| entrypoints.as_ref())
+            .flatten()
+            .filter(|(_, _, target)| {
+                target.exists()
+                    && !previous_entrypoints
+                        .iter()
+                        .any(|entry| same_entrypoint_destination(target, &entry.install_path))
+            })
+            .map(|(_, _, target)| {
+                target
+                    .file_name()
+                    .expect("entrypoint target has a filename")
+                    .to_string_lossy()
+            })
+            .collect::<BTreeSet<_>>();
+        if !conflicts.is_empty() {
+            if conflict_policy == EntrypointConflictPolicy::RejectAndRemoveEnvironment {
+                installed_tools.remove_environment(name)?;
+            }
+            let (suffix, verb) = if conflicts.len() == 1 {
+                ("", "exists")
+            } else {
+                ("s", "exist")
+            };
+            bail!(
+                "Executable{suffix} already {verb}: {} (use `--force` to overwrite)",
+                conflicts.iter().map(|name| name.bold()).join(", ")
+            );
+        }
+    }
+
+    for (package, target_entrypoints) in package_entrypoints {
         if package == name {
             debug!("Installing entrypoints for tool `{package}`");
         } else {
             debug!("Installing entrypoints for `{package}` as part of tool `{name}`");
         }
 
-        let Some(target_entrypoints) =
-            package_entrypoint_targets(&site_packages, package, &executable_directory)?
-        else {
+        let Some(target_entrypoints) = target_entrypoints else {
             if package != name {
                 bail!("Expected package `{package}` to be installed");
             }
@@ -1015,48 +1008,6 @@ pub(super) fn finalize_tool_install(
             installed_tools.remove_environment(name)?;
 
             return Err(err.into());
-        }
-
-        // Error if we're overwriting an existing entrypoint, unless the user passed `--force`.
-        if conflict_policy != EntrypointConflictPolicy::Overwrite {
-            let mut existing_entrypoints = target_entrypoints
-                .iter()
-                .filter(|(_, _, target_path)| {
-                    target_path.exists()
-                        && !previous_entrypoints.iter().any(|entry| {
-                            same_entrypoint_destination(target_path, &entry.install_path)
-                        })
-                })
-                .peekable();
-            if existing_entrypoints.peek().is_some() {
-                // Clean up the environment we just created
-                remove_new_entrypoint_paths(
-                    installed_entrypoints
-                        .iter()
-                        .map(|entrypoint| entrypoint.install_path.as_path()),
-                    previous_entrypoints,
-                );
-                if conflict_policy == EntrypointConflictPolicy::RejectAndRemoveEnvironment {
-                    installed_tools.remove_environment(name)?;
-                }
-
-                let existing_entrypoints = existing_entrypoints
-                    // SAFETY: We know the target has a filename because we just constructed it above
-                    .map(|(_, _, target)| target.file_name().unwrap().to_string_lossy())
-                    .collect::<Vec<_>>();
-                let (s, exists) = if existing_entrypoints.len() == 1 {
-                    ("", "exists")
-                } else {
-                    ("s", "exist")
-                };
-                bail!(
-                    "Executable{s} already {exists}: {} (use `--force` to overwrite)",
-                    existing_entrypoints
-                        .iter()
-                        .map(|name| name.bold())
-                        .join(", ")
-                )
-            }
         }
 
         #[cfg(windows)]
