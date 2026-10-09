@@ -3924,6 +3924,7 @@ impl Lock {
         &self,
         target: &Package,
         root: &Path,
+        root_requirements: &[Cow<'_, Requirement>],
     ) -> Result<MarkerTree, LockError> {
         let mut package_markers = PackageMarkers::default();
         let mut pending = VecDeque::new();
@@ -3937,13 +3938,8 @@ impl Lock {
         }
 
         // Scripts and projectless roots keep their direct requirements in the manifest.
-        for requirement in self
-            .manifest
-            .requirements
-            .iter()
-            .chain(self.manifest.dependency_groups.values().flatten())
-        {
-            let requirement = requirement.clone().into_absolute(root);
+        for requirement in root_requirements {
+            let requirement = requirement.as_ref().clone().into_absolute(root);
             for package in self.packages_for_name(&requirement.name) {
                 if !Self::package_satisfies_requirement(package, &requirement, root)? {
                     continue;
@@ -4005,6 +4001,7 @@ impl Lock {
         dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
         source_requirements: &DependencySources<'_>,
         modifiers: &DependencyModifiers,
+        root_requirements: &[Cow<'_, Requirement>],
         package_requires_python: Option<&VersionSpecifiers>,
         package_version: Option<&Version>,
         package: &'lock Package,
@@ -4033,7 +4030,7 @@ impl Lock {
                 .and(package_python_marker.negate());
             if !unsupported_marker.is_false()
                 && !self
-                    .package_reachability_marker(package, root)?
+                    .package_reachability_marker(package, root, root_requirements)?
                     .and(unsupported_marker)
                     .is_false()
             {
@@ -4606,18 +4603,19 @@ impl Lock {
             }
         }
 
+        let root_modifiers = DependencyModifiers::new(
+            Overrides::from_entries(normalized_overrides)
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(excludes.iter().cloned()),
+        );
         let dependency_modifiers = if allow_missing_package_metadata {
-            DependencyModifiers::new(
-                Overrides::from_entries(normalized_overrides)
-                    .map_err(LockErrorKind::InvalidScopedOverride)?,
-                Excludes::from_entries(excludes.iter().cloned()),
-            )
+            root_modifiers.clone()
         } else {
             DependencyModifiers::default()
         };
         // Projectless workspace groups and scripts are root declarations, so apply only
         // global overrides and exclusions before using them for sources or validation.
-        let root_requirements = dependency_modifiers
+        let root_requirements = root_modifiers
             .apply(
                 DependencyModifierScope::Global,
                 requirements
@@ -4705,13 +4703,13 @@ impl Lock {
         }
 
         if !root_requirements.is_empty() {
-            for requirement in root_requirements {
+            for requirement in &root_requirements {
                 for package in self.packages_for_name(&requirement.name) {
                     if !package.id.source.is_source_tree() {
                         continue;
                     }
                     if allow_missing_package_metadata {
-                        if !Self::package_satisfies_requirement(package, &requirement, root)? {
+                        if !Self::package_satisfies_requirement(package, requirement, root)? {
                             continue;
                         }
                         let is_bare_registry_requirement = matches!(
@@ -4879,6 +4877,7 @@ impl Lock {
                             metadata.dependency_groups,
                             &dependency_sources,
                             &dependency_modifiers,
+                            &root_requirements,
                             requires_python.as_ref(),
                             Some(version),
                             package,
@@ -4945,6 +4944,7 @@ impl Lock {
                         metadata.dependency_groups,
                         &dependency_sources,
                         &dependency_modifiers,
+                        &root_requirements,
                         metadata.requires_python.as_ref(),
                         Some(&metadata.version),
                         package,
@@ -5013,6 +5013,7 @@ impl Lock {
                         metadata.dependency_groups,
                         &dependency_sources,
                         &dependency_modifiers,
+                        &root_requirements,
                         requires_python.as_ref(),
                         None,
                         package,
@@ -5078,6 +5079,7 @@ impl Lock {
                         metadata.dependency_groups,
                         &dependency_sources,
                         &dependency_modifiers,
+                        &root_requirements,
                         metadata.requires_python.as_ref(),
                         Some(&metadata.version),
                         package,

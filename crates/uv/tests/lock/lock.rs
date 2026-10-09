@@ -48978,3 +48978,71 @@ fn lock_local_python_projectless_group_change() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Global script overrides determine which locked local package is reachable.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_script_override_dependency_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    let url = Url::from_directory_path(context.temp_dir.child("local").path())
+        .map_err(|()| anyhow::anyhow!("invalid local directory"))?;
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["local==1.0.0"]
+        # [tool.uv]
+        # override-dependencies = ["local @ {url}"]
+        # ///
+    "#})?;
+    context
+        .lock()
+        .args(["--script", "script.py", "--offline"])
+        .assert()
+        .success();
+    local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.12", ">=3.13"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--script", "script.py", "--locked", "--offline"]), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==2.0.0 depends on Python>=3.13, we can conclude that local==2.0.0 cannot be used.
+             And because only local==2.0.0 is available and you require local, we can conclude that your requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==2.0.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    ");
+
+    local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.13", ">=3.12"))?;
+    context
+        .lock()
+        .args([
+            "--script",
+            "script.py",
+            "--offline",
+            "--preview-features",
+            "resolution-inputs",
+        ])
+        .assert()
+        .success();
+    local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.12", ">=3.13"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--script", "script.py", "--locked", "--offline", "--preview-features", "resolution-inputs"]), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==2.0.0 depends on Python>=3.13, we can conclude that local==2.0.0 cannot be used.
+             And because only local==2.0.0 is available and you require local, we can conclude that your requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==2.0.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    ");
+    Ok(())
+}
