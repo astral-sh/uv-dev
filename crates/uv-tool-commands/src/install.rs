@@ -15,10 +15,10 @@ use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, DryRun, Excludes, GitLfsSetting,
     HashCheckingMode, Modifications, Override, Overrides, Reinstall, TargetTriple, Upgrade,
 };
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{GitWorkspaceMember, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirementSpecification,
+    ExtraBuildRequires, GitDirectorySourceUrl, IndexCapabilities, NameRequirementSpecification,
+    Requirement, RequirementSource, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -41,8 +41,8 @@ use uv_workspace::WorkspaceCache;
 use uv_lock_operations::LockValidationError;
 
 use crate::common::{
-    ToolLock, ToolPython, ValidatedToolLock, finalize_tool_install, locked_tool_project,
-    refine_interpreter, remove_entrypoints, tool_environment_spec,
+    ToolLock, ToolPython, finalize_tool_install, locked_tool_project, refine_interpreter,
+    remove_entrypoints, tool_environment_spec,
 };
 use crate::error::ToolLockError;
 use crate::requirements::resolve_names;
@@ -516,6 +516,7 @@ pub async fn install(
     let mut receipt_excludes = spec.excludes.clone();
 
     if let Some((project, lock)) = source_project_lock.as_ref() {
+        let lock = lock.lock();
         let project_root = project.workspace().install_path();
         receipt_constraints.extend(lock.constraints(project_root).requirements().cloned());
         receipt_overrides.extend(lock.overrides(project_root));
@@ -539,10 +540,31 @@ pub async fn install(
         &settings.resolver.dependency_metadata,
     );
 
-    let extra_build_requires = if let Some((project, _)) = source_project_lock.as_ref() {
+    let extra_build_requires = if let Some((project, lock)) = source_project_lock.as_ref() {
+        let git_source = match (&requirement.source, lock.git()) {
+            (
+                RequirementSource::GitDirectory {
+                    url, subdirectory, ..
+                },
+                Some(fetch),
+            ) => Some(GitDirectorySourceUrl {
+                url,
+                git: fetch.git(),
+                subdirectory: subdirectory.as_deref(),
+            }),
+            _ => None,
+        };
+        let git_member = git_source
+            .as_ref()
+            .zip(lock.git())
+            .map(|(git_source, fetch)| GitWorkspaceMember {
+                fetch_root: fetch.path(),
+                git_source,
+            });
         LoweredExtraBuildDependencies::from_workspace(
             settings.resolver.extra_build_dependencies.clone(),
             project.workspace(),
+            git_member.as_ref(),
             &settings.resolver.index_locations,
             &settings.resolver.sources,
             &cache,
@@ -635,7 +657,7 @@ pub async fn install(
             environment.environment().interpreter()
         });
     let mut existing_tool_lock = if let Some(lock) = source_tool_lock {
-        Some(ValidatedToolLock::from_locked(lock))
+        Some(lock)
     } else if tool_locks {
         if let Some(lock) = ToolLock::read(&tool_dir) {
             match Box::pin(lock.validate(
