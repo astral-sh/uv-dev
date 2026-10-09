@@ -278,7 +278,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Return an iterator over the [`Index`] definitions in the [`LockTarget`].
-    pub fn indexes(self) -> impl Iterator<Item = &'lock Index> {
+    pub(crate) fn indexes(self) -> impl Iterator<Item = &'lock Index> {
         match self {
             Self::Workspace(workspace) => Either::Left(workspace.indexes().iter().chain(
                 workspace.packages().values().flat_map(|member| {
