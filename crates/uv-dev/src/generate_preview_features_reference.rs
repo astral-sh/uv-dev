@@ -357,6 +357,8 @@ mod tests {
         ### `remote-python-download-metadata` {#remote-python-download-metadata}
 
         Fetches available CPython downloads from the remote Python release metadata.
+        Enable it explicitly with `--preview-features remote-python-download-metadata`;
+        `--preview` alone does not enable this feature.
 
         ### `resolution-inputs` {#resolution-inputs}
 

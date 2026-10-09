@@ -469,6 +469,8 @@ pub enum PreviewFeature {
     /// Variant wheels are not yet selectable.
     WheelVariants,
     /// Fetches available CPython downloads from the remote Python release metadata.
+    /// Enable it explicitly with `--preview-features remote-python-download-metadata`;
+    /// `--preview` alone does not enable this feature.
     RemotePythonDownloadMetadata,
 }
 

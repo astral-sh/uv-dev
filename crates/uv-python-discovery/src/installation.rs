@@ -164,7 +164,7 @@ impl PythonInstallation {
                 cache,
                 python_downloads_json_url,
             )
-            .await?;
+            .await;
         Ok(installation)
     }
 
@@ -194,7 +194,7 @@ impl PythonInstallation {
                         cache,
                         python_downloads_json_url,
                     )
-                    .await?;
+                    .await;
                 return Ok(installation);
             }
             Err(err) => err,
@@ -550,17 +550,22 @@ impl PythonInstallation {
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
         python_downloads_json_url: Option<&str>,
-    ) -> Result<(), Error> {
+    ) {
         if !self.should_check_outdated_prerelease_warning(request) {
-            return Ok(());
+            return;
         }
 
         let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
+            match ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
+                .await
+            {
+                Ok(download_list) => download_list,
+                Err(err) => {
+                    debug!("Skipping the prerelease upgrade warning: {err}");
+                    return;
+                }
+            };
         self.warn_if_outdated_prerelease(request, &download_list);
-
-        Ok(())
     }
 
     /// Check whether this installation satisfies the Python preference.
