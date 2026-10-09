@@ -695,9 +695,19 @@ impl BuildContext for BuildDispatch<'_> {
             build_requirements.extend(
                 builder
                     .build_requirements()
-                    .filter_map(|requirement| self.constraints.get(&requirement.name))
-                    .flatten()
-                    .cloned(),
+                    .filter(|requirement| {
+                        requirement.evaluate_markers(Some(self.interpreter.markers()), &[])
+                    })
+                    .flat_map(|requirement| {
+                        self.constraints
+                            .get(&requirement.name)
+                            .into_iter()
+                            .flatten()
+                            .map(move |constraint| Requirement {
+                                marker: constraint.marker.and(requirement.marker),
+                                ..constraint.clone()
+                            })
+                    }),
             );
         }
         Ok(builder)
