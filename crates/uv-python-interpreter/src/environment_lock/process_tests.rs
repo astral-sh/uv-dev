@@ -18,6 +18,7 @@ const HOLDER: &str = "environment_lock::process_tests::lock_holder";
 /// The direct child owns both its destination and its blocking release gate, including under
 /// panic-abort test execution. Killing it cannot leave a grandchild holding the lock.
 #[test]
+#[expect(clippy::exit, reason = "This fixture owns its gated subprocess")]
 fn lock_holder() -> Result<()> {
     let Some(path) = std::env::var_os("UV_TEST_LOCK_DESTINATION") else {
         return Ok(());
@@ -31,7 +32,7 @@ fn lock_holder() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(async {
+    let result: Result<()> = runtime.block_on(async {
         let cache = Cache::temp()?;
         let path = std::path::PathBuf::from(path);
         let mut guard = EnvironmentLock::acquire(std::slice::from_ref(&path), &cache).await?;
@@ -49,7 +50,12 @@ fn lock_holder() -> Result<()> {
         release()?;
         drop(guard);
         Ok(())
-    })
+    });
+    drop(runtime);
+    result?;
+    // This fixture owns the subprocess. Report success after cleanup without using libtest's
+    // private exit-status protocol for panic-abort children.
+    std::process::exit(0)
 }
 
 fn signal(state: &str) -> Result<()> {
