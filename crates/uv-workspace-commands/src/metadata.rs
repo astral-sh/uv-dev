@@ -23,6 +23,7 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
+use uv_python_interpreter::EnvironmentOperation;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -230,7 +231,7 @@ pub async fn metadata(
                     printer,
                 )
                 .await?
-                .into_environment()?
+                .into_operation()?
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => ScriptEnvironment::get_or_init(
                 (*script).into(),
@@ -248,7 +249,7 @@ pub async fn metadata(
                 printer,
             )
             .await?
-            .into_environment()?,
+            .into_operation()?,
             MetadataSource::Lockfile(workspace) => ProjectEnvironment::get_or_init(
                 ProjectEnvironmentTarget::Lockfile {
                     root: workspace.root(),
@@ -271,7 +272,7 @@ pub async fn metadata(
                 printer,
             )
             .await?
-            .into_environment()?,
+            .into_operation()?,
         })
     } else {
         match &source {
@@ -285,9 +286,11 @@ pub async fn metadata(
                 ProjectInterpreter::discover_existing(workspace.root(), active, cache)?
             }
         }
+        .map(|environment| EnvironmentOperation::new(environment, None))
     };
 
-    if let Some(environment) = environment {
+    if let Some(operation) = environment {
+        let environment = operation.environment();
         let _lock = environment
             .lock()
             .await
@@ -297,7 +300,7 @@ pub async fn metadata(
             .ok();
         let module_owners = collect_module_owners(
             install_target,
-            &environment,
+            environment,
             &settings,
             &client_builder,
             &state,
@@ -311,7 +314,7 @@ pub async fn metadata(
         .await
         .context("Failed to collect module owners")?;
         export = export
-            .with_environment(&environment)
+            .with_environment(environment)
             .with_module_owners(module_owners);
     }
 

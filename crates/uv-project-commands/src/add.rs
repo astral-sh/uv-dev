@@ -363,7 +363,7 @@ pub async fn add(
                 printer,
             )
             .await?
-            .into_environment()?;
+            .into_operation()?;
 
             (
                 EditTarget::Project(project),
@@ -1288,10 +1288,11 @@ async fn lock_and_sync(
         return Ok(());
     };
 
-    let PythonTarget::Environment(venv) = python_target else {
+    let PythonTarget::Environment(operation) = python_target else {
         // If we're not syncing, exit early.
         return Ok(());
     };
+    let venv = operation.environment();
 
     // Identify the installation target.
     let target = InstallTarget::from_project(

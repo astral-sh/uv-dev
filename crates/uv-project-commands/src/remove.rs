@@ -290,7 +290,7 @@ pub async fn remove(
                     printer,
                 )
                 .await?
-                .into_environment()?;
+                .into_operation()?;
 
                 PythonTarget::Environment(environment)
             }
@@ -364,11 +364,12 @@ pub async fn remove(
         return Ok(ExitStatus::Success);
     };
 
-    let PythonTarget::Environment(venv) = &python_target else {
+    let PythonTarget::Environment(operation) = &python_target else {
         // If we're not syncing, exit early.
         edit.commit();
         return Ok(ExitStatus::Success);
     };
+    let venv = operation.environment();
 
     // Identify the installation target.
     let target = InstallTarget::from_project(

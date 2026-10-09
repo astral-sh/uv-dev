@@ -34,6 +34,7 @@ uv-trampoline-builder = { workspace = true }
 configparser = { workspace = true }
 dunce = { workspace = true }
 fs-err = { workspace = true, features = ["tokio"] }
+homedir = { workspace = true }
 owo-colors = { workspace = true }
 rmp-serde = { workspace = true }
 same-file = { workspace = true }
@@ -51,3 +52,4 @@ windows = { workspace = true }
 anyhow = { workspace = true }
 indoc = { workspace = true }
 tokio = { workspace = true }
+tracing-subscriber = { workspace = true }

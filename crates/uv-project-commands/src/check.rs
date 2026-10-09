@@ -29,7 +29,7 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::ScriptInterpreter;
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{EnvironmentOperation, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -360,8 +360,8 @@ pub async fn check(
     let mut locked_ty_path = None;
     let venv = if let Some(script) = &script {
         let extras = extras.with_defaults(DefaultExtras::default());
-        let venv = if let Some(venv) = isolated_venv {
-            venv
+        let operation = if let Some(venv) = isolated_venv {
+            EnvironmentOperation::new(venv, None)
         } else {
             ScriptEnvironment::get_or_init(
                 script.into(),
@@ -379,8 +379,9 @@ pub async fn check(
                 printer,
             )
             .await?
-            .into_environment()?
+            .into_operation()?
         };
+        let venv = operation.environment();
 
         let state = UniversalState::default();
         let lock_target = LockTarget::Script(script);
@@ -449,7 +450,7 @@ pub async fn check(
         };
         match sync_from_lock(
             target,
-            &venv,
+            venv,
             &extras,
             &groups,
             None,
@@ -481,7 +482,7 @@ pub async fn check(
             );
         }
 
-        Some(venv)
+        Some(operation.into_unlocked())
     } else if let Some(project) = &project {
         let extras = extras.with_defaults(DefaultExtras::default());
         let mut malware_context = MalwareCheckContext::from(&malware_settings);
@@ -496,8 +497,8 @@ pub async fn check(
             Vec::new(),
         );
 
-        let venv = if let Some(venv) = isolated_venv {
-            venv
+        let operation = if let Some(venv) = isolated_venv {
+            EnvironmentOperation::new(venv, None)
         } else {
             ProjectEnvironment::get_or_init(
                 ProjectEnvironmentTarget::from(project.workspace()),
@@ -518,8 +519,9 @@ pub async fn check(
                 printer,
             )
             .await?
-            .into_environment()?
+            .into_operation()?
         };
+        let venv = operation.environment();
 
         // `--no-sync` intentionally permits an incompatible project environment, but locking must
         // still use an interpreter that satisfies the project and any explicit Python request.
@@ -676,7 +678,7 @@ pub async fn check(
             let sync_state = state.fork();
             match sync_from_lock(
                 target,
-                &venv,
+                venv,
                 &extras,
                 &groups,
                 None,
@@ -703,7 +705,7 @@ pub async fn check(
             }
         }
 
-        Some(venv)
+        Some(operation.into_unlocked())
     } else {
         isolated_venv
     };

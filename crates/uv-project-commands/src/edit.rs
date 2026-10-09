@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 
 use uv_fs::Simplified;
 use uv_lock_operations::LockTarget;
-use uv_python_interpreter::{Interpreter, PythonEnvironment};
+use uv_python_interpreter::{EnvironmentOperation, Interpreter};
 use uv_scripts::{Pep723Metadata, Pep723Script};
 use uv_workspace::pyproject::PyProjectToml;
 use uv_workspace::{VirtualProject, WorkspaceCache};
@@ -89,11 +89,11 @@ impl EditTarget {
 }
 
 /// The interpreter used for resolution, or an environment that can also be synchronized.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[expect(clippy::large_enum_variant)]
 pub(super) enum PythonTarget {
     Interpreter(Interpreter),
-    Environment(PythonEnvironment),
+    Environment(EnvironmentOperation),
 }
 
 impl PythonTarget {
@@ -101,7 +101,7 @@ impl PythonTarget {
     pub(super) fn interpreter(&self) -> &Interpreter {
         match self {
             Self::Interpreter(interpreter) => interpreter,
-            Self::Environment(venv) => venv.interpreter(),
+            Self::Environment(operation) => operation.environment().interpreter(),
         }
     }
 }

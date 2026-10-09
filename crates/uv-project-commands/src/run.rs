@@ -52,7 +52,9 @@ use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::PythonVersionFile;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::VersionFileDiscoveryOptions;
-use uv_python_interpreter::{Interpreter, PyVenvConfiguration, PythonEnvironment};
+use uv_python_interpreter::{
+    EnvironmentOperation, Interpreter, PyVenvConfiguration, PythonEnvironment,
+};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -210,7 +212,7 @@ pub async fn run(
             debug!("Found existing lockfile for script");
 
             // Discover the interpreter for the script.
-            let environment = ScriptEnvironment::get_or_init(
+            let operation = ScriptEnvironment::get_or_init(
                 (&script).into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
@@ -226,7 +228,8 @@ pub async fn run(
                 printer,
             )
             .await?
-            .into_environment()?;
+            .into_operation()?;
+            let environment = operation.environment();
 
             let _lock = environment
                 .lock()
@@ -284,7 +287,7 @@ pub async fn run(
 
             match sync_from_lock(
                 target,
-                &environment,
+                environment,
                 &extras.with_defaults(DefaultExtras::default()),
                 &groups.with_defaults(DefaultGroups::default()),
                 editable.clone(),
@@ -322,7 +325,7 @@ pub async fn run(
             let install_path = target.install_path().to_path_buf();
             base_lock = Some((lock, install_path));
 
-            Some(environment.into_interpreter())
+            Some(operation.into_unlocked().into_interpreter())
         } else {
             // If no lockfile is found, error for `--locked` and `--frozen` when provided
             // via CLI. For environment variables, warn instead to avoid
@@ -401,7 +404,7 @@ pub async fn run(
                 )
                 .await?
                 .into_inner();
-                let environment = ScriptEnvironment::get_or_init(
+                let operation = ScriptEnvironment::get_or_init(
                     (&script).into(),
                     python.as_deref().map(PythonRequest::parse),
                     &client_builder,
@@ -417,7 +420,8 @@ pub async fn run(
                     printer,
                 )
                 .await?
-                .into_environment()?;
+                .into_operation()?;
+                let environment = operation.environment();
 
                 let _lock = environment
                     .lock()
@@ -428,7 +432,7 @@ pub async fn run(
                     .ok();
 
                 match update_environment(
-                    environment,
+                    environment.clone(),
                     spec,
                     modifications,
                     python_platform.as_ref(),
@@ -458,7 +462,10 @@ pub async fn run(
                 )
                 .await
                 {
-                    Ok(update) => Some(update.environment.into_interpreter()),
+                    Ok(update) => {
+                        drop(operation.into_unlocked());
+                        Some(update.environment.into_interpreter())
+                    }
                     Err(EnvironmentError::Resolve(err)) => {
                         let err = *err;
                         return Err(UvError::from(err.with_resolution_context("script")).into());
@@ -647,7 +654,7 @@ pub async fn run(
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);
 
-            let venv = if isolated {
+            let operation = if isolated {
                 debug!("Creating isolated virtual environment");
 
                 // If we're isolating the environment, use an ephemeral virtual environment as the
@@ -678,7 +685,7 @@ pub async fn run(
 
                 // Create a virtual environment
                 temp_dir = cache.venv_dir()?;
-                uv_virtualenv::create_venv(
+                let environment = uv_virtualenv::create_venv(
                     temp_dir.path(),
                     interpreter.into_interpreter(),
                     uv_virtualenv::Prompt::None,
@@ -689,7 +696,8 @@ pub async fn run(
                     false,
                     uv_virtualenv::Seed::Disabled,
                     false,
-                )?
+                )?;
+                EnvironmentOperation::new(environment, None)
             } else {
                 // If we're not isolating the environment, reuse the base environment for the
                 // project.
@@ -712,8 +720,9 @@ pub async fn run(
                     printer,
                 )
                 .await?
-                .into_environment()?
+                .into_operation()?
             };
+            let venv = operation.environment();
 
             if no_sync {
                 debug!("Skipping environment synchronization due to `--no-sync`");
@@ -804,7 +813,7 @@ pub async fn run(
 
                 match sync_from_lock(
                     target,
-                    &venv,
+                    venv,
                     &extras,
                     &groups,
                     editable,
@@ -840,7 +849,7 @@ pub async fn run(
                 ));
             }
 
-            venv.into_interpreter()
+            operation.into_unlocked().into_interpreter()
         } else {
             debug!("No project found; searching for Python interpreter");
 

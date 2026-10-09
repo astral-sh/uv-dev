@@ -578,7 +578,7 @@ async fn lock_and_sync(
             printer,
         )
         .await?
-        .into_environment()?;
+        .into_operation()?;
 
         PythonTarget::Environment(environment)
     };
@@ -616,10 +616,11 @@ async fn lock_and_sync(
         Err(err) => return Err(UvError::from(err).into()),
     };
 
-    let PythonTarget::Environment(venv) = &python_target else {
+    let PythonTarget::Environment(operation) = &python_target else {
         // If we're not syncing, exit early.
         return Ok(ExitStatus::Success);
     };
+    let venv = operation.environment();
 
     // Perform a full sync, because we don't know what exactly is affected by the version.
 

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -15,6 +17,7 @@ use walkdir::WalkDir;
 
 use uv_configuration::Concurrency;
 use uv_fs::Simplified;
+use uv_python_interpreter::EnvironmentLock;
 use uv_static::EnvVars;
 use uv_warnings::warn_user;
 
@@ -98,6 +101,7 @@ fn spawn_workers(
     receiver: &Receiver<PathBuf>,
     worker_count: usize,
     timeout: Option<Duration>,
+    destination_lock: Option<&Arc<EnvironmentLock>>,
 ) -> Vec<WorkerHandle> {
     debug!("Starting {} bytecode compilation workers", worker_count);
     let mut worker_handles = Vec::with_capacity(worker_count);
@@ -112,10 +116,13 @@ fn spawn_workers(
             timeout,
         );
 
+        let destination_lock = destination_lock.cloned();
+
         // Spawn each worker on a dedicated thread.
         std::thread::Builder::new()
             .name("uv-compile".to_owned())
             .spawn(move || {
+                let _destination_lock = destination_lock;
                 // Report panics back to the main thread.
                 let result = panic::catch_unwind(AssertUnwindSafe(|| {
                     tokio::runtime::Builder::new_current_thread()
@@ -169,12 +176,13 @@ async fn wait_for_workers(
 /// > Uninstallers should be smart enough to remove .pyc even if it is not mentioned in RECORD.
 ///
 /// We've confirmed that both uv and pip (as of 24.0.0) remove the `__pycache__` directory.
-#[instrument(skip(python_executable))]
+#[instrument(skip(python_executable, destination_lock))]
 pub async fn compile_tree(
     dir: &Path,
     python_executable: &Path,
     concurrency: &Concurrency,
     cache: &Path,
+    destination_lock: Option<Arc<EnvironmentLock>>,
 ) -> Result<usize, CompileError> {
     debug_assert!(
         dir.is_absolute(),
@@ -197,6 +205,7 @@ pub async fn compile_tree(
         &receiver,
         worker_count,
         timeout,
+        destination_lock.as_ref(),
     );
     // Make sure the channel gets closed when all workers exit.
     drop(receiver);
@@ -249,12 +258,13 @@ pub async fn compile_tree(
 ///
 /// All paths must be absolute. Compilation errors are muted (like pip), while failures to launch
 /// or communicate with the Python workers are returned.
-#[instrument(skip(files, python_executable))]
+#[instrument(skip(files, python_executable, destination_lock))]
 pub async fn compile_files(
     files: impl IntoIterator<Item = anyhow::Result<PathBuf>>,
     python_executable: &Path,
     concurrency: &Concurrency,
     cache: &Path,
+    destination_lock: Option<Arc<EnvironmentLock>>,
 ) -> Result<usize, CompileError> {
     let mut files = files.into_iter();
     let mut initial_files = Vec::with_capacity(concurrency.installs);
@@ -279,6 +289,7 @@ pub async fn compile_files(
         &receiver,
         worker_count,
         timeout,
+        destination_lock.as_ref(),
     );
     drop(receiver);
 

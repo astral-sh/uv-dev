@@ -26,12 +26,8 @@ use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::Conflicts;
-use uv_python_discovery::PythonInstallation;
-use uv_python_discovery::find_environment;
-use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
-    EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
-    PythonRequest, PythonVersion, Target,
+    Prefix, PythonArchitecture, PythonDownloads, PythonPreference, PythonVersion, Target,
 };
 use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
 use uv_resolver::{
@@ -47,12 +43,9 @@ use uv_workspace::pyproject::ExtraBuildDependencies;
 
 use crate::install_report::write_install_report;
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
-use crate::reporters::report_target_environment;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_install_operations::Changelog;
 use uv_install_operations::loggers::DefaultInstallLogger;
-use uv_python_discovery::PythonDownloadReporter;
-use uv_python_discovery::report_interpreter;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
@@ -177,57 +170,21 @@ pub async fn pip_sync(
         }
     }
 
-    // Detect the current Python interpreter.
-    let environment = if target.is_some() || prefix.is_some() {
-        let python_request = python.as_deref().map(PythonRequest::parse);
-        let reporter = PythonDownloadReporter::single(printer);
-
-        let installation = PythonInstallation::find_or_download(
-            python_request.as_ref(),
-            EnvironmentPreference::from_system_flag(system, false),
-            python_preference.with_system_flag(system),
-            python_arch,
-            python_downloads,
-            &client_builder,
-            &cache,
-            Some(&reporter),
-            install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url.as_deref(),
-        )
-        .await?;
-        report_interpreter(&installation, true, printer)?;
-        PythonEnvironment::from_interpreter(installation.into_interpreter())
-    } else {
-        let environment = find_environment(
-            &python
-                .as_deref()
-                .map(PythonRequest::parse)
-                .unwrap_or_default(),
-            EnvironmentPreference::from_system_flag(system, true),
-            PythonPreference::default().with_system_flag(system),
-            python_arch,
-            &cache,
-        )?;
-        report_target_environment(&environment, &cache, printer)?;
-        environment
-    };
-
-    // Apply any `--target` or `--prefix` directories.
-    let environment = if let Some(target) = target {
-        debug!(
-            "Using `--target` directory at `{}`",
-            target.root().user_display()
-        );
-        environment.with_target(target)?
-    } else if let Some(prefix) = prefix {
-        debug!(
-            "Using `--prefix` directory at `{}`",
-            prefix.root().user_display()
-        );
-        environment.with_prefix(prefix)?
-    } else {
-        environment
-    };
+    let operation = crate::environment::prepare_environment(
+        python.as_deref(),
+        system,
+        target,
+        prefix,
+        python_preference,
+        python_arch,
+        python_downloads,
+        &install_mirrors,
+        &client_builder,
+        &cache,
+        printer,
+    )
+    .await?;
+    let environment = operation.environment();
 
     // If the environment is externally managed, abort.
     if let Some(externally_managed) = environment.interpreter().is_externally_managed() {
@@ -344,9 +301,9 @@ pub async fn pip_sync(
     // Determine whether to enable build isolation.
     let types_build_isolation = match build_isolation {
         BuildIsolation::Isolate => uv_types::BuildIsolation::Isolated,
-        BuildIsolation::Shared => uv_types::BuildIsolation::Shared(&environment),
+        BuildIsolation::Shared => uv_types::BuildIsolation::Shared(environment),
         BuildIsolation::SharedPackage(ref packages) => {
-            uv_types::BuildIsolation::SharedPackage(&environment, packages)
+            uv_types::BuildIsolation::SharedPackage(environment, packages)
         }
     };
 
@@ -396,7 +353,7 @@ pub async fn pip_sync(
     );
 
     // Determine the set of installed packages.
-    let site_packages = SitePackages::from_environment(&environment)?;
+    let site_packages = SitePackages::from_environment(environment)?;
 
     let (resolution, hasher) = if let Some(pylock) = pylock {
         let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
@@ -536,7 +493,7 @@ pub async fn pip_sync(
         &concurrency,
         &build_dispatch,
         &cache,
-        &environment,
+        environment,
         Box::new(DefaultInstallLogger),
         installer_metadata,
         dry_run,
@@ -562,7 +519,7 @@ pub async fn pip_sync(
     if strict && !dry_run.enabled() {
         uv_install_operations::diagnose_environment(
             resolution.distributions().map(Name::name),
-            &environment,
+            environment,
             &marker_env,
             &tags,
             &dependency_metadata,

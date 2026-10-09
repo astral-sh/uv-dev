@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::{env, fmt};
 
 use owo_colors::OwoColorize;
@@ -12,9 +12,9 @@ use uv_fs::{LockedFile, LockedFileError, Simplified};
 use uv_pep440::Version;
 use uv_static::EnvVars;
 
-use crate::Interpreter;
 use crate::interpreter::InterpreterInfo;
 use crate::virtualenv::{PyVenvConfiguration, virtualenv_python_executable};
+use crate::{EnvironmentLock, Interpreter};
 use uv_python_types::{EnvironmentPreference, Prefix, PythonRequest, Target};
 
 /// A failure while inspecting an existing Python environment.
@@ -45,8 +45,61 @@ impl uv_errors::Hinted for Error {
 }
 
 /// A Python environment, consisting of a Python [`Interpreter`] and its associated paths.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct PythonEnvironment(Arc<PythonEnvironmentShared>);
+#[derive(Debug, Clone)]
+pub struct PythonEnvironment(Arc<PythonEnvironmentShared>, Weak<EnvironmentLock>);
+
+/// A Python environment and the admission retained while an operation can modify it.
+///
+/// Environment descriptions borrowed or copied from this handle do not retain admission. Publishing
+/// workers acquire their own leases through [`PythonEnvironment::destination_lock`].
+#[derive(Debug)]
+pub struct EnvironmentOperation {
+    environment: PythonEnvironment,
+    destination_lock: Option<Arc<EnvironmentLock>>,
+}
+
+impl EnvironmentOperation {
+    /// Associate an environment with its operation's admission.
+    pub fn new(
+        mut environment: PythonEnvironment,
+        destination_lock: Option<Arc<EnvironmentLock>>,
+    ) -> Self {
+        environment.1 = destination_lock
+            .as_ref()
+            .map_or_else(Weak::new, Arc::downgrade);
+        Self {
+            environment,
+            destination_lock,
+        }
+    }
+
+    /// Borrow the environment while retaining its admission in this operation.
+    pub fn environment(&self) -> &PythonEnvironment {
+        &self.environment
+    }
+
+    /// Release admission after this operation finishes modifying the environment.
+    ///
+    /// Publishing workers that are still running retain their own admission until they finish.
+    pub fn into_unlocked(self) -> PythonEnvironment {
+        let Self {
+            mut environment,
+            destination_lock,
+        } = self;
+        environment.1 = Weak::new();
+        drop(destination_lock);
+        environment
+    }
+}
+
+impl PartialEq for PythonEnvironment {
+    fn eq(&self, other: &Self) -> bool {
+        // Environment identity compares interpreter configuration independently of operation state.
+        self.0 == other.0
+    }
+}
+
+impl Eq for PythonEnvironment {}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct PythonEnvironmentShared {
@@ -225,36 +278,48 @@ impl PythonEnvironment {
 
         let interpreter = Interpreter::query(executable, cache)?;
 
-        Ok(Self(Arc::new(PythonEnvironmentShared {
-            root: interpreter.sys_prefix().to_path_buf(),
-            interpreter,
-        })))
+        Ok(Self(
+            Arc::new(PythonEnvironmentShared {
+                root: interpreter.sys_prefix().to_path_buf(),
+                interpreter,
+            }),
+            Weak::new(),
+        ))
     }
 
     /// Create a [`PythonEnvironment`] from an existing [`Interpreter`].
     pub fn from_interpreter(interpreter: Interpreter) -> Self {
-        Self(Arc::new(PythonEnvironmentShared {
-            root: interpreter.sys_prefix().to_path_buf(),
-            interpreter,
-        }))
+        Self(
+            Arc::new(PythonEnvironmentShared {
+                root: interpreter.sys_prefix().to_path_buf(),
+                interpreter,
+            }),
+            Weak::new(),
+        )
     }
 
     /// Create a [`PythonEnvironment`] from an existing [`Interpreter`] and `--target` directory.
     pub fn with_target(self, target: Target) -> std::io::Result<Self> {
         let inner = Arc::unwrap_or_clone(self.0);
-        Ok(Self(Arc::new(PythonEnvironmentShared {
-            interpreter: inner.interpreter.with_target(target)?,
-            ..inner
-        })))
+        Ok(Self(
+            Arc::new(PythonEnvironmentShared {
+                interpreter: inner.interpreter.with_target(target)?,
+                ..inner
+            }),
+            Weak::new(),
+        ))
     }
 
     /// Create a [`PythonEnvironment`] from an existing [`Interpreter`] and `--prefix` directory.
     pub fn with_prefix(self, prefix: Prefix) -> std::io::Result<Self> {
         let inner = Arc::unwrap_or_clone(self.0);
-        Ok(Self(Arc::new(PythonEnvironmentShared {
-            interpreter: inner.interpreter.with_prefix(prefix)?,
-            ..inner
-        })))
+        Ok(Self(
+            Arc::new(PythonEnvironmentShared {
+                interpreter: inner.interpreter.with_prefix(prefix)?,
+                ..inner
+            }),
+            Weak::new(),
+        ))
     }
 
     /// Returns the root (i.e., `prefix`) of the Python interpreter.
@@ -309,6 +374,11 @@ impl PythonEnvironment {
     /// Returns the path to the `bin` directory inside this environment.
     pub fn scripts(&self) -> &Path {
         self.0.interpreter.scripts()
+    }
+
+    /// Give a publishing worker its own reference to the current operation's admission.
+    pub fn destination_lock(&self) -> Option<Arc<EnvironmentLock>> {
+        self.1.upgrade()
     }
 
     /// Grab a file lock for the environment to prevent concurrent writes across processes.

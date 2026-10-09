@@ -28,12 +28,8 @@ use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::Conflicts;
-use uv_python_discovery::PythonInstallation;
-use uv_python_discovery::find_environment;
-use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
-    EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
-    PythonRequest, PythonVersion, Target,
+    Prefix, PythonArchitecture, PythonDownloads, PythonPreference, PythonVersion, Target,
 };
 use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
 use uv_resolver::{
@@ -49,13 +45,10 @@ use uv_workspace::pyproject::ExtraBuildDependencies;
 
 use crate::install_report::write_install_report;
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
-use crate::reporters::report_target_environment;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_install_operations::Changelog;
 use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::{DefaultInstallLogger, InstallLogger};
-use uv_python_discovery::PythonDownloadReporter;
-use uv_python_discovery::report_interpreter;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
@@ -210,62 +203,26 @@ pub async fn pip_install(
             .chain(build_constraints_from_workspace.iter().cloned()),
     );
 
-    // Detect the current Python interpreter.
-    let environment = if target.is_some() || prefix.is_some() {
-        let python_request = python.as_deref().map(PythonRequest::parse);
-        let reporter = PythonDownloadReporter::single(printer);
-
-        let installation = PythonInstallation::find_or_download(
-            python_request.as_ref(),
-            EnvironmentPreference::from_system_flag(system, false),
-            python_preference.with_system_flag(system),
-            python_arch,
-            python_downloads,
-            &client_builder,
-            &cache,
-            Some(&reporter),
-            install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url.as_deref(),
-        )
-        .await?;
-        report_interpreter(&installation, true, printer)?;
-        PythonEnvironment::from_interpreter(installation.into_interpreter())
-    } else {
-        let environment = find_environment(
-            &python
-                .as_deref()
-                .map(PythonRequest::parse)
-                .unwrap_or_default(),
-            EnvironmentPreference::from_system_flag(system, true),
-            PythonPreference::default().with_system_flag(system),
-            python_arch,
-            &cache,
-        )?;
-        report_target_environment(&environment, &cache, printer)?;
-        environment
-    };
+    let operation = crate::environment::prepare_environment(
+        python.as_deref(),
+        system,
+        target,
+        prefix,
+        python_preference,
+        python_arch,
+        python_downloads,
+        &install_mirrors,
+        &client_builder,
+        &cache,
+        printer,
+    )
+    .await?;
+    let environment = operation.environment();
 
     // Lower the extra build dependencies, if any.
     let extra_build_requires =
         LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
             .into_inner();
-
-    // Apply any `--target` or `--prefix` directories.
-    let environment = if let Some(target) = target {
-        debug!(
-            "Using `--target` directory at `{}`",
-            target.root().user_display()
-        );
-        environment.with_target(target)?
-    } else if let Some(prefix) = prefix {
-        debug!(
-            "Using `--prefix` directory at `{}`",
-            prefix.root().user_display()
-        );
-        environment.with_prefix(prefix)?
-    } else {
-        environment
-    };
 
     // If the environment is externally managed, abort.
     if let Some(externally_managed) = environment.interpreter().is_externally_managed() {
@@ -325,7 +282,7 @@ pub async fn pip_install(
     let site_packages = if defer_site_packages {
         None
     } else {
-        Some(SitePackages::from_environment(&environment)?)
+        Some(SitePackages::from_environment(environment)?)
     };
 
     // Check if the current environment satisfies the requirements.
@@ -375,7 +332,7 @@ pub async fn pip_install(
                         recursive_requirements
                             .iter()
                             .map(|requirement| &requirement.name),
-                        &environment,
+                        environment,
                         &marker_env,
                         &tags,
                         &dependency_metadata,
@@ -466,9 +423,9 @@ pub async fn pip_install(
     // Determine whether to enable build isolation.
     let types_build_isolation = match build_isolation {
         BuildIsolation::Isolate => uv_types::BuildIsolation::Isolated,
-        BuildIsolation::Shared => uv_types::BuildIsolation::Shared(&environment),
+        BuildIsolation::Shared => uv_types::BuildIsolation::Shared(environment),
         BuildIsolation::SharedPackage(ref packages) => {
-            uv_types::BuildIsolation::SharedPackage(&environment, packages)
+            uv_types::BuildIsolation::SharedPackage(environment, packages)
         }
     };
 
@@ -610,7 +567,7 @@ pub async fn pip_install(
     let site_packages = match site_packages {
         // Only resolved packages can be modified when using sufficient installation semantics.
         None => SitePackages::from_environment_for_packages(
-            &environment,
+            environment,
             resolution.distributions().map(Name::name),
         )?,
         Some(site_packages) => site_packages,
@@ -663,7 +620,7 @@ pub async fn pip_install(
         &concurrency,
         &build_dispatch,
         &cache,
-        &environment,
+        environment,
         Box::new(DefaultInstallLogger),
         installer_metadata,
         dry_run,
@@ -689,7 +646,7 @@ pub async fn pip_install(
     if strict && !dry_run.enabled() {
         uv_install_operations::diagnose_environment(
             resolution.distributions().map(Name::name),
-            &environment,
+            environment,
             &marker_env,
             &tags,
             &dependency_metadata,

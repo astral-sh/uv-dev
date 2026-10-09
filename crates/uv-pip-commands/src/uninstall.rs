@@ -1,4 +1,5 @@
 use std::fmt::Write;
+use std::sync::Arc;
 
 use anyhow::Result;
 use itertools::{Either, Itertools};
@@ -14,6 +15,7 @@ use uv_fs::Simplified;
 use uv_pep508::UnnamedRequirement;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_discovery::find_environment;
+use uv_python_interpreter::{EnvironmentLock, EnvironmentOperation};
 use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonPreference, PythonRequest, Target,
 };
@@ -45,17 +47,42 @@ pub async fn pip_uninstall(
     // Read all requirements from the provided sources.
     let spec = RequirementsSpecification::from_simple_sources(sources, &client_builder).await?;
 
-    // Detect the current Python interpreter.
-    let environment = find_environment(
-        &python
-            .as_deref()
-            .map(PythonRequest::parse)
-            .unwrap_or_default(),
-        EnvironmentPreference::from_system_flag(system, true),
-        PythonPreference::default().with_system_flag(system),
-        python_arch,
-        &cache,
-    )?;
+    // Re-discover after destination admission: replacement may change the selected interpreter.
+    let mut destination_lock: Option<Arc<EnvironmentLock>> = None;
+    let mut admitted = false;
+    let environment = loop {
+        let environment = find_environment(
+            &python
+                .as_deref()
+                .map(PythonRequest::parse)
+                .unwrap_or_default(),
+            EnvironmentPreference::from_system_flag(system, true),
+            PythonPreference::default().with_system_flag(system),
+            python_arch,
+            &cache,
+        )?;
+
+        let destination = target
+            .as_ref()
+            .map(Target::root)
+            .or_else(|| prefix.as_ref().map(Prefix::root))
+            .unwrap_or_else(|| environment.root())
+            .to_path_buf();
+        let paths = [destination];
+        let needs_admission = match destination_lock.as_ref() {
+            Some(lock) => !lock.matches(&paths)?,
+            None => !admitted,
+        };
+        if needs_admission {
+            drop(destination_lock.take());
+            destination_lock = EnvironmentLock::acquire_optional(&paths, &cache).await?;
+            admitted = true;
+            if destination_lock.is_some() {
+                continue;
+            }
+        }
+        break environment;
+    };
 
     report_target_environment(&environment, &cache, printer)?;
 
@@ -75,6 +102,12 @@ pub async fn pip_uninstall(
     } else {
         environment
     };
+
+    if let Some(lock) = destination_lock.as_mut() {
+        lock.finish_creation()?;
+    }
+    let operation = EnvironmentOperation::new(environment, destination_lock);
+    let environment = operation.environment();
 
     // If the environment is externally managed, abort.
     if let Some(externally_managed) = environment.interpreter().is_externally_managed() {
@@ -105,7 +138,7 @@ pub async fn pip_uninstall(
         .ok();
 
     // Index the current `site-packages` directory.
-    let site_packages = uv_installer::SitePackages::from_environment(&environment)?;
+    let site_packages = uv_installer::SitePackages::from_environment(environment)?;
 
     // Partition the requirements into named and unnamed requirements.
     let (named, unnamed): (Vec<Requirement>, Vec<UnnamedRequirement<VerbatimParsedUrl>>) = spec
@@ -203,7 +236,9 @@ pub async fn pip_uninstall(
     if !dry_run.enabled() {
         let layout = environment.interpreter().layout();
         for distribution in &distributions {
-            let summary = uv_installer::uninstall(distribution, &layout).await?;
+            let summary =
+                uv_installer::uninstall(distribution, &layout, environment.destination_lock())
+                    .await?;
             debug!(
                 "Uninstalled {} ({} file{}, {} director{})",
                 distribution.name(),
