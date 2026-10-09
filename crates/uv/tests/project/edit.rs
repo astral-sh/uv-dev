@@ -1090,6 +1090,245 @@ fn add_raw_replaces_existing_source() -> Result<()> {
     Ok(())
 }
 
+/// Raw version-bound selection retains the workspace source for this dependency scope.
+#[test]
+fn add_raw_retains_workspace_dependency_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
+
+        [tool.uv.workspace]
+        members = ["dep"]
+
+        [tool.uv.sources]
+        dep = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("dep/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("dep").arg("--raw"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + dep==0.1.0 (from file://[TEMP_DIR]/dep)
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "dep",
+    ]
+
+    [tool.uv.workspace]
+    members = ["dep"]
+
+    [tool.uv.sources]
+    dep = { workspace = true }
+    "#);
+    Ok(())
+}
+
+/// Raw version-bound selection retains the workspace source for this dependency scope.
+#[test]
+fn add_raw_retains_workspace_dev_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        dev-dependencies = ["dep"]
+
+        [tool.uv.workspace]
+        members = ["dep"]
+
+        [tool.uv.sources]
+        dep = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("dep/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("dep").arg("--raw").arg("--dev"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + dep==0.1.0 (from file://[TEMP_DIR]/dep)
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+
+    [tool.uv]
+    dev-dependencies = [
+        "dep",
+    ]
+
+    [tool.uv.workspace]
+    members = ["dep"]
+
+    [tool.uv.sources]
+    dep = { workspace = true }
+    "#);
+    Ok(())
+}
+
+/// Raw version-bound selection retains the workspace source for this dependency scope.
+#[test]
+fn add_raw_retains_workspace_optional_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [project.optional-dependencies]
+        test = ["dep"]
+
+        [tool.uv.workspace]
+        members = ["dep"]
+
+        [tool.uv.sources]
+        dep = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("dep/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("dep").arg("--raw").arg("--optional").arg("test"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + dep==0.1.0 (from file://[TEMP_DIR]/dep)
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+
+    [project.optional-dependencies]
+    test = [
+        "dep",
+    ]
+
+    [tool.uv.workspace]
+    members = ["dep"]
+
+    [tool.uv.sources]
+    dep = { workspace = true }
+    "#);
+    Ok(())
+}
+
+/// Raw version-bound selection retains the workspace source for this dependency scope.
+#[test]
+fn add_raw_retains_workspace_group_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [dependency-groups]
+        docs = ["dep"]
+
+        [tool.uv.workspace]
+        members = ["dep"]
+
+        [tool.uv.sources]
+        dep = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("dep/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("dep").arg("--raw").arg("--group").arg("docs"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + dep==0.1.0 (from file://[TEMP_DIR]/dep)
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+
+    [dependency-groups]
+    docs = [
+        "dep",
+    ]
+
+    [tool.uv.workspace]
+    members = ["dep"]
+
+    [tool.uv.sources]
+    dep = { workspace = true }
+    "#);
+    Ok(())
+}
+
 /// `--raw-sources` should be considered conflicting with sources-specific arguments, like `--tag`.
 #[test]
 #[cfg(feature = "test-git")]

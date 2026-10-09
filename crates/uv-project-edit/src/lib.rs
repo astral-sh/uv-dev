@@ -196,7 +196,7 @@ impl PyProjectTomlMut {
 
         if let Some(source) = source {
             self.add_source(&req.name, source)?;
-        } else if raw {
+        } else if raw && let Some(VersionOrUrl::Url(_)) = &req.version_or_url {
             self.remove_unscoped_source(&req.name)?;
         }
 
@@ -291,7 +291,7 @@ impl PyProjectTomlMut {
 
         if let Some(source) = source {
             self.add_source(&req.name, source)?;
-        } else if raw {
+        } else if raw && let Some(VersionOrUrl::Url(_)) = &req.version_or_url {
             self.remove_unscoped_source(&req.name)?;
         }
 
@@ -556,7 +556,7 @@ impl PyProjectTomlMut {
 
         if let Some(source) = source {
             self.add_source(&req.name, source)?;
-        } else if raw {
+        } else if raw && let Some(VersionOrUrl::Url(_)) = &req.version_or_url {
             self.remove_unscoped_source(&req.name)?;
         }
 
@@ -664,7 +664,7 @@ impl PyProjectTomlMut {
 
         if let Some(source) = source {
             self.add_source(&req.name, source)?;
-        } else if raw {
+        } else if raw && let Some(VersionOrUrl::Url(_)) = &req.version_or_url {
             self.remove_unscoped_source(&req.name)?;
         }
 
