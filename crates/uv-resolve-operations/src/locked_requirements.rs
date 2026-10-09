@@ -5,10 +5,10 @@ use itertools::Either;
 use tracing::info_span;
 
 use uv_configuration::Upgrade;
-use uv_distribution_types::{IndexUrl, MinimumLibcVersion, RequiresPython};
+use uv_distribution_types::{IndexUrl, MinimumLibcVersion};
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
-use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
+use uv_lock::{Lock, LockError, Package, PylockToml, PylockTomlErrorKind};
 use uv_pep508::{MarkerTree, VerbatimUrl};
 use uv_requirements_txt::RequirementsTxt;
 use uv_resolver::{Preference, PreferenceError, UpgradePackages, implied_markers_for_wheels};
@@ -68,13 +68,14 @@ pub async fn read_requirements_txt(
 }
 
 /// Load the preferred requirements from an existing lockfile, applying the upgrade strategy.
+///
+/// Without current activation information, wheel coverage checks treat every package as active.
 pub fn read_lock_requirements(
     lock: &Lock,
     install_path: &Path,
     upgrade: &Upgrade,
-    requires_python: &RequiresPython,
     required_environments: &[MarkerTree],
-    activation_is_current: bool,
+    activation: Option<Vec<(&Package, MarkerTree)>>,
     minimum_libc_version: Option<MinimumLibcVersion>,
 ) -> Result<LockedRequirements, LockError> {
     // As an optimization, skip iterating over the lockfile is we're upgrading all packages anyway.
@@ -87,14 +88,14 @@ pub fn read_lock_requirements(
     let mut preferences = Vec::new();
     let mut git = Vec::new();
 
-    let packages = if required_environments.is_empty() || !activation_is_current {
+    let packages = if let Some(activation) = activation {
+        Either::Right(activation.into_iter())
+    } else {
         Either::Left(
             lock.packages()
                 .iter()
                 .map(|package| (package, MarkerTree::TRUE)),
         )
-    } else {
-        Either::Right(lock.package_reachability(install_path, requires_python)?)
     };
     for (package, activation) in packages {
         // Skip the distribution if it's included in the upgrade strategy (either by explicit
