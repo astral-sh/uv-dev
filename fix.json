@@ -1,0 +1,10 @@
+{
+  "outcome": "fixed",
+  "summary": "Fix `uv run --with` entrypoints missing overlay dependencies when long or space-containing environment paths produce absolute shell wrappers. Recognize these wrappers with correctly escaped interpreter paths and update both parent regressions to require successful imports, including an apostrophe-containing path.",
+  "validation": [
+    "Focused debug-profile overlay integration tests: all 3 passed; updated regressions failed before the fix.",
+    "RUSTUP_TOOLCHAIN=stable cargo fmt --all",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2584"
+}
