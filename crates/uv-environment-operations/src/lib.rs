@@ -1511,6 +1511,7 @@ pub async fn resolve_environment(
                 &upgrade,
                 lock.requires_python(),
                 &[],
+                true,
                 None,
             )?;
 

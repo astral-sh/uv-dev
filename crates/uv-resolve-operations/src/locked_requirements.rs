@@ -74,6 +74,7 @@ pub fn read_lock_requirements(
     upgrade: &Upgrade,
     requires_python: &RequiresPython,
     required_environments: &[MarkerTree],
+    activation_is_current: bool,
     minimum_libc_version: Option<MinimumLibcVersion>,
 ) -> Result<LockedRequirements, LockError> {
     // As an optimization, skip iterating over the lockfile is we're upgrading all packages anyway.
@@ -86,7 +87,7 @@ pub fn read_lock_requirements(
     let mut preferences = Vec::new();
     let mut git = Vec::new();
 
-    let packages = if required_environments.is_empty() {
+    let packages = if required_environments.is_empty() || !activation_is_current {
         Either::Left(
             lock.packages()
                 .iter()
@@ -109,10 +110,14 @@ pub fn read_lock_requirements(
 
         // If a required environment is active for this package and the existing lock entry has no
         // matching wheel, drop the lock preference so the resolver can eagerly upgrade it.
+        let mut wheel_coverage = None;
         if required_environments.iter().copied().any(|marker| {
             let applicable = activation.and(marker);
             !applicable.is_false()
-                && implied_markers_for_wheels(package.wheel_filenames(), minimum_libc_version)
+                && wheel_coverage
+                    .get_or_insert_with(|| {
+                        implied_markers_for_wheels(package.wheel_filenames(), minimum_libc_version)
+                    })
                     .is_disjoint(applicable)
         }) {
             continue;

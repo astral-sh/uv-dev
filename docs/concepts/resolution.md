@@ -207,9 +207,8 @@ wheel is available).
 When updating an existing lockfile, uv drops lock preferences for packages that do not include a
 wheel for a required environment and resolves those packages again. This makes a Python-version
 upgrade eager: once a constraint is removed, a package that was previously pinned to a version
-without matching wheels can move to another allowed version. Constraints on known holdouts
-continue to be respected, but source-only packages may also be upgraded because their pins are
-discarded.
+without matching wheels can move to another allowed version. Constraints on known holdouts continue
+to be respected, but source-only packages may also be upgraded because their pins are discarded.
 
 ```toml title="pyproject.toml"
 [project]
