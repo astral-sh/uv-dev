@@ -18,11 +18,12 @@ mod macos {
     use criterion::{BatchSize, Criterion, measurement::WallTime};
     use tempfile::TempDir;
 
-    use uv_client::BaseClientBuilder;
+    use uv_client::{BaseClientBuilder, fetch_with_url_fallback};
+    use uv_distribution_filename::SourceDistExtension;
     use uv_preview::Preview;
     use uv_python_managed::ManagedPythonInstallation;
     use uv_python_managed::downloads::{
-        DownloadResult, ManagedPythonDownload, ManagedPythonDownloadList,
+        Error as DownloadError, ManagedPythonDownload, ManagedPythonDownloadList,
     };
     use uv_python_types::PythonDownloadMirrors;
 
@@ -46,23 +47,58 @@ mod macos {
                 .retries(0)
                 .build()
                 .expect("Failed to create download client");
+            let urls = download
+                .download_urls(PythonDownloadMirrors::default())
+                .expect("Failed to construct download URLs");
+            let extension = SourceDistExtension::from_path(
+                urls.first().expect("Missing Python archive URL").path(),
+            )
+            .expect("Unsupported Python archive extension");
 
-            // Download and verify the archive without running installation fixups:
-            // the input must retain its original install name and code signature.
-            let result = runtime
-                .block_on(download.fetch_with_retry(
-                    &client,
-                    &retry_policy,
-                    directory.path(),
-                    directory.path(),
-                    false,
-                    PythonDownloadMirrors::default(),
-                    None,
-                ))
-                .expect("Failed to download Python dylib fixture");
-            let path = match result {
-                DownloadResult::AlreadyAvailable(path) | DownloadResult::Fetched(path) => path,
-            };
+            // Extract archive bytes directly so installation finalization cannot modify the input.
+            let (directory, _) = runtime.block_on(async {
+                let archive = fetch_with_url_fallback(
+                    &urls,
+                    retry_policy,
+                    "Python dylib fixture",
+                    async |url| {
+                        let response = client
+                            .for_host(&url)
+                            .get(url.as_str())
+                            .send()
+                            .await
+                            .map_err(|error| {
+                                DownloadError::NetworkError(url.clone(), error.into())
+                            })?;
+                        response
+                            .error_for_status()
+                            .map_err(|error| {
+                                DownloadError::NetworkError(url.clone(), error.into())
+                            })?
+                            .bytes()
+                            .await
+                            .map_err(|error| DownloadError::NetworkError(url, error.into()))
+                    },
+                )
+                .await
+                .expect("Failed to download Python archive");
+                uv_extract::stream::archive(archive.as_ref(), extension, directory)
+                    .await
+                    .expect("Failed to extract Python archive")
+            });
+            let path = uv_extract::strip_component(directory.path())
+                .expect("Failed to find the Python archive root");
+            let output = Command::new("/usr/bin/otool")
+                .arg("-D")
+                .arg(path.join(DYLIB))
+                .output()
+                .expect("Failed to inspect original dylib");
+            assert!(output.status.success(), "otool failed: {output:?}");
+            let stdout = String::from_utf8(output.stdout).expect("otool output is not UTF-8");
+            assert_eq!(
+                stdout.lines().nth(1),
+                Some("/install/lib/libpython3.13.dylib")
+            );
 
             Self {
                 download,

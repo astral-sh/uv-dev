@@ -697,49 +697,22 @@ impl ManagedPythonDownload {
             fs_err::tokio::remove_dir_all(&path).await?;
         }
 
-        // Finalize the installation on the extracted temp directory BEFORE
-        // renaming into place. This eliminates the race window: when the rename
-        // completes, the installation is already fully functional, so a
-        // concurrent `uv python find` will never see an incomplete installation.
+        // Finalize files in staging with their published paths before making the installation
+        // visible to concurrent interpreter discovery.
         let installation =
             ManagedPythonInstallation::new(extracted.clone(), self).map_err(io::Error::other)?;
         installation
             .ensure_externally_managed()
             .map_err(io::Error::other)?;
-        let is_cpython = match self.key.implementation().as_ref() {
-            LenientImplementationName::Known(ImplementationName::CPython) => true,
-            LenientImplementationName::Known(
-                ImplementationName::Pyodide
-                | ImplementationName::GraalPy
-                | ImplementationName::PyPy,
-            )
-            | LenientImplementationName::Unknown(_) => false,
-        };
-        // Patch sysconfig with the final destination path, even though we
-        // operate on the temp staging directory. The `_sysconfigdata_` file
-        // replaces `/install` with `install_root`, and it must reference the
-        // final path so the installation is valid after rename.
-        // Only applicable on Unix, non-Windows, non-Emscripten, CPython.
-        if cfg!(unix) && !self.key.os().is_windows() && !self.key.os().is_emscripten() && is_cpython
-        {
-            crate::sysconfig::update_sysconfig_at(
-                &extracted,
-                &path,
-                self.key.major,
-                self.key.minor,
-                self.key.variant.lib_suffix(),
-            )
+        installation
+            .ensure_sysconfig_patched_at(&path)
             .map_err(io::Error::other)?;
-        }
         installation
             .ensure_canonical_executables()
             .map_err(io::Error::other)?;
         installation.ensure_build_file().map_err(io::Error::other)?;
-        // Only applicable on macOS for dylib install_name patching.
-        if cfg!(target_os = "macos") && self.key.os().is_like_darwin() && is_cpython {
-            if let Err(e) = installation.ensure_dylib_patched() {
-                e.warn_user(&installation);
-            }
+        if let Err(error) = installation.ensure_dylib_patched_at(&path) {
+            error.warn_user(&installation);
         }
 
         // Persist it to the target.
