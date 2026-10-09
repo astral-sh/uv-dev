@@ -20,7 +20,10 @@ use uv_resolver_types::graph_ops::{Reachable, marker_reachability};
 use uv_resolver_types::universal_marker::resolve_activated_extras;
 use uv_resolver_types::{ConflictMarker, UniversalMarker};
 
-use crate::lock::{DependencyContext, LockErrorKind, PackageIndex, normalize_requirement};
+use crate::lock::{
+    DependencyContext, DependencySelectionContext, LockErrorKind, PackageIndex,
+    normalize_requirement,
+};
 use crate::{
     Installable, InstallableRootKind, Lock, LockError, Package, implicit_constraints_marker,
 };
@@ -290,9 +293,59 @@ impl<'lock> ConflictRequests<'lock> {
     }
 }
 
+/// The roots whose requests must be validated before materializing conflict forks.
+#[derive(Clone, Copy)]
+enum ConflictRoots<'a, 'lock> {
+    Installable,
+    Concrete {
+        packages: &'a [&'lock Package],
+        selection_context: DependencySelectionContext<'lock>,
+    },
+}
+
 /// Validate requested selections before conflict guards can remove their resolved edges.
 pub(super) fn validate_requested_conflicts<'lock>(
     target: &(impl Installable<'lock> + ?Sized),
+    prune: &[PackageName],
+    extras: &ExtrasSpecificationWithDefaults,
+    groups: &DependencyGroupsWithDefaults,
+    marker_env: Option<&ResolverMarkerEnvironment>,
+) -> Result<(), LockError> {
+    validate_conflict_roots(
+        target,
+        ConflictRoots::Installable,
+        prune,
+        extras,
+        groups,
+        marker_env,
+    )
+}
+
+/// Validate concrete package roots without activating unrelated manifest requirements.
+pub(super) fn validate_concrete_requested_conflicts<'lock>(
+    target: &(impl Installable<'lock> + ?Sized),
+    roots: &[&'lock Package],
+    selection_context: DependencySelectionContext<'lock>,
+    extras: &ExtrasSpecificationWithDefaults,
+    groups: &DependencyGroupsWithDefaults,
+    marker_env: &ResolverMarkerEnvironment,
+) -> Result<(), LockError> {
+    validate_conflict_roots(
+        target,
+        ConflictRoots::Concrete {
+            packages: roots,
+            selection_context,
+        },
+        &[],
+        extras,
+        groups,
+        Some(marker_env),
+    )
+}
+
+fn validate_conflict_roots<'lock>(
+    target: &(impl Installable<'lock> + ?Sized),
+    roots: ConflictRoots<'_, 'lock>,
     prune: &[PackageName],
     extras: &ExtrasSpecificationWithDefaults,
     groups: &DependencyGroupsWithDefaults,
@@ -308,23 +361,57 @@ pub(super) fn validate_requested_conflicts<'lock>(
         lock.requires_python.to_marker_tree(),
         lock.supported_environments(),
     ));
-    let mut known_conflicts = FxHashMap::default();
-    for (name, kind) in target
-        .roots()
-        .map(|name| (name, InstallableRootKind::Production))
-        .chain(
-            target
-                .group_root(groups)
-                .map(|name| (name, InstallableRootKind::DependencyGroups)),
-        )
-    {
-        if prune.contains(name) {
-            continue;
+    let (roots, include_manifest, selection_context) = match roots {
+        ConflictRoots::Installable => {
+            let mut roots = Vec::new();
+            for (name, kind) in target
+                .roots()
+                .map(|name| (name, InstallableRootKind::Production))
+                .chain(
+                    target
+                        .group_root(groups)
+                        .map(|name| (name, InstallableRootKind::DependencyGroups)),
+                )
+            {
+                if prune.contains(name) {
+                    continue;
+                }
+                let package = lock
+                    .find_by_name(name)
+                    .map_err(|_| LockErrorKind::MultipleRootPackages { name: name.clone() })?
+                    .ok_or_else(|| LockErrorKind::MissingRootPackage { name: name.clone() })?;
+                roots.push((package, kind));
+            }
+            (roots, true, DependencySelectionContext::None)
         }
-        let package = lock
-            .find_by_name(name)
-            .map_err(|_| LockErrorKind::MultipleRootPackages { name: name.clone() })?
-            .ok_or_else(|| LockErrorKind::MissingRootPackage { name: name.clone() })?;
+        ConflictRoots::Concrete {
+            packages,
+            selection_context,
+        } => (
+            packages
+                .iter()
+                .copied()
+                .map(|package| (package, InstallableRootKind::Production))
+                .collect(),
+            false,
+            selection_context,
+        ),
+    };
+    let mut known_conflicts = FxHashMap::default();
+    match selection_context {
+        DependencySelectionContext::None => {}
+        DependencySelectionContext::Production(project) => {
+            known_conflicts.insert(ConflictItem::from(project.clone()), root_marker);
+        }
+        DependencySelectionContext::Group(project, group) => {
+            known_conflicts.insert(
+                ConflictItem::from((project.clone(), group.clone())),
+                root_marker,
+            );
+        }
+    }
+    for (package, kind) in roots {
+        let name = package.name();
         let index = lock.by_id[&package.id];
         if kind == InstallableRootKind::Production && groups.prod() {
             known_conflicts.insert(ConflictItem::from(name.clone()), root_marker);
@@ -336,6 +423,7 @@ pub(super) fn validate_requested_conflicts<'lock>(
                         .keys()
                         .chain(package.metadata.provides_extra.iter()),
                 )
+                .filter(|extra| !package.is_known_missing_extra(extra))
                 .collect::<BTreeSet<_>>()
             {
                 known_conflicts.insert(
@@ -392,12 +480,16 @@ pub(super) fn validate_requested_conflicts<'lock>(
             }
         }
     }
-    let requirements = lock.requirements().iter().filter(|_| groups.prod()).chain(
-        lock.dependency_groups()
-            .iter()
-            .filter(|(group, _)| target.includes_group(None, group, groups))
-            .flat_map(|(_, requirements)| requirements),
-    );
+    let requirements = lock
+        .requirements()
+        .iter()
+        .filter(|_| include_manifest && groups.prod())
+        .chain(
+            lock.dependency_groups()
+                .iter()
+                .filter(|(group, _)| include_manifest && target.includes_group(None, group, groups))
+                .flat_map(|(_, requirements)| requirements),
+        );
     for requirement in modifiers.apply(DependencyModifierScope::Global, requirements) {
         let requirement = normalize_requirement(
             requirement.into_owned(),

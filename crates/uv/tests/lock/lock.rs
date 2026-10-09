@@ -39027,6 +39027,7 @@ fn lock_pytorch_cpu() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu124"]
         dependencies = [
             { name = "jinja2" },
             { name = "numpy" },
@@ -39585,6 +39586,7 @@ fn lock_pytorch_index_preferences() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu118"]
 
         [package.optional-dependencies]
         cpu = [
