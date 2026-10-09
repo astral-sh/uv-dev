@@ -715,6 +715,20 @@ fn install_script(
     Ok(())
 }
 
+/// Return whether a data script is replaced by a generated entry-point wrapper.
+fn is_bundled_script(name: &str, console_scripts: &[Script], gui_scripts: &[Script]) -> bool {
+    // Match the wrapper names recognized by pip's wheel installer.
+    let match_name = name
+        .strip_suffix(".exe")
+        .or_else(|| name.strip_suffix("-script.py"))
+        .or_else(|| name.strip_suffix(".pya"))
+        .unwrap_or(name);
+    console_scripts
+        .iter()
+        .chain(gui_scripts)
+        .any(|script| script.name == match_name)
+}
+
 /// Move the files from the .data directory to the right location in the venv
 #[instrument(skip_all)]
 pub(crate) fn install_data(
@@ -758,19 +772,11 @@ pub(crate) fn install_data(
                 for file in fs::read_dir(path)? {
                     let file = file?;
 
-                    // Couldn't find any docs for this, took it directly from
-                    // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
-                    let name = file.file_name().to_string_lossy().to_string();
-                    let match_name = name
-                        .strip_suffix(".exe")
-                        .or_else(|| name.strip_suffix("-script.py"))
-                        .or_else(|| name.strip_suffix(".pya"))
-                        .unwrap_or(&name);
-                    if console_scripts
-                        .iter()
-                        .chain(gui_scripts)
-                        .any(|script| script.name == match_name)
-                    {
+                    if is_bundled_script(
+                        &file.file_name().to_string_lossy(),
+                        console_scripts,
+                        gui_scripts,
+                    ) {
                         continue;
                     }
 
@@ -1206,6 +1212,13 @@ pub fn script_paths(layout: &Layout, wheel: impl AsRef<Path>) -> Result<Vec<Path
     if data_scripts.is_dir() {
         for entry in fs::read_dir(data_scripts)? {
             let entry = entry?;
+            if is_bundled_script(
+                &entry.file_name().to_string_lossy(),
+                &console_scripts,
+                &gui_scripts,
+            ) {
+                continue;
+            }
             paths.push(layout.scheme.scripts.join(entry.file_name()));
         }
     }

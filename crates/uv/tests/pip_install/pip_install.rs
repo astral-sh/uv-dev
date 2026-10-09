@@ -36,9 +36,7 @@ use uv_test::archive::write_tar_gz;
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
 use uv_test::package_server::PackageServer;
-#[cfg(windows)]
-use uv_test::packse::generate_wheel_with_files;
-use uv_test::packse::{PackseServer, generate_wheel};
+use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, apply_filters, download_to_disk, get_bin, uv_snapshot,
     venv_bin_path,
@@ -235,30 +233,10 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
 }
 
 fn write_shared_script_wheel(path: &Path, name: &str, data_script: Option<&str>) -> Result<()> {
-    let mut writer = ZipFileWriter::new(Vec::new());
-    let metadata = formatdoc! {"
-        Metadata-Version: 2.1
-        Name: {name}
-        Version: 1.0.0
-    "};
-    let wheel = indoc! {"
-        Wheel-Version: 1.0
-        Generator: uv-test
-        Root-Is-Purelib: true
-        Tag: py3-none-any
-    "};
-    let entry_points = formatdoc! {"
-        [console_scripts]
-        shared-tool = {name}:main
-    "};
     let module = format!("def main():\n    print('{name}')\n");
-    let mut entries = vec![
-        (format!("{name}/__init__.py"), module),
-        (format!("{name}-1.0.0.dist-info/METADATA"), metadata),
-        (format!("{name}-1.0.0.dist-info/WHEEL"), wheel.to_string()),
-    ];
+    let mut files = vec![(format!("{name}/__init__.py"), module)];
     if let Some(data_script) = data_script {
-        entries.push((
+        files.push((
             format!(
                 "{name}-1.0.0.data/{data_script}{}",
                 std::env::consts::EXE_SUFFIX
@@ -266,22 +244,79 @@ fn write_shared_script_wheel(path: &Path, name: &str, data_script: Option<&str>)
             "#!python\nprint('data script')\n".to_string(),
         ));
     } else {
-        entries.push((
+        files.push((
             format!("{name}-1.0.0.dist-info/entry_points.txt"),
-            entry_points,
+            format!("[console_scripts]\nshared-tool = {name}:main\n"),
         ));
     }
-    let mut record = String::new();
-    for (entry_name, contents) in entries {
-        let entry = ZipEntryBuilder::new(entry_name.clone().into(), Compression::Stored);
-        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
-        writeln!(record, "{entry_name},,")?;
-    }
-    writeln!(record, "{name}-1.0.0.dist-info/RECORD,,")?;
-    let record_name = format!("{name}-1.0.0.dist-info/RECORD");
-    let entry = ZipEntryBuilder::new(record_name.into(), Compression::Stored);
-    block_on(writer.write_entry_whole(entry, record.as_bytes()))?;
-    fs_err::write(path, block_on(writer.close())?)?;
+    let files = files
+        .iter()
+        .map(|(name, content)| (name.as_str(), content.as_str()))
+        .collect::<Vec<_>>();
+    let (_, wheel) = generate_wheel_with_files(
+        &name.parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &files,
+    );
+    fs::write(path, wheel)?;
+    Ok(())
+}
+
+#[test]
+fn install_bundled_wheel_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (first, wheel) = generate_wheel_with_files(
+        &"first".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("first/__init__.py", "def main():\n    print('first')\n"),
+            (
+                "first-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nshared-tool = first:main\n",
+            ),
+            (
+                "first-1.0.0.data/scripts/shared-tool-script.py",
+                "#!python\nprint('bundled wrapper')\n",
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&first), wheel)?;
+    let (second, wheel) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "second-1.0.0.data/scripts/shared-tool-script.py",
+            "#!python\nprint('standalone script')\n",
+        )],
+    );
+    fs::write(context.temp_dir.join(&second), wheel)?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&first).arg(&second), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + first==1.0.0 (from file://[TEMP_DIR]/first-1.0.0-py3-none-any.whl)
+     + second==1.0.0 (from file://[TEMP_DIR]/second-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), context.python_command().arg(venv_bin_path(&context.venv).join("shared-tool-script.py")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    standalone script
+    ");
     Ok(())
 }
 
