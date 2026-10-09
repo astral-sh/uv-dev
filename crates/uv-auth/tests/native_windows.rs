@@ -197,8 +197,12 @@ async fn native_store_removes_credentials() -> Result<(), Box<dyn std::error::Er
     let credentials = Credentials::basic(Some("user".to_owned()), Some("password".to_owned()));
     let result = async {
         provider.store(&url, &credentials).await?;
-        if provider.fetch(&url, Some("user")).await? != Some(credentials) {
-            return Err(std::io::Error::other("unexpected stored credentials").into());
+        let actual = provider.fetch(&url, Some("user")).await?;
+        if actual.as_ref() != Some(&credentials) {
+            return Err(std::io::Error::other(format!(
+                "unexpected stored credentials: {actual:?}; expected {credentials:?}"
+            ))
+            .into());
         }
         provider.remove(&url, "user").await?;
         if provider.fetch(&url, Some("user")).await?.is_some() {

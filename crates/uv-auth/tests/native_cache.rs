@@ -116,8 +116,8 @@ async fn native_credentials_are_cached_by_service_path() -> Result<(), Box<dyn s
 }
 
 #[tokio::test]
-async fn migrated_native_credentials_are_cached_by_service_path()
--> Result<(), Box<dyn std::error::Error>> {
+async fn migrated_native_credentials_are_cached_by_realm() -> Result<(), Box<dyn std::error::Error>>
+{
     let preview =
         Preview::from_feature_names([&MaybePreviewFeature::Known(PreviewFeature::NativeAuth)]);
     let provider = match AuthBackend::from_settings(preview).await? {
@@ -140,8 +140,23 @@ async fn migrated_native_credentials_are_cached_by_service_path()
         .mount(&server)
         .await;
 
+    let realm = DisplaySafeUrl::parse(&server.uri())?;
     let private = DisplaySafeUrl::parse(&format!("{}/private", server.uri()))?;
-    let legacy = uv_keyring::Entry::new(&format!("uv:{private}"), "legacy-user")?;
+    // An HTTP scheme-qualified host entry can migrate to its exact realm. Exact request-URL
+    // entries remain legacy entries because their intended broader scope is unknown.
+    let legacy = uv_keyring::Entry::new(&format!("uv:{}", server.uri()), "legacy-user")?;
+    let other = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(basic_auth("legacy-user", "legacy-password"))
+        .respond_with(ResponseTemplate::new(200))
+        .with_priority(1)
+        .mount(&other)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(2)
+        .mount(&other)
+        .await;
     legacy.set_password("legacy-password").await?;
     let result = async {
         let cache = Arc::new(CredentialsCache::new());
@@ -170,24 +185,17 @@ async fn migrated_native_credentials_are_cached_by_service_path()
 
         // Removing the migrated entry makes any subsequent native lookup fail. Shared clients
         // must retain the migrated service scope in their cached realm snapshot.
-        provider.remove(&private, "legacy-user").await?;
-        assert_eq!(
-            second_client
-                .get(format!("{request}/package"))
-                .send()
-                .await?
-                .status(),
-            200
-        );
-        request.set_path("/sibling");
+        provider.remove(&realm, "legacy-user").await?;
+        request.set_path("/private/package");
         assert_eq!(
             second_client.get(request.as_str()).send().await?.status(),
-            401
+            200
         );
+        assert_eq!(second_client.get(other.uri()).send().await?.status(), 401);
         Ok::<(), Box<dyn std::error::Error>>(())
     }
     .await;
-    let _ = provider.remove(&private, "legacy-user").await;
+    let _ = provider.remove(&realm, "legacy-user").await;
     let _ = legacy.delete_credential().await;
     result
 }
