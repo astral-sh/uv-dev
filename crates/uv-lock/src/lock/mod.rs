@@ -9430,22 +9430,15 @@ impl Dependency {
             marker.combined()
         };
         let fallback = || {
-            let marker = if has_forks {
-                selection_marker(None)
-            } else {
-                self.complexified_marker.combined()
-            };
+            // Normalize forbidden assignments before assuming the requested item, including
+            // legacy markers on dependencies with only one locked version or source.
             Ok((
-                marker,
+                selection_marker(None),
                 self.extra
                     .iter()
                     .cloned()
                     .map(|extra| {
-                        let marker = if has_forks {
-                            selection_marker(Some(&extra))
-                        } else {
-                            marker
-                        };
+                        let marker = selection_marker(Some(&extra));
                         (extra, marker)
                     })
                     .collect(),

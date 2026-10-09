@@ -10435,6 +10435,173 @@ fn requirements_txt_scoped_override_adds_conflicting_empty_extra() -> Result<()>
     Ok(())
 }
 
+/// Impossible legacy conflict assignments cannot turn disjoint registry requests into conflicts.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_legacy_registry_extra_conflicts_are_disjoint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway", "child[b]; python_version >= '3.13'"]
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "a" }, { package = "child", extra = "b" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["leaf-a"]
+        b = ["leaf-b"]
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "python_full_version >= '3.13'",
+            "python_full_version < '3.13'",
+        ]
+        conflicts = [[
+            { package = "child", extra = "a" },
+            { package = "child", extra = "b" },
+        ]]
+
+        [manifest]
+        members = [
+            "child",
+            "project",
+        ]
+
+        [[package]]
+        name = "child"
+        version = "0.1.0"
+        source = { editable = "child" }
+
+        [package.optional-dependencies]
+        a = [
+            { name = "leaf-a" },
+        ]
+        b = [
+            { name = "leaf-b" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "leaf-a", marker = "extra == 'a'" },
+            { name = "leaf-b", marker = "extra == 'b'" },
+        ]
+        provides-extras = ["a", "b"]
+
+        [[package]]
+        name = "gateway"
+        version = "1.0"
+        source = { registry = "https://example.org/simple" }
+        dependencies = [
+            { name = "child", marker = "python_full_version < '3.13' or (extra == 'extra-5-child-a' and extra == 'extra-5-child-b')" },
+            { name = "child", extra = ["a"], marker = "(python_full_version < '3.13' and extra == 'extra-5-child-a') or (extra == 'extra-5-child-a' and extra == 'extra-5-child-b')" },
+        ]
+        wheels = [
+            { url = "https://example.org/gateway-1.0-py3-none-any.whl", hash = "sha256:ebec56efd20fd82de6ac24789ec15f1e7200b98ad2cfed473df90f2e98aca35e" },
+        ]
+
+        [[package]]
+        name = "leaf-a"
+        version = "1.0"
+        source = { registry = "https://example.org/simple" }
+        wheels = [
+            { url = "https://example.org/leaf_a-1.0-py3-none-any.whl", hash = "sha256:ec824301b1194780117241924b14a38facab4781a3a5b5216d44ae2cdede1a30" },
+        ]
+
+        [[package]]
+        name = "leaf-b"
+        version = "1.0"
+        source = { registry = "https://example.org/simple" }
+        wheels = [
+            { url = "https://example.org/leaf_b-1.0-py3-none-any.whl", hash = "sha256:73c2105bae413c19a4d1f05d5345ec3bc74f5eba422d7371ac6a6aa7b257799f" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "child", marker = "python_full_version >= '3.13' or (extra == 'extra-5-child-a' and extra == 'extra-5-child-b')" },
+            { name = "child", extra = ["b"], marker = "(python_full_version >= '3.13' and extra == 'extra-5-child-b') or (extra == 'extra-5-child-a' and extra == 'extra-5-child-b')" },
+            { name = "gateway" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "child", extras = ["b"], marker = "python_full_version >= '3.13'", editable = "child" },
+            { name = "gateway" },
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./child
+    gateway==1.0
+    leaf-a==1.0 ; python_full_version < '3.13'
+    leaf-b==1.0 ; python_full_version >= '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--no-header", "--format", "pylock.toml",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "child"
+    directory = { path = "child", editable = true }
+
+    [[packages]]
+    name = "gateway"
+    version = "1.0"
+    index = "https://example.org/simple"
+    wheels = [{ url = "https://example.org/gateway-1.0-py3-none-any.whl", hashes = { sha256 = "ebec56efd20fd82de6ac24789ec15f1e7200b98ad2cfed473df90f2e98aca35e" } }]
+
+    [[packages]]
+    name = "leaf-a"
+    version = "1.0"
+    marker = "python_full_version < '3.13'"
+    index = "https://example.org/simple"
+    wheels = [{ url = "https://example.org/leaf_a-1.0-py3-none-any.whl", hashes = { sha256 = "ec824301b1194780117241924b14a38facab4781a3a5b5216d44ae2cdede1a30" } }]
+
+    [[packages]]
+    name = "leaf-b"
+    version = "1.0"
+    marker = "python_full_version >= '3.13'"
+    index = "https://example.org/simple"
+    wheels = [{ url = "https://example.org/leaf_b-1.0-py3-none-any.whl", hashes = { sha256 = "73c2105bae413c19a4d1f05d5345ec3bc74f5eba422d7371ac6a6aa7b257799f" } }]
+    "#);
+    Ok(())
+}
+
 /// Dependency-activated extras also conflict with selected groups and production packages.
 #[cfg(feature = "test-universal")]
 #[test]
