@@ -574,15 +574,39 @@ pub async fn add(
         ),
     )?;
 
-    // If the user provides a single, named index, pin all requirements to that index.
-    let index = indexes
+    // Validate any indexes that were provided on the command-line before modifying the workspace.
+    let supplied_index_count = indexes.len();
+    let supplied_index_name = indexes
         .first()
-        .as_ref()
-        .and_then(|index| index.name.as_ref())
-        .filter(|_| indexes.len() == 1)
-        .inspect(|index| {
-            debug!("Pinning all requirements to index: `{index}`");
-        });
+        .filter(|_| supplied_index_count == 1)
+        .and_then(|index| index.name.clone());
+    let mut valid_indexes = Vec::with_capacity(supplied_index_count);
+    for index in indexes {
+        if let IndexUrl::Path(url) = &index.url {
+            let path = url
+                .to_file_path()
+                .map_err(|()| anyhow::anyhow!("Invalid file path in index URL: {url}"))?;
+            if !path.is_dir() {
+                bail!("Directory not found for index: {url}");
+            }
+            if fs_err::read_dir(&path)?.next().is_none() {
+                if supplied_index_name.is_some() {
+                    // The selected source still needs its declaration, including for frozen edits.
+                    warn_user_once!("Index directory `{url}` is empty");
+                } else {
+                    warn_user_once!("Index directory `{url}` is empty, skipping");
+                    continue;
+                }
+            }
+        }
+        valid_indexes.push(index);
+    }
+    let indexes = valid_indexes;
+
+    // If the user provides a single, named index, pin all requirements to that index.
+    let index = supplied_index_name.as_ref().inspect(|index| {
+        debug!("Pinning all requirements to index: `{index}`");
+    });
 
     // Determine whether to use workspace mode.
     let use_workspace = match workspace {
@@ -655,7 +679,7 @@ pub async fn add(
 
                 writeln!(
                     printer.stderr(),
-                    "Added `{}` to workspace members",
+                    "Adding `{}` to workspace members",
                     relative_path.user_display().cyan()
                 )?;
             }
@@ -724,26 +748,6 @@ pub async fn add(
             _ => {}
         }
     }
-
-    // Validate any indexes that were provided on the command-line to ensure
-    // they point to existing non-empty directories when using path URLs.
-    let mut valid_indexes = Vec::with_capacity(indexes.len());
-    for index in indexes {
-        if let IndexUrl::Path(url) = &index.url {
-            let path = url
-                .to_file_path()
-                .map_err(|()| anyhow::anyhow!("Invalid file path in index URL: {url}"))?;
-            if !path.is_dir() {
-                bail!("Directory not found for index: {url}");
-            }
-            if fs_err::read_dir(&path)?.next().is_none() {
-                warn_user_once!("Index directory `{url}` is empty, skipping");
-                continue;
-            }
-        }
-        valid_indexes.push(index);
-    }
-    let indexes = valid_indexes;
 
     // Add any indexes that were provided on the command-line, in priority order.
     if !raw {
