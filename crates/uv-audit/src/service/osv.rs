@@ -19,7 +19,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uv_cache::{Cache, CacheBucket, CacheEntry};
 use uv_client::{CacheControl, CachedClient, CachedClientError};
-use uv_configuration::ConcurrencyState;
+use uv_configuration::Concurrency;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_redacted::policy::Raw;
@@ -233,7 +233,7 @@ const OSV_QUERY_BATCH_SIZE: usize = 1_000;
 pub struct Osv {
     base_url: SafeUrl,
     client: CachedClient,
-    concurrency: ConcurrencyState,
+    concurrency: Concurrency,
     cache: Cache,
 }
 
@@ -246,7 +246,7 @@ impl Osv {
     pub fn new(
         client: CachedClient,
         base_url: Option<SafeUrl>,
-        concurrency: ConcurrencyState,
+        concurrency: Concurrency,
         cache: Cache,
     ) -> Self {
         Self {
@@ -368,7 +368,7 @@ impl Osv {
                 let vuln = self.fetch_vuln(id.as_str()).await?;
                 Ok::<(VulnerabilityID, Vulnerability), Error>((id, vuln))
             })
-            .buffer_unordered(self.concurrency.limits().downloads)
+            .buffer_unordered(self.concurrency.downloads)
             .try_collect::<FxHashMap<VulnerabilityID, Vulnerability>>()
             .await?;
 
@@ -519,7 +519,7 @@ mod tests {
     use serde_json::json;
     use uv_cache::Cache;
     use uv_client::{BaseClientBuilder, CachedClient};
-    use uv_configuration::ConcurrencyState;
+    use uv_configuration::Concurrency;
     use uv_normalize::PackageName;
     use uv_pep440::Version;
     use uv_redacted::SafeUrl;
@@ -617,7 +617,7 @@ mod tests {
         let osv = Osv::new(
             test_client(),
             Some(SafeUrl::parse(&server.uri()).unwrap()),
-            ConcurrencyState::default(),
+            Concurrency::default(),
             Cache::temp().unwrap(),
         );
 
@@ -694,7 +694,7 @@ mod tests {
         let osv = Osv::new(
             test_client(),
             Some(SafeUrl::parse(&server.uri()).unwrap()),
-            ConcurrencyState::default(),
+            Concurrency::default(),
             Cache::temp().unwrap(),
         );
         let dependencies = (0..=OSV_QUERY_BATCH_SIZE)
@@ -786,7 +786,7 @@ mod tests {
         let osv = Osv::new(
             test_client(),
             Some(SafeUrl::parse(&server.uri()).unwrap()),
-            ConcurrencyState::default(),
+            Concurrency::default(),
             Cache::temp().unwrap(),
         );
 
@@ -981,7 +981,7 @@ mod tests {
         let osv = Osv::new(
             test_client(),
             Some(SafeUrl::parse(&server.uri()).unwrap()),
-            ConcurrencyState::default(),
+            Concurrency::default(),
             Cache::temp().unwrap(),
         );
 
@@ -1065,7 +1065,7 @@ mod tests {
         let osv = Osv::new(
             test_client(),
             Some(SafeUrl::parse(&server.uri()).unwrap()),
-            ConcurrencyState::default(),
+            Concurrency::default(),
             Cache::temp().unwrap(),
         );
 

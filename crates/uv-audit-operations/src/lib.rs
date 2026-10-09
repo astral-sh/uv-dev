@@ -82,7 +82,8 @@ pub async fn audit_lock(
         match service {
             VulnerabilityServiceFormat::Osv => {
                 let client = CachedClient::new(base_client);
-                let service = osv::Osv::new(client, service_url, concurrency, cache.clone());
+                let service =
+                    osv::Osv::new(client, service_url, *concurrency.limits(), cache.clone());
                 trace!("Auditing {n} dependencies against OSV", n = auditable.len());
                 service.query_batch(&dependencies, osv::Filter::All).await
             }

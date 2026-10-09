@@ -5,7 +5,7 @@ use owo_colors::OwoColorize;
 use tracing::debug;
 use uv_cache::Cache;
 use uv_command_support::{Printer, elapsed};
-use uv_configuration::ConcurrencyState;
+use uv_configuration::Concurrency;
 use uv_fs::CWD;
 use uv_installer::{compile_files, compile_tree};
 use uv_python_interpreter::PythonEnvironment;
@@ -18,7 +18,7 @@ use crate::Error;
 /// See the `--compile` option on `pip sync` and `pip install`.
 pub(super) async fn compile_bytecode(
     venv: &PythonEnvironment,
-    concurrency: &ConcurrencyState,
+    concurrency: &Concurrency,
     cache: &Cache,
     printer: Printer,
 ) -> Result<(), Error> {
@@ -36,7 +36,7 @@ pub(super) async fn compile_bytecode(
         files += compile_tree(
             &site_packages,
             venv.python_executable(),
-            concurrency.limits(),
+            concurrency,
             cache.root(),
         )
         .await
@@ -53,19 +53,14 @@ pub(super) async fn compile_bytecode(
 pub(super) async fn compile_bytecode_files(
     files: impl IntoIterator<Item = anyhow::Result<PathBuf>>,
     venv: &PythonEnvironment,
-    concurrency: &ConcurrencyState,
+    concurrency: &Concurrency,
     cache: &Cache,
     printer: Printer,
 ) -> Result<(), Error> {
     let start = std::time::Instant::now();
-    let files = compile_files(
-        files,
-        venv.python_executable(),
-        concurrency.limits(),
-        cache.root(),
-    )
-    .await
-    .map_err(Error::CompileFiles)?;
+    let files = compile_files(files, venv.python_executable(), concurrency, cache.root())
+        .await
+        .map_err(Error::CompileFiles)?;
     if files == 0 {
         return Ok(());
     }

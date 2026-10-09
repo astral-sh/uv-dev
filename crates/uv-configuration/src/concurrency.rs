@@ -1,4 +1,3 @@
-use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -62,17 +61,11 @@ impl Concurrency {
 }
 
 /// Shared runtime state for the configured [`Concurrency`] limits.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConcurrencyState {
     limits: Concurrency,
     downloads_semaphore: Arc<Semaphore>,
     builds_semaphore: Arc<Semaphore>,
-}
-
-impl fmt::Debug for ConcurrencyState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.limits.fmt(f)
-    }
 }
 
 impl Default for ConcurrencyState {
@@ -153,9 +146,5 @@ mod tests {
             cache_reads: 5,
         }
         ");
-        assert_eq!(
-            format!("{limits:?}"),
-            format!("{:?}", ConcurrencyState::new(limits))
-        );
     }
 }
