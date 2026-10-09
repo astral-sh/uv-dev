@@ -264,31 +264,11 @@ impl ToolPython {
         })
     }
 
-    /// Discover an interpreter and validate its requirements bound before it can run build hooks.
-    pub(super) async fn find_or_download(
+    /// Validate the selected interpreter against requirements before it can run build hooks.
+    pub(super) fn check_interpreter_compatibility(
         &self,
-        python_preference: PythonPreference,
-        python_arch: Option<PythonArchitecture>,
-        python_downloads: PythonDownloads,
-        client_builder: &BaseClientBuilder<'_>,
-        cache: &Cache,
-        reporter: &PythonDownloadReporter,
-        install_mirrors: &PythonInstallMirrors,
-    ) -> anyhow::Result<Interpreter> {
-        let interpreter = PythonInstallation::find_or_download(
-            self.python_request.as_ref(),
-            EnvironmentPreference::OnlySystem,
-            python_preference,
-            python_arch,
-            python_downloads,
-            client_builder,
-            cache,
-            Some(reporter),
-            install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url.as_deref(),
-        )
-        .await?
-        .into_interpreter();
+        interpreter: &Interpreter,
+    ) -> anyhow::Result<()> {
         if let Some(requires_python) = self.requires_python.as_ref()
             && !requires_python.contains(interpreter.python_version())
         {
@@ -297,7 +277,7 @@ impl ToolPython {
                 interpreter.python_version()
             );
         }
-        Ok(interpreter)
+        Ok(())
     }
 
     /// Returns `true` if the selected request was explicitly provided by the user.

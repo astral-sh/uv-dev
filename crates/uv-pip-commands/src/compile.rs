@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
@@ -389,7 +389,13 @@ pub async fn pip_compile(
     // Determine the Python requirement, if the user requested a specific version.
     let python_requirement = if universal {
         let requires_python = if let Some(python_version) = python_version.as_ref() {
-            RequiresPython::greater_than_equal_version(&python_version.version)
+            let minimum = RequiresPython::greater_than_equal_version(&python_version.version);
+            if let Some(requires_python) = requires_python.as_ref() {
+                RequiresPython::intersection([minimum.specifiers(), requires_python.specifiers()].into_iter())
+                    .context("The requested Python version does not overlap the PEP 723 `requires-python` value")?
+            } else {
+                minimum
+            }
         } else if let Some(requires_python) = requires_python.as_ref() {
             requires_python.clone()
         } else {

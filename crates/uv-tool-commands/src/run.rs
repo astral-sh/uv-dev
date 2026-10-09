@@ -35,7 +35,9 @@ use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_interpreter::PythonEnvironment;
-use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
+};
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_shell::WindowsRunnable;
@@ -54,7 +56,7 @@ use crate::requirements::resolve_names;
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
-use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::{PythonDownloadReporter, PythonInstallation};
 use uv_resolve_operations as operations;
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
@@ -829,17 +831,21 @@ async fn get_or_create_environment(
     .await?;
 
     // Discover an interpreter.
-    let interpreter = tool_python
-        .find_or_download(
-            python_preference,
-            python_arch,
-            python_downloads,
-            client_builder,
-            cache,
-            &reporter,
-            &install_mirrors,
-        )
-        .await?;
+    let interpreter = PythonInstallation::find_or_download(
+        tool_python.python_request.as_ref(),
+        EnvironmentPreference::OnlySystem,
+        python_preference,
+        python_arch,
+        python_downloads,
+        client_builder,
+        cache,
+        Some(&reporter),
+        install_mirrors.mirrors(),
+        install_mirrors.python_downloads_json_url.as_deref(),
+    )
+    .await?
+    .into_interpreter();
+    tool_python.check_interpreter_compatibility(&interpreter)?;
     let requires_python = &tool_python.requires_python;
     let python_request = &tool_python.python_request;
 

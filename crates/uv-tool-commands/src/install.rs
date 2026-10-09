@@ -2,7 +2,7 @@ use std::fmt::Write;
 use std::str::FromStr;
 use uv_dispatch::PlatformState;
 use uv_distribution_types::RequirementScope;
-use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::{PythonDownloadReporter, PythonInstallation};
 
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
@@ -27,7 +27,9 @@ use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
-use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
+};
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_tool::{InstalledTools, Tool};
@@ -150,17 +152,21 @@ pub async fn install(
 
     // Pre-emptively identify a Python interpreter. We need an interpreter to resolve any unnamed
     // requirements, even if we end up using a different interpreter for the tool install itself.
-    let interpreter = tool_python
-        .find_or_download(
-            python_preference,
-            python_arch,
-            python_downloads,
-            &client_builder,
-            &cache,
-            &reporter,
-            &install_mirrors,
-        )
-        .await?;
+    let interpreter = PythonInstallation::find_or_download(
+        tool_python.python_request.as_ref(),
+        EnvironmentPreference::OnlySystem,
+        python_preference,
+        python_arch,
+        python_downloads,
+        &client_builder,
+        &cache,
+        Some(&reporter),
+        install_mirrors.mirrors(),
+        install_mirrors.python_downloads_json_url.as_deref(),
+    )
+    .await?
+    .into_interpreter();
+    tool_python.check_interpreter_compatibility(&interpreter)?;
     let requires_python = &tool_python.requires_python;
     let python_request = &tool_python.python_request;
 

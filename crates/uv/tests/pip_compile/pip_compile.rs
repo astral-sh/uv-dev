@@ -20010,3 +20010,29 @@ fn compile_pep723_empty_python_bound() -> Result<()> {
     ");
     Ok(())
 }
+
+#[test]
+fn compile_pep723_universal_target_python() -> Result<()> {
+    let context = uv_test::test_context!("3.11");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.11,<3.12"
+        # dependencies = [
+        #     "unreachable==1; python_version >= '3.12'",
+        #     "unreachable==2; python_version >= '3.12'",
+        # ]
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "--universal", "--python-version", "3.11", "--no-index",
+        "--no-header", "--no-annotate", "requirements.py"
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    "#);
+    Ok(())
+}
