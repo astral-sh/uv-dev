@@ -3073,6 +3073,149 @@ fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
     Ok(())
 }
 
+/// Conflict checks use the retained dependency version, even when a newer version drops its script.
+#[test]
+fn tool_install_conflict_retained_dependency_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "retained-tool-entrypoint"
+        [root]
+        requires = ["tool"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.dep.versions."1.0.0"]
+        sdist = false
+        entry_points = ["dep"]
+        [packages.dep.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let bin_dir = context.temp_dir.child("bin");
+    let tool_dir = context.temp_dir.child("tools/tool");
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--with")
+        .arg("dep==1.0.0")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let receipt = fs_err::read(tool_dir.child("uv-receipt.toml"))?;
+    let conflict = bin_dir.child(format!("dep{}", std::env::consts::EXE_SUFFIX));
+    conflict.write_str("unrelated executable")?;
+
+    uv_snapshot!(context.filters(), context.tool_install().arg("tool")
+        .arg("--with-executables-from").arg("dep")
+        .arg("--default-index").arg(server.index_url())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Executable already exists: dep (use `--force` to overwrite)
+    ");
+    assert_eq!(fs_err::read(tool_dir.child("uv-receipt.toml"))?, receipt);
+    assert_eq!(fs_err::read_to_string(&conflict)?, "unrelated executable");
+    Command::new(
+        bin_dir
+            .child(format!("tool{}", std::env::consts::EXE_SUFFIX))
+            .path(),
+    )
+    .assert()
+    .success();
+
+    fs_err::remove_file(&conflict)?;
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--with-executables-from")
+        .arg("dep")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let python = tool_dir.child(if cfg!(windows) {
+        "Scripts/python.exe"
+    } else {
+        "bin/python"
+    });
+    Command::new(python.path())
+        .args([
+            "-c",
+            "import importlib.metadata; assert importlib.metadata.version('dep') == '1.0.0'",
+        ])
+        .assert()
+        .success();
+    Command::new(conflict.path()).assert().success();
+    Ok(())
+}
+
+/// A no-op package upgrade can still add requested dependency executables.
+#[test]
+fn tool_install_conflict_empty_plan_with_locks() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "empty-tool-plan-entrypoint"
+        [root]
+        requires = ["tool"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.dep.versions."1.0.0"]
+        sdist = false
+        entry_points = ["dep"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let bin_dir = context.temp_dir.child("bin");
+    let tool_dir = context.temp_dir.child("tools/tool");
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--with")
+        .arg("dep")
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let receipt = fs_err::read(tool_dir.child("uv-receipt.toml"))?;
+    let conflict = bin_dir.child(format!("dep{}", std::env::consts::EXE_SUFFIX));
+    conflict.write_str("unrelated executable")?;
+
+    uv_snapshot!(context.filters(), context.tool_install().arg("tool")
+        .arg("--with-executables-from").arg("dep").arg("--upgrade")
+        .arg("--preview-features").arg("tool-install-locks")
+        .arg("--default-index").arg(server.index_url())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Executable already exists: dep (use `--force` to overwrite)
+    ");
+    assert_eq!(fs_err::read(tool_dir.child("uv-receipt.toml"))?, receipt);
+    assert_eq!(fs_err::read_to_string(&conflict)?, "unrelated executable");
+    Command::new(
+        bin_dir
+            .child(format!("tool{}", std::env::consts::EXE_SUFFIX))
+            .path(),
+    )
+    .assert()
+    .success();
+    Ok(())
+}
+
 #[test]
 fn tool_install_conflict_preserves_reused_environment() -> Result<()> {
     let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
@@ -3127,12 +3270,9 @@ fn tool_install_conflict_preserves_reused_environment() -> Result<()> {
         .assert()
         .success();
     uv_snapshot!(context.filters(), Command::new("simple_launcher").env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     Hi from the simple launcher!
-
-    ----- stderr -----
     ");
     external.assert(predicate::path::is_file());
 
@@ -3198,12 +3338,9 @@ fn tool_install_conflict_preserves_recreated_environment() -> Result<()> {
         .assert()
         .success();
     uv_snapshot!(context.filters(), Command::new("simple_launcher").env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     Hi from the simple launcher!
-
-    ----- stderr -----
     ");
     external.assert(predicate::path::is_file());
 

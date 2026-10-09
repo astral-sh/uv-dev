@@ -1754,6 +1754,58 @@ pub async fn update_environment(
     printer: Printer,
     preview: Preview,
 ) -> Result<EnvironmentUpdate, EnvironmentError> {
+    update_environment_with_preflight(
+        venv,
+        spec,
+        modifications,
+        python_platform,
+        source_tree_editable_policy,
+        build_constraints,
+        extra_build_requires,
+        settings,
+        client_builder,
+        state,
+        resolve,
+        install,
+        installer_metadata,
+        concurrency,
+        cache,
+        workspace_cache,
+        dry_run,
+        printer,
+        preview,
+        async |_, _, _| Ok(()),
+    )
+    .await
+}
+
+/// Update an environment, checking its resolved packages before modifying installed files.
+pub async fn update_environment_with_preflight(
+    venv: PythonEnvironment,
+    spec: RequirementsSpecification,
+    modifications: Modifications,
+    python_platform: Option<&TargetTriple>,
+    source_tree_editable_policy: SourceTreeEditablePolicy,
+    build_constraints: Constraints,
+    extra_build_requires: ExtraBuildRequires,
+    settings: &ResolverInstallerSettings,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &SharedState,
+    resolve: Box<dyn ResolveLogger>,
+    install: Box<dyn InstallLogger>,
+    installer_metadata: bool,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    dry_run: DryRun,
+    printer: Printer,
+    preview: Preview,
+    preflight: impl AsyncFnOnce(
+        &PythonEnvironment,
+        &Resolution,
+        &HashStrategy,
+    ) -> Result<(), EnvironmentError>,
+) -> Result<EnvironmentUpdate, EnvironmentError> {
     warn_on_requirements_txt_setting(&spec, &settings.resolver);
 
     let ResolverInstallerSettings {
@@ -1978,6 +2030,8 @@ pub async fn update_environment(
         Ok((resolution, hasher)) => (Resolution::from(resolution), hasher),
         Err(err) => return Err(err.into()),
     };
+    preflight(&venv, &resolution, &hasher).await?;
+
     // Sync the environment.
     let changelog = uv_install_operations::install(
         &resolution,

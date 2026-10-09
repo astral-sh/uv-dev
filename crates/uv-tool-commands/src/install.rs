@@ -18,8 +18,8 @@ use uv_configuration::{
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirementSpecification,
+    ExtraBuildRequires, IndexCapabilities, Name, NameRequirementSpecification, Requirement,
+    RequirementSource, ResolvedDist, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -49,7 +49,7 @@ use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
-    sync_environment, update_environment,
+    sync_environment, update_environment_with_preflight,
 };
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_resolve_operations as operations;
@@ -833,6 +833,14 @@ pub async fn install(
                 return Ok(ExitStatus::Success);
             }
             let environment = if plan.is_empty() && !settings.compile_bytecode {
+                if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
+                    check_tool_entrypoint_conflicts(
+                        &environment,
+                        package_name,
+                        entrypoints,
+                        existing_receipt,
+                    )?;
+                }
                 environment
             } else {
                 if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
@@ -883,44 +891,7 @@ pub async fn install(
             };
             (environment, Some(tool_lock))
         } else {
-            if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
-                let (_temp_dir, preflight) =
-                    create_preflight_environment(environment.interpreter().clone(), &cache)?;
-                let preflight = match update_environment(
-                    preflight,
-                    spec.clone(),
-                    Modifications::Exact,
-                    python_platform.as_ref(),
-                    SourceTreeEditablePolicy::Tool,
-                    Constraints::from_specifications(receipt_build_constraints.iter().cloned()),
-                    ExtraBuildRequires::default(),
-                    &settings,
-                    &client_builder,
-                    &state,
-                    Box::new(DefaultResolveLogger),
-                    Box::new(DefaultInstallLogger),
-                    installer_metadata,
-                    &concurrency,
-                    &cache,
-                    workspace_cache,
-                    DryRun::Disabled,
-                    Printer::Silent,
-                    preview,
-                )
-                .await
-                {
-                    Ok(update) => update.environment,
-                    Err(err) => return Err(UvError::from(err).into()),
-                };
-                check_tool_entrypoint_conflicts(
-                    &preflight,
-                    package_name,
-                    entrypoints,
-                    existing_receipt,
-                )?;
-            }
-
-            let update = match update_environment(
+            let update = match update_environment_with_preflight(
                 environment,
                 spec,
                 Modifications::Exact,
@@ -940,6 +911,70 @@ pub async fn install(
                 DryRun::Disabled,
                 printer,
                 preview,
+                async |environment, resolution, hash_strategy| {
+                    if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
+                        // Retained distributions already have the exact entrypoint metadata that
+                        // will be used by the update. Inspect them in their existing environment.
+                        let retained_entrypoints = entrypoints
+                            .iter()
+                            .filter(|package| {
+                                resolution.distributions().any(|dist| {
+                                    dist.name() == *package
+                                        && match dist {
+                                            ResolvedDist::Installed { .. } => true,
+                                            ResolvedDist::Installable { .. } => false,
+                                        }
+                                })
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        check_tool_entrypoint_conflicts(
+                            environment,
+                            package_name,
+                            &retained_entrypoints,
+                            existing_receipt,
+                        )?;
+
+                        // Install only changed distributions into the temporary environment.
+                        // Installed distributions reference files in the original environment.
+                        let pending = resolution.clone().filter(|dist| match dist {
+                            ResolvedDist::Installed { .. } => false,
+                            ResolvedDist::Installable { .. } => true,
+                        });
+                        if !pending.is_empty() {
+                            let (_temp_dir, preflight) = create_preflight_environment(
+                                environment.interpreter().clone(),
+                                &cache,
+                            )?;
+                            let preflight = sync_environment(
+                                preflight,
+                                &pending,
+                                hash_strategy.clone(),
+                                Modifications::Exact,
+                                Constraints::from_specifications(
+                                    receipt_build_constraints.iter().cloned(),
+                                ),
+                                (&settings).into(),
+                                &client_builder,
+                                &state,
+                                Box::new(DefaultInstallLogger),
+                                installer_metadata,
+                                &concurrency,
+                                &cache,
+                                Printer::Silent,
+                                preview,
+                            )
+                            .await?;
+                            check_tool_entrypoint_conflicts(
+                                &preflight,
+                                package_name,
+                                entrypoints,
+                                existing_receipt,
+                            )?;
+                        }
+                    }
+                    Ok(())
+                },
             )
             .await
             {
