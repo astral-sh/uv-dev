@@ -361,10 +361,11 @@ mod tests {
     use std::io::Cursor;
     use std::str::FromStr;
 
-    use tar_codec::{Archive as _, Member, TarArchive};
+    use tar_codec::{Archive as _, Member, MemberPayload as _, TarArchive};
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     use super::*;
+    use crate::packse::scenario::PackageMetadata;
 
     #[test]
     fn generate_simple_wheel() {
@@ -463,6 +464,106 @@ mod tests {
         assert!(names.contains(&"my_package-1.0.0/pyproject.toml".to_string()));
         assert!(names.contains(&"my_package-1.0.0/PKG-INFO".to_string()));
         assert!(names.contains(&"my_package-1.0.0/src/my_package/__init__.py".to_string()));
+    }
+
+    #[test]
+    fn generate_script_archives() -> anyhow::Result<()> {
+        let name = PackageName::from_str("my-package")?;
+        let version = Version::from_str("1.2.3")?;
+        let metadata: PackageMetadata = toml::from_str(
+            r#"scripts = { alias = "my_package.commands.cli:main", example = "my_package.commands.cli:main", root = "my_package:run" }"#,
+        )?;
+        let scripts = GeneratedScripts::new(&name, &version, &[], &metadata.scripts)?;
+
+        let (_, wheel) = WheelBuilder::new(&name, &version).scripts(&scripts).build();
+        let archive = block_on(async_zip::base::read::mem::ZipFileReader::new(wheel))?;
+        let wheel_files = block_on(async {
+            let mut files = BTreeMap::new();
+            for (index, entry) in archive.file().entries().iter().enumerate() {
+                let path = entry.filename().as_str()?.to_string();
+                let mut contents = String::new();
+                archive
+                    .reader_with_entry(index)
+                    .await?
+                    .read_to_string_checked(&mut contents)
+                    .await?;
+                files.insert(path, contents);
+            }
+            anyhow::Ok(files)
+        })?;
+        assert_eq!(
+            wheel_files["my_package-1.2.3.dist-info/entry_points.txt"],
+            "[console_scripts]\nalias = my_package.commands.cli:main\nexample = my_package.commands.cli:main\nroot = my_package:run\n"
+        );
+
+        // Every archive member, including the generated modules and entry points, is recorded.
+        let record_path = "my_package-1.2.3.dist-info/RECORD";
+        let record = &wheel_files[record_path];
+        assert_eq!(record.lines().count(), wheel_files.len());
+        insta::assert_snapshot!(record, @"
+        my_package/__init__.py,sha256=E44EfoNEJVgS_HVAsgNak4PUm0EnxS5Gn23Psivt3xA,95
+        my_package-1.2.3.dist-info/METADATA,sha256=9XdufOc_mUApNOOke1zP114TooYlmh_JbUPWvIxbVVY,54
+        my_package-1.2.3.dist-info/WHEEL,sha256=ujr00BDMtYYidJ71ulklWmNFpiGqy5NyjK1fX-JwFO4,78
+        my_package/commands/__init__.py,sha256=C-D_WWrVkBDmQmApLcm0sWNh2CgIrwWfc8_sB5vvU-Q,22
+        my_package/commands/cli/__init__.py,sha256=WjcWAel2D_BC9c32M8BKlvl1WFAvOXorIUPMs2Aqizw,96
+        my_package-1.2.3.dist-info/entry_points.txt,sha256=oNS6X4b0V73FXIK3xiOr7Mkviu88GGmHfdFrU8WXSUA,116
+        my_package-1.2.3.dist-info/RECORD,,
+        ");
+
+        let (_, sdist) =
+            generate_sdist_with_scripts(&name, &version, &[], &BTreeMap::new(), None, &scripts);
+        let decoder = flate2::read::GzDecoder::new(Cursor::new(sdist));
+        let archive = TarArchive::new(AllowStdIo::new(decoder).compat());
+        let sdist_files = block_on(async {
+            let mut members = archive.members();
+            let mut files = BTreeMap::new();
+            while let Some(member) = members.next().await? {
+                if let Member::File {
+                    metadata,
+                    mut payload,
+                    ..
+                } = member
+                {
+                    let mut contents = Vec::new();
+                    while payload.next_chunk(&mut contents, 8192).await? {}
+                    files.insert(metadata.path, String::from_utf8(contents)?);
+                }
+            }
+            anyhow::Ok(files)
+        })?;
+        assert_eq!(
+            sdist_files.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "my_package-1.2.3/PKG-INFO",
+                "my_package-1.2.3/pyproject.toml",
+                "my_package-1.2.3/src/my_package/__init__.py",
+                "my_package-1.2.3/src/my_package/commands/__init__.py",
+                "my_package-1.2.3/src/my_package/commands/cli/__init__.py",
+            ]
+        );
+        let pyproject: toml::Value =
+            toml::from_str(&sdist_files["my_package-1.2.3/pyproject.toml"])?;
+        let entry_points = pyproject["project"]["scripts"]
+            .as_table()
+            .expect("scripts should be a table");
+        assert_eq!(entry_points.len(), metadata.scripts.len());
+        for (script, target) in &metadata.scripts {
+            assert_eq!(
+                entry_points[script].as_str(),
+                Some(target.to_string().as_str())
+            );
+        }
+        for path in [
+            "my_package/__init__.py",
+            "my_package/commands/__init__.py",
+            "my_package/commands/cli/__init__.py",
+        ] {
+            assert_eq!(
+                wheel_files[path],
+                sdist_files[&format!("my_package-1.2.3/src/{path}")]
+            );
+        }
+        Ok(())
     }
 
     #[test]
