@@ -6,7 +6,13 @@ Classification: bug
 
 ## Summary
 
-Cache-warming regression introduced by astral-sh/uv#21304 in uv 0.12.24. The direct fix is open in astral-sh/uv#22394, following proposals in astral-sh/uv-dev#2548 and astral-sh/uv-dev#2549.
+Independently reproduced the reported cached-versus-queried `sys_base_executable`
+mismatch with uv 0.12.24 and CPython 3.12.15 on Ubuntu 24.04.5 x86_64. Selecting
+Python through a test-harness-style executable symlink is sufficient; Gentoo is
+not required. The same fixture produces consistent metadata with uv 0.12.23 and
+the installed uv 0.12.13. Cache warming was introduced by astral-sh/uv#21304 in
+uv 0.12.24. The direct fix is open in astral-sh/uv#22394, following proposals in
+astral-sh/uv-dev#2548 and astral-sh/uv-dev#2549.
 
 The reporter runs uv 0.12.24's tests on Gentoo Linux amd64 with CPython 3.12.15.
 The assertion at `crates/uv/tests/python/venv.rs:118` compares the environment loaded
@@ -18,18 +24,147 @@ metadata regardless of whether the cache is used.
 
 ## Draft response
 
-The mismatch comes from venv cache warming: uv records the test harness's `python3` symlink as the base executable, while CPython queried inside the venv reports `/usr/bin/python3.12`. Cache warming and this test were introduced in astral-sh/uv#21304, released in 0.12.24.
+Reproduced with uv 0.12.24 and CPython 3.12.15 on Ubuntu using a `python3`
+symlink, matching the test harness setup. The warmed cache records that symlink
+as the base executable; querying the venv's Python reports the real `python3.12`
+path. Child venvs consequently select different executable targets on cache hits
+and misses. The same setup produces matching metadata and child-venv targets
+with uv 0.12.23. Cache warming and this test were introduced in
+astral-sh/uv#21304, released in 0.12.24.
 
 A fix is open in astral-sh/uv#22394. It skips cache warming for symlinked base executables and invalidates affected cached metadata. Please rerun the failing test with that patch on Gentoo and let us know whether it passes.
 
 ## Classification
 
-The reported assertion and source establish incorrect cached interpreter metadata: the warmed sys_base_executable retains the test harness's python3 symlink, while a fresh venv query reports /usr/bin/python3.12. Cache warming and this test were introduced by astral-sh/uv#21304 in the reported release, uv 0.12.24. No earlier canonical report or previously fixed instance of this same problem was found. The directly related fixes were created in response to this issue, so their existence does not justify duplicate classification.
+Bug: independent runtime reproduction confirms incorrect cached interpreter
+metadata. The warmed `sys_base_executable` retains the selected `python3`
+symlink, while a fresh venv query reports the real `python3.12` executable.
+Among the cached fields consumed by `Interpreter`, this is the only difference
+in the reproduction. Cache warming and this test were introduced by
+astral-sh/uv#21304 in uv 0.12.24. No earlier canonical report or previously fixed
+instance of this same problem was found. The directly related fixes were created
+in response to this issue, so their existence does not justify duplicate
+classification.
 
-The report establishes a correctness failure, not a request for new functionality
-or merely a question about test configuration. Repository source and maintainer
-review comments support the executable-symlink mechanism. This handoff does not
-claim an independent Gentoo reproduction or a released fix.
+The metadata discrepancy affects child-venv executable selection, so it extends
+beyond the test assertion. Runtime observations, repository source, and maintainer
+review comments agree on the executable-symlink mechanism. The original Gentoo
+Rust test and the proposed fix were not executed during this reproduction.
+
+## Reproduction
+
+**Outcome: reproducible.** The reported field mismatch was observed directly in
+uv's generated interpreter-cache records and in child-venv executable targets.
+All reproduction files, downloaded tools, and caches are under
+`/tmp/uv-22383-y6JmCn`; no checkout files or GitHub objects were changed.
+
+### Environment and preparation
+
+- Report: Gentoo Linux amd64, uv 0.12.24, CPython 3.12.15; the reported kernel is
+  `7.2.9-gentoo-dist-bin`, and interpreter metadata identifies glibc 2.44.
+- Observed locally: Ubuntu 24.04.5 x86_64, CPython 3.12.15 from
+  `/opt/hostedtoolcache/Python/3.12.15/x64/bin/python3.12`, a non-standalone
+  interpreter. The interpreter's version matches the report, while its prefix
+  and operating-system distribution differ.
+- The installed `uv` on `PATH` is 0.12.13. It was used both as a baseline and to
+  install the published binary wheels for uv 0.12.23 and 0.12.24 into separate
+  temporary `--target` directories. `msgpack==1.1.2` was installed into another
+  temporary directory to decode only the newly generated interpreter records.
+  No Rust builds were needed.
+- Reproduction subprocesses use an explicit minimal environment, a temporary
+  `TMPDIR` and `UV_PYTHON_INSTALL_DIR`, and `UV_PYTHON_DOWNLOADS=never`. Every uv
+  scenario uses `--no-config --offline --cache-dir <temporary-directory>`.
+  There is no project, workspace, dependency group, or package dependency.
+
+### Minimal command sequence
+
+The following distills the observed child-venv behavior. `UV_BIN` selects the
+temporarily installed affected binary; it can be replaced with a uv 0.12.24
+executable on another machine. The full measurement script also checks the
+startup marker and decodes the cache records.
+
+```sh
+repro=$(mktemp -d /tmp/uv-22383-minimal-XXXXXX)
+UV_BIN=/tmp/uv-22383-y6JmCn/uv-0.12.24/bin/uv
+PYTHON_BIN=/opt/hostedtoolcache/Python/3.12.15/x64/bin/python3.12
+mkdir -p "$repro/python/3.12"
+ln -s "$PYTHON_BIN" "$repro/python/3.12/python3"
+"$UV_BIN" --no-config --offline --cache-dir "$repro/warm" \
+  venv --python "$repro/python/3.12/python3" "$repro/parent"
+"$UV_BIN" --no-config --offline --cache-dir "$repro/warm" -v \
+  venv --python "$repro/parent/bin/python" "$repro/child-warm"
+"$UV_BIN" --no-config --offline --cache-dir "$repro/fresh" -v \
+  venv --python "$repro/parent/bin/python" "$repro/child-fresh"
+readlink "$repro/child-warm/bin/python"
+readlink "$repro/child-fresh/bin/python"
+"$repro/parent/bin/python" -I -B -c 'import sys; print(sys._base_executable)'
+```
+
+For uv 0.12.24, the first child target is
+`$repro/python/3.12/python3`; the second child target and Python's
+`sys._base_executable` are the real `$PYTHON_BIN` path. All uv commands succeed;
+the failure is inconsistent metadata and executable selection.
+
+### Direct metadata comparison and version controls
+
+The full reproduction creates the parent venv, then installs this
+`lib/python3.12/site-packages/sitecustomize.py`, following the existing test:
+
+```python
+from pathlib import Path
+Path(__file__).with_name("interpreter-started").touch()
+```
+
+It runs `uv pip list --python <parent>/bin/python` once with the creation cache
+and once with a fresh cache, then reads their `interpreter-v4/**/*.msgpack`
+records for that exact executable. This establishes whether Python actually
+started and compares uv's stored `sys_base_executable`, rather than inferring it
+from source alone.
+
+| uv version | Parent metadata warmed at creation | Python starts on first lookup with original cache | Cached versus fresh base executable | Child targets |
+| --- | --- | --- | --- | --- |
+| 0.12.24 | Yes | No | Symlink versus real executable | Different |
+| 0.12.23 | No | Yes | Both real executable | Identical |
+| 0.12.13, installed on PATH | No | Yes | Both real executable | Identical |
+
+The fresh-cache lookup starts Python in all three cases. For uv 0.12.24, the
+observed cached base is
+`/tmp/uv-22383-y6JmCn/affected-0.12.24/python/3.12/python3`; the queried base is
+`/opt/hostedtoolcache/Python/3.12.15/x64/bin/python3.12`. The records also differ
+in `sys_base_exec_prefix` and `sys_path`, which `from_virtualenv` intentionally
+leaves empty and `Interpreter` does not consume. All fields consumed by
+`Interpreter` match except `sys_base_executable`, precisely the field in the
+reported assertion. The two older versions produce identical complete records
+for the parent venv after lookup.
+
+Evidence files:
+
+- `/tmp/uv-22383-y6JmCn/reproduce.py` — the executed measurement script.
+- `/tmp/uv-22383-y6JmCn/affected-0.12.24.log` — commands, marker observations,
+  decoded differences, and child-venv targets for the affected version.
+- `/tmp/uv-22383-y6JmCn/baseline-0.12.23.log` and
+  `/tmp/uv-22383-y6JmCn/installed-0.12.13.log` — explicit control runs.
+- Each scenario directory contains `cached.json` and `queried.json` with the
+  decoded parent-interpreter records.
+
+### Existing test coverage and limits
+
+`crates/uv/tests/python/venv.rs::create_venv_caches_interpreter` is the exact
+reported integration test. Its setup creates environments from both a selected
+Python 3.12 and a parent venv. Its `sitecustomize.py` marker asserts that a warmed
+lookup skips Python, a fresh-cache lookup starts Python, and the resulting
+`PythonEnvironment` values are equal. The module is gated by `test-python` in
+`crates/uv/tests/python/main.rs`; the test has no additional gate.
+`crates/uv-test/src/lib.rs` supplies the temporary `python3` symlink on Unix.
+The nearby `create_venv_caches_upgradeable_interpreter` test additionally requires
+`test-python-managed` and covers recreation of an upgradeable managed venv,
+which is a different configuration.
+
+The original Rust assertion was not run, and no Gentoo installation was used.
+Instead, the matching field discrepancy was measured with the published affected
+binary, the reported Python version, and the harness's symlink arrangement.
+The reproduction establishes the behavior on Ubuntu as well as the release
+boundary; it does not validate the proposed fix.
 
 ## Related
 
@@ -92,9 +227,11 @@ Neither is evidence that this previously fixed bug returned.
 ## Status and next step
 
 As inspected on October 9, 2026, astral-sh/uv#22394 remains open and unmerged.
-Review and validate that patch against the Gentoo test invocation. The reporter's
-environment is already sufficiently identified to classify the failure; testing
-the proposed fix downstream is the useful next step.
+Review and validate that patch against the reported Gentoo test invocation and
+the reproduced executable-symlink case. The uv 0.12.24 behavior is independently
+confirmed, with uv 0.12.23 providing a passing behavior control. Testing the
+proposed fix downstream remains the useful next step.
 
-Only this temporary handoff was updated. No checkout files or GitHub objects were
-modified, and no builds or tests were run.
+This temporary handoff was updated and isolated CLI reproductions were run. No
+checkout files, existing user state, or GitHub objects were modified. No Rust
+builds or repository test binaries were run.
