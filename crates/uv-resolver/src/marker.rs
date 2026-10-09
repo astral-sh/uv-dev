@@ -2,10 +2,24 @@ use pubgrub::Ranges;
 use smallvec::SmallVec;
 use std::ops::Bound;
 
-use uv_pep440::{LowerBound, UpperBound, Version};
-use uv_pep508::{CanonicalMarkerValueVersion, MarkerTree, MarkerTreeKind};
+use uv_pep440::{LowerBound, UpperBound, Version, VersionSpecifiers};
+use uv_pep508::{
+    CanonicalMarkerValueVersion, MarkerExpression, MarkerTree, MarkerTreeKind, MarkerValueVersion,
+};
 
 use uv_distribution_types::RequiresPythonRange;
+
+/// Retain all Python bounds and exclusions when checking an artifact's environment coverage.
+pub(crate) fn requires_python_marker(requires_python: &VersionSpecifiers) -> MarkerTree {
+    requires_python
+        .iter()
+        .fold(MarkerTree::TRUE, |marker, specifier| {
+            marker.and(MarkerTree::expression(MarkerExpression::Version {
+                key: MarkerValueVersion::PythonFullVersion,
+                specifier: specifier.clone(),
+            }))
+        })
+}
 
 /// Returns the bounding Python versions that can satisfy the [`MarkerTree`], if it's constrained.
 pub(crate) fn requires_python(tree: MarkerTree) -> Option<RequiresPythonRange> {

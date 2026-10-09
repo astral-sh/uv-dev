@@ -11,15 +11,14 @@ use uv_distribution_types::{
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
-use uv_pep508::{
-    MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString, MarkerValueVersion,
-};
+use uv_pep508::{MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString};
 use uv_platform_tags::{
     AbiTag, BinaryFormat, IncompatibleTag, LanguageTag, PlatformTag, TagPriority, Tags,
 };
 use uv_pypi_types::{HashDigest, Yanked};
 
 use crate::known_platform::KnownPlatform;
+use crate::marker::requires_python_marker;
 use crate::resolved::ResolvedDistRef;
 
 /// A collection of distributions that have been filtered by relevance.
@@ -555,14 +554,7 @@ impl PrioritizedDist {
 
             let requires_python = if let Some(requires_python) = wheel.file.requires_python.as_ref()
             {
-                requires_python
-                    .iter()
-                    .fold(MarkerTree::TRUE, |marker, specifier| {
-                        marker.and(MarkerTree::expression(MarkerExpression::Version {
-                            key: MarkerValueVersion::PythonFullVersion,
-                            specifier: specifier.clone(),
-                        }))
-                    })
+                requires_python_marker(requires_python)
             } else {
                 metadata_markers(wheel)?
             };

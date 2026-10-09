@@ -575,7 +575,7 @@ pub async fn pip_compile(
                 | SourceTree::SetupPy(path)
                 | SourceTree::SetupCfg(path) => path,
             };
-            let path = std::path::absolute(path)?;
+            let path = fs_err::canonicalize(path)?;
             let Some(root) = path.parent() else {
                 continue;
             };

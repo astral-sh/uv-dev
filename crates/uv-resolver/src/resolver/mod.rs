@@ -32,7 +32,6 @@ use uv_normalize::PackageName;
 use uv_pep440::{MIN_VERSION, Version, VersionSpecifiers, release_specifiers_to_ranges};
 use uv_pep508::{
     MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString,
-    MarkerValueVersion,
 };
 use uv_platform_tags::{IncompatibleTag, Tags};
 use uv_pypi_types::{ConflictItem, ConflictItemRef, ConflictKindRef, Conflicts, VerbatimParsedUrl};
@@ -48,6 +47,7 @@ use crate::error::{NoSolutionError, ResolveError, derivation_tree_packages};
 use crate::fork_indexes::ForkIndexes;
 use crate::fork_urls::ForkUrls;
 use crate::manifest::Manifest;
+use crate::marker::requires_python_marker;
 use crate::pins::FilePins;
 use crate::preferences::{PreferenceSource, Preferences};
 use crate::prioritized_distribution::{
@@ -90,6 +90,13 @@ use crate::universal_marker::UniversalMarker;
 use crate::yanks::AllowedYanks;
 use crate::{DependencyMode, Exclusions, FlatIndex, Options, ResolutionMode, VersionMap, marker};
 pub(crate) use provider::MetadataUnavailable;
+
+/// Whether a wheel's metadata established its Python coverage.
+enum WheelMetadataMarker {
+    Available(MarkerTree),
+    Unavailable(MetadataUnavailable),
+}
+
 pub(crate) use resolution::{
     Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, ResolvedFork,
     SelectedDistribution,
@@ -1553,6 +1560,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         }
 
         let mut wheel_markers = None;
+        let mut unavailable_wheel = None;
 
         // If the caller marked an environment as requiring artifact coverage, ensure it has
         // coverage.
@@ -1573,7 +1581,17 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         let markers = if let Some(prioritized) = dist.prioritized() {
                             prioritized.implied_wheel_markers(
                                 self.options.minimum_libc_version,
-                                |wheel| self.wheel_metadata_marker(wheel, id, pubgrub, requests),
+                                |wheel| match self
+                                    .wheel_metadata_marker(wheel, id, pubgrub, requests)?
+                                {
+                                    WheelMetadataMarker::Available(marker) => {
+                                        Ok::<_, ResolveError>(marker)
+                                    }
+                                    WheelMetadataMarker::Unavailable(reason) => {
+                                        unavailable_wheel.get_or_insert(reason);
+                                        Ok(MarkerTree::FALSE)
+                                    }
+                                },
                             )?
                         } else {
                             MarkerTree::TRUE
@@ -1587,6 +1605,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 if !env.included_by_marker(supported_markers.and(marker))
                     && env.included_by_marker(find_environments(id, pubgrub).and(marker))
                 {
+                    if let Some(reason) = unavailable_wheel.as_ref() {
+                        return Ok(Some(ResolverVersion::Unavailable(
+                            candidate.version().clone(),
+                            self.record_incomplete_package(name, candidate.version(), reason),
+                        )));
+                    }
                     // Separate the required environment from the candidate's wheel coverage in
                     // this fork, allowing environments in neither set to fall on either side.
                     // For example, Darwin == 24 becomes Darwin < 25 when the wheels require
@@ -1763,6 +1787,29 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         Ok(Some(ResolverVersion::Forked(forks)))
     }
 
+    /// Keep metadata failure reasons available to the final resolution diagnostic.
+    fn record_incomplete_package(
+        &self,
+        name: &PackageName,
+        version: &Version,
+        reason: &MetadataUnavailable,
+    ) -> UnavailableVersion {
+        let unavailable_version = UnavailableVersion::from(reason);
+        let message = unavailable_version.singular_message();
+        if let Some(err) = reason.source() {
+            warn!("{name} {message}: {err}");
+        } else {
+            warn!("{name} {message}");
+        }
+        let incomplete_packages = self.incomplete_packages.pin();
+        let versions = incomplete_packages.get_or_insert(
+            name.clone(),
+            HashMap::builder().resize_mode(ResizeMode::Blocking).build(),
+        );
+        versions.pin().insert(version.clone(), reason.clone());
+        unavailable_version
+    }
+
     /// Read wheel metadata when its index record omits the supported Python versions.
     fn wheel_metadata_marker(
         &self,
@@ -1770,7 +1817,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         id: Id<PubGrubPackage>,
         pubgrub: &State<UvDependencyProvider>,
         requests: &MetadataRequests,
-    ) -> Result<MarkerTree, ResolveError> {
+    ) -> Result<WheelMetadataMarker, ResolveError> {
         let request = MetadataRequest::Dist(Dist::Built(BuiltDist::Registry(RegistryBuiltDist {
             wheels: vec![wheel.clone()],
             best_wheel_index: 0,
@@ -1786,12 +1833,16 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             Ok(())
         })?;
         match &*registered.wait() {
-            MetadataResponse::Found(archive) => Ok(archive
-                .metadata
-                .requires_python
-                .as_ref()
-                .map_or(MarkerTree::TRUE, requires_python_marker)),
-            MetadataResponse::Unavailable(_) => Ok(MarkerTree::FALSE),
+            MetadataResponse::Found(archive) => Ok(WheelMetadataMarker::Available(
+                archive
+                    .metadata
+                    .requires_python
+                    .as_ref()
+                    .map_or(MarkerTree::TRUE, requires_python_marker),
+            )),
+            MetadataResponse::Unavailable(reason) => {
+                Ok(WheelMetadataMarker::Unavailable(reason.clone()))
+            }
             MetadataResponse::Error(dist, err) => Err(ResolveError::Dist(
                 DistErrorKind::from_requested_dist(dist, &**err),
                 dist.clone(),
@@ -1961,21 +2012,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 let metadata = match &*response {
                     MetadataResponse::Found(archive) => &archive.metadata,
                     MetadataResponse::Unavailable(reason) => {
-                        let unavailable_version = UnavailableVersion::from(reason);
-                        let message = unavailable_version.singular_message();
-                        if let Some(err) = reason.source() {
-                            // Show the detailed error for metadata parse errors.
-                            warn!("{name} {message}: {err}");
-                        } else {
-                            warn!("{name} {message}");
-                        }
-                        let incomplete_packages = self.incomplete_packages.pin();
-                        let versions = incomplete_packages.get_or_insert(
-                            name.clone(),
-                            HashMap::builder().resize_mode(ResizeMode::Blocking).build(),
-                        );
-                        versions.pin().insert(version.clone(), reason.clone());
-                        return Ok(Dependencies::Unavailable(unavailable_version));
+                        return Ok(Dependencies::Unavailable(
+                            self.record_incomplete_package(name, version, reason),
+                        ));
                     }
                     MetadataResponse::Error(dist, err) => {
                         let chain = DerivationChainBuilder::from_state(id, version, pubgrub)
@@ -4121,18 +4160,6 @@ struct ConflictTracker {
     ///
     /// Distilled from `culprit` for fast checking in the hot loop.
     deprioritize: Vec<Id<PubGrubPackage>>,
-}
-
-/// Retain all Python bounds and exclusions when checking an artifact's environment coverage.
-fn requires_python_marker(requires_python: &VersionSpecifiers) -> MarkerTree {
-    requires_python
-        .iter()
-        .fold(MarkerTree::TRUE, |marker, specifier| {
-            marker.and(MarkerTree::expression(MarkerExpression::Version {
-                key: MarkerValueVersion::PythonFullVersion,
-                specifier: specifier.clone(),
-            }))
-        })
 }
 
 #[cfg(test)]
