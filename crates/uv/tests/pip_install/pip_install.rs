@@ -18845,3 +18845,81 @@ fn script_no_build_blocks_unnamed_editable() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Inline global policies prohibit source-only requirements read from a script.
+#[test]
+fn script_build_policy_disallows_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "script-build-policy-global"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.source_only.versions."1.0.0"]
+        wheel = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["source-only==1.0.0"]
+        # [tool.uv]
+        # build-policy = "disallow"
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["-r", "script.py", "--dry-run"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features build-policy` to disable this warning.
+    error: No solution found when resolving dependencies
+      cause: Because source-only==1.0.0 has no usable wheels and you require source-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `source-only` because its build policy is `disallow`
+    "#);
+    Ok(())
+}
+
+/// Inline package policies are propagated, while an explicit CLI package policy takes precedence.
+#[test]
+fn script_build_policy_package_precedence() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "script-build-policy-package"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.source_only.versions."1.0.0"]
+        wheel = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["source-only==1.0.0"]
+        # [tool.uv]
+        # build-policy = "allow"
+        # build-policy-package = { source-only = "disallow" }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["-r", "script.py", "--dry-run", "--preview-features", "build-policy"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because source-only==1.0.0 has no usable wheels and you require source-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `source-only` because its build policy is `disallow`
+    "#);
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["-r", "script.py", "--dry-run", "--preview-features", "build-policy", "--build-policy-package", "source-only=allow"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
+     + source-only==1.0.0
+    "#);
+    Ok(())
+}

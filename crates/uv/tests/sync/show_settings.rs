@@ -302,6 +302,9 @@ fn pip_compile_baseline() {
             build_options: BuildOptions {
                 no_binary: None,
                 no_build: None,
+                no_build_unnamed_editable: Some(
+                    false,
+                ),
                 build_policy: None,
                 build_policy_package: BuildPolicyPackage(
                     {},
@@ -703,6 +706,9 @@ fn pip_install_baseline() {
             build_options: BuildOptions {
                 no_binary: None,
                 no_build: None,
+                no_build_unnamed_editable: Some(
+                    false,
+                ),
                 build_policy: None,
                 build_policy_package: BuildPolicyPackage(
                     {},
@@ -845,6 +851,7 @@ fn lock_baseline() {
             build_options: BuildOptions {
                 no_binary: None,
                 no_build: None,
+                no_build_unnamed_editable: None,
                 build_policy: None,
                 build_policy_package: BuildPolicyPackage(
                     {},
@@ -987,6 +994,7 @@ fn version_baseline() {
                 build_options: BuildOptions {
                     no_binary: None,
                     no_build: None,
+                    no_build_unnamed_editable: None,
                     build_policy: None,
                     build_policy_package: BuildPolicyPackage(
                         {},
@@ -1171,6 +1179,7 @@ fn tool_install_baseline() {
                 build_options: BuildOptions {
                     no_binary: None,
                     no_build: None,
+                    no_build_unnamed_editable: None,
                     build_policy: None,
                     build_policy_package: BuildPolicyPackage(
                         {},

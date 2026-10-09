@@ -48,7 +48,7 @@ use uv_resolver::{
     InMemoryIndex, OptionsBuilder, Prerelease, PythonRequirement, ResolutionMode,
     ResolverEnvironment,
 };
-use uv_settings::PythonInstallMirrors;
+use uv_settings::{PythonInstallMirrors, warn_build_policy_preview};
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode, TorchStrategy};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
@@ -228,6 +228,8 @@ pub async fn pip_compile(
         no_binary,
         no_build,
         no_build_unnamed_editable,
+        build_policy,
+        build_policy_package,
     } = RequirementsSpecification::from_sources(
         requirements,
         constraints,
@@ -488,7 +490,10 @@ pub async fn pip_compile(
     }
 
     // Combine the `--no-binary` and `--no-build` flags from the requirements files.
-    let build_options = build_options.combine(no_binary, no_build, no_build_unnamed_editable);
+    let build_options = build_options
+        .combine(no_binary, no_build, no_build_unnamed_editable)
+        .with_fallback_build_policy(build_policy, build_policy_package);
+    warn_build_policy_preview(&build_options);
 
     // Resolve the flat indexes from `--find-links`.
     let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;
@@ -612,11 +617,6 @@ pub async fn pip_compile(
         }
     };
 
-    let output_build_options = build_options
-        .has_build_policy()
-        .then(|| resolution.materialize_build_options(&build_options));
-    let output_build_options = output_build_options.as_ref().unwrap_or(&build_options);
-
     if generate_hashes && preview.is_enabled(PreviewFeature::ArtifactHashFiltering) {
         resolution.retain_allowed_distribution_hashes(&build_options);
     }
@@ -689,6 +689,12 @@ pub async fn pip_compile(
 
             // If necessary, include the `--no-binary` and `--only-binary` options.
             if include_build_options {
+                let materialized_build_options = build_options
+                    .has_build_policy()
+                    .then(|| resolution.materialize_build_options(&build_options));
+                let output_build_options = materialized_build_options
+                    .as_ref()
+                    .unwrap_or(&build_options);
                 match output_build_options.no_binary() {
                     NoBinary::None => {}
                     NoBinary::All => {
