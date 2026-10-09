@@ -692,14 +692,14 @@ impl<'lock> InstallTarget<'lock> {
         Ok(())
     }
 
-    /// Validate that selected non-root extras were resolved for the requested environment.
-    pub fn validate_extra_resolution(
+    /// Validate that selected non-root dependencies were resolved for the requested environment.
+    pub fn validate_workspace_resolution(
         &self,
         extras: &ExtrasSpecification,
         groups: &DependencyGroupsWithDefaults,
         marker_environment: Option<&ResolverMarkerEnvironment>,
     ) -> Result<(), EnvironmentError> {
-        if extras.is_empty() {
+        if !groups.prod() && extras.is_empty() {
             return Ok(());
         }
         let lock = self.lock();
@@ -743,14 +743,32 @@ impl<'lock> InstallTarget<'lock> {
                 }
             }
         }
-        let resolved = lock.resolved_workspace_extras(self.install_path(), &activated)?;
+        let resolved = lock.resolved_workspace_reachability(self.install_path(), &activated)?;
         let domain = implicit_constraints_marker(
             self.python_requirement(groups)?
                 .requires_python
                 .to_marker_tree(),
             lock.supported_environments(),
         );
+        let available = |marker: MarkerTree| {
+            if let Some(environment) = marker_environment {
+                marker.evaluate(environment.markers(), &[])
+            } else {
+                domain.and(marker.negate()).is_false()
+            }
+        };
         for package in selected {
+            if groups.prod() {
+                let marker = resolved
+                    .get(&(package.name(), None))
+                    .copied()
+                    .unwrap_or(MarkerTree::FALSE);
+                if !available(marker) {
+                    return Err(EnvironmentError::UnresolvedWorkspacePackage(
+                        package.name().clone(),
+                    ));
+                }
+            }
             for extra in extras.extra_names(
                 package
                     .provides_extras()
@@ -758,15 +776,10 @@ impl<'lock> InstallTarget<'lock> {
                     .chain(package.optional_dependencies().keys()),
             ) {
                 let marker = resolved
-                    .get(&(package.name(), extra))
+                    .get(&(package.name(), Some(extra)))
                     .copied()
                     .unwrap_or(MarkerTree::FALSE);
-                let available = if let Some(environment) = marker_environment {
-                    marker.evaluate(environment.markers(), &[])
-                } else {
-                    domain.and(marker.negate()).is_false()
-                };
-                if !available {
+                if !available(marker) {
                     return Err(EnvironmentError::UnresolvedWorkspaceExtra {
                         package: package.name().clone(),
                         extra: extra.clone(),
