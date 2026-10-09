@@ -38,7 +38,7 @@ use uv_distribution_types::{
     ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
     DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
     FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    HashValidation, Identifier, IndexFormat, IndexLocations, IndexMetadata, IndexUrl,
+    HashValidation, Identifier, Index, IndexFormat, IndexLocations, IndexMetadata, IndexUrl,
     MetadataHashPolicy, MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL,
     PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
     RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
@@ -6271,6 +6271,31 @@ struct ResolverIndexWire {
 }
 
 impl ResolverIndex {
+    fn from_index(index: &Index, root: &Path) -> Result<Self, LockError> {
+        let url = match index.url() {
+            IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
+                // Queries and fragments can contain short-lived credentials and do not
+                // participate in index policy identity.
+                let mut url = index.url().without_credentials().into_owned();
+                url.set_query(None);
+                url.set_fragment(None);
+                if index.format == IndexFormat::Simple {
+                    let path = url.path().trim_end_matches('/').to_owned();
+                    url.set_path(&path);
+                }
+                RegistrySource::Url(UrlString::from(url))
+            }
+            IndexUrl::Path(_) => RegistrySource::from_index_url(index.url(), root)?,
+        };
+        Ok(Self {
+            url,
+            explicit: index.explicit,
+            default: index.default,
+            format: index.format,
+            ignore_error_codes: index.ignore_error_codes.clone(),
+        })
+    }
+
     fn from_locations(
         index_locations: &IndexLocations,
         root: &Path,
@@ -6279,51 +6304,24 @@ impl ResolverIndex {
             return Ok(Vec::new());
         }
 
-        // The built-in PyPI fallback is implied whenever no other default is configured. Avoid
-        // writing it to every lockfile that defines an additional index.
+        // Compare normalized policies so naming or publishing metadata does not change
+        // whether the implicit PyPI fallback needs to be serialized.
         let default_locations = IndexLocations::default();
-        let default_index = default_locations.default_index();
-
-        let indexes = index_locations
-            .allowed_indexes()
-            .into_iter()
-            .filter(|index| Some(*index) != default_index)
-            .map(|index| {
-                let url = match index.url() {
-                    IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
-                        // Index URLs can contain short-lived or provider-specific query
-                        // credentials (e.g., presigned URLs). Queries and fragments are not
-                        // part of the index policy identity and must not enter the lockfile.
-                        let mut url = index.url().without_credentials().into_owned();
-                        url.set_query(None);
-                        url.set_fragment(None);
-                        if index.format == IndexFormat::Simple {
-                            let path = url.path().trim_end_matches('/').to_owned();
-                            url.set_path(&path);
-                        }
-                        RegistrySource::Url(UrlString::from(url))
-                    }
-                    IndexUrl::Path(_) => RegistrySource::from_index_url(index.url(), root)?,
-                };
-
-                Ok(Self {
-                    url,
-                    explicit: index.explicit,
-                    default: index.default,
-                    format: index.format,
-                    ignore_error_codes: index.ignore_error_codes.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>, LockError>>()?;
-        // Equivalent repeated indexes do not change package priority. Normalize them after
-        // removing credentials and simple-index trailing slashes.
-        let mut unique = Vec::with_capacity(indexes.len());
-        for index in indexes {
-            if !unique.contains(&index) {
-                unique.push(index);
+        let default_index = default_locations
+            .default_index()
+            .map(|index| Self::from_index(index, root))
+            .transpose()?;
+        let mut indexes = Vec::new();
+        // allowed_indexes returns reverse precedence order. Keep the first occurrence
+        // seen by resolution, then restore serialization order after deduplication.
+        for index in index_locations.allowed_indexes().into_iter().rev() {
+            let index = Self::from_index(index, root)?;
+            if Some(&index) != default_index.as_ref() && !indexes.contains(&index) {
+                indexes.push(index);
             }
         }
-        Ok(unique)
+        indexes.reverse();
+        Ok(indexes)
     }
 }
 

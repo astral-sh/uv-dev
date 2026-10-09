@@ -2270,15 +2270,13 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     let trusted_wheel_path = "/files/review_dep-1.0.0-1-py3-none-any.whl";
     let replacement_wheel_path = "/files/review_dep-1.0.0-2-py3-none-any.whl";
     let replacement_digest = hex::encode(Sha256::digest(&replacement));
-    Mock::given(path("/links"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            formatdoc! {r#"
-                <a href="{trusted_wheel_path}#sha256={trusted_digest}">review_dep-1.0.0-1-py3-none-any.whl</a>
-                <a href="{replacement_wheel_path}#sha256={replacement_digest}">review_dep-1.0.0-2-py3-none-any.whl</a>
-            "#},
-            "text/html",
-        ))
-        .mount(&server)
+    let links_html = formatdoc! {r#"
+        <a href="{trusted_wheel_path}#sha256={trusted_digest}">review_dep-1.0.0-1-py3-none-any.whl</a>
+        <a href="{replacement_wheel_path}#sha256={replacement_digest}">review_dep-1.0.0-2-py3-none-any.whl</a>
+    "#};
+    let links = Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(links_html.clone(), "text/html"))
+        .mount_as_scoped(&server)
         .await;
     Mock::given(path(trusted_wheel_path))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(trusted))
@@ -2339,6 +2337,13 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
         .mount(&server)
         .await;
 
+    // Keep the policy unchanged while forcing metadata validation to fetch the tampered wheel.
+    drop(links);
+    let empty_links = Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("", "text/html"))
+        .mount_as_scoped(&server)
+        .await;
+
     drop(trusted_wheel);
     let replacement_wheel = Mock::given(method("GET"))
         .and(path(wheel_path))
@@ -2350,11 +2355,10 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
         .mount_as_scoped(&server)
         .await;
 
-    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-cache"), @"
-    exit_code: 1 (failure)
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-cache").arg("--find-links").arg(format!("{}/links", server.uri())), @"
+    exit_code: 2 (failure)
     ----- stderr -----
-    Ignoring existing lockfile due to change in index configuration
-    error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/files/demo_pkg-1.0.0.tar.gz`
+    error: Failed to generate package metadata for `demo-pkg==1.0.0 @ direct+http://[LOCALHOST]/files/demo_pkg-1.0.0.tar.gz`
       cause: Failed to install requirements from `build-system.requires`
       cause: Failed to download `review-dep==1.0.0`
       cause: Hash mismatch for `review-dep==1.0.0`
@@ -2370,10 +2374,9 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
         "the locked build dependency was executed"
     );
 
-    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--refresh").arg("--no-cache"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--refresh").arg("--no-cache").arg("--find-links").arg(format!("{}/links", server.uri())), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Ignoring existing lockfile due to change in index configuration
     error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/files/demo_pkg-1.0.0.tar.gz`
       cause: Failed to install requirements from `build-system.requires`
       cause: Failed to download `review-dep==1.0.0`
@@ -2390,11 +2393,10 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
         "the refreshed build dependency was executed"
     );
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-cache"), @"
-    exit_code: 1 (failure)
+    uv_snapshot!(context.filters(), context.sync().arg("--no-cache").arg("--find-links").arg(format!("{}/links", server.uri())), @"
+    exit_code: 2 (failure)
     ----- stderr -----
-    Ignoring existing lockfile due to change in index configuration
-    error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/files/demo_pkg-1.0.0.tar.gz`
+    error: Failed to generate package metadata for `demo-pkg==1.0.0 @ direct+http://[LOCALHOST]/files/demo_pkg-1.0.0.tar.gz`
       cause: Failed to install requirements from `build-system.requires`
       cause: Failed to download `review-dep==1.0.0`
       cause: Hash mismatch for `review-dep==1.0.0`
@@ -2485,6 +2487,12 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
         replacement_wheel.received_requests().await.len(),
         request_count
     );
+
+    drop(empty_links);
+    Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(links_html, "text/html"))
+        .mount(&server)
+        .await;
 
     // Explicitly unlocked resolution retains its existing update policy.
     uv_snapshot!(context.filters(), context.lock().arg("--upgrade").arg("--no-cache")
@@ -3210,6 +3218,7 @@ async fn lock_sdist_registry_hash_changes_require_upgrade() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
     exit_code: 1 (failure)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     error: Failed to download and build `demo-pkg==1.0.0`
       cause: Hash mismatch for `demo-pkg==1.0.0`
 
@@ -3226,6 +3235,7 @@ async fn lock_sdist_registry_hash_changes_require_upgrade() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package").arg("demo-pkg").arg("--no-cache"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     Resolved 2 packages in [TIME]
     ");
     assert!(sentinel.exists());
@@ -17290,6 +17300,7 @@ fn lock_find_links_relative_url() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "links", explicit = true, format = "flat" }]
 
         [[package]]
         name = "colorama"
@@ -22115,6 +22126,7 @@ fn lock_without_metadata_conflicting_group_with_extra_and_different_specifiers()
         .arg(server.index_url()), @"
     exit_code: 1 (failure)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
@@ -25124,6 +25136,7 @@ fn lock_regenerates_marker_specific_requested_extras() -> Result<()> {
         .arg(server.index_url()), @"
     exit_code: 1 (failure)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
@@ -27674,7 +27687,6 @@ fn lock_trailing_slash_index_url() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "https://pypi.org/simple", default = true }]
 
         [[package]]
         name = "anyio"
@@ -28021,6 +28033,101 @@ fn lock_index_policy() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
 
+    Ok(())
+}
+
+/// Duplicate definitions retain the highest-priority occurrence when recording policy.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_policy_duplicate_priority() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::new("simple/single-package.toml");
+    let second = PackseServer::new("extras/missing-extra.toml");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [[tool.uv.index]]
+        name = "first"
+        url = "{first}"
+        [[tool.uv.index]]
+        name = "second"
+        url = "{second}"
+        [[tool.uv.index]]
+        name = "duplicate"
+        url = "{first}"
+    "#, first = first.index_url(), second = second.index_url()})?;
+    context.lock().assert().success();
+    let lock = context.read("uv.lock");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [[tool.uv.index]]
+        name = "second"
+        url = "{second}"
+        [[tool.uv.index]]
+        name = "duplicate"
+        url = "{first}"
+    "#, first = first.index_url(), second = second.index_url()})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    Resolved 2 packages in [TIME]
+    Updated a v2.0.0 -> v1.0.0
+    ");
+    Ok(())
+}
+
+/// Naming the default PyPI index does not change its resolution policy.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_policy_default_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})?;
+    context.lock().assert().success();
+    let lock = context.read("uv.lock");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+        [[tool.uv.index]]
+        name = "pypi"
+        url = "https://pypi.org/simple"
+        default = true
+        publish-url = "https://upload.pypi.org/legacy/"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }
 
@@ -44800,6 +44907,7 @@ fn lock_required_environment_generic_python_wheel() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     Resolved 2 packages in [TIME]
     ");
 

@@ -4531,6 +4531,7 @@ fn sync_extra_build_dependencies_index() -> Result<()> {
         .arg("--reinstall-package").arg("child").env(EnvVars::EXPECTED_ANYIO_VERSION, "4.3"), @"
     exit_code: 1 (failure)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
       cause: The build backend returned an error
@@ -18975,6 +18976,7 @@ fn project_build_hashes_lock_and_sync() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "wheels", format = "flat" }]
 
         [manifest]
         build-constraints = [{ name = "build-dependency", specifier = "==1.0.0", hashes = ["sha256:[BUILD_HASH]"] }]
@@ -19328,6 +19330,7 @@ fn project_build_hashes_locked_script_run_with_no_sync() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "package/wheels", format = "flat" }]
 
         [manifest]
         build-constraints = [{ name = "build-dependency", specifier = "==1.0.0", hashes = ["sha256:[BUILD_HASH]"] }]

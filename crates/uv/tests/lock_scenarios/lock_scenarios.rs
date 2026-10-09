@@ -4445,6 +4445,9 @@ fn fork_requires_python_full_prerelease() -> Result<()> {
         revision = 5
         requires-python = ">=3.10"
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "project"
         version = "0.1.0"
@@ -4525,6 +4528,9 @@ fn fork_requires_python_full() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.10"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "project"
@@ -4704,6 +4710,9 @@ fn fork_requires_python() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.10"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "project"

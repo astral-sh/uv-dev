@@ -9905,6 +9905,7 @@ fn add_warn_index_url() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     warning: Indexes specified via `--extra-index-url` will not be persisted to the `pyproject.toml` file; use `--index` instead.
+    Ignoring existing lockfile due to change in index configuration
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because only idna==2.7 is available and your project depends on idna>=3.6, we can conclude that your project's requirements are unsatisfiable.
@@ -11104,6 +11105,7 @@ fn add_index_without_trailing_slash() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
+        indexes = [{ url = "https://pypi.org/simple" }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
