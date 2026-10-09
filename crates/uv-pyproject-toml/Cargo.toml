@@ -1,6 +1,6 @@
 [package]
 name = "uv-pyproject-toml"
-version = "0.0.92"
+version = "0.0.93"
 description = "A parser for pyproject.toml files"
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -17,8 +17,9 @@ workspace = true
 
 [dependencies]
 uv-normalize = { workspace = true }
-uv-pep440 = { version = "0.0.92", path = "../uv-pep440" }
-uv-pep508 = { version = "0.0.92", path = "../uv-pep508" }
+uv-pep440 = { version = "0.0.93", path = "../uv-pep440" }
+uv-pep508 = { version = "0.0.93", path = "../uv-pep508" }
+uv-toml = { workspace = true }
 
 indexmap = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
