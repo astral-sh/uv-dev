@@ -64,6 +64,29 @@ pub enum Error {
 }
 
 impl IsBuildBackendError for Error {
+    fn is_metadata_inconsistent(&self) -> bool {
+        match self {
+            Self::ProjectNameMismatch(..) | Self::ProjectVersionMismatch(..) => true,
+            Self::Io(_)
+            | Self::Lowering(_)
+            | Self::InvalidSourceDist(_)
+            | Self::InvalidPyprojectTomlSyntax(_)
+            | Self::InvalidPyprojectTomlSchema(_)
+            | Self::InvalidBackendPath(_)
+            | Self::BackendPathOutsideSourceTree(_)
+            | Self::RequirementsResolve(..)
+            | Self::RequirementsInstall(..)
+            | Self::Virtualenv(_)
+            | Self::InvalidBuiltWheelFilename(_)
+            | Self::CommandFailed(..)
+            | Self::BuildBackend(_)
+            | Self::MissingHeader(_)
+            | Self::BuildScriptPath(_)
+            | Self::CyclicBuildDependency(_)
+            | Self::UnmatchedRuntime(..) => false,
+        }
+    }
+
     fn is_user_failure(&self) -> bool {
         match self {
             Self::InvalidSourceDist(_)
