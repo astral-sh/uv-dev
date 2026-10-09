@@ -3146,7 +3146,7 @@ impl Lock {
     }
 
     /// Return the dependency overrides and exclusions recorded in the lockfile.
-    pub fn dependency_modifiers(&self) -> Result<DependencyModifiers, LockError> {
+    fn dependency_modifiers(&self) -> Result<DependencyModifiers, LockError> {
         Ok(DependencyModifiers::new(
             Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
                 .map_err(LockErrorKind::InvalidScopedOverride)?,
@@ -7398,8 +7398,7 @@ impl Package {
     /// Prepare effective declarations once for a dependency section, when metadata is available.
     fn dependency_requirements(
         &self,
-        extra: Option<&ExtraName>,
-        group: Option<&GroupName>,
+        context: DependencyContext<'_>,
         modifiers: &DependencyModifiers,
     ) -> Option<Vec<Requirement>> {
         // Dynamic source trees omit their version from the lock. Resolved edges already reflect
@@ -7407,16 +7406,13 @@ impl Package {
         if self.id.version.is_none() && modifiers.has_scoped_package(&self.id.name) {
             return None;
         }
-        let requirements = group
-            .map_or(Some(&self.metadata.requires_dist), |group| {
-                self.metadata.dependency_groups.get(group)
-            })
-            .filter(|requirements| !requirements.is_empty())?;
-        let context = match (group, extra) {
-            (Some(group), _) => DependencyContext::Group(group),
-            (None, Some(extra)) => DependencyContext::Extra(extra),
-            (None, None) => DependencyContext::Production,
-        };
+        let requirements = match context {
+            DependencyContext::Production | DependencyContext::Extra(_) => {
+                Some(&self.metadata.requires_dist)
+            }
+            DependencyContext::Group(group) => self.metadata.dependency_groups.get(group),
+        }
+        .filter(|requirements| !requirements.is_empty())?;
         let mut requirements = Lock::preprocess_requirements(
             &self.id.name,
             self.id.version.as_ref(),

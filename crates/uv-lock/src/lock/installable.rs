@@ -22,8 +22,8 @@ use uv_resolver_types::UniversalMarker;
 use uv_resolver_types::universal_marker::ActivatedConflictItems;
 
 use crate::lock::{
-    Dependency, DependencySelectionContext, HashedDist, LockErrorKind, Package, PackageIndex,
-    SelectedDependency, TagPolicy,
+    Dependency, DependencyContext, DependencySelectionContext, HashedDist, LockErrorKind, Package,
+    PackageIndex, SelectedDependency, TagPolicy,
 };
 use crate::{Lock, LockError};
 
@@ -191,7 +191,7 @@ pub trait Installable<'lock> {
                     continue;
                 }
                 let requirements = modifiers.as_ref().and_then(|modifiers| {
-                    package.dependency_requirements(None, Some(group), modifiers)
+                    package.dependency_requirements(DependencyContext::Group(group), modifiers)
                 });
                 for dependency in dependencies {
                     if !dependency_is_active(dependency, requirements.as_deref()) {
@@ -214,10 +214,11 @@ pub trait Installable<'lock> {
             if lock.members().contains(package.name()) {
                 required_members.insert(package.name());
             }
+            let context = extra.map_or(DependencyContext::Production, DependencyContext::Extra);
             let requirements = modifiers
                 .as_ref()
-                .and_then(|modifiers| package.dependency_requirements(extra, None, modifiers));
-            for dependency in package_dependencies(package, extra) {
+                .and_then(|modifiers| package.dependency_requirements(context, modifiers));
+            for dependency in context.dependencies(package) {
                 if !dependency_is_active(dependency, requirements.as_deref()) {
                     continue;
                 }
