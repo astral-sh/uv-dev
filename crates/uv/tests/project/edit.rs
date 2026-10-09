@@ -1090,9 +1090,9 @@ fn add_raw_replaces_existing_source() -> Result<()> {
     Ok(())
 }
 
-/// Raw version-bound selection retains the workspace source for this dependency scope.
+/// A raw bare-name requirement retains its unscoped non-workspace path source.
 #[test]
-fn add_raw_retains_workspace_dependency_source() -> Result<()> {
+fn add_raw_retains_path_dependency_source() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -1104,11 +1104,8 @@ fn add_raw_retains_workspace_dependency_source() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["dep"]
 
-        [tool.uv.workspace]
-        members = ["dep"]
-
         [tool.uv.sources]
-        dep = { workspace = true }
+        dep = { path = "dep" }
     "#})?;
     context
         .temp_dir
@@ -1136,11 +1133,8 @@ fn add_raw_retains_workspace_dependency_source() -> Result<()> {
         "dep",
     ]
 
-    [tool.uv.workspace]
-    members = ["dep"]
-
     [tool.uv.sources]
-    dep = { workspace = true }
+    dep = { path = "dep" }
     "#);
     Ok(())
 }
