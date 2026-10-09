@@ -8,7 +8,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use ring::signature::Ed25519KeyPair;
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -669,7 +669,18 @@ async fn verified_archive_reports_transfer_and_remains_seekable() -> Result<()> 
     let endpoint = format!("http://{}", listener.local_addr()?);
     let (received_first_chunk, first_chunk_received) = oneshot::channel();
     let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await?;
+        let (stream, _) = listener.accept().await?;
+        let mut stream = BufReader::new(stream);
+        let mut line = String::new();
+        loop {
+            let read = stream.read_line(&mut line).await?;
+            anyhow::ensure!(read != 0, "request ended before its headers");
+            if line == "\r\n" {
+                break;
+            }
+            line.clear();
+        }
+        let mut stream = stream.into_inner();
         stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nX-Archive: trusted\r\n\r\n8\r\ntrusted \r\n").await?;
         first_chunk_received.await?;
         stream.write_all(b"7\r\narchive\r\n0\r\n\r\n").await?;
