@@ -895,10 +895,7 @@ pub(super) fn publish_export(journal: &ExportDirectory, index: usize) -> anyhow:
     Ok(())
 }
 
-pub(super) fn publish_export_data(
-    journal: &ExportDirectory,
-    index: usize,
-) -> anyhow::Result<PathBuf> {
+fn publish_export_data(journal: &ExportDirectory, index: usize) -> anyhow::Result<PathBuf> {
     let staging = journal.staging_directory()?;
     let export = &journal.exports[index];
     let target = journal.directory.join(&export.filename);

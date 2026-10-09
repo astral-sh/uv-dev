@@ -70,7 +70,9 @@ with warnings.catch_warnings():
             relative = os.path.relpath(os.path.dirname(path), source_root)
             if relative == os.pardir or relative.startswith(os.pardir + os.sep):
                 raise ValueError("bytecode source is outside the staged directory")
-            display_directory = os.path.normpath(os.path.join(destination_root, relative))
+            display_directory = os.path.normpath(
+                os.path.join(destination_root, relative)
+            )
         success = compileall.compile_file(
             path,
             ddir=display_directory,

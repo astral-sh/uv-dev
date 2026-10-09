@@ -513,7 +513,7 @@ pub(super) struct PlannedToolEntrypoint {
     pub(super) entrypoint: ToolEntrypoint,
     pub(super) source: PathBuf,
     provider: PackageName,
-    pub(super) replace: bool,
+    replace: bool,
 }
 
 impl ToolEntrypointPlan {
