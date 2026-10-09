@@ -20141,3 +20141,111 @@ fn project_and_group_workspace_includes_modern_and_legacy_dev() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Imported groups retain their member's source mapping and source-specific group selection.
+#[test]
+fn project_group_workspace_include_uses_member_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["tools", "lib"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["lib"]
+        [tool.uv.sources]
+        lib = { workspace = true, group = "test" }
+    "#})?;
+    context
+        .temp_dir
+        .child("lib/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "lib"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--offline", "--group", "lint", "--no-header", "--no-annotate"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e file://[TEMP_DIR]/lib
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Imported groups use their member's index while retaining the importing group's Python marker.
+#[cfg(feature = "test-universal")]
+#[test]
+fn project_group_workspace_include_uses_member_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "pip-group-member-index-and-markers"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = {{ requires-python = ">=3.13", include-workspace-groups = [{{ package = "tools", group = "test" }}] }}
+        [tool.uv.workspace]
+        members = ["tools"]
+        [[tool.uv.index]]
+        name = "owner"
+        url = "{}/missing/"
+        explicit = true
+    "#, server.index_url()})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+        [tool.uv.sources]
+        example = {{ index = "owner", group = "test" }}
+        [[tool.uv.index]]
+        name = "owner"
+        url = "{}"
+        explicit = true
+    "#, server.index_url()})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--group", "lint", "--universal", "--python-version", "3.12", "--no-header", "--no-annotate"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0 ; python_full_version >= '3.13'
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    Ok(())
+}

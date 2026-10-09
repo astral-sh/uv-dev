@@ -49103,28 +49103,60 @@ fn lock_workspace_nonproject_group_include_markers() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .assert()
         .success();
-    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
-    assert_snapshot!(toml::to_string(&lock["manifest"]["dependency-group-includes"])?, @r#"
-    [[check]]
-    package = "tools"
-    group = "test"
-    marker = "python_full_version >= '3.13'"
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 2
+        revision = 5
+        requires-python = ">=3.12"
 
-    [[empty]]
-    package = "tools"
-    group = "empty"
-    marker = "python_full_version >= '3.14'"
+        [manifest]
+        members = [
+            "tools",
+        ]
 
-    [[legacy]]
-    package = "tools"
-    group = "test"
-    marker = "python_full_version < '3.13'"
+        [manifest.dependency-groups]
+        check = []
+        empty = []
+        legacy = []
+        lint = []
 
-    [[lint]]
-    package = "tools"
-    group = "test"
-    marker = "python_full_version >= '3.13'"
-    "#);
+        [manifest.dependency-group-includes]
+        check = [{ package = "tools", group = "test", marker = "python_full_version >= '3.13'" }]
+        empty = [{ package = "tools", group = "empty", marker = "python_full_version >= '3.14'" }]
+        legacy = [{ package = "tools", group = "test", marker = "python_full_version < '3.13'" }]
+        lint = [{ package = "tools", group = "test", marker = "python_full_version >= '3.13'" }]
+
+        [manifest.group-requires-python]
+        check = ">=3.13"
+        empty = ">=3.14"
+        legacy = "<3.13"
+        lint = ">=3.13"
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-any.whl", hash = "sha256:b7afa474387cab6d91b2c82e69a9784a246413f090aa97e7ce63a5e6a14e6268", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tools"
+        version = "0.1.0"
+        source = { virtual = "tools" }
+
+        [package.dev-dependencies]
+        test = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+
+        [package.metadata.requires-dev]
+        empty = []
+        test = [{ name = "example", specifier = "==1.0.0" }]
+        "#);
+    });
     uv_snapshot!(context.filters(), context.lock()
         .args(["--preview-features", "include-group-workspace", "--locked", "--offline", "--no-cache"])
         .arg("--index-url").arg(server.index_url())
