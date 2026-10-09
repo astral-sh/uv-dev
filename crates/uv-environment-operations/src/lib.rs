@@ -1,6 +1,6 @@
 //! Shared project, script, and tool environment workflows.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -2037,19 +2037,27 @@ pub fn detect_conflicts(
     // group `g` are declared as conflicting, then enabling both of
     // those should result in an error.
     let lock = target.lock();
-    let packages = target.packages(extras, groups);
     let conflicts = lock.conflicts();
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+
+    let packages = target.packages(extras, groups);
+    // CLI extras and groups apply to selected roots, independently of transitive production members.
+    let roots = target.roots().collect::<BTreeSet<_>>();
+    let group_root = target.group_root(groups);
     for set in conflicts.iter() {
         let mut conflicts: Vec<ConflictItem> = vec![];
         for item in set.iter() {
-            if !packages.contains(item.package()) {
-                // Ignore items that are not in the install targets
-                continue;
-            }
             let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
-                ConflictKind::Extra(extra) => extras.contains(extra),
-                ConflictKind::Group(group1) => groups.contains(group1),
+                ConflictKind::Project => groups.prod() && packages.contains(item.package()),
+                ConflictKind::Extra(extra) => {
+                    groups.prod() && roots.contains(item.package()) && extras.contains(extra)
+                }
+                ConflictKind::Group(group) => {
+                    (roots.contains(item.package()) || group_root == Some(item.package()))
+                        && target.includes_group(Some(item.package()), group, groups)
+                }
             };
             if is_conflicting {
                 conflicts.push(item.clone());
