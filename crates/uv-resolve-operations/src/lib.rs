@@ -14,7 +14,7 @@ use uv_configuration::{
     ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
-use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
+use uv_distribution::{DistributionDatabase, FirstPartyPackages, SourcedDependencyGroups};
 use uv_distribution_types::{
     Diagnostic, NameRequirementSpecification, Requirement, RequirementScope, RequirementSource,
     ResolutionDiagnostic, ResolutionRecorder, UnresolvedRequirement,
@@ -101,6 +101,7 @@ pub async fn resolve(
     source_trees: Vec<SourceTree>,
     mut project: Option<PackageName>,
     workspace_members: BTreeMap<PackageName, RequirementSource>,
+    first_party_packages: Option<&FirstPartyPackages>,
     extras: &ExtrasSpecification,
     groups: &BTreeMap<PathBuf, DependencyGroups>,
     preferences: Vec<Preference>,
@@ -151,7 +152,8 @@ pub async fn resolve(
                         build_dispatch,
                         concurrency.downloads_semaphore.clone(),
                     )
-                    .with_recorder(recorder.clone()),
+                    .with_recorder(recorder.clone())
+                    .with_first_party_packages(first_party_packages),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
                 .resolve(unnamed.into_iter())
@@ -170,7 +172,8 @@ pub async fn resolve(
                     build_dispatch,
                     concurrency.downloads_semaphore.clone(),
                 )
-                .with_recorder(recorder.clone()),
+                .with_recorder(recorder.clone())
+                .with_first_party_packages(first_party_packages),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
             .resolve(source_trees.iter())
@@ -295,7 +298,8 @@ pub async fn resolve(
                         build_dispatch,
                         concurrency.downloads_semaphore.clone(),
                     )
-                    .with_recorder(recorder.clone()),
+                    .with_recorder(recorder.clone())
+                    .with_first_party_packages(first_party_packages),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
                 .resolve(unnamed.into_iter())
@@ -339,7 +343,8 @@ pub async fn resolve(
                     build_dispatch,
                     concurrency.downloads_semaphore.clone(),
                 )
-                .with_recorder(recorder.clone()),
+                .with_recorder(recorder.clone())
+                .with_first_party_packages(first_party_packages),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
             .resolve(&resolver_env)
@@ -394,7 +399,8 @@ pub async fn resolve(
                 build_dispatch,
                 concurrency.downloads_semaphore.clone(),
             )
-            .with_recorder(recorder.clone()),
+            .with_recorder(recorder.clone())
+            .with_first_party_packages(first_party_packages),
         )?
         .with_reporter(Arc::new(reporter));
 
