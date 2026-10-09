@@ -552,9 +552,8 @@ impl ToolLock {
             concurrency.downloads_semaphore.clone(),
         );
 
-        let requires_python = requires_python.cloned().unwrap_or_else(|| {
-            RequiresPython::greater_than_equal_version(&interpreter.python_minor_version())
-        });
+        let requires_python =
+            uv_environment_operations::universal_requires_python(interpreter, requires_python);
         let overrides = overrides
             .iter()
             .cloned()

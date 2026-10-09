@@ -3796,6 +3796,7 @@ fn tool_install_with_dependencies_from_script() -> Result<()> {
             { name = "black" },
             { name = "anyio" },
         ]
+        requires-python = ">=3.11"
         entrypoints = [
             { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
             { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
@@ -3845,6 +3846,7 @@ fn tool_install_with_dependencies_from_script() -> Result<()> {
             { name = "anyio" },
             { name = "iniconfig" },
         ]
+        requires-python = ">=3.11"
         entrypoints = [
             { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
             { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
@@ -6582,7 +6584,26 @@ fn tool_install_pep723_requirements_reject_incompatible_environment() -> Result<
     let bin = context.temp_dir.child("bin");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    crate::write_python_version_tool(&wheels, None)?;
+    let (filename, wheel_bytes) = uv_test::packse::generate_wheel_with_files(
+        &"bound-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &std::collections::BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "bound_tool/cli.py",
+                "import sys\ndef main():\n    print(f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "bound_tool-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nbound-tool = bound_tool.cli:main\n",
+            ),
+        ],
+    );
+    let wheel = wheels.child(filename);
+    wheel.write_binary(&wheel_bytes)?;
     context
         .tool_install()
         .args([
@@ -6631,7 +6652,26 @@ fn tool_install_pep723_requirements_bound_interpreter_refinement() -> Result<()>
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_tool_dirs();
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    crate::write_python_version_tool(&wheels, Some(">=3.12"))?;
+    let (filename, wheel_bytes) = uv_test::packse::generate_wheel_with_files(
+        &"bound-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &std::collections::BTreeMap::new(),
+        Some(&">=3.12".parse()?),
+        "py3-none-any",
+        &[
+            (
+                "bound_tool/cli.py",
+                "import sys\ndef main():\n    print(f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "bound_tool-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nbound-tool = bound_tool.cli:main\n",
+            ),
+        ],
+    );
+    let wheel = wheels.child(filename);
+    wheel.write_binary(&wheel_bytes)?;
     context
         .temp_dir
         .child("requirements.py")
@@ -6641,7 +6681,7 @@ fn tool_install_pep723_requirements_bound_interpreter_refinement() -> Result<()>
         # dependencies = []
         # ///
     "#})?;
-    uv_snapshot!(context.filters(), context.tool_install().args(["--with-requirements", "requirements.py", "--python", ">=3.11", "--no-index", "--from", "wheels/bound_tool-1.0.0-py3-none-any.whl", "bound-tool"]), @r#"
+    uv_snapshot!(context.filters(), context.tool_install().args(["--with-requirements", "requirements.py", "--python", ">=3.11", "--no-index", "--from"]).arg(wheel.path()).arg("bound-tool"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
@@ -6693,7 +6733,7 @@ fn tool_install_pep723_universal_python_bound() -> Result<()> {
     let input = context.temp_dir.child("requirements.py");
     input.write_str(indoc! {r#"
         # /// script
-        # requires-python = ">=3.11,<3.12"
+        # requires-python = "<3.12"
         # dependencies = [
         #     "unreachable==1; python_version >= '3.12'",
         #     "unreachable==2; python_version >= '3.12'",
@@ -6705,7 +6745,7 @@ fn tool_install_pep723_universal_python_bound() -> Result<()> {
         &"1.0.0".parse()?,
         &[],
         &BTreeMap::new(),
-        None,
+        Some(&">=3.8".parse()?),
         "py3-none-any",
         &["bound-tool".to_owned()],
     );
@@ -6733,10 +6773,7 @@ fn tool_install_pep723_universal_python_bound() -> Result<()> {
     "#);
     assert_eq!(context.read("tools/bound-tool/uv.lock"), lock);
     let receipt: toml::Value = toml::from_str(&context.read("tools/bound-tool/uv-receipt.toml"))?;
-    assert_eq!(
-        receipt["tool"]["requires-python"].as_str(),
-        Some(">=3.11, <3.12")
-    );
+    assert_eq!(receipt["tool"]["requires-python"].as_str(), Some("<3.12"));
     fs_err::remove_file(&input)?;
     uv_snapshot!(context.filters(), context.tool_upgrade().arg("bound-tool")
         .args(["--no-index", "--preview-features", "tool-install-locks"])
