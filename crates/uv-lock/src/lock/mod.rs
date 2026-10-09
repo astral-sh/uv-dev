@@ -4655,43 +4655,61 @@ impl Lock {
             }
         }
 
-        // A per-index `exclude-newer` setting is not stored in the lockfile. Validate every
-        // locked registry artifact, including transitive packages behind immutable dependencies.
-        // `--find-links` artifacts do not have upload times and are not subject to index cutoffs.
+        // Per-index cutoffs are not stored in the lockfile. Validate registry artifacts even
+        // for transitive packages behind immutable dependencies.
         for package in &self.packages {
-            if let Some(indexes) = indexes
-                && let Some(index) = package.index(root)?
-                && let Some(index) = indexes.index_for_url(&index)
-                && index.format == IndexFormat::Simple
-                && let Some(exclude_newer) = exclude_newer
-                    .exclude_newer_package_for_index(&package.id.name, index.exclude_newer.as_ref())
-                // Older locks cannot corroborate saved cutoffs with upload times. A relaxed cutoff
-                // still permits every artifact admitted by the saved cutoff.
-                // Index-specific cutoffs were never saved, so they must still be checked.
-                && (self.revision >= UPLOAD_TIME_REVISION
-                    || index.exclude_newer.is_some()
-                    || self.options.exclude_newer.exclude_newer_package(&package.id.name)
-                        .is_none_or(|saved| saved > exclude_newer))
-                && package
-                    .sdist
-                    .iter()
-                    .map(SourceDist::upload_time)
-                    .chain(package.wheels.iter().map(|wheel| wheel.upload_time))
-                    .all(|upload_time| {
-                        upload_time.is_none_or(|upload_time| {
-                            upload_time.as_millisecond() >= exclude_newer.as_millisecond()
-                        })
-                    })
-            {
-                let Some(version) = package.id.version.as_ref() else {
-                    return Ok(SatisfiesResult::MissingVersion(&package.id.name));
-                };
-                return Ok(SatisfiesResult::ExcludedNewerArtifact(
-                    &package.id.name,
-                    version,
-                    exclude_newer,
-                ));
+            let Some(indexes) = indexes else {
+                continue;
+            };
+            let Some(index_url) = package.index(root)? else {
+                continue;
+            };
+            let Some(index) = indexes.index_for_url(&index_url) else {
+                continue;
+            };
+            // The resolver exempts flat metadata from cutoffs, including timestamped HTML entries.
+            if index.format != IndexFormat::Simple {
+                continue;
             }
+            let Some(cutoff) = exclude_newer
+                .exclude_newer_package_for_index(&package.id.name, index.exclude_newer.as_ref())
+            else {
+                continue;
+            };
+
+            // Legacy locks lack upload times. Their saved cutoff still guarantees compatibility
+            // when the current fallback is unchanged or relaxed; unsaved index cutoffs do not.
+            if self.revision < UPLOAD_TIME_REVISION
+                && index.exclude_newer.is_none()
+                && self
+                    .options
+                    .exclude_newer
+                    .exclude_newer_package(&package.id.name)
+                    .is_some_and(|saved| saved <= cutoff)
+            {
+                continue;
+            }
+            if package
+                .sdist
+                .iter()
+                .map(SourceDist::upload_time)
+                .chain(package.wheels.iter().map(|wheel| wheel.upload_time))
+                .any(|upload_time| {
+                    upload_time.is_some_and(|upload_time| {
+                        upload_time.as_millisecond() < cutoff.as_millisecond()
+                    })
+                })
+            {
+                continue;
+            }
+            let Some(version) = package.id.version.as_ref() else {
+                return Ok(SatisfiesResult::MissingVersion(&package.id.name));
+            };
+            return Ok(SatisfiesResult::ExcludedNewerArtifact(
+                &package.id.name,
+                version,
+                cutoff,
+            ));
         }
 
         while let Some(package_index) = queue.pop_front() {

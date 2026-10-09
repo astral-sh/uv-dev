@@ -43071,7 +43071,7 @@ fn lock_exclude_newer_index_locked_transitive_boundary() -> Result<()> {
     Ok(())
 }
 
-/// Flat indexes have no upload timestamps and remain reusable with an explicit cutoff.
+/// The resolver exempts flat-index artifacts from cutoffs, so their locks remain reusable.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_newer_flat_index() -> Result<()> {
