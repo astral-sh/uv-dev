@@ -627,10 +627,10 @@ required-environments = [
 ]
 ```
 
-For packages that publish a source distribution, `required-environments` also prefers an allowed
-version that provides a wheel for the required environment. Packages without source
-distributions (like PyTorch) can _only_ be installed on environments covered by the published
-wheels.
+When updating an existing lockfile, `required-environments` also prefers an allowed version that
+provides a wheel for the required environment for packages that publish a source distribution.
+Packages without source distributions (like PyTorch) can _only_ be installed on environments covered
+by the published wheels.
 
 See the [resolution documentation](../resolution.md#required-environments) for more.
 
