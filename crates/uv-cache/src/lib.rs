@@ -35,6 +35,9 @@ mod wheel;
 /// Must be kept in-sync with the version in [`CacheBucket::to_str`].
 pub const ARCHIVE_VERSION: u8 = 0;
 
+/// Sidecars authorizing cached build artifacts must survive CI cache pruning.
+pub const AUTHORITY_RECEIPT_SUFFIX: &str = ".authority.msgpack";
+
 /// Error locking a cache entry or shard
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -810,6 +813,13 @@ impl Cache {
                             && entry.file_type()?.is_dir()
                             && path.join("metadata.msgpack").exists()
                         {
+                            continue;
+                        }
+
+                        // Retain the receipts that authorize cached metadata and wheel archives.
+                        if path.file_name().is_some_and(|name| {
+                            name.to_string_lossy().ends_with(AUTHORITY_RECEIPT_SUFFIX)
+                        }) {
                             continue;
                         }
 

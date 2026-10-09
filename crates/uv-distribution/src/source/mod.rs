@@ -51,10 +51,10 @@ use uv_workspace::pyproject::ToolUvSources;
 
 use crate::distribution_database::ManagedClient;
 use crate::error::Error;
-use crate::hash::matches_authority;
+use crate::hash::{matches_authority, sha256_file};
 use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata};
 use crate::source::authority::{
-    authority_build_shard, read_authority_receipt, write_authority_receipt,
+    authority_build_shard, authority_wheel_target, read_authority_receipt, write_authority_receipt,
 };
 use crate::source::built_wheel_metadata::{BuiltWheelFile, BuiltWheelMetadata};
 use crate::source::revision::Revision;
@@ -294,7 +294,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<BuiltWheelMetadata, Error> {
-        let built_wheel_metadata = match &source {
+        let mut built_wheel_metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
                 // For registry source distributions, shard by package, then version, for
                 // convenience in debugging.
@@ -317,35 +317,34 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     let path = url
                         .to_file_path()
                         .map_err(|()| Error::NonFileUrl(url.clone()))?;
-                    return self
-                        .archive(
-                            source,
-                            &PathSourceUrl {
-                                url: &url,
-                                path: Cow::Owned(path),
-                                ext: dist.ext,
-                            },
-                            &cache_shard,
-                            tags,
-                            hashes,
-                        )
-                        .boxed_local()
-                        .await;
+                    self.archive(
+                        source,
+                        &PathSourceUrl {
+                            url: &url,
+                            path: Cow::Owned(path),
+                            ext: dist.ext,
+                        },
+                        &cache_shard,
+                        tags,
+                        hashes,
+                    )
+                    .boxed_local()
+                    .await?
+                } else {
+                    self.url(
+                        source,
+                        &url,
+                        Some(&dist.index),
+                        &cache_shard,
+                        None,
+                        dist.ext,
+                        tags,
+                        hashes,
+                        client,
+                    )
+                    .boxed_local()
+                    .await?
                 }
-
-                self.url(
-                    source,
-                    &url,
-                    Some(&dist.index),
-                    &cache_shard,
-                    None,
-                    dist.ext,
-                    tags,
-                    hashes,
-                    client,
-                )
-                .boxed_local()
-                .await?
             }
             BuildableSource::Dist(SourceDist::DirectUrl(dist)) => {
                 // For direct URLs, cache directly under the hash of the URL itself.
@@ -450,6 +449,21 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     .await?
             }
         };
+
+        if client.unmanaged.has_checksum_authority() {
+            let digest = if let Some(digest) = built_wheel_metadata.authority_digest.take() {
+                digest
+            } else {
+                sha256_file(&built_wheel_metadata.path)
+                    .await
+                    .map_err(Error::CacheRead)?
+            };
+            built_wheel_metadata.target = authority_wheel_target(
+                &built_wheel_metadata.target,
+                &built_wheel_metadata.filename,
+                digest,
+            );
+        }
 
         Ok(built_wheel_metadata)
     }
@@ -719,14 +733,17 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .ok()
             .flatten()
             .filter(|file| file.matches(source.name(), source.version()))
-            && read_authority_receipt(client.unmanaged, &CacheEntry::from_path(file.path())).await?
+            && let Some(authorization) =
+                read_authority_receipt(client.unmanaged, &CacheEntry::from_path(file.path()))
+                    .await?
         {
             return Ok(BuiltWheelMetadata::from_file(
                 file,
                 revision.into_hashes(),
                 cache_info,
                 build_info,
-            ));
+            )
+            .with_authority_digest(authorization.digest()));
         }
 
         // Otherwise, we need to build a wheel. Before building, ensure that the source is present.
@@ -771,7 +788,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
-        write_authority_receipt(client.unmanaged, &cache_shard.entry(&disk_filename)).await?;
+        let authority_digest =
+            write_authority_receipt(client.unmanaged, &cache_shard.entry(&disk_filename)).await?;
 
         if let Some(task) = task {
             if let Some(reporter) = self.reporter.as_ref() {
@@ -784,9 +802,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
             .await
             .map_err(Error::CacheWrite)?;
-        write_authority_receipt(client.unmanaged, &metadata_entry).await?;
+        let _ = write_authority_receipt(client.unmanaged, &metadata_entry).await?;
 
         Ok(BuiltWheelMetadata {
+            authority_digest,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(wheel_filename.stem()).into_boxed_path(),
             filename: wheel_filename,
@@ -862,7 +881,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the cache contains compatible metadata, return it.
         let metadata_entry = cache_shard.entry(METADATA);
-        let cached_metadata = if read_authority_receipt(client.unmanaged, &metadata_entry).await? {
+        let cached_metadata = if read_authority_receipt(client.unmanaged, &metadata_entry)
+            .await?
+            .is_some()
+        {
             CachedMetadata::read(&metadata_entry).await
         } else {
             Ok(None)
@@ -940,7 +962,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
                 .await
                 .map_err(Error::CacheWrite)?;
-            write_authority_receipt(client.unmanaged, &metadata_entry).await?;
+            let _ = write_authority_receipt(client.unmanaged, &metadata_entry).await?;
 
             return Ok(ArchiveMetadata {
                 metadata: Metadata::from_metadata23(metadata),
@@ -963,7 +985,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
-        write_authority_receipt(client.unmanaged, &cache_shard.entry(&disk_filename)).await?;
+        let _ =
+            write_authority_receipt(client.unmanaged, &cache_shard.entry(&disk_filename)).await?;
 
         if let Some(task) = task {
             if let Some(reporter) = self.reporter.as_ref() {
@@ -985,7 +1008,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
             .await
             .map_err(Error::CacheWrite)?;
-        write_authority_receipt(client.unmanaged, &metadata_entry).await?;
+        let _ = write_authority_receipt(client.unmanaged, &metadata_entry).await?;
 
         Ok(ArchiveMetadata {
             metadata: Metadata::from_metadata23(metadata),
@@ -1218,6 +1241,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
             filename,
@@ -1539,6 +1563,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
             filename,
@@ -2025,6 +2050,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
             filename,
@@ -2293,6 +2319,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
             filename,

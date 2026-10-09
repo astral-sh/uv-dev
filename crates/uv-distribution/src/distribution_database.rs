@@ -47,7 +47,7 @@ use uv_types::{BuildContext, BuildStack};
 use crate::archive::Archive;
 use crate::error::PythonVersion;
 use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
-use crate::hash::{http_hash_algorithms, matches_authority, sha256_file};
+use crate::hash::{http_hash_algorithms, matches_authority};
 use crate::metadata::{ArchiveMetadata, Metadata};
 use crate::source::SourceDistributionBuilder;
 use crate::{Error, FirstPartyPackages, LocalWheel, Reporter, RequiresDist};
@@ -521,23 +521,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         tags: &Tags,
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<LocalWheel, Error> {
-        let mut built_wheel = self
+        let built_wheel = self
             .builder
             .download_and_build(&BuildableSource::Dist(dist), tags, hashes, &self.client)
             .boxed_local()
             .await?;
-
-        // A rebuilt wheel can have different bytes at the same source revision and filename.
-        // Keep its unpacked cache entry tied to the exact output covered by the build receipt.
-        if self.client.unmanaged.has_checksum_authority() {
-            let digest = sha256_file(&built_wheel.path)
-                .await
-                .map_err(Error::CacheRead)?;
-            built_wheel.target = built_wheel
-                .target
-                .with_file_name(format!("{}-{digest}", built_wheel.filename.stem()))
-                .into_boxed_path();
-        }
 
         // Check that the wheel is compatible with its install target.
         //

@@ -425,6 +425,20 @@ impl<'a> Planner<'a> {
                 unreachable!("Installed distribution could not be found in site-packages: {dist}");
             };
 
+            if let Dist::Built(BuiltDist::DirectUrl(wheel)) = dist.as_ref() {
+                if !wheel.filename.is_compatible(tags) {
+                    return Err(PlanError::IncompatibleWheel(Box::new(
+                        IncompatibleWheelError {
+                            kind: IncompatibleWheelKind::Url(wheel.url.to_url()),
+                            compatibility_hint: generate_wheel_compatibility_hint(
+                                &wheel.filename,
+                                tags,
+                            ),
+                        },
+                    )));
+                }
+            }
+
             // Remote cache hits need the distribution database when an independent authority
             // must approve their original archive. The database can still reuse matching entries.
             if self.revalidate_remote
@@ -459,18 +473,6 @@ impl<'a> Planner<'a> {
                     }
                 }
                 Dist::Built(BuiltDist::DirectUrl(wheel)) => {
-                    if !wheel.filename.is_compatible(tags) {
-                        return Err(PlanError::IncompatibleWheel(Box::new(
-                            IncompatibleWheelError {
-                                kind: IncompatibleWheelKind::Url(wheel.url.to_url()),
-                                compatibility_hint: generate_wheel_compatibility_hint(
-                                    &wheel.filename,
-                                    tags,
-                                ),
-                            },
-                        )));
-                    }
-
                     if no_binary {
                         return Err(PlanError::NoBinaryUrl(wheel.url.clone()));
                     }

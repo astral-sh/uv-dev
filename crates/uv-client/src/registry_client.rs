@@ -186,10 +186,7 @@ impl<'a> RegistryClientBuilder<'a> {
         existing: Option<&BaseClient>,
     ) -> Result<RegistryClient, ClientBuildError> {
         self.cache_index_credentials()?;
-        let checksum_authority = self
-            .base_client_builder
-            .checksum_authority_config()
-            .cloned();
+        let checksum_authority = self.base_client_builder.build_checksum_authority()?;
 
         // Wrap in any relevant middleware and handle connectivity.
         let builder = self

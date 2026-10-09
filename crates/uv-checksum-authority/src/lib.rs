@@ -62,6 +62,23 @@ impl ChecksumAuthority {
         })
     }
 
+    /// Return the configured endpoint for network policy selection.
+    pub fn endpoint(&self) -> &Url {
+        &self.endpoint
+    }
+
+    /// Apply a transport configured by the caller while retaining authority request limits.
+    pub fn with_client_builder(
+        mut self,
+        client: reqwest::ClientBuilder,
+    ) -> Result<Self, reqwest::Error> {
+        self.client = client
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(30))
+            .build()?;
+        Ok(self)
+    }
+
     pub async fn lookup(&self, artifact: &ArtifactId) -> Result<VerifiedRecord, Error> {
         let endpoint = self
             .endpoint

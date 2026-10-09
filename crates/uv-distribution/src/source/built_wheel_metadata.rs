@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use uv_cache::CacheShard;
 use uv_cache_info::CacheInfo;
+use uv_checksum_authority::Sha256Digest;
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{BuildInfo, Hashed};
 use uv_fs::files;
@@ -26,6 +27,8 @@ pub(crate) struct BuiltWheelMetadata {
     pub(crate) cache_info: CacheInfo,
     /// The build information for the wheel.
     pub(crate) build_info: BuildInfo,
+    /// Reuse the digest computed while checking or writing this build's authority receipt.
+    pub(super) authority_digest: Option<Sha256Digest>,
 }
 
 impl BuiltWheelMetadata {
@@ -43,7 +46,13 @@ impl BuiltWheelMetadata {
             hashes,
             cache_info,
             build_info,
+            authority_digest: None,
         }
+    }
+
+    pub(super) fn with_authority_digest(mut self, digest: Option<Sha256Digest>) -> Self {
+        self.authority_digest = digest;
+        self
     }
 }
 

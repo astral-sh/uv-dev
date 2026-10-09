@@ -30,6 +30,9 @@ async fn rejects_untrusted_authority_responses() -> Result<()> {
     let authority = ChecksumAuthority::new(
         Url::parse(&server.uri())?,
         AuthorityPublicKey::from_signing_key(&signing_key),
+    )?
+    .with_client_builder(
+        reqwest::Client::builder().redirect(reqwest::redirect::Policy::limited(10)),
     )?;
 
     Mock::given(method("GET"))
@@ -463,9 +466,9 @@ async fn shutdown_interrupts_incomplete_requests() -> Result<()> {
     Ok(())
 }
 
-/// A signed size bounds the archive stream even when Content-Length is absent or dishonest.
+/// Signed archive sizes are enforced independently of response headers.
 #[tokio::test]
-async fn archive_size_and_status() -> Result<()> {
+async fn archive_short_response() -> Result<()> {
     let record = record()?;
     let service = AuthorityService::new(Catalog::from_records([record.clone()])?, &key(7)?)?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -479,16 +482,64 @@ async fn archive_size_and_status() -> Result<()> {
     }));
     let temporary = assert_fs::TempDir::new()?;
 
-    for body in ["short", "an archive longer than admitted"] {
-        let response = http::Response::new(body);
-        let error = authority
-            .verify_response(response.into(), record.artifact(), temporary.path())
-            .await
-            .expect_err("wrong size");
-        insta::allow_duplicates! {
-            insta::assert_snapshot!(error, @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl`: expected 15 bytes");
-        }
-    }
+    let response = http::Response::new("short");
+    let error = authority
+        .verify_response(response.into(), record.artifact(), temporary.path())
+        .await
+        .expect_err("wrong size");
+    insta::assert_snapshot!(error, @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl`: expected 15 bytes");
+    shutdown
+        .send(())
+        .map_err(|()| anyhow!("server exited early"))?;
+    server.await??;
+    Ok(())
+}
+
+/// Signed archive sizes are enforced independently of response headers.
+#[tokio::test]
+async fn archive_oversized_response() -> Result<()> {
+    let record = record()?;
+    let service = AuthorityService::new(Catalog::from_records([record.clone()])?, &key(7)?)?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let authority = ChecksumAuthority::new(
+        Url::parse(&format!("http://{}", listener.local_addr()?))?,
+        service.public_key(),
+    )?;
+    let (shutdown, stopped) = oneshot::channel();
+    let server = tokio::spawn(service.serve(listener, async {
+        let _ = stopped.await;
+    }));
+    let temporary = assert_fs::TempDir::new()?;
+
+    let response = http::Response::new("an archive longer than admitted");
+    let error = authority
+        .verify_response(response.into(), record.artifact(), temporary.path())
+        .await
+        .expect_err("wrong size");
+    insta::assert_snapshot!(error, @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl`: expected 15 bytes");
+    shutdown
+        .send(())
+        .map_err(|()| anyhow!("server exited early"))?;
+    server.await??;
+    Ok(())
+}
+
+/// Partial HTTP responses cannot authenticate a complete archive.
+#[tokio::test]
+async fn archive_partial_response() -> Result<()> {
+    let record = record()?;
+    let service = AuthorityService::new(Catalog::from_records([record.clone()])?, &key(7)?)?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let authority = ChecksumAuthority::new(
+        Url::parse(&format!("http://{}", listener.local_addr()?))?,
+        service.public_key(),
+    )?;
+    let (shutdown, stopped) = oneshot::channel();
+    let server = tokio::spawn(service.serve(listener, async {
+        let _ = stopped.await;
+    }));
+    let temporary = assert_fs::TempDir::new()?;
+
     let response = http::Response::builder()
         .status(206)
         .body("trusted archive")?;

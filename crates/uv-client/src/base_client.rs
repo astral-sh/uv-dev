@@ -259,8 +259,32 @@ impl<'a> BaseClientBuilder<'a> {
         self.checksum_authority.is_some()
     }
 
-    pub(crate) fn checksum_authority_config(&self) -> Option<&ChecksumAuthority> {
-        self.checksum_authority.as_ref()
+    pub(crate) fn build_checksum_authority(
+        &self,
+    ) -> Result<Option<ChecksumAuthority>, ClientBuildError> {
+        let Some(authority) = &self.checksum_authority else {
+            return Ok(None);
+        };
+        let security = if self
+            .allow_insecure_host
+            .iter()
+            .any(|host| host.matches(authority.endpoint()))
+        {
+            Security::Insecure
+        } else {
+            Security::Secure
+        };
+        let client = self.create_client_builder(
+            &format!("uv/{}", version()),
+            self.read_timeout,
+            self.connect_timeout,
+            self.custom_certificates
+                .as_ref()
+                .map(Certificates::to_reqwest_certs),
+            security,
+            RedirectPolicy::NoRedirect,
+        )?;
+        Ok(Some(authority.clone().with_client_builder(client)?))
     }
 
     pub fn new(
@@ -621,6 +645,27 @@ impl<'a> BaseClientBuilder<'a> {
         security: Security,
         redirect_policy: RedirectPolicy,
     ) -> Result<Client, ClientBuildError> {
+        self.create_client_builder(
+            user_agent,
+            read_timeout,
+            connect_timeout,
+            custom_certs,
+            security,
+            redirect_policy,
+        )?
+        .build()
+        .map_err(Into::into)
+    }
+
+    fn create_client_builder(
+        &self,
+        user_agent: &str,
+        read_timeout: Duration,
+        connect_timeout: Duration,
+        custom_certs: Option<Vec<Certificate>>,
+        security: Security,
+        redirect_policy: RedirectPolicy,
+    ) -> Result<ClientBuilder, ClientBuildError> {
         // Configure the builder.
         let client_builder = ClientBuilder::new()
             .http1_title_case_headers()
@@ -692,7 +737,7 @@ impl<'a> BaseClientBuilder<'a> {
             client_builder = client_builder.proxy(proxy);
         }
 
-        client_builder.build().map_err(Into::into)
+        Ok(client_builder)
     }
 
     fn apply_middleware(&self, client: Client) -> ClientWithMiddleware {

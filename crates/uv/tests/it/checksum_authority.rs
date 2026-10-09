@@ -160,6 +160,81 @@ async fn checksum_authority_install_and_authenticated_metadata() -> Result<()> {
     Ok(())
 }
 
+/// Admission authenticates bytes but cannot make a foreign-platform wheel installable.
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_rejects_incompatible_direct_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let (filename, bytes) = generate_wheel(
+        &"checksum-example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "cp312-cp312-win32",
+        &[],
+    );
+    let url = format!("{}/files/{filename}", server.uri());
+    let authority = Authority::start(vec![record(&url, &filename, &bytes)?]).await?;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!("checksum-example @ {url}"))?;
+    uv_snapshot!(context.filters(), authority.configure(context.pip_sync()
+        .arg("requirements.txt").args(["--python-platform", "linux"])), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to determine installation plan
+      cause: A URL (http://[LOCALHOST]/files/checksum_example-1.0.0-cp312-cp312-win32.whl) dependency is incompatible with the current platform
+
+    hint: The wheel is compatible with Windows (`win32`), but you're on Linux (`manylinux_2_28_x86_64`)
+    ");
+    context.assert_command("import checksum_example").failure();
+    Ok(())
+}
+
+/// Authority requests honor proxy settings from uv.toml while archive requests can bypass it.
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_uses_configured_proxy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let bytes = wheel()?;
+    index(&server, WHEEL, &bytes, false).await;
+    let index_url = format!("{}/simple", server.uri().replace("127.0.0.1", "localhost"));
+    let proxy = Authority::start(vec![record(&index_url, WHEEL, &bytes)?]).await?;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        http-proxy = "{}"
+        no-proxy = ["localhost"]
+    "#, proxy.url})?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--index-url").arg(&index_url)
+        .arg("checksum-example")
+        .env(EnvVars::UV_CHECKSUM_AUTHORITY, "http://127.0.0.1:9")
+        .env(EnvVars::UV_CHECKSUM_AUTHORITY_KEY, &proxy.public_key)
+        .env_remove("HTTP_PROXY").env_remove("http_proxy")
+        .env_remove("HTTPS_PROXY").env_remove("https_proxy")
+        .env_remove("ALL_PROXY").env_remove("all_proxy")
+        .env_remove("NO_PROXY").env_remove("no_proxy"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + checksum-example==1.0.0
+    ");
+    Ok(())
+}
+
 /// An authority admission names the original filename, not its normalized wheel spelling.
 #[tokio::test(flavor = "multi_thread")]
 async fn checksum_authority_preserves_wheel_filename() -> Result<()> {
@@ -855,12 +930,12 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
     let builds = fs_err::read_to_string(marker.path())?;
     insta::assert_snapshot!(builds, @"built");
 
-    Mock::given(method("GET"))
+    let unavailable = Mock::given(method("GET"))
         .and(path(format!("/files/{filename}")))
         .respond_with(ResponseTemplate::new(500))
         .with_priority(1)
         .expect(0)
-        .mount(&server)
+        .mount_as_scoped(&server)
         .await;
     let authority = Authority::start(vec![record(&index_url, filename, &bytes)?]).await?;
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
@@ -884,6 +959,12 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
         .arg("checksum-example")
         .assert()
         .success();
+    // CI pruning retains the wheel and the receipts required to reuse it without rebuilding.
+    context
+        .command()
+        .args(["cache", "prune", "--ci"])
+        .assert()
+        .success();
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
         .arg("--index-url")
         .arg(&index_url)
@@ -901,6 +982,9 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
         .arg("checksum-example")
         .assert()
         .success();
+
+    // Repairing a tampered output after pruning needs to retrieve the source again.
+    drop(unavailable);
 
     // A replaced output must not inherit the previous file's receipt or unpacked directory.
     let built_wheel = WalkDir::new(context.cache_dir.path())
@@ -950,8 +1034,8 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
         .arg("checksum-example")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to download and build `checksum-example==1.0.0`
-      ╰─▶ Checksum authority has no trusted record for `checksum_example-1.0.0.tar.gz`
+    error: Failed to download and build `checksum-example==1.0.0`
+      cause: Checksum authority has no trusted record for `checksum_example-1.0.0.tar.gz`
     ");
     assert_eq!(fs_err::read_to_string(marker.path())?, repaired_builds);
     context.assert_command("import checksum_example").failure();

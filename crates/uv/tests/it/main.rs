@@ -4,6 +4,7 @@ use uv_test::pypi_proxy;
 
 mod auth;
 
+#[cfg(feature = "test-python")]
 mod checksum_authority;
 
 #[cfg(all(feature = "test-pypi", feature = "test-universal"))]
