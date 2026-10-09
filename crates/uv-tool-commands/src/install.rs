@@ -40,8 +40,9 @@ use uv_workspace::WorkspaceCache;
 use uv_lock_operations::LockValidationError;
 
 use crate::common::{
-    ToolLock, ToolPython, check_tool_entrypoint_conflicts, finalize_tool_install,
-    refine_interpreter, remove_entrypoints, tool_environment_spec,
+    ToolLock, ToolPython, check_tool_entrypoint_conflicts, check_tool_entrypoint_targets,
+    collect_tool_entrypoint_targets, finalize_tool_install, refine_interpreter, remove_entrypoints,
+    tool_environment_spec,
 };
 use crate::error::ToolLockError;
 use crate::requirements::resolve_names;
@@ -49,7 +50,7 @@ use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
-    sync_environment, update_environment_with_preflight,
+    sync_environment, sync_environment_with_build_environment, update_environment_with_preflight,
 };
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_resolve_operations as operations;
@@ -844,10 +845,14 @@ pub async fn install(
                 environment
             } else {
                 if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
-                    let (_temp_dir, preflight) =
-                        create_preflight_environment(environment.interpreter().clone(), &cache)?;
-                    let preflight = sync_environment(
+                    let (_temp_dir, preflight) = create_preflight_environment(
+                        package_name,
+                        environment.interpreter().clone(),
+                        &cache,
+                    )?;
+                    let preflight = sync_environment_with_build_environment(
                         preflight,
+                        Some(&environment),
                         &resolution,
                         hash_strategy.clone(),
                         Modifications::Exact,
@@ -917,6 +922,7 @@ pub async fn install(
                         // will be used by the update. Inspect them in their existing environment.
                         let retained_entrypoints = entrypoints
                             .iter()
+                            .chain(std::iter::once(package_name))
                             .filter(|package| {
                                 resolution.distributions().any(|dist| {
                                     dist.name() == *package
@@ -928,12 +934,8 @@ pub async fn install(
                             })
                             .cloned()
                             .collect::<Vec<_>>();
-                        check_tool_entrypoint_conflicts(
-                            environment,
-                            package_name,
-                            &retained_entrypoints,
-                            existing_receipt,
-                        )?;
+                        let mut targets =
+                            collect_tool_entrypoint_targets(environment, &retained_entrypoints)?;
 
                         // Install only changed distributions into the temporary environment.
                         // Installed distributions reference files in the original environment.
@@ -943,11 +945,13 @@ pub async fn install(
                         });
                         if !pending.is_empty() {
                             let (_temp_dir, preflight) = create_preflight_environment(
+                                package_name,
                                 environment.interpreter().clone(),
                                 &cache,
                             )?;
-                            let preflight = sync_environment(
+                            let preflight = sync_environment_with_build_environment(
                                 preflight,
+                                Some(environment),
                                 &pending,
                                 hash_strategy.clone(),
                                 Modifications::Exact,
@@ -965,13 +969,12 @@ pub async fn install(
                                 preview,
                             )
                             .await?;
-                            check_tool_entrypoint_conflicts(
+                            targets.extend(collect_tool_entrypoint_targets(
                                 &preflight,
-                                package_name,
-                                entrypoints,
-                                existing_receipt,
-                            )?;
+                                entrypoints.iter().chain(std::iter::once(package_name)),
+                            )?);
                         }
+                        check_tool_entrypoint_targets(targets, existing_receipt)?;
                     }
                     Ok(())
                 },
@@ -1128,7 +1131,8 @@ pub async fn install(
             HashStrategy::default()
         };
         if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
-            let (_temp_dir, preflight) = create_preflight_environment(interpreter.clone(), &cache)?;
+            let (_temp_dir, preflight) =
+                create_preflight_environment(package_name, interpreter.clone(), &cache)?;
             let preflight = sync_environment(
                 preflight,
                 &resolution,
@@ -1217,20 +1221,13 @@ pub async fn install(
 
 /// Create a temporary environment for checking tool entrypoint conflicts before updating a tool.
 fn create_preflight_environment(
+    name: &PackageName,
     interpreter: Interpreter,
     cache: &Cache,
 ) -> Result<(impl AsRef<Path>, PythonEnvironment)> {
     let temp_dir = cache.venv_dir()?;
-    let environment = uv_virtualenv::create_venv(
-        temp_dir.path(),
-        interpreter,
-        uv_virtualenv::Prompt::None,
-        false,
-        uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::TemporaryEnvironment),
-        true,
-        uv_virtualenv::Seed::Disabled,
-        false,
-    )?;
+    let tools = InstalledTools::from_path(temp_dir.path());
+    let environment = tools.create_environment(name, interpreter, cache)?;
     Ok((temp_dir, environment))
 }
 

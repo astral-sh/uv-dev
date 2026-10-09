@@ -1603,6 +1603,44 @@ pub async fn sync_environment(
     printer: Printer,
     preview: Preview,
 ) -> Result<PythonEnvironment, EnvironmentError> {
+    sync_environment_with_build_environment(
+        venv,
+        None,
+        resolution,
+        hasher,
+        modifications,
+        build_constraints,
+        settings,
+        client_builder,
+        state,
+        logger,
+        installer_metadata,
+        concurrency,
+        cache,
+        printer,
+        preview,
+    )
+    .await
+}
+
+/// Sync an environment while using an existing environment for non-isolated source builds.
+pub async fn sync_environment_with_build_environment(
+    venv: PythonEnvironment,
+    build_environment: Option<&PythonEnvironment>,
+    resolution: &Resolution,
+    hasher: HashStrategy,
+    modifications: Modifications,
+    build_constraints: Constraints,
+    settings: InstallerSettingsRef<'_>,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &PlatformState,
+    logger: Box<dyn InstallLogger>,
+    installer_metadata: bool,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    printer: Printer,
+    preview: Preview,
+) -> Result<PythonEnvironment, EnvironmentError> {
     let InstallerSettingsRef {
         index_locations,
         index_strategy,
@@ -1638,11 +1676,12 @@ pub async fn sync_environment(
         .build()?;
 
     // Determine whether to enable build isolation.
+    let shared_environment = build_environment.unwrap_or(&venv);
     let build_isolation = match build_isolation {
         uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-        uv_configuration::BuildIsolation::Shared => BuildIsolation::Shared(&venv),
+        uv_configuration::BuildIsolation::Shared => BuildIsolation::Shared(shared_environment),
         uv_configuration::BuildIsolation::SharedPackage(packages) => {
-            BuildIsolation::SharedPackage(&venv, packages)
+            BuildIsolation::SharedPackage(shared_environment, packages)
         }
     };
 

@@ -729,50 +729,65 @@ pub(super) async fn refine_interpreter(
     Ok(Some(interpreter))
 }
 
-/// Check whether installing a tool would overwrite executables not owned by the existing tool.
-pub(crate) fn check_tool_entrypoint_conflicts(
+/// Collect executable destinations for the requested packages in an environment.
+pub(super) fn collect_tool_entrypoint_targets<'a>(
     environment: &PythonEnvironment,
-    name: &PackageName,
-    entrypoints: &[PackageName],
-    existing_tool: &Tool,
-) -> anyhow::Result<()> {
+    packages: impl IntoIterator<Item = &'a PackageName>,
+) -> anyhow::Result<Vec<(PackageName, PathBuf)>> {
     let executable_directory = uv_tool::tool_executable_dir()?;
     let site_packages = SitePackages::from_environment(environment)?;
+    let mut targets = Vec::new();
+    for package in packages.into_iter().collect::<BTreeSet<_>>() {
+        let installed = site_packages.get_packages(package);
+        let Some(distribution) = installed.first() else {
+            continue;
+        };
+        for (name, source) in
+            entrypoint_paths(&site_packages, distribution.name(), distribution.version())?
+        {
+            let target = executable_directory.join(
+                source
+                    .file_name()
+                    .map(std::borrow::ToOwned::to_owned)
+                    .unwrap_or_else(|| OsString::from(name)),
+            );
+            targets.push((package.clone(), target));
+        }
+    }
+    Ok(targets)
+}
+
+/// Check all prospective targets before changing installed packages or executables.
+pub(super) fn check_tool_entrypoint_targets(
+    targets: Vec<(PackageName, PathBuf)>,
+    existing_tool: &Tool,
+) -> anyhow::Result<()> {
     let existing_paths = existing_tool
         .entrypoints()
         .iter()
         .map(|entrypoint| entrypoint.install_path.as_path())
         .collect::<BTreeSet<_>>();
-
-    let conflicts = entrypoints
-        .iter()
-        .filter(|package| *package != name)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .chain(std::iter::once(name))
-        .filter_map(|package| site_packages.get_packages(package).first().copied())
-        .map(|distribution| {
-            entrypoint_paths(&site_packages, distribution.name(), distribution.version())
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .map(|(name, source)| {
-            executable_directory.join(
-                source
-                    .file_name()
-                    .map(std::borrow::ToOwned::to_owned)
-                    .unwrap_or_else(|| OsString::from(name)),
-            )
-        })
-        .filter(|target| target.exists() && !existing_paths.contains(target.as_path()))
-        .filter_map(|target| {
-            target
+    let mut owners = BTreeMap::new();
+    let mut conflicts = BTreeSet::new();
+    for (package, target) in targets {
+        if let Some(previous) = owners.insert(target.clone(), package.clone())
+            && previous != package
+        {
+            let executable = target
                 .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .collect::<BTreeSet<_>>();
-
+                .unwrap_or(target.as_os_str())
+                .to_string_lossy();
+            bail!(
+                "Packages `{previous}` and `{package}` provide the same executable: {executable}"
+            );
+        }
+        if target.exists()
+            && !existing_paths.contains(target.as_path())
+            && let Some(filename) = target.file_name()
+        {
+            conflicts.insert(filename.to_string_lossy().into_owned());
+        }
+    }
     if !conflicts.is_empty() {
         let (suffix, exists) = if conflicts.len() == 1 {
             ("", "exists")
@@ -784,8 +799,23 @@ pub(crate) fn check_tool_entrypoint_conflicts(
             conflicts.iter().map(|name| name.bold()).join(", ")
         );
     }
-
     Ok(())
+}
+
+/// Check whether installing a tool would overwrite executables not owned by the existing tool.
+pub(crate) fn check_tool_entrypoint_conflicts(
+    environment: &PythonEnvironment,
+    name: &PackageName,
+    entrypoints: &[PackageName],
+    existing_tool: &Tool,
+) -> anyhow::Result<()> {
+    check_tool_entrypoint_targets(
+        collect_tool_entrypoint_targets(
+            environment,
+            entrypoints.iter().chain(std::iter::once(name)),
+        )?,
+        existing_tool,
+    )
 }
 
 /// Finalizes a tool installation, after creation of an environment.

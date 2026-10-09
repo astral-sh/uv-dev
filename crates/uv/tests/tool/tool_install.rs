@@ -13,7 +13,7 @@ use assert_fs::{
     assert::PathAssert,
     fixture::{FileTouch, FileWriteBin, FileWriteStr, PathChild, PathCreateDir},
 };
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
@@ -3073,6 +3073,323 @@ fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
     Ok(())
 }
 
+/// Prospective dependency executables must not collide with the retained tool's command.
+#[test]
+fn tool_install_conflict_with_retained_root_executable() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "prospective-tool-entrypoint"
+        [root]
+        requires = ["tool"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.dep.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let bin = context.temp_dir.child("bin");
+    let directory = context.temp_dir.child("tools/tool");
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let receipt = fs_err::read(directory.child("uv-receipt.toml"))?;
+    uv_snapshot!(context.filters(), context.tool_install().arg("tool")
+        .arg("--with-executables-from").arg("dep")
+        .arg("--default-index").arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Packages `tool` and `dep` provide the same executable: tool
+    ");
+    assert_eq!(fs_err::read(directory.child("uv-receipt.toml"))?, receipt);
+    Command::new(
+        bin.child(format!("tool{}", std::env::consts::EXE_SUFFIX))
+            .path(),
+    )
+    .assert()
+    .success();
+    let python = directory.child(if cfg!(windows) {
+        "Scripts/python.exe"
+    } else {
+        "bin/python"
+    });
+    Command::new(python.path())
+        .args([
+            "-c",
+            "import importlib.util; assert importlib.util.find_spec('dep') is None",
+        ])
+        .assert()
+        .success();
+    Ok(())
+}
+
+/// Prospective dependency executables must not collide with the retained tool's command.
+#[test]
+fn tool_install_conflict_with_retained_root_executable_with_locks() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "prospective-tool-entrypoint"
+        [root]
+        requires = ["tool"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.dep.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let bin = context.temp_dir.child("bin");
+    let directory = context.temp_dir.child("tools/tool");
+    context
+        .tool_install()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg("tool")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let receipt = fs_err::read(directory.child("uv-receipt.toml"))?;
+    uv_snapshot!(context.filters(), context.tool_install().arg("--preview-features").arg("tool-install-locks").arg("tool")
+        .arg("--with-executables-from").arg("dep")
+        .arg("--default-index").arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Packages `dep` and `tool` provide the same executable: tool
+    ");
+    assert_eq!(fs_err::read(directory.child("uv-receipt.toml"))?, receipt);
+    Command::new(
+        bin.child(format!("tool{}", std::env::consts::EXE_SUFFIX))
+            .path(),
+    )
+    .assert()
+    .success();
+    let python = directory.child(if cfg!(windows) {
+        "Scripts/python.exe"
+    } else {
+        "bin/python"
+    });
+    Command::new(python.path())
+        .args([
+            "-c",
+            "import importlib.util; assert importlib.util.find_spec('dep') is None",
+        ])
+        .assert()
+        .success();
+    Ok(())
+}
+
+/// Non-isolated preflight builds use dependencies retained in the original tool environment.
+#[test]
+fn tool_install_preflight_retains_shared_build_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-shared-build-environment"
+        [root]
+        requires = ["tool", "backend-helper"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.backend-helper.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--with")
+        .arg("backend-helper")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let project = context.temp_dir.child("tool");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "tool"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [build-system]
+        requires = ["backend-helper"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"tool".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["tool".to_owned()],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        import shutil
+        import zipfile
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            with zipfile.ZipFile(Path(__file__).parent / "{filename}") as wheel:
+                for name in wheel.namelist():
+                    if name.startswith("tool-2.0.0.dist-info/"):
+                        wheel.extract(name, metadata_directory)
+            return "tool-2.0.0.dist-info"
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            import backend_helper
+            source = Path(__file__).parent / "{filename}"
+            shutil.copyfile(source, Path(wheel_directory) / source.name)
+            return source.name
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
+        .arg("--with").arg("backend-helper").arg("--no-build-isolation")
+        .arg("--default-index").arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - tool==1.0.0
+     + tool==2.0.0 (from file://[TEMP_DIR]/tool)
+    Installed 1 executable: tool
+    ");
+    let python = context
+        .temp_dir
+        .child("tools/tool")
+        .child(if cfg!(windows) {
+            "Scripts/python.exe"
+        } else {
+            "bin/python"
+        });
+    Command::new(python.path()).args(["-c", "import backend_helper; import importlib.metadata; assert importlib.metadata.version('tool') == '2.0.0'"]).assert().success();
+    Ok(())
+}
+
+/// Non-isolated preflight builds use dependencies retained in the original tool environment.
+#[test]
+fn tool_install_preflight_retains_shared_package_build_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-shared-build-environment"
+        [root]
+        requires = ["tool", "backend-helper"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.backend-helper.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--with")
+        .arg("backend-helper")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let project = context.temp_dir.child("tool");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "tool"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [build-system]
+        requires = ["backend-helper"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"tool".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["tool".to_owned()],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        import shutil
+        import zipfile
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            with zipfile.ZipFile(Path(__file__).parent / "{filename}") as wheel:
+                for name in wheel.namelist():
+                    if name.startswith("tool-2.0.0.dist-info/"):
+                        wheel.extract(name, metadata_directory)
+            return "tool-2.0.0.dist-info"
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            import backend_helper
+            source = Path(__file__).parent / "{filename}"
+            shutil.copyfile(source, Path(wheel_directory) / source.name)
+            return source.name
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
+        .arg("--with").arg("backend-helper").arg("--no-build-isolation-package").arg("tool")
+        .arg("--default-index").arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - tool==1.0.0
+     + tool==2.0.0 (from file://[TEMP_DIR]/tool)
+    Installed 1 executable: tool
+    ");
+    let python = context
+        .temp_dir
+        .child("tools/tool")
+        .child(if cfg!(windows) {
+            "Scripts/python.exe"
+        } else {
+            "bin/python"
+        });
+    Command::new(python.path()).args(["-c", "import backend_helper; import importlib.metadata; assert importlib.metadata.version('tool') == '2.0.0'"]).assert().success();
+    Ok(())
+}
+
 /// Conflict checks use the retained dependency version, even when a newer version drops its script.
 #[test]
 fn tool_install_conflict_retained_dependency_version() -> Result<()> {
@@ -3244,15 +3561,18 @@ fn tool_install_conflict_preserves_reused_environment() -> Result<()> {
     let external = bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
     external.touch()?;
 
-    context
+    uv_snapshot!(context.filters(), context
         .tool_install()
         .arg(&launcher)
         .arg("--with-executables-from")
         .arg(&app_requirement)
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
-        .assert()
-        .failure();
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Executable already exists: basic-app (use `--force` to overwrite)
+    ");
 
     assert_eq!(
         receipt,
@@ -3310,7 +3630,7 @@ fn tool_install_conflict_preserves_recreated_environment() -> Result<()> {
     let external = bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
     external.touch()?;
 
-    context
+    uv_snapshot!(context.filters(), context
         .tool_install()
         .arg(&launcher)
         .arg("--python")
@@ -3318,9 +3638,13 @@ fn tool_install_conflict_preserves_recreated_environment() -> Result<()> {
         .arg("--with-executables-from")
         .arg(&app_requirement)
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
-        .assert()
-        .failure();
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Ignoring existing environment for `simple-launcher`: the requested Python interpreter does not match the environment interpreter
+    Resolved 2 packages in [TIME]
+    error: Executable already exists: basic-app (use `--force` to overwrite)
+    ");
 
     assert_eq!(
         receipt,

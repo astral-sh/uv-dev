@@ -118,7 +118,7 @@ pub struct InstalledTools {
 
 impl InstalledTools {
     /// A directory for tools at `root`.
-    fn from_path(root: impl Into<PathBuf>) -> Self {
+    pub fn from_path(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
 
