@@ -614,6 +614,9 @@ pub(super) fn solve<InstalledPackages: InstalledPackagesProvider>(
                 );
             }
             ForkOutcome::Complete(mut state) => {
+                if live.is_empty() && completed.is_empty() {
+                    return Ok(vec![state.into_resolution()]);
+                }
                 observations.refresh(&mut state, &mut ledger, &mut identities);
                 completed.push(CompletedFork::new(state, observations.observations));
             }
@@ -910,15 +913,18 @@ fn next_proposal<InstalledPackages: InstalledPackagesProvider>(
     for (target, fork) in completed.iter().enumerate() {
         let current = registry_versions(&fork.observations, &resolver.workspace_members);
         let protected = selected_preferences(&resolver.preferences, &fork.states);
-        let external = registry_versions(
-            ledger.excluding(&fork.observations),
-            &resolver.workspace_members,
-        );
         for (package, current_versions) in current {
-            let Some(candidates) = external.get(&package) else {
-                continue;
-            };
-            let mut candidates: Vec<_> = candidates.iter().collect();
+            let candidates: BTreeSet<_> = ledger
+                .for_package(&package.name, &fork.observations)
+                .filter_map(|observation| {
+                    let Source::Registry(index) = &observation.source else {
+                        return None;
+                    };
+                    (*index == package.index && observation.version.is_stable())
+                        .then_some(&observation.version)
+                })
+                .collect();
+            let mut candidates: Vec<_> = candidates.into_iter().collect();
             match resolver.options.resolution_mode {
                 ResolutionMode::Highest => candidates.reverse(),
                 ResolutionMode::Lowest => {}

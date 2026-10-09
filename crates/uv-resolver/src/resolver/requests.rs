@@ -196,15 +196,17 @@ impl MetadataRequests {
                 let key = (name.clone(), index.url().clone());
                 self.index
                     .explicit()
-                    .get(&key)
-                    .or_else(|| speculative.explicit().get(&key))
+                    .get_registered(key.clone())
+                    .or_else(|| speculative.explicit().get_registered(key))
+                    .is_some()
             } else {
                 self.index
                     .implicit()
-                    .get(name)
-                    .or_else(|| speculative.implicit().get(name))
+                    .get_registered(name.clone())
+                    .or_else(|| speculative.implicit().get_registered(name.clone()))
+                    .is_some()
             };
-            if cached.is_none() {
+            if !cached {
                 self.request_speculative(Request::Package(name.clone(), index.cloned()))?;
             }
             return Ok(());
@@ -453,7 +455,7 @@ mod tests {
     use tokio::sync::mpsc;
     use uv_distribution::ArchiveMetadata;
     use uv_distribution_filename::{DistExtension, SourceDistExtension};
-    use uv_distribution_types::{Dist, Identifier, RequestedDist};
+    use uv_distribution_types::{Dist, Identifier, IndexMetadata, IndexUrl, RequestedDist};
     use uv_normalize::PackageName;
     use uv_pep508::VerbatimUrl;
     use uv_pypi_types::ResolutionMetadata;
@@ -482,6 +484,38 @@ mod tests {
                 b"Metadata-Version: 2.3\nName: example\nVersion: 1.0.0\n",
             )?,
         )))
+    }
+
+    #[test]
+    fn speculative_enqueue_reuses_pending_implicit_request() -> Result<(), Box<dyn Error>> {
+        let index = InMemoryIndex::default();
+        let (sender, receiver) = mpsc::channel(1);
+        let requests = MetadataRequests::new(index.clone(), sender, None);
+        let name: PackageName = "example".parse()?;
+        assert!(index.implicit().register(name.clone()));
+        drop(receiver);
+
+        requests.speculative().enqueue_package(&name, None)?;
+        assert!(index.implicit().get(&name).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn speculative_enqueue_reuses_pending_explicit_request() -> Result<(), Box<dyn Error>> {
+        let index = InMemoryIndex::default();
+        let (sender, receiver) = mpsc::channel(1);
+        let requests = MetadataRequests::new(index.clone(), sender, None);
+        let name: PackageName = "example".parse()?;
+        let source = IndexMetadata::from(IndexUrl::parse("https://example.org/simple", None)?);
+        let key = (name.clone(), source.url().clone());
+        assert!(index.explicit().register(key.clone()));
+        drop(receiver);
+
+        requests
+            .speculative()
+            .enqueue_package(&name, Some(&source))?;
+        assert!(index.explicit().get(&key).is_none());
+        Ok(())
     }
 
     #[test]
