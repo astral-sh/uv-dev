@@ -1603,29 +1603,21 @@ impl From<&CachedHashDigests> for HashDigests {
 #[derive(rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 enum PackedHashDigest {
-    Md5(Box<PackedDigestBytes<16>>),
-    Sha256(Box<PackedDigestBytes<32>>),
-    Blake2b(Box<PackedDigestBytes<32>>),
-    Sha384(Box<PackedDigestBytes<48>>),
-    Sha512(Box<PackedDigestBytes<64>>),
+    Md5(Box<[u8; 16]>),
+    Sha256(Box<[u8; 32]>),
+    Blake2b(Box<[u8; 32]>),
+    Sha384(Box<[u8; 48]>),
+    Sha512(Box<[u8; 64]>),
 }
 
 impl From<HashDigest> for PackedHashDigest {
     fn from(hash: HashDigest) -> Self {
         match hash {
-            HashDigest::Md5(digest) => Self::Md5(Box::new(PackedDigestBytes(digest.decode()))),
-            HashDigest::Sha256(digest) => {
-                Self::Sha256(Box::new(PackedDigestBytes(digest.decode())))
-            }
-            HashDigest::Blake2b256(digest) => {
-                Self::Blake2b(Box::new(PackedDigestBytes(digest.decode())))
-            }
-            HashDigest::Sha384(digest) => {
-                Self::Sha384(Box::new(PackedDigestBytes(digest.decode())))
-            }
-            HashDigest::Sha512(digest) => {
-                Self::Sha512(Box::new(PackedDigestBytes(digest.decode())))
-            }
+            HashDigest::Md5(digest) => Self::Md5(Box::new(digest.decode())),
+            HashDigest::Sha256(digest) => Self::Sha256(Box::new(digest.decode())),
+            HashDigest::Blake2b256(digest) => Self::Blake2b(Box::new(digest.decode())),
+            HashDigest::Sha384(digest) => Self::Sha384(Box::new(digest.decode())),
+            HashDigest::Sha512(digest) => Self::Sha512(Box::new(digest.decode())),
         }
     }
 }
@@ -1633,40 +1625,12 @@ impl From<HashDigest> for PackedHashDigest {
 impl From<&PackedHashDigest> for HashDigest {
     fn from(hash: &PackedHashDigest) -> Self {
         match hash {
-            PackedHashDigest::Md5(digest) => Self::Md5(Digest::from_bytes(digest.0)),
-            PackedHashDigest::Sha256(digest) => Self::Sha256(Digest::from_bytes(digest.0)),
-            PackedHashDigest::Blake2b(digest) => Self::Blake2b256(Digest::from_bytes(digest.0)),
-            PackedHashDigest::Sha384(digest) => Self::Sha384(Digest::from_bytes(digest.0)),
-            PackedHashDigest::Sha512(digest) => Self::Sha512(Digest::from_bytes(digest.0)),
+            PackedHashDigest::Md5(digest) => Self::Md5(Digest::from_bytes(**digest)),
+            PackedHashDigest::Sha256(digest) => Self::Sha256(Digest::from_bytes(**digest)),
+            PackedHashDigest::Blake2b(digest) => Self::Blake2b256(Digest::from_bytes(**digest)),
+            PackedHashDigest::Sha384(digest) => Self::Sha384(Digest::from_bytes(**digest)),
+            PackedHashDigest::Sha512(digest) => Self::Sha512(Digest::from_bytes(**digest)),
         }
-    }
-}
-
-/// Fixed-size binary digests need no relocation or per-byte conversion when archived.
-struct PackedDigestBytes<const BYTES: usize>([u8; BYTES]);
-
-impl<const BYTES: usize> rkyv::Archive for PackedDigestBytes<BYTES> {
-    type Archived = [u8; BYTES];
-    type Resolver = ();
-
-    fn resolve(&self, (): (), out: rkyv::Place<Self::Archived>) {
-        out.write(self.0);
-    }
-}
-
-impl<const BYTES: usize, S: rkyv::rancor::Fallible + ?Sized> rkyv::Serialize<S>
-    for PackedDigestBytes<BYTES>
-{
-    fn serialize(&self, _serializer: &mut S) -> Result<(), S::Error> {
-        Ok(())
-    }
-}
-
-impl<const BYTES: usize, D: rkyv::rancor::Fallible + ?Sized>
-    rkyv::Deserialize<PackedDigestBytes<BYTES>, D> for [u8; BYTES]
-{
-    fn deserialize(&self, _deserializer: &mut D) -> Result<PackedDigestBytes<BYTES>, D::Error> {
-        Ok(PackedDigestBytes(*self))
     }
 }
 
