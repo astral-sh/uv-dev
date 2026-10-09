@@ -8,19 +8,101 @@ Classification: bug
 
 A project entrypoint launched with `uv run --with` can use the project's base interpreter instead of the ephemeral overlay interpreter. Consequently, packages requested with `--with` are unavailable. The supplied example installs pytest in the project and requests six only for the invocation: `uv run --with six pytest -q test_x.py` raises `ModuleNotFoundError: No module named 'six'`, while invoking `python -m pytest` succeeds.
 
-The trigger is a POSIX interpreter path that makes uv generate an absolute `/bin/sh` wrapper. This occurs when the complete direct shebang would exceed 127 bytes, including `#!` and its newline, or when the interpreter path contains a space. The reporter tested macOS aarch64 with uv 0.11.32 and 0.12.17. A subsequent issue comment reports reproducing both long-path and space-containing-path cases on Linux with uv 0.12.17 and main at e8c3128f0. Those execution results are contributor reports; this handoff independently verifies the source mismatch.
+The trigger is a POSIX interpreter path that makes uv generate an absolute `/bin/sh` wrapper. This occurs when the complete direct shebang would exceed 127 bytes, including `#!` and its newline, or when the interpreter path contains a space. Independent reproduction confirms both long-path and space-containing-path failures on Linux x86_64 with the installed uv 0.12.13 and CPython 3.12.3. The short-path control and the long-path `python -m pytest` workaround both pass. Runtime trace output confirms that uv skips copying the absolute shell-wrapper entrypoint, and `sys.executable` confirms that the failed invocation uses the project interpreter. The reporter tested macOS aarch64 with uv 0.11.32 and 0.12.17; a subsequent issue comment reports Linux results with uv 0.12.17 and main at e8c3128f0. Those other versions and macOS were not independently executed here.
 
 Closest history: astral-sh/uv#13327 and its fix astral-sh/uv#14790, followed by the distinct shebang-matching fix astral-sh/uv#14970. Open reports astral-sh/uv#12691 and astral-sh/uv#9724 describe pre-fix behavior; no existing report or PR specifically covering the remaining absolute-wrapper failure was found.
 
 ## Draft response
 
-Your diagnosis matches the current code: uv generates absolute /bin/sh wrappers for long paths and paths containing spaces, but entrypoint copying does not recognize that form. The launcher therefore keeps using the project interpreter and misses the --with packages. This is an uncovered case in the entrypoint rewriting introduced by astral-sh/uv#14790.
+Reproduced on Linux x86_64 with uv 0.12.13 and Python 3.12.3. With a long project path, `uv run --with six==1.17.0 pytest -q -s test_x.py` fails with `ModuleNotFoundError: No module named 'six'`; the same project at a short path passes. A short path containing a space also fails. Trace output confirms that uv skips copying the absolute /bin/sh launcher, and the failing test reports the project interpreter rather than the overlay interpreter.
 
-Your `uv run --with six python -m pytest -q test_x.py` workaround avoids the skipped launcher. The fix should recognize and rewrite these absolute wrappers, with focused integration coverage for long paths and paths containing spaces.
+The `uv run --with six==1.17.0 python -m pytest -q -s test_x.py` workaround passes at the long path. This is an uncovered case in the entrypoint rewriting introduced by astral-sh/uv#14790. The fix should recognize and rewrite these absolute wrappers, with focused integration coverage for long paths and paths containing spaces.
+
+## Reproduction
+
+**Outcome: reproducible.** Tested using the installed `uv` from `PATH`, not a checkout build:
+
+- uv: `0.12.13 (x86_64-unknown-linux-gnu)`, executable `/opt/hostedtoolcache/uv/0.12.13/x86_64/uv`.
+- Platform: Linux `6.17.0-1022-azure`, x86_64; CPython 3.12.3 at `/usr/bin/python3`.
+- Project dependency: `pytest==8.3.5`; invocation-only dependency: `six==1.17.0`.
+- Standalone project with no workspace, dependency groups, custom sources, or build backend. Commands use normal project synchronization, without `--frozen`.
+- All fixtures, generated environments, caches, configuration directories, and command logs are under `/tmp/uv-22323-woppv2ux`. Subprocesses used a clean allowlisted environment, public PyPI, disabled user configuration, disabled Python downloads, and disabled automatic pytest plugin loading.
+
+The following reconstructs the tested long-path fixture. The extra prints and `-s` identify the interpreter selected by the launcher; the failing operation is simply `import six`.
+
+```bash
+repro_root=$(mktemp -d /tmp/uv-22323-XXXXXXXX)
+export UV_CACHE_DIR="$repro_root/cache"
+export UV_PYTHON_INSTALL_DIR="$repro_root/python"
+export UV_PYTHON=/usr/bin/python3
+export UV_PYTHON_DOWNLOADS=never UV_NO_CONFIG=1 UV_NO_PROGRESS=1
+export UV_DEFAULT_INDEX=https://pypi.org/simple
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+export XDG_CONFIG_HOME="$repro_root/config"
+export XDG_DATA_HOME="$repro_root/data"
+export XDG_CACHE_HOME="$repro_root/xdg-cache"
+export TMPDIR="$repro_root/tmp"
+mkdir -p "$TMPDIR"
+long_component=$(python3 -c 'print("a" * 160)')
+mkdir -p "$repro_root/$long_component/project"
+cd "$repro_root/$long_component/project"
+cat > pyproject.toml <<'TOML'
+[project]
+name = "repro"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["pytest==8.3.5"]
+TOML
+cat > test_x.py <<'PYTHON'
+def test_x():
+    import sys
+    print(f"interpreter: {sys.executable}")
+    import six
+    print(f"six: {six.__version__}")
+PYTHON
+uv sync
+head -n 3 .venv/bin/pytest
+uv run --with six==1.17.0 pytest -q -s test_x.py
+uv run --with six==1.17.0 python -m pytest -q -s test_x.py
+```
+
+`uv sync` succeeds. The generated pytest launcher starts with the following, where `<project>` is the absolute long project directory:
+
+```text
+#!/bin/sh
+'''exec' '<project>/.venv/bin/python' "$0" "$@"
+' '''
+```
+
+The equivalent direct shebang would be 211 bytes including `#!` and the newline. `uv run --with six==1.17.0 pytest -q -s test_x.py` exits 1 with `1 failed` and `ModuleNotFoundError: No module named 'six'`. Its printed interpreter is `<project>/.venv/bin/python`. The module invocation exits 0 with `1 passed`, prints `six: 1.17.0`, and selects `$UV_CACHE_DIR/builds-v0/<temporary-directory>/bin/python`.
+
+Additional explicit invocations used identical `pyproject.toml` and `test_x.py` files in separate directories:
+
+| Scenario | Launcher | Result of `uv run --with six==1.17.0 pytest -q -s test_x.py` |
+| --- | --- | --- |
+| Long path: 160-character component followed by `project` | Absolute `/bin/sh` wrapper; equivalent direct shebang 211 bytes | Exit 1; project interpreter; `six` missing |
+| Short path: `/tmp/uv-22323-woppv2ux/short` | Direct Python shebang, 48 bytes | Exit 0; overlay interpreter; `six==1.17.0`; `1 passed` |
+| Space-containing path: `/tmp/uv-22323-woppv2ux/with space` | Absolute `/bin/sh` wrapper despite equivalent direct shebang being only 53 bytes | Exit 1; project interpreter; `six` missing |
+
+An offline diagnostic rerun at the long path, `uv -vv run --offline --with six==1.17.0 pytest -q test_x.py`, also exits 1 and emits:
+
+```text
+TRACE Skipping copy of entrypoint `.venv/bin/pytest`: does not start with expected shebang
+```
+
+These results directly confirm the reported failure, the launcher-selection mechanism, and the module-invocation workaround on the tested platform. They do not establish a regression between releases: no last known-good version is supplied, and the reported uv 0.11.32/0.12.17 versions were not executed here.
+
+Existing test coverage was inspected, including fixture setup and assertions:
+
+- `crates/uv/tests/project/run.rs`, `run_with_overlay_interpreter`: creates a project console entrypoint, snapshots the overlay interpreter and rewritten launcher, checks imports of the project and overlay dependency through `python`, then repeats entrypoint checks after switching to a relocatable environment. It does not place the project at a long or space-containing path and does not test the absolute shell-wrapper interaction.
+- `crates/uv-install-wheel/src/wheel.rs`, `test_shebang`: directly asserts launcher formatting for ordinary, space-containing, long, and relocatable paths. It does not exercise `uv run --with` or entrypoint copying.
+- Searches in `crates/uv/tests/` and `crates/uv-client/tests/it/` found no integration scenario covering the absolute shell-wrapper interaction with an overlay-only dependency.
+
+No checkout source or tests were changed, and no checkout builds or Rust test suites were run. The pytest executions above are isolated reproduction experiments. Raw stdout/stderr logs, project lockfiles, safe subprocess settings, and exit results remain in the temporary reproduction directory.
 
 ## Classification
 
-Current source confirms a correctness bug: the installer emits absolute /bin/sh wrappers for long or space-containing POSIX interpreter paths, but copy_entrypoint skips those launchers, allowing the base interpreter to bypass the --with overlay. The omission was already present in astral-sh/uv#14790, so this is an uncovered case in the historical fix, not a demonstrated regression. The older open reports predate that fix and do not establish an existing discussion of this current wrapper-specific failure.
+Observed execution and current source confirm a correctness bug: the installer emits absolute /bin/sh wrappers for long or space-containing POSIX interpreter paths, but copy_entrypoint skips those launchers, allowing the base interpreter to bypass the --with overlay. The omission was already present in astral-sh/uv#14790, so this is an uncovered case in the historical fix, not a demonstrated regression. The older open reports predate that fix and do not establish an existing discussion of this current wrapper-specific failure.
 
 The fact that astral-sh/uv#12691 and astral-sh/uv#9724 remain open does not demonstrate that they track the present defect. Their latest comments are dated May 27, 2025 and December 11, 2024 respectively, before the July 22, 2025 entrypoint-copying fix. The original patch for that fix already lacks the absolute shell-wrapper form. There is no evidence here that this form worked in a released version and subsequently stopped working.
 
@@ -45,11 +127,11 @@ Source inspection used checkout commit `01b62808962d7abfe2d10f43d652f357d8038202
 
 ## Suggested next step and existing coverage
 
-Extend entrypoint recognition and rewriting to handle the absolute shell-wrapper form generated by uv. Keep matching tied to the expected interpreter and its established `python`/`python3` handling. The reporter's module invocation is a usable workaround for pytest.
+Extend entrypoint recognition and rewriting to handle the absolute shell-wrapper form generated by uv. Keep matching tied to the expected interpreter and its established `python`/`python3` handling. The module invocation was independently verified as a usable workaround for pytest.
 
 `run_with_overlay_interpreter` in `crates/uv/tests/project/run.rs:1708` already covers ordinary and relocatable project entrypoints. `test_shebang` in `crates/uv-install-wheel/src/wheel.rs:1378` covers generation of wrappers for long paths and spaces. The missing coverage is their interaction: executing a project entrypoint through the overlay when its original launcher uses an absolute shell wrapper.
 
-Add separate, explicitly named POSIX integration scenarios for long project paths and project paths containing spaces. Verify access to an overlay-only dependency through the entrypoint using the existing `uv_snapshot!` style. The project run module is already gated on `test-python` and `test-pypi`; wrapper-specific cases also need a Unix platform gate. This handoff proposes coverage only; no source or test files were changed and no builds or test executions were performed.
+Add separate, explicitly named POSIX integration scenarios for long project paths and project paths containing spaces. Verify access to an overlay-only dependency through the entrypoint using the existing `uv_snapshot!` style. The project run module is already gated on `test-python` and `test-pypi`; wrapper-specific cases also need a Unix platform gate. This handoff proposes repository coverage only; no source or test files in the checkout were changed and no checkout builds or Rust tests were run. Independent pytest reproductions and their outcomes are recorded above.
 
 ## Search scope and exclusions
 

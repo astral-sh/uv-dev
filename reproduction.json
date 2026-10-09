@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced on Linux x86_64 with installed uv 0.12.13 and CPython 3.12.3. A temporary project with pytest==8.3.5 and a test importing six used a long path requiring a 211-byte direct shebang. After `uv sync`, pytest had a /bin/sh wrapper. `uv run --with six==1.17.0 pytest -q -s test_x.py` used the project interpreter and exited 1 with ModuleNotFoundError. Trace output confirmed the entrypoint was skipped because its shebang was unrecognized. `uv run --with six==1.17.0 python -m pytest -q -s test_x.py` passed, as did the entrypoint command at a short path. A short path containing a space also reproduced the failure. Updated $RUNNER_TEMP/issue-context/README.md with commands, evidence, and existing coverage. The reported macOS platform and uv versions were not independently tested. No checkout files were modified."
+}
