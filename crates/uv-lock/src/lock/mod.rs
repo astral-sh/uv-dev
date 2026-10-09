@@ -3918,6 +3918,120 @@ impl Lock {
         SatisfiesResult::Satisfied
     }
 
+    /// Whether current root declarations retain the activation recorded in this lockfile.
+    ///
+    /// Changed declarations make old edge markers unreliable. Until resolution refreshes those
+    /// edges, wheel preference checks must conservatively consider every required environment.
+    pub fn root_activation_is_current(
+        &self,
+        packages: &BTreeMap<PackageName, WorkspaceMember>,
+        requirements: &[Requirement],
+        dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
+        overrides: &[Override<Requirement>],
+        excludes: &[ExcludeDependency],
+    ) -> bool {
+        type Activation = BTreeMap<(PackageName, Vec<ExtraName>), MarkerTree>;
+        fn activation(
+            requirements: impl IntoIterator<Item = (PackageName, Vec<ExtraName>, MarkerTree)>,
+        ) -> Activation {
+            let mut markers = BTreeMap::new();
+            for (name, extras, marker) in requirements {
+                markers
+                    .entry((name, extras))
+                    .and_modify(|value: &mut MarkerTree| {
+                        *value = value.or(marker);
+                    })
+                    .or_insert(marker);
+            }
+            markers
+        }
+        fn locked<'a>(requirements: impl IntoIterator<Item = &'a Requirement>) -> Activation {
+            activation(requirements.into_iter().map(|requirement| {
+                (
+                    requirement.name.clone(),
+                    requirement.extras.to_vec(),
+                    requirement.marker,
+                )
+            }))
+        }
+        if !self.manifest.overrides.iter().eq(overrides)
+            || !self.manifest.excludes.iter().eq(excludes)
+            || packages.keys().ne(self.workspace_members.keys())
+        {
+            return false;
+        }
+
+        if locked(
+            requirements
+                .iter()
+                .chain(dependency_groups.values().flatten()),
+        ) != locked(
+            self.manifest
+                .requirements
+                .iter()
+                .chain(self.manifest.dependency_groups.values().flatten()),
+        ) {
+            return false;
+        }
+
+        for (name, member) in packages {
+            let Some(package) = self.find_by_name(name).ok().flatten() else {
+                return false;
+            };
+            let Some(project) = &member.pyproject_toml().project else {
+                return false;
+            };
+            let mut current = Vec::new();
+            for requirement in project.dependencies.iter().flatten().chain(
+                project
+                    .optional_dependencies
+                    .iter()
+                    .flat_map(|extras| extras.values().flatten()),
+            ) {
+                let Ok(requirement) = uv_pep508::Requirement::<VerbatimUrl>::from_str(requirement)
+                else {
+                    return false;
+                };
+                current.push((
+                    requirement.name,
+                    requirement.extras.to_vec(),
+                    requirement.marker,
+                ));
+            }
+            let Ok(groups) =
+                FlatDependencyGroups::from_pyproject_toml(member.root(), member.pyproject_toml())
+            else {
+                return false;
+            };
+            for (_, group) in groups {
+                current.extend(group.requirements.into_iter().map(|requirement| {
+                    (
+                        requirement.name,
+                        requirement.extras.to_vec(),
+                        requirement.marker,
+                    )
+                }));
+            }
+            let all_extras = &package.metadata.provides_extra;
+            let previous = package
+                .metadata
+                .requires_dist
+                .iter()
+                .chain(package.metadata.dependency_groups.values().flatten())
+                .map(|requirement| {
+                    (
+                        requirement.name.clone(),
+                        requirement.extras.to_vec(),
+                        requirement.marker.simplify_extras(all_extras),
+                    )
+                });
+            if activation(current) != activation(previous) {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Recover package reachability while retaining the activation markers of requested extras.
     pub fn package_reachability(
         &self,

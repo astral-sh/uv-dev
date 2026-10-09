@@ -880,6 +880,14 @@ async fn do_lock(
                         upgrade,
                         &requires_python,
                         lock_required_environments.as_markers(),
+                        lock_required_environments.as_markers().is_empty()
+                            || lock.root_activation_is_current(
+                                packages,
+                                &requirements,
+                                &dependency_groups,
+                                &overrides,
+                                &excludes,
+                            ),
                         minimum_libc_version,
                     )
                 })
