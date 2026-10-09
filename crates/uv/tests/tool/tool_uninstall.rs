@@ -1,8 +1,24 @@
+#[cfg(unix)]
+use fs_err::os::unix::fs::symlink;
+use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
+
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::PathChild;
+#[cfg(unix)]
+use assert_fs::assert::PathAssert;
+use assert_fs::fixture::{FileWriteBin, PathChild, PathCreateDir};
+use url::Url;
 
 use uv_static::EnvVars;
 
+#[cfg(unix)]
+use uv_test::ReadOnlyDirectoryGuard;
+use uv_test::packse::generate_wheel;
+#[cfg(unix)]
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -48,6 +64,376 @@ fn tool_uninstall() {
      + platformdirs==4.2.0
     Installed 2 executables: black, blackd
     ");
+}
+
+#[test]
+fn tool_uninstall_preserves_replaced_executable() {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let launcher_requirement = format!(
+        "simple-launcher @ {}",
+        Url::from_file_path(&launcher).expect("Failed to convert launcher path to file URL")
+    );
+
+    context.tool_install().arg(&launcher).assert().success();
+
+    context
+        .tool_install()
+        .arg(&app)
+        .arg("--with-executables-from")
+        .arg(&launcher_requirement)
+        .arg("--force")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed environment for `simple-launcher`
+    ");
+
+    assert!(
+        bin_dir
+            .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+            .exists()
+    );
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("basic-app"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 2 executables: basic-app, simple_launcher
+    ");
+}
+
+/// A stale original receipt must not retain a launcher owned by the replacement being removed.
+#[test]
+fn tool_uninstall_removes_replacement_before_stale_owner() {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let launcher_requirement = format!(
+        "simple-launcher @ {}",
+        Url::from_file_path(&launcher).expect("Failed to convert launcher path to file URL")
+    );
+
+    context.tool_install().arg(&launcher).assert().success();
+
+    context
+        .tool_install()
+        .arg(&app)
+        .arg("--with-executables-from")
+        .arg(&launcher_requirement)
+        .arg("--force")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("basic-app"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 2 executables: basic-app, simple_launcher
+    ");
+
+    assert!(
+        !bin_dir
+            .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+            .exists()
+    );
+}
+
+#[test]
+fn tool_uninstall_validates_other_tools_before_removing_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+
+    context.tool_install().arg(&launcher).assert().success();
+
+    tool_dir.child("babel").create_dir_all()?;
+    tool_dir
+        .child("babel/uv-receipt.toml")
+        .write_binary(&[0xff])?;
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: failed to read from file `[TEMP_DIR]/tools/babel/uv-receipt.toml`: stream did not contain valid UTF-8
+    "#);
+
+    assert!(tool_dir.child("simple-launcher").exists());
+    assert!(
+        bin_dir
+            .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+            .exists()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn tool_uninstall_all_with_dangling_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let tools = context.temp_dir.child("tools");
+    context
+        .tool_install()
+        .arg(
+            context
+                .workspace_root
+                .join("test/links/simple_launcher-0.1.0-py3-none-any.whl"),
+        )
+        .assert()
+        .success();
+    tools.child("dangling").create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("--all"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed dangling environment for `dangling`
+    Uninstalled 1 executable: simple_launcher
+    ");
+    assert!(!tools.child("dangling").exists());
+    assert!(!tools.child("simple-launcher").exists());
+    assert!(
+        !context
+            .temp_dir
+            .child("bin")
+            .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn tool_uninstall_preserves_replacement_with_symlinked_tool_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let real_tools = context.temp_dir.child("real-tools");
+    real_tools.create_dir_all()?;
+    let tools = context.temp_dir.child("linked-tools");
+    symlink(real_tools.path(), tools.path())?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let requirement = format!(
+        "simple-launcher @ {}",
+        Url::from_file_path(&launcher).expect("launcher file URL")
+    );
+    context
+        .tool_install()
+        .arg(&launcher)
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin.as_os_str())
+        .assert()
+        .success();
+    context
+        .tool_install()
+        .arg(&app)
+        .arg("--with-executables-from")
+        .arg(requirement)
+        .arg("--force")
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin.as_os_str())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str()).env(EnvVars::XDG_BIN_HOME, bin.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed environment for `simple-launcher`
+    ");
+    assert!(tools.child("basic-app").exists());
+    uv_snapshot!(context.filters(), Command::new(bin.child("simple_launcher").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+    Ok(())
+}
+
+/// Bin-directory aliases identify the same destination without conflating different commands.
+#[test]
+#[cfg(unix)]
+fn tool_uninstall_preserves_replacement_with_symlinked_bin_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    bin.create_dir_all()?;
+    let alias = context.temp_dir.child("linked-bin");
+    symlink(bin.path(), alias.path())?;
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let requirement = format!(
+        "simple-launcher @ {}",
+        Url::from_file_path(&launcher).expect("launcher file URL")
+    );
+    context
+        .tool_install()
+        .arg(&launcher)
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin.as_os_str())
+        .assert()
+        .success();
+    context
+        .tool_install()
+        .arg(&app)
+        .arg("--with-executables-from")
+        .arg(requirement)
+        .arg("--force")
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, alias.as_os_str())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed environment for `simple-launcher`
+    ");
+    assert!(tools.child("basic-app").exists());
+    uv_snapshot!(context.filters(), Command::new(bin.child("simple_launcher").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+    Ok(())
+}
+
+/// Permission errors must not turn a retained executable into an unclaimed destination.
+#[test]
+#[cfg(unix)]
+fn tool_uninstall_preserves_replacement_when_ownership_is_unreadable() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let requirement = format!(
+        "simple-launcher @ {}",
+        Url::from_file_path(&launcher).expect("launcher file URL")
+    );
+    context.tool_install().arg(&launcher).assert().success();
+    context
+        .tool_install()
+        .arg(&app)
+        .arg("--with-executables-from")
+        .arg(requirement)
+        .arg("--force")
+        .assert()
+        .success();
+    let protected = tools.child("basic-app/bin");
+    {
+        let _restore = ReadOnlyDirectoryGuard::new(protected.path())?;
+        let mut permissions = fs_err::metadata(&protected)?.permissions();
+        permissions.set_mode(0o000);
+        fs_err::set_permissions(&protected, permissions)?;
+        uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher"), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        error: failed to query metadata of file `[TEMP_DIR]/tools/basic-app/bin/simple_launcher`: Permission denied (os error 13)
+        ");
+        assert!(tools.child("simple-launcher").exists());
+        assert!(tools.child("basic-app").exists());
+    }
+    uv_snapshot!(context.filters(), Command::new(bin.child("simple_launcher").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+    Ok(())
+}
+
+/// Different filename casing can identify one directory entry on case-insensitive filesystems.
+#[test]
+fn tool_uninstall_preserves_replacement_with_different_filename_case() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    bin.create_dir_all()?;
+    let probe = bin.child("Case-Probe");
+    probe.write_binary(b"")?;
+    let case_insensitive = bin.child("case-probe").exists();
+    fs_err::remove_file(probe.path())?;
+    if !case_insensitive {
+        return Ok(());
+    }
+    let (filename, wheel) = generate_wheel(
+        &"first".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["shared-tool".to_owned()],
+    );
+    let first = context.temp_dir.child(filename);
+    first.write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["Shared-Tool".to_owned()],
+    );
+    let second = context.temp_dir.child(filename);
+    second.write_binary(&wheel)?;
+    context.tool_install().arg(first.path()).assert().success();
+    context
+        .tool_install()
+        .arg(second.path())
+        .arg("--force")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("first"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed environment for `first`
+    ");
+    assert!(context.temp_dir.child("tools/second").exists());
+    uv_snapshot!(context.filters(), Command::new(bin.child(format!("shared-tool{}", std::env::consts::EXE_SUFFIX)).path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from second!
+    ");
+    Ok(())
 }
 
 #[test]
@@ -169,4 +555,173 @@ fn tool_uninstall_all_missing_receipt() {
     ----- stderr -----
     Removed dangling environment for `black`
     ");
+}
+
+#[test]
+#[cfg(unix)]
+fn tool_uninstall_preserves_cache_backed_script_replacement() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"first".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "first-1.0.0.data/scripts/shared-tool",
+            "#!/bin/sh\nprintf 'first\\n'\n",
+        )],
+    );
+    let first = context.temp_dir.child(filename);
+    first.write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "second-1.0.0.data/scripts/shared-tool",
+            "#!/bin/sh\nprintf 'second\\n'\n",
+        )],
+    );
+    let second = context.temp_dir.child(filename);
+    second.write_binary(&wheel)?;
+    make_wheel_scripts_executable(&context, &[first.path(), second.path()]);
+    context
+        .tool_install()
+        .arg(first.path())
+        .args(["--link-mode", "symlink"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    context
+        .tool_install()
+        .arg(second.path())
+        .args(["--link-mode", "symlink", "--force"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    assert!(
+        fs_err::symlink_metadata(context.temp_dir.child("tools/second/bin/shared-tool"))?
+            .file_type()
+            .is_symlink()
+    );
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("first"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed environment for `first`
+    ");
+    uv_snapshot!(context.filters(), Command::new(bin.child("shared-tool").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    second
+    ");
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("second"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 executable: shared-tool
+    ");
+    Ok(())
+}
+
+/// Set executable permissions on generated data-script wheel members.
+#[cfg(unix)]
+fn make_wheel_scripts_executable(context: &uv_test::TestContext, paths: &[&std::path::Path]) {
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc::indoc! {r#"
+        import sys
+        import zipfile
+        for filename in sys.argv[1:]:
+            with zipfile.ZipFile(filename) as source:
+                entries = [(info, source.read(info)) for info in source.infolist()]
+            with zipfile.ZipFile(filename, "w") as target:
+                for info, contents in entries:
+                    if ".data/scripts/" in info.filename:
+                        info.create_system = 3
+                        info.external_attr = 0o100755 << 16
+                    target.writestr(info, contents)
+    "#})
+        .args(paths)
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn tool_uninstall_removes_hardlinked_script_replacement_before_stale_owner() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"first".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "first-1.0.0.data/scripts/shared-tool",
+            "#!/bin/sh\nprintf 'shared\\n'\n",
+        )],
+    );
+    let first = context.temp_dir.child(filename);
+    first.write_binary(&wheel)?;
+    make_wheel_scripts_executable(&context, &[first.path()]);
+    let (filename, wheel) = generate_wheel(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["second".to_owned()],
+    );
+    let second = context.temp_dir.child(filename);
+    second.write_binary(&wheel)?;
+    context
+        .tool_install()
+        .arg(first.path())
+        .args(["--link-mode", "hardlink"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    context
+        .tool_install()
+        .arg(second.path())
+        .args([
+            "--link-mode",
+            "hardlink",
+            "--force",
+            "--with-executables-from",
+        ])
+        .arg(format!(
+            "first @ {}",
+            Url::from_file_path(first.path()).expect("wheel URL")
+        ))
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let first_script = fs_err::metadata(context.temp_dir.child("tools/first/bin/shared-tool"))?;
+    let second_script = fs_err::metadata(context.temp_dir.child("tools/second/bin/shared-tool"))?;
+    assert_eq!(
+        (first_script.dev(), first_script.ino()),
+        (second_script.dev(), second_script.ino())
+    );
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("second"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 2 executables: second, shared-tool
+    ");
+    bin.child("shared-tool").assert(predicates::path::missing());
+    context
+        .temp_dir
+        .child("tools/first")
+        .assert(predicates::path::is_dir());
+    Ok(())
 }
