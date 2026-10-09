@@ -2893,10 +2893,10 @@ fn sync_frozen_ambiguous_implicit_root() -> Result<()> {
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(indoc! {r#"
+        .write_str(indoc! {r"
         [tool.uv.workspace]
         members = []
-    "#})?;
+    "})?;
     context.temp_dir.child("uv.lock").write_str(indoc! {r#"
         version = 1
         revision = 3
