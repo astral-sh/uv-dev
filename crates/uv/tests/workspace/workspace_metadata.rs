@@ -71,6 +71,93 @@ fn write_wheel_with_metadata(
     Ok(())
 }
 
+/// Repeated environment discovery emits a pin incompatibility warning once.
+#[cfg(feature = "test-python")]
+#[test]
+fn workspace_metadata_sync_pin_warning() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+    "#})?;
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.11")
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.12\n")?;
+
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .arg("--sync").arg("--offline").arg("--no-index"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/bin/python",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.11",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "example",
+          "path": "[TEMP_DIR]/",
+          "id": "example==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "example==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "example",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    warning: The project environment's Python version does not satisfy the request: `Python 3.12` (from version file at `.python-version`)
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    "#);
+    Ok(())
+}
+
 /// Test basic metadata output for a simple workspace with one member.
 #[test]
 fn workspace_metadata_simple() {

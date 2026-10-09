@@ -337,8 +337,10 @@ fn discover_project_environment(
                 && !centralized
                 && let EnvironmentIncompatibilityError::PythonRequest(..) = &err
                 && let PythonRequestSource::DotPythonVersion(_) = source
+                && let Some(request) = python_request
+                && !environment.interpreter().matches_request(request, cache)
             {
-                warn_user!("{err} (from {source})");
+                warn_user_once!("{err} (from {source})");
             }
             debug!("{err}");
             Ok(None)
