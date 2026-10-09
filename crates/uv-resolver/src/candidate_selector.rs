@@ -141,7 +141,7 @@ impl CandidateSelector {
                 required_environments,
             ) {
                 debug!(
-                    "Ignoring preference {} {} in favor of {} with wheels for the required environments",
+                    "Reselecting preference {} {} as {} after checking required-environment wheel availability",
                     preferred.name, preferred.version, candidate.version
                 );
                 return Some(candidate);
