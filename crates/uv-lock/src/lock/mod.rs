@@ -4075,6 +4075,10 @@ impl Lock {
             else {
                 return Ok(false);
             };
+            // A package's version selects its scoped overrides and exclusions.
+            if current.version.is_none() || current.version.as_ref() != package.version() {
+                return Ok(false);
+            }
             let current = current.metadata;
             let current = current
                 .requires_dist

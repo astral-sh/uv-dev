@@ -49770,3 +49770,62 @@ fn lock_required_environment_changed_parent_metadata() -> Result<()> {
     ");
     Ok(())
 }
+
+/// A workspace version change can disable a scoped override without changing declarations.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_changed_workspace_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "changed-workspace-version-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.child.versions."2.0.0"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv]
+        override-dependencies = [
+            { package = { name = "project", version = "1.0.0" }, dependencies = ["child; python_version < '3.13'"] },
+        ]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "child==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv]
+        override-dependencies = [
+            { package = { name = "project", version = "1.0.0" }, dependencies = ["child; python_version < '3.13'"] },
+        ]
+        required-environments = ["python_version == '3.13'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated child v1.0.0 -> v2.0.0
+    Updated project v1.0.0 -> v2.0.0
+    ");
+    Ok(())
+}
