@@ -372,17 +372,18 @@ fn package_cleanup_supports_root_links_and_unlinks_entry_links() -> io::Result<(
     let cache = Cache::from_path(root.path().join("cache-link"));
     uv_fs::create_symlink(&target, cache.root())?;
     let package = cache.bucket(CacheBucket::Wheels).join("pypi/demo");
-    fs_err::create_dir_all(&package)?;
-    fs_err::write(package.join("payload"), "cache contents")?;
+    fs_err::create_dir_all(package.parent().expect("package has a parent"))?;
     let external = root.path().join("external");
     fs_err::create_dir(&external)?;
     let sentinel = external.join("sentinel");
     fs_err::write(&sentinel, "external contents")?;
-    uv_fs::create_symlink(&external, package.join("entry-link"))?;
+    uv_fs::create_symlink(&external, &package)?;
 
     cache.remove(&"demo".parse().map_err(io::Error::other)?)?;
 
-    assert!(!package.exists());
+    assert!(
+        fs_err::symlink_metadata(&package).is_err_and(|err| err.kind() == io::ErrorKind::NotFound)
+    );
     assert_eq!(fs_err::read_to_string(sentinel)?, "external contents");
     assert!(cache.root().is_dir());
     assert!(fs_err::symlink_metadata(cache.root())?.is_symlink());
