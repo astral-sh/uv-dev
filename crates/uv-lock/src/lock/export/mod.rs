@@ -69,6 +69,7 @@ impl<'lock> ExportableRequirements<'lock> {
         install_options: &'lock InstallOptions,
         virtual_packages: VirtualPackages,
     ) -> Result<Self, LockError> {
+        target.validate_workspace_resolution(extras, groups, None)?;
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut node_by_package = vec![None; size_guess];

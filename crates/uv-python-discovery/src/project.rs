@@ -339,17 +339,19 @@ fn find_workspace_python_requirement_for_roots(
             };
             ranges.push(requires_python);
         }
-        return Ok(
-            RequiresPython::union(ranges.iter().map(RequiresPython::specifiers)).map(
-                |intersection| ProjectPythonRequirement {
-                    requires_python: intersection,
-                    source: PythonRequirementSource::Workspace {
-                        sources: requires_python,
-                        multiple_members: workspace.packages().len() > 1,
-                    },
-                },
-            ),
-        );
+        let Some(union) = RequiresPython::union(ranges.iter().map(RequiresPython::specifiers))
+        else {
+            return Err(PythonSelectionError::UnrepresentableRequiresPythonUnion(
+                requires_python,
+            ));
+        };
+        return Ok(Some(ProjectPythonRequirement {
+            requires_python: union,
+            source: PythonRequirementSource::Workspace {
+                sources: requires_python,
+                multiple_members: workspace.packages().len() > 1,
+            },
+        }));
     }
     match RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers)) {
         Some(intersection) => Ok(Some(ProjectPythonRequirement {
