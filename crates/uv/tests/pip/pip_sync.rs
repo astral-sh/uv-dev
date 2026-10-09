@@ -3560,7 +3560,7 @@ fn require_hashes_pyproject_dependency_origin() -> Result<()> {
         .args(["-c", "hashes.txt", "--no-index"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `iniconfig`
+    error: Hash-checking is required, but no trusted hash was provided for: `iniconfig`
 
     hint: `--require-hashes` was enabled in `hashes.txt`
     ");

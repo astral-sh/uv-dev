@@ -464,28 +464,12 @@ impl RequirementsTxt {
                         });
                     }
 
-                    // Treat any nested requirements or constraints as constraints. This differs
-                    // from `pip`, which seems to treat `-r` requirements in constraints files as
-                    // _requirements_, but we don't want to support that.
-                    for entry in sub_constraints.requirements {
-                        match entry.requirement {
-                            RequirementsTxtRequirement::Named(requirement) => {
-                                data.constraints.push(RequirementEntry {
-                                    requirement,
-                                    hashes: entry.hashes,
-                                });
-                            }
-                            RequirementsTxtRequirement::Unnamed(_) => {
-                                return Err(RequirementsTxtParserError::UnnamedConstraint {
-                                    start,
-                                    end,
-                                });
-                            }
-                        }
+                    // Named entries are already appended in declaration order while parsing in
+                    // constraints mode, including nested requirements files. Only unnamed entries remain.
+                    if !sub_constraints.requirements.is_empty() {
+                        return Err(RequirementsTxtParserError::UnnamedConstraint { start, end });
                     }
-                    for constraint in sub_constraints.constraints {
-                        data.constraints.push(constraint);
-                    }
+                    data.constraints.extend(sub_constraints.constraints);
                     data.require_hashes = data.require_hashes.or(sub_constraints.require_hashes);
                 }
                 RequirementsTxtStatement::RequirementEntry(requirement_entry) => {
