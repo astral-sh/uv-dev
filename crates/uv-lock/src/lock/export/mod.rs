@@ -325,7 +325,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 && install_options.include_package(
                     package.as_install_target(),
                     target.project_name(),
-                    target.lock().members(),
+                    target.lock().workspace_members(),
                 )
         };
 
