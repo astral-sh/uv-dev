@@ -1202,8 +1202,9 @@ fn tool_upgrade_with() {
 
 #[test]
 fn tool_upgrade_refreshes_dependency_entrypoints() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
-    let tool_dir = context.temp_dir.child("tools");
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
     let bin_dir = context.temp_dir.child("bin");
 
     let tool = context.temp_dir.child("tool");
@@ -1252,12 +1253,17 @@ fn tool_upgrade_refreshes_dependency_entrypoints() -> Result<()> {
             .map_err(|()| anyhow!("Failed to convert provider path to file URL"))?
     );
     context
-        .tool_install()
+        .build()
+        .arg("--wheel")
         .arg(tool.path())
+        .assert()
+        .success();
+    let root_wheel = tool.child("dist/tool_root-1.0.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(root_wheel.path())
         .arg("--with-executables-from")
         .arg(provider_requirement)
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
@@ -1281,14 +1287,18 @@ fn tool_upgrade_refreshes_dependency_entrypoints() -> Result<()> {
         build-backend = "uv_build"
     "#})?;
 
-    context
-        .tool_upgrade()
+    uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("tool-root")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str())
-        .assert()
-        .success();
+, @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified tool-root environment
+     - tool-provider==1.0.0 (from file://[TEMP_DIR]/provider)
+     + tool-provider==2.0.0 (from file://[TEMP_DIR]/provider)
+    Installed 1 executable from `tool-provider`: new-command
+    Installed 1 executable: root
+    "#);
 
     assert_eq!(
         fs_err::symlink_metadata(&old)
