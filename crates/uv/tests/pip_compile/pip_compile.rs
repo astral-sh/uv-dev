@@ -5670,8 +5670,8 @@ fn build_policy_modes() -> Result<()> {
         .arg("--build-policy").arg("disallow"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × No solution found when resolving dependencies:
-      ╰─▶ Because source-only==1.0.0 has no usable wheels and you require source-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+    error: No solution found when resolving dependencies
+      cause: Because source-only==1.0.0 has no usable wheels and you require source-only==1.0.0, we can conclude that your requirements are unsatisfiable.
 
     hint: Wheels are required for `source-only` because its build policy is `disallow`
     ");
