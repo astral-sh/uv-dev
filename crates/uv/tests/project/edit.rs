@@ -1642,20 +1642,38 @@ fn add_git_lfs_custom_endpoint() -> Result<()> {
             PATH="$GIT_LFS_TEST_ORIGINAL_PATH" exec git-lfs "$@"
         "#})?;
         fs_err::set_permissions(shim.path(), Permissions::from_mode(0o755))?;
+        // Git searches its helper directory before `PATH`; retain its helpers alongside the LFS shim.
+        let git_exec_path = git(&["--exec-path"])?;
+        for entry in fs_err::read_dir(&git_exec_path)? {
+            let entry = entry?;
+            if entry.file_name() != "git-lfs" {
+                uv_fs::create_symlink(entry.path(), shim_dir.path().join(entry.file_name()))?;
+            }
+        }
         let original_path =
             std::env::var_os(EnvVars::PATH).ok_or_else(|| anyhow!("PATH is not set"))?;
+        let original_path = std::env::join_paths(
+            std::iter::once(git_exec_path.into()).chain(std::env::split_paths(&original_path)),
+        )?;
         let path = std::env::join_paths(
             std::iter::once(shim_dir.path().to_path_buf())
                 .chain(std::env::split_paths(&original_path)),
         )?;
         lock()
             .env(EnvVars::PATH, path)
+            .env("GIT_EXEC_PATH", shim_dir.path())
             .env("GIT_LFS_TEST_ORIGINAL_PATH", original_path)
             .assert()
             .success();
         Command::new("git")
             .args(["lfs", "fsck", "--objects", &revision])
             .current_dir(db_root.path())
+            .output()?
+            .assert()
+            .success();
+        Command::new("git")
+            .args(["lfs", "fsck", "--objects", &revision])
+            .current_dir(checkout_root.path())
             .output()?
             .assert()
             .success();
