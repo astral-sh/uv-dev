@@ -1147,10 +1147,7 @@ impl Workspace {
     ) -> Result<Option<PathBuf>, WorkspaceError> {
         find_parent_workspace_root(
             &self.install_path,
-            ChildWorkspaceTarget::Existing {
-                pyproject_toml: &self.pyproject_toml,
-                members: Some(self.packages()),
-            },
+            ChildWorkspaceTarget::Existing(self),
             options,
             cache,
         )
@@ -1181,8 +1178,8 @@ impl Workspace {
     /// Return the independently locked workspaces registered directly by this workspace.
     ///
     /// The returned paths are canonical, sorted, and deduplicated. A workspace matched by a more
-    /// distant ancestor's glob is omitted when a nearer ancestor also registers it. Reading a
-    /// child root does not discover its members or read its lockfile.
+    /// distant ancestor's glob is omitted when a nearer ancestor also registers it. Each child
+    /// is discovered before its parent lookup, matching production membership validation.
     #[cfg(all(test, unix))]
     async fn child_workspace_roots(
         &self,
@@ -1199,17 +1196,10 @@ impl Workspace {
 
         let workspace_root = fs_err::tokio::canonicalize(&self.install_path).await?;
         let mut child_roots = Vec::new();
-        for (child_root, pyproject_toml) in children.validated_roots(options, cache).await? {
-            let parent = find_parent_workspace_root(
-                &child_root,
-                ChildWorkspaceTarget::Existing {
-                    pyproject_toml: &pyproject_toml,
-                    members: None,
-                },
-                options,
-                cache,
-            )
-            .await?;
+        let workspace_cache = WorkspaceCache::default();
+        for (child_root, _) in children.validated_roots(options, cache).await? {
+            let child = Self::discover(&child_root, options, cache, &workspace_cache).await?;
+            let parent = child.parent_workspace_root(options, cache).await?;
             if parent.as_ref() == Some(&workspace_root) {
                 child_roots.push(child_root);
             }
@@ -2513,10 +2503,7 @@ fn discovery_cache_boundary(
 
 #[derive(Clone, Copy)]
 enum ChildWorkspaceTarget<'workspace> {
-    Existing {
-        pyproject_toml: &'workspace PyProjectToml,
-        members: Option<&'workspace BTreeMap<PackageName, WorkspaceMember>>,
-    },
+    Existing(&'workspace Workspace),
     Prospective {
         ordinary_workspace: Option<&'workspace Workspace>,
     },
@@ -2576,7 +2563,7 @@ async fn find_parent_workspace_root(
     cache: &Cache,
 ) -> Result<Option<PathBuf>, WorkspaceError> {
     let prospective = match target {
-        ChildWorkspaceTarget::Existing { .. } => false,
+        ChildWorkspaceTarget::Existing(_) => false,
         ChildWorkspaceTarget::Prospective { .. } => true,
     };
     let absolute_child_root =
@@ -2710,17 +2697,13 @@ async fn find_parent_workspace_root(
         validate_child_workspace_containment(&canonical_parent_root, &canonical_child_root)?;
         validate_explicit_child_workspace(&canonical_parent_root, &pyproject_toml)?;
         match target {
-            ChildWorkspaceTarget::Existing {
-                pyproject_toml,
-                members,
-            } => {
-                validate_explicit_child_workspace(&canonical_child_root, pyproject_toml)?;
+            ChildWorkspaceTarget::Existing(child) => {
+                validate_explicit_child_workspace(&canonical_child_root, child.pyproject_toml())?;
                 validate_parent_member_overlap(
                     parent_root,
                     workspace,
                     &canonical_child_root,
-                    pyproject_toml,
-                    members,
+                    child.packages(),
                     options,
                     cache,
                 )
@@ -2837,22 +2820,13 @@ async fn validate_parent_member_overlap(
     parent_root: &Path,
     parent_definition: &ToolUvWorkspace,
     child_root: &Path,
-    child_pyproject_toml: &PyProjectToml,
-    child_members: Option<&BTreeMap<PackageName, WorkspaceMember>>,
+    child_members: &BTreeMap<PackageName, WorkspaceMember>,
     options: &DiscoveryOptions,
     cache: &Cache,
 ) -> Result<(), WorkspaceError> {
     let mut canonical_child_members = FxHashSet::default();
-    if let Some(child_members) = child_members {
-        for member in child_members.values() {
-            canonical_child_members.insert(fs_err::tokio::canonicalize(member.root()).await?);
-        }
-    } else if let Some(child_definition) = workspace_definition(child_pyproject_toml) {
-        canonical_child_members.extend(
-            workspace_member_roots(child_root, child_definition, options, cache)
-                .await?
-                .into_keys(),
-        );
+    for member in child_members.values() {
+        canonical_child_members.insert(fs_err::tokio::canonicalize(member.root()).await?);
     }
 
     for (canonical_member_root, (member_root, member_glob)) in
