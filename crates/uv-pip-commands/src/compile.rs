@@ -227,7 +227,6 @@ pub async fn pip_compile(
         find_links,
         no_binary,
         no_build,
-        no_build_unnamed_editable,
         build_policy,
         build_policy_package,
     } = RequirementsSpecification::from_sources(
@@ -491,7 +490,7 @@ pub async fn pip_compile(
 
     // Combine the `--no-binary` and `--no-build` flags from the requirements files.
     let build_options = build_options
-        .combine(no_binary, no_build, no_build_unnamed_editable)
+        .combine(no_binary, no_build)
         .with_fallback_build_policy(build_policy, build_policy_package);
     warn_build_policy_preview(&build_options);
 
