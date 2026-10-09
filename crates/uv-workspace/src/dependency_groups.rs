@@ -2,7 +2,7 @@ use std::collections::btree_map::Entry;
 use std::str::FromStr;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use thiserror::Error;
@@ -38,23 +38,20 @@ struct WorkspaceDependencyGroups {
 }
 
 impl FlatDependencyGroups {
-    /// Gather and flatten all the dependency-groups defined in the given pyproject.toml
-    ///
-    /// The path is only used in diagnostics.
-    pub(crate) fn from_pyproject_toml(
-        path: &Path,
-        pyproject_toml: &PyProjectToml,
-    ) -> Result<Self, DependencyGroupError> {
-        Self::from_pyproject_toml_with_workspace(path, pyproject_toml, None, None)
-    }
-
     /// Gather and flatten dependency groups, including any referenced workspace groups.
     pub fn from_workspace(
         path: &Path,
         pyproject_toml: &PyProjectToml,
         workspace: &Workspace,
     ) -> Result<Self, DependencyGroupError> {
-        Self::from_workspace_with_parents(path, pyproject_toml, workspace, None, &mut Vec::new())
+        Self::from_workspace_with_parents(
+            path,
+            pyproject_toml,
+            workspace,
+            None,
+            &mut Vec::new(),
+            &mut BTreeMap::new(),
+        )
     }
 
     fn from_workspace_with_parents(
@@ -63,7 +60,14 @@ impl FlatDependencyGroups {
         workspace: &Workspace,
         requested_group: Option<&GroupName>,
         parents: &mut Vec<(PackageName, GroupName)>,
+        resolved: &mut BTreeMap<(PathBuf, GroupName), FlatDependencyGroup>,
     ) -> Result<Self, DependencyGroupError> {
+        if let Some(group) = requested_group
+            && let Some(resolved) = resolved.get(&(path.to_path_buf(), group.clone()))
+        {
+            return Ok(Self(BTreeMap::from([(group.clone(), resolved.clone())])));
+        }
+
         let selected_groups = requested_group.map(|requested_group| {
             let mut selected_groups = BTreeSet::new();
             let mut pending_groups = vec![requested_group];
@@ -105,12 +109,13 @@ impl FlatDependencyGroups {
                     .map(|project| (project.name.clone(), group.clone()));
                 if let Some(current) = &current {
                     if parents.contains(current) {
-                        let cycle = parents
-                            .iter()
-                            .chain(std::iter::once(current))
-                            .map(|(package, group)| format!("{package}:{group}"))
-                            .collect::<Vec<_>>()
-                            .join(" -> ");
+                        let cycle = WorkspaceCycle(
+                            parents
+                                .iter()
+                                .chain(std::iter::once(current))
+                                .cloned()
+                                .collect(),
+                        );
                         return Err(DependencyGroupError {
                             package: current.0.to_string(),
                             path: path.user_display().to_string(),
@@ -133,6 +138,7 @@ impl FlatDependencyGroups {
                                 workspace,
                                 Some(included_group),
                                 parents,
+                                resolved,
                             )?;
                             root.get_or_insert_with(Self::default).0.extend(included.0);
                         }
@@ -167,6 +173,7 @@ impl FlatDependencyGroups {
                         workspace,
                         Some(included_group),
                         parents,
+                        resolved,
                     )?;
                     packages
                         .entry(package.clone())
@@ -182,12 +189,16 @@ impl FlatDependencyGroups {
         }
 
         let workspace_groups = WorkspaceDependencyGroups { root, packages };
-        Self::from_pyproject_toml_with_workspace(
+        let groups = Self::from_pyproject_toml_with_workspace(
             path,
             pyproject_toml,
             Some(&workspace_groups),
             selected_groups.as_ref(),
-        )
+        )?;
+        for (group, dependencies) in &groups.0 {
+            resolved.insert((path.to_path_buf(), group.clone()), dependencies.clone());
+        }
+        Ok(groups)
     }
 
     fn from_pyproject_toml_with_workspace(
@@ -537,7 +548,7 @@ enum DependencyGroupErrorInner {
     )]
     WorkspaceGroupOutsideWorkspace(GroupName, GroupName),
     #[error("Detected a cycle in workspace dependency groups: {0}")]
-    WorkspaceGroupCycle(String),
+    WorkspaceGroupCycle(WorkspaceCycle),
     #[error(
         "Group `{0}` includes the `dev` group (`include = \"dev\"`), but only `tool.uv.dev-dependencies` was found. To reference the `dev` group via an `include`, remove the `tool.uv.dev-dependencies` section and add any development dependencies to the `dev` entry in the `[dependency-groups]` table instead."
     )]
@@ -592,6 +603,23 @@ impl std::fmt::Display for Cycle {
             write!(f, " -> `{group}`")?;
         }
         write!(f, " -> `{first}`")?;
+        Ok(())
+    }
+}
+
+/// A cycle of named workspace dependency groups.
+#[derive(Debug)]
+struct WorkspaceCycle(Vec<(PackageName, GroupName)>);
+
+impl std::fmt::Display for WorkspaceCycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [(package, group), rest @ ..] = self.0.as_slice() else {
+            return Ok(());
+        };
+        write!(f, "`{package}:{group}`")?;
+        for (package, group) in rest {
+            write!(f, " -> `{package}:{group}`")?;
+        }
         Ok(())
     }
 }

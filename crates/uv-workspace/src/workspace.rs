@@ -958,9 +958,10 @@ impl Workspace {
             Ok(BTreeMap::default())
         } else {
             // Otherwise, return the dependency groups in the non-project workspace root.
-            let dependency_groups = FlatDependencyGroups::from_pyproject_toml(
+            let dependency_groups = FlatDependencyGroups::from_workspace(
                 &self.install_path,
                 &self.pyproject_toml,
+                self,
             )?;
             Ok(dependency_groups.into_inner())
         }
