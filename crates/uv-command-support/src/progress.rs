@@ -31,6 +31,22 @@ pub enum ProgressStatus {
     Failed,
 }
 
+/// Operations represented by the JSONL progress protocol.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressPhase {
+    Audit,
+    Build,
+    Checkout,
+    Download,
+    Extract,
+    Hash,
+    Install,
+    Prepare,
+    Resolve,
+    Upload,
+}
+
 /// A progress update emitted before a command's final JSONL result.
 ///
 /// Concurrent operations are correlated using their process-wide `id`. Top-level
@@ -42,7 +58,7 @@ pub struct JsonlProgressEvent {
     #[serde(rename = "type")]
     event_type: &'static str,
     /// The operation being reported, such as `download`, `build`, or `install`.
-    phase: &'static str,
+    phase: ProgressPhase,
     /// The operation's current lifecycle state.
     status: ProgressStatus,
     /// A process-wide identifier shared by all events for one concurrent operation.
@@ -69,7 +85,7 @@ pub struct JsonlProgressEvent {
 }
 
 impl JsonlProgressEvent {
-    pub fn new(phase: &'static str, status: ProgressStatus) -> Self {
+    pub fn new(phase: ProgressPhase, status: ProgressStatus) -> Self {
         Self {
             event_type: "progress",
             phase,
@@ -190,12 +206,12 @@ impl Direction {
         }
     }
 
-    fn phase(self) -> &'static str {
+    fn phase(self) -> ProgressPhase {
         match self {
-            Self::Download => "download",
-            Self::Upload => "upload",
-            Self::Extract => "extract",
-            Self::Hash => "hash",
+            Self::Download => ProgressPhase::Download,
+            Self::Upload => ProgressPhase::Upload,
+            Self::Extract => ProgressPhase::Extract,
+            Self::Hash => ProgressPhase::Hash,
         }
     }
 }
@@ -254,7 +270,7 @@ impl ProgressReporter {
         state.headers += 1;
         state.bars.insert(id, ProgressBarKind::Spinner { progress });
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("build", ProgressStatus::Started);
+            let mut event = JsonlProgressEvent::new(ProgressPhase::Build, ProgressStatus::Started);
             event.id = Some(id);
             event.name = Some(source.to_string());
             self.emit_progress(&event);
@@ -288,7 +304,8 @@ impl ProgressReporter {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("build", ProgressStatus::Completed);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Build, ProgressStatus::Completed);
             event.id = Some(id);
             event.name = Some(source.to_string());
             self.emit_progress(&event);
@@ -310,7 +327,7 @@ impl ProgressReporter {
             progress
         };
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("build", ProgressStatus::Failed);
+            let mut event = JsonlProgressEvent::new(ProgressPhase::Build, ProgressStatus::Failed);
             event.id = Some(id);
             event.name = Some(source.to_string());
             self.emit_progress(&event);
@@ -566,7 +583,8 @@ impl ProgressReporter {
         state.headers += 1;
         state.bars.insert(id, ProgressBarKind::Spinner { progress });
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("checkout", ProgressStatus::Started);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Checkout, ProgressStatus::Started);
             event.id = Some(id);
             event.url = Some(url.to_string());
             event.revision = Some(rev.to_string());
@@ -600,7 +618,8 @@ impl ProgressReporter {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("checkout", ProgressStatus::Completed);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Checkout, ProgressStatus::Completed);
             event.id = Some(id);
             event.url = Some(url.to_string());
             event.revision = Some(rev.to_string());

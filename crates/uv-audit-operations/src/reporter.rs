@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use uv_command_support::Printer;
-use uv_command_support::progress::{JsonlProgressEvent, ProgressStatus, emit_jsonl_progress};
+use uv_command_support::progress::{
+    JsonlProgressEvent, ProgressPhase, ProgressStatus, emit_jsonl_progress,
+};
 
 #[derive(Debug)]
 pub(crate) struct AuditReporter {
@@ -22,7 +24,7 @@ impl From<Printer> for AuditReporter {
         progress.set_message("Auditing dependencies...");
         emit_jsonl_progress(
             printer,
-            &JsonlProgressEvent::new("audit", ProgressStatus::Started),
+            &JsonlProgressEvent::new(ProgressPhase::Audit, ProgressStatus::Started),
         );
         Self { printer, progress }
     }
@@ -33,7 +35,7 @@ impl AuditReporter {
         self.progress.set_message("");
         emit_jsonl_progress(
             self.printer,
-            &JsonlProgressEvent::new("audit", ProgressStatus::Completed),
+            &JsonlProgressEvent::new(ProgressPhase::Audit, ProgressStatus::Completed),
         );
         self.progress.finish_and_clear();
     }
