@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
@@ -175,23 +174,30 @@ fn unreachable_legacy_registry_extra_does_not_require_metadata() -> Result<()> {
     ----- stderr -----
     Checked in [TIME]
     ");
-    context
-        .export()
-        .args(["--frozen", "--extra", "feature", "--no-header"])
-        .assert()
-        .success();
-    context
-        .export()
-        .args([
-            "--frozen",
-            "--extra",
-            "feature",
-            "--format",
-            "pylock.toml",
-            "--no-header",
-        ])
-        .assert()
-        .success();
+    // Conflict validation follows guarded requests. The flattened export graph can
+    // still include `q` even though its request is unreachable during validation.
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "feature", "--no-header",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    q==1.0.0
+        # via parent
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "feature", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "q"
+    version = "1.0.0"
+    index = "https://example.com/simple"
+    "#);
     // The legacy request needs a refresh when its parent is selected.
     uv_snapshot!(context.filters(), context.export().args([
         "--frozen", "--no-header",

@@ -6267,6 +6267,9 @@ fn lock_conflicting_workspace_members_depends_direct_extra() -> Result<()> {
             { name = "sortedcontainers", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-example-foo' or extra == 'project-7-example'" },
         ]
 
+        [package.optional-dependencies]
+        foo = []
+
         [package.metadata]
         requires-dist = [
             { name = "sortedcontainers", specifier = "==2.3.0" },
