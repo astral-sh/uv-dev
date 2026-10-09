@@ -916,45 +916,75 @@ fn workspace_metadata_script_stdin_ignores_environment_lockfile_modes() -> Resul
 "#,
     )?;
 
-    let locked = context
-        .workspace_metadata()
+    uv_snapshot!(context.filters(), context.workspace_metadata()
         .arg("--script")
         .arg("-")
         .env(EnvVars::UV_LOCKED, "1")
-        .stdin(File::open(script.path())?.into_file())
-        .assert()
-        .success();
-    let frozen = context
-        .workspace_metadata()
+        .stdin(File::open(script.path())?.into_file()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "script": {
+        "path": "[TEMP_DIR]/-",
+        "id": "script+[TEMP_DIR]/-"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "resolution": {
+        "script+[TEMP_DIR]/-": {
+          "kind": "script",
+          "path": "[TEMP_DIR]/-",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: No lockfile found for Python script (ignoring `UV_LOCKED=1`); run `uv lock --script` to generate a lockfile
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Resolved in [TIME]
+    "#);
+
+    uv_snapshot!(context.filters(), context.workspace_metadata()
         .arg("--script")
         .arg("-")
         .env(EnvVars::UV_FROZEN, "1")
-        .stdin(File::open(script.path())?.into_file())
-        .assert()
-        .success();
-
-    let locked = String::from_utf8(locked.get_output().stderr.clone())?;
-    let frozen = String::from_utf8(frozen.get_output().stderr.clone())?;
-
-    insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(serde_json::json!({
-            "frozen": frozen.lines().collect::<Vec<_>>(),
-            "locked": locked.lines().collect::<Vec<_>>(),
-        }), @r#"
-        {
-          "frozen": [
-            "warning: No lockfile found for Python script (ignoring `--frozen`); run `uv lock --script` to generate a lockfile",
-            "warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.",
-            "Resolved in [TIME]"
-          ],
-          "locked": [
-            "warning: No lockfile found for Python script (ignoring `UV_LOCKED=1`); run `uv lock --script` to generate a lockfile",
-            "warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.",
-            "Resolved in [TIME]"
-          ]
+        .stdin(File::open(script.path())?.into_file()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "script": {
+        "path": "[TEMP_DIR]/-",
+        "id": "script+[TEMP_DIR]/-"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "resolution": {
+        "script+[TEMP_DIR]/-": {
+          "kind": "script",
+          "path": "[TEMP_DIR]/-",
+          "dependencies": []
         }
-        "#);
-    });
+      }
+    }
+
+    ----- stderr -----
+    warning: No lockfile found for Python script (ignoring `--frozen`); run `uv lock --script` to generate a lockfile
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Resolved in [TIME]
+    "#);
 
     Ok(())
 }
