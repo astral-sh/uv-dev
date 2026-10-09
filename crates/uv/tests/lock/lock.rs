@@ -22073,6 +22073,7 @@ fn lock_without_metadata_conflicting_group_with_extra_and_different_specifiers()
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{{ url = "{index_policy_url}", default = true }}]
 
         [[package]]
         name = "h2"
@@ -22112,6 +22113,7 @@ fn lock_without_metadata_conflicting_group_with_extra_and_different_specifiers()
         ]
         "#,
             index_url = server.index_url(),
+            index_policy_url = server.index_url().trim_end_matches('/'),
             h2_sdist_url = server.file_url("h2-1.0.0.tar.gz"),
             h2_wheel_url = server.file_url("h2-1.0.0-py3-none-any.whl"),
             httpx_sdist_url = server.file_url("httpx-1.0.0.tar.gz"),
@@ -22126,7 +22128,6 @@ fn lock_without_metadata_conflicting_group_with_extra_and_different_specifiers()
         .arg(server.index_url()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Ignoring existing lockfile due to change in index configuration
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
@@ -25088,6 +25089,7 @@ fn lock_regenerates_marker_specific_requested_extras() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{{ url = "{index_policy_url}", default = true }}]
 
         [[package]]
         name = "h2"
@@ -25122,6 +25124,7 @@ fn lock_regenerates_marker_specific_requested_extras() -> Result<()> {
         ]
         "#,
         index_url = server.index_url(),
+            index_policy_url = server.index_url().trim_end_matches('/'),
         h2_sdist_url = server.file_url("h2-1.0.0.tar.gz"),
         h2_wheel_url = server.file_url("h2-1.0.0-py3-none-any.whl"),
         httpx_sdist_url = server.file_url("httpx-1.0.0.tar.gz"),
@@ -25136,7 +25139,6 @@ fn lock_regenerates_marker_specific_requested_extras() -> Result<()> {
         .arg(server.index_url()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Ignoring existing lockfile due to change in index configuration
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
