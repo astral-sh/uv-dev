@@ -44,7 +44,7 @@ impl EnvFile {
                 push_character(&mut current, character);
                 escape = false;
             } else if character == Ok('\\') {
-                if current.is_empty() && characters.peek() == Some(&Ok('\\')) {
+                if cfg!(windows) && current.is_empty() && characters.peek() == Some(&Ok('\\')) {
                     let mut count = 1;
                     while characters.peek() == Some(&Ok('\\')) {
                         characters.next();
@@ -123,6 +123,13 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    #[cfg(unix)]
+    fn test_from_args_escaped_leading_backslash() {
+        let env_file = EnvFile::from_args(vec![], Some(r"\\config.env".into()), false);
+        assert_eq!(env_file.0, vec![PathBuf::from(r"\config.env")]);
+    }
 
     #[test]
     fn test_from_args_default() {
@@ -210,6 +217,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn test_from_args_windows_unc_and_extended_paths() {
         let env_file = EnvFile::from_args(
             vec![],
@@ -227,6 +235,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn test_from_args_windows_unc_and_extended_paths_with_escaped_spaces() {
         let env_file = EnvFile::from_args(
             vec![],
