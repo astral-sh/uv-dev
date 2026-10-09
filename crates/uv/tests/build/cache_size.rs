@@ -230,7 +230,7 @@ fn cache_size_output_format_conflicts_with_human() {
 #[test]
 fn cache_size_physical_fresh_allocation() -> Result<()> {
     use std::os::unix::fs::MetadataExt;
-    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
+    let context = uv_test::test_context!("3.12");
     context.clean().assert().success();
     let file = context.cache_dir.child("fresh.bin");
     file.write_binary(&vec![42; 1024 * 1024])?;
@@ -238,10 +238,10 @@ fn cache_size_physical_fresh_allocation() -> Result<()> {
     assert!(allocated > 0);
     assert_eq!(uv_fs::physical_disk_usage(file.path())?, allocated);
     uv_snapshot!(context.filters(), context.cache_size()
-        .args(["--preview-features", "cache-size,cache-physical-space"]), @"
+        .args(["--preview-features", "cache-size,cache-physical-space", "--human"]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [SIZE]
+    1.0MiB
     ");
     Ok(())
 }
@@ -251,7 +251,7 @@ fn cache_size_physical_fresh_allocation() -> Result<()> {
 #[test]
 fn cache_size_physical_unreadable_file() -> Result<()> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
+    let context = uv_test::test_context!("3.12");
     context.clean().assert().success();
     let file = context.cache_dir.child("unreadable.bin");
     file.write_binary(&vec![42; 1024 * 1024])?;
@@ -262,10 +262,10 @@ fn cache_size_physical_unreadable_file() -> Result<()> {
     assert!(allocated > 0);
     assert_eq!(uv_fs::physical_disk_usage(file.path())?, allocated);
     uv_snapshot!(context.filters(), context.cache_size()
-        .args(["--preview-features", "cache-size,cache-physical-space"]), @"
+        .args(["--preview-features", "cache-size,cache-physical-space", "--human"]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [SIZE]
+    1.0MiB
     ");
     Ok(())
 }

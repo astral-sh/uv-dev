@@ -163,8 +163,9 @@ mod tests {
         ### `cache-physical-space` {#cache-physical-space}
 
         Cache size and cleanup report physical disk usage, accounting for hardlinks and
-        copy-on-write clones on macOS and Linux. If an entry's allocated size cannot be measured, uv
-        reports a lower bound; other platforms continue to use a coarser estimate. See [clearing the
+        copy-on-write clones on macOS and Linux. During cleanup, unmeasurable allocations produce a
+        lower bound. Cache sizing falls back to a coarser allocation estimate when extent mapping is
+        unavailable; other platforms use coarser estimates. See [clearing the
         cache](./cache.md#clearing-the-cache) for details.
 
         ### `cache-size` {#cache-size}

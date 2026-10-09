@@ -82,8 +82,22 @@ pub fn physical_disk_usage(path: &Path) -> io::Result<u64> {
     let mut untracked_bytes = 0_u64;
 
     for entry in walkdir::WalkDir::new(path).follow_links(false) {
-        let entry = entry.map_err(io::Error::other)?;
-        let metadata = fs_err::symlink_metadata(entry.path())?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err)
+                if err
+                    .io_error()
+                    .is_some_and(|err| err.kind() == io::ErrorKind::NotFound) =>
+            {
+                continue;
+            }
+            Err(err) => return Err(io::Error::other(err)),
+        };
+        let metadata = match fs_err::symlink_metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
         let allocated_bytes = metadata.blocks().saturating_mul(512);
 
         if !metadata.is_file() {
@@ -542,5 +556,20 @@ fn linux_file_extents(
             .into());
         }
         start = next;
+    }
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+mod tests {
+    use super::physical_disk_usage;
+
+    #[test]
+    fn disappeared_root_has_no_storage() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let removed = root.path().join("removed");
+        fs_err::create_dir(&removed)?;
+        fs_err::remove_dir(&removed)?;
+        assert_eq!(physical_disk_usage(&removed)?, 0);
+        Ok(())
     }
 }
