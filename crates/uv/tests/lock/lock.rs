@@ -20003,6 +20003,63 @@ fn lock_dependency_edges_accept_conflict_omitted_extra() -> Result<()> {
     Ok(())
 }
 
+/// Conflict predicates on an extra edge remain part of lockfile completeness validation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_dependency_edges_reject_conflict_marker_narrowing() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["leaf"]
+        b = []
+
+        [tool.uv]
+        conflicts = [[{ extra = "a" }, { extra = "b" }]]
+
+        [tool.uv.sources]
+        leaf = { path = "leaf" }
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let original = context.read("uv.lock");
+    let narrowed = original.replace(
+        r#"{ name = "leaf" }"#,
+        r#"{ name = "leaf", marker = "extra != 'extra-7-project-a'" }"#,
+    );
+    assert_ne!(original, narrowed);
+    context.temp_dir.child("uv.lock").write_str(&narrowed)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
 /// Empty declared extras do not require an incoming extra label in the lock.
 #[cfg(all(feature = "test-universal", feature = "test-pypi"))]
 #[test]

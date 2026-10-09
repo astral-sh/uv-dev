@@ -4080,7 +4080,10 @@ impl Lock {
                     requirements,
                     context.dependencies(package),
                     context,
-                    expected.context_parent_marker(context).pep508(),
+                    expected.context_activation_marker(
+                        context,
+                        expected.context_parent_marker(context),
+                    ),
                     package,
                     root,
                     activated_extras,
@@ -4243,7 +4246,7 @@ impl Lock {
         requirements: &BTreeSet<Requirement>,
         dependencies: &[Dependency],
         context: DependencyContext<'_>,
-        parent_marker: MarkerTree,
+        parent_marker: UniversalMarker,
         package: &Package,
         root: &Path,
         activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
@@ -4253,11 +4256,60 @@ impl Lock {
             DependencyContext::Group(_) => false,
         };
         for requirement in requirements {
-            let required = self.requires_python.simplify_markers(
-                context
-                    .requirement_marker(requirement.marker)
-                    .and(parent_marker),
+            let mut required =
+                UniversalMarker::from_combined(context.requirement_marker(requirement.marker));
+            required.and(parent_marker);
+            for extra in &requirement.extras {
+                if self.conflicts.contains(&requirement.name, extra)
+                    && !context.omits_conflicting_extra(self, package, &requirement.name, extra)
+                {
+                    required.and(UniversalMarker::new(
+                        MarkerTree::TRUE,
+                        ConflictMarker::from_conflict_item(&ConflictItem::from((
+                            requirement.name.clone(),
+                            extra.clone(),
+                        ))),
+                    ));
+                }
+            }
+            let selects_project = requirement.extras.is_empty()
+                || requirement.extras.iter().any(|extra| {
+                    context.omits_conflicting_extra(self, package, &requirement.name, extra)
+                });
+            if selects_project
+                && self
+                    .conflicts
+                    .contains(&requirement.name, ConflictKindRef::Project)
+            {
+                required.and(UniversalMarker::new(
+                    MarkerTree::TRUE,
+                    ConflictMarker::from_conflict_item(&ConflictItem::from(
+                        requirement.name.clone(),
+                    )),
+                ));
+            }
+            if let RequirementSource::Registry {
+                conflict: Some(conflict),
+                ..
+            } = &requirement.source
+            {
+                required.and(UniversalMarker::new(
+                    MarkerTree::TRUE,
+                    ConflictMarker::from_conflict_item(conflict),
+                ));
+            }
+            // Compare both sides in the same valid conflict world without expanding unrelated sets.
+            let conflicts = ConflictMarker::from_relevant_conflicts(
+                &self.conflicts,
+                iter::once(required).chain(
+                    dependencies
+                        .iter()
+                        .filter(|dependency| dependency.package_id.name == requirement.name)
+                        .map(|dependency| dependency.complexified_marker),
+                ),
             );
+            required.and(UniversalMarker::new(MarkerTree::TRUE, conflicts));
+            let required = self.requires_python.simplify_markers(required.combined());
             if required.is_false() {
                 continue;
             }
@@ -4283,7 +4335,11 @@ impl Lock {
                 let target = self.package(dependency.index);
                 let marker = self
                     .requires_python
-                    .simplify_markers(dependency.complexified_marker.pep508().and(parent_marker));
+                    .simplify_markers(dependency.simplified_marker.as_simplified_marker_tree())
+                    .and(
+                        self.requires_python
+                            .simplify_markers(parent_marker.combined()),
+                    );
                 covered = covered.or(marker);
                 for (extra, coverage) in &mut extra_coverage {
                     // Lock construction drops empty sections and conflicting workspace labels.
@@ -10987,7 +11043,7 @@ source = { registry = "https://example.com/simple" }
                 &package.metadata.requires_dist,
                 &package.dependencies,
                 DependencyContext::Production,
-                lock.fork_markers_union(),
+                UniversalMarker::from_combined(lock.fork_markers_union()),
                 package,
                 Path::new("."),
                 &mut FxHashMap::default(),
