@@ -75,7 +75,9 @@ fn write_wheel_with_metadata(
 #[cfg(feature = "test-python")]
 #[test]
 fn workspace_metadata_sync_pin_warning() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -108,7 +110,7 @@ fn workspace_metadata_sync_pin_warning() -> Result<()> {
       "environment": {
         "root": "[VENV]/",
         "python": {
-          "path": "[VENV]/bin/python",
+          "path": "[VENV]/[BIN]/python",
           "version": "3.12.[X]",
           "implementation": "cpython"
         }
