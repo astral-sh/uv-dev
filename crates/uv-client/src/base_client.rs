@@ -444,6 +444,16 @@ impl<'a> BaseClientBuilder<'a> {
         self
     }
 
+    /// Construct authentication middleware with this builder's shared cache and credential policy.
+    pub fn auth_middleware(&self) -> AuthMiddleware {
+        AuthMiddleware::new()
+            .with_cache_arc(self.credentials_cache.clone())
+            .with_indexes(self.indexes.clone())
+            .with_keyring(self.keyring.to_provider())
+            .with_credentials_prompt(self.credentials_prompt.clone())
+            .with_preview(self.preview)
+    }
+
     pub fn credentials_cache(&self) -> &CredentialsCache {
         &self.credentials_cache
     }
@@ -715,22 +725,11 @@ impl<'a> BaseClientBuilder<'a> {
                 // Initialize the authentication middleware to set headers.
                 match self.auth_integration {
                     AuthIntegration::Default => {
-                        let auth_middleware = AuthMiddleware::new()
-                            .with_cache_arc(self.credentials_cache.clone())
-                            .with_indexes(self.indexes.clone())
-                            .with_keyring(self.keyring.to_provider())
-                            .with_credentials_prompt(self.credentials_prompt.clone())
-                            .with_preview(self.preview);
+                        let auth_middleware = self.auth_middleware();
                         client = client.with(auth_middleware);
                     }
                     AuthIntegration::OnlyAuthenticated => {
-                        let auth_middleware = AuthMiddleware::new()
-                            .with_cache_arc(self.credentials_cache.clone())
-                            .with_indexes(self.indexes.clone())
-                            .with_keyring(self.keyring.to_provider())
-                            .with_credentials_prompt(self.credentials_prompt.clone())
-                            .with_preview(self.preview)
-                            .with_only_authenticated(true);
+                        let auth_middleware = self.auth_middleware().with_only_authenticated(true);
                         client = client.with(auth_middleware);
                     }
                     AuthIntegration::NoAuthMiddleware => {
