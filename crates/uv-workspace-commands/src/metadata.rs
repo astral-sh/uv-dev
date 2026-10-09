@@ -127,7 +127,7 @@ pub async fn metadata(
                     )
                     .await?
                     {
-                        ScriptInterpreter::Interpreter(interpreter) => interpreter,
+                        discovered @ ScriptInterpreter::Interpreter(_) => discovered.into_interpreter(),
                         ScriptInterpreter::Environment(discovered) => {
                             let interpreter = discovered.interpreter().clone();
                             environment = Some(discovered);
@@ -232,9 +232,9 @@ pub async fn metadata(
         },
     };
     let mut export = metadata_for_target(install_target);
-    // Centralized environment initialization also refreshes the project's `.venv` link.
-    if sync.is_some()
-        && let MetadataSource::Manifest(LockTarget::Workspace(workspace)) = &source
+    // Centralized discovery selects an environment for resolution. Sync refreshes `.venv`, while
+    // read-only metadata describes the environment currently linked by `.venv`.
+    if let MetadataSource::Manifest(LockTarget::Workspace(workspace)) = &source
         && centralized_environments_enabled(
             &ProjectEnvironmentSelection::from_install_path(workspace.install_path(), active),
             cache,
