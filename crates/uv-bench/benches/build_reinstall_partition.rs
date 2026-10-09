@@ -1,5 +1,7 @@
 //! Benchmarks for separating reinstalls between isolated and shared source-build phases.
 
+extern crate uv_performance_memory_allocator;
+
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::str::FromStr;
