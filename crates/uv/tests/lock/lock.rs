@@ -22697,7 +22697,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
         .arg("python")
         .arg("-c")
         .arg("pass"), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 9 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
