@@ -111,7 +111,9 @@ pub async fn pin(
                 {
                     Ok(downloads) => Some(downloads),
                     Err(error) => {
-                        debug!("Skipping Python pin compatibility warnings: {error}");
+                        debug!(
+                            "Skipping catalog-dependent Python pin compatibility warnings: {error}"
+                        );
                         None
                     }
                 }
@@ -121,15 +123,13 @@ pub async fn pin(
 
             for pin in pins {
                 writeln!(printer.stdout(), "{}", pin.to_canonical_string())?;
-                if let Some(virtual_project) = &virtual_project
-                    && let Some(download_list) = &download_list
-                {
+                if let Some(virtual_project) = &virtual_project {
                     warn_if_existing_pin_incompatible_with_project(
                         pin,
                         virtual_project,
                         python_preference,
                         python_arch,
-                        download_list,
+                        download_list.as_ref(),
                         cache,
                     );
                 }
@@ -270,7 +270,7 @@ fn warn_if_existing_pin_incompatible_with_project(
     virtual_project: &VirtualProject,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
-    downloads_list: &ManagedPythonDownloadList,
+    downloads_list: Option<&ManagedPythonDownloadList>,
     cache: &Cache,
 ) {
     // Check if the pinned version is compatible with the project.
@@ -288,6 +288,10 @@ fn warn_if_existing_pin_incompatible_with_project(
             return;
         }
     }
+
+    let Some(downloads_list) = downloads_list else {
+        return;
+    };
 
     // If the request itself didn't prove an incompatibility, resolve the pin into an
     // interpreter to check the concrete version on the current system.
