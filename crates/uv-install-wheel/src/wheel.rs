@@ -21,6 +21,7 @@ use uv_shell::escape_posix_for_single_quotes;
 use uv_trampoline_builder::windows_script_launcher;
 use uv_warnings::warn_user_once;
 
+use crate::install::wheel_destination;
 use crate::record::RecordEntry;
 use crate::script::{EntryPoints, Script};
 use crate::{Error, Layout};
@@ -715,6 +716,20 @@ fn install_script(
     Ok(())
 }
 
+/// Return whether a data script is replaced by a generated entry-point wrapper.
+fn is_bundled_script(name: &str, console_scripts: &[Script], gui_scripts: &[Script]) -> bool {
+    // Match the wrapper names recognized by pip's wheel installer.
+    let match_name = name
+        .strip_suffix(".exe")
+        .or_else(|| name.strip_suffix("-script.py"))
+        .or_else(|| name.strip_suffix(".pya"))
+        .unwrap_or(name);
+    console_scripts
+        .iter()
+        .chain(gui_scripts)
+        .any(|script| script.name == match_name)
+}
+
 /// Move the files from the .data directory to the right location in the venv
 #[instrument(skip_all)]
 pub(crate) fn install_data(
@@ -758,19 +773,11 @@ pub(crate) fn install_data(
                 for file in fs::read_dir(path)? {
                     let file = file?;
 
-                    // Couldn't find any docs for this, took it directly from
-                    // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
-                    let name = file.file_name().to_string_lossy().to_string();
-                    let match_name = name
-                        .strip_suffix(".exe")
-                        .or_else(|| name.strip_suffix("-script.py"))
-                        .or_else(|| name.strip_suffix(".pya"))
-                        .unwrap_or(&name);
-                    if console_scripts
-                        .iter()
-                        .chain(gui_scripts)
-                        .any(|script| script.name == match_name)
-                    {
+                    if is_bundled_script(
+                        &file.file_name().to_string_lossy(),
+                        console_scripts,
+                        gui_scripts,
+                    ) {
                         continue;
                     }
 
@@ -1187,6 +1194,70 @@ pub(crate) fn parse_scripts(
     } = EntryPoints::read(entry_points_path, python_minor)?;
 
     Ok((console_scripts, gui_scripts))
+}
+
+/// Return the paths a wheel will write into the installation's scripts directory.
+pub fn script_paths(layout: &Layout, wheel: impl AsRef<Path>) -> Result<Vec<PathBuf>, Error> {
+    let wheel = wheel.as_ref();
+    let (dist_info_prefix, root_scheme) = wheel_destination(layout, wheel)?;
+    let (console_scripts, gui_scripts) =
+        parse_scripts(wheel, &dist_info_prefix, layout.python_version.1)?;
+
+    let mut paths = console_scripts
+        .iter()
+        .chain(&gui_scripts)
+        .map(|script| ValidatedScript::try_from_script(script, layout).map(|script| script.path))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let data_scripts = wheel.join(format!("{dist_info_prefix}.data/scripts"));
+    if data_scripts.is_dir() {
+        for entry in fs::read_dir(data_scripts)? {
+            let entry = entry?;
+            if is_bundled_script(
+                &entry.file_name().to_string_lossy(),
+                &console_scripts,
+                &gui_scripts,
+            ) {
+                continue;
+            }
+            paths.push(layout.scheme.scripts.join(entry.file_name()));
+        }
+    }
+
+    // A target installation puts libraries and data beside its scripts directory. Include every
+    // scheme whose files can overlap that directory, including files at the wheel root.
+    for (source, destination) in [
+        (wheel.to_path_buf(), root_scheme),
+        (
+            wheel.join(format!("{dist_info_prefix}.data/purelib")),
+            &layout.scheme.purelib,
+        ),
+        (
+            wheel.join(format!("{dist_info_prefix}.data/platlib")),
+            &layout.scheme.platlib,
+        ),
+        (
+            wheel.join(format!("{dist_info_prefix}.data/data")),
+            &layout.scheme.data,
+        ),
+    ] {
+        let Ok(scripts_relative) = layout.scheme.scripts.strip_prefix(destination) else {
+            continue;
+        };
+        let source_scripts = source.join(scripts_relative);
+        if source_scripts.is_dir() {
+            for entry in WalkDir::new(&source_scripts).min_depth(1) {
+                let entry = entry?;
+                if entry.file_type().is_dir() {
+                    continue;
+                }
+                let relative = relative_to(entry.path(), &source_scripts)?;
+                paths.push(layout.scheme.scripts.join(relative));
+            }
+        }
+    }
+
+    Ok(paths)
 }
 
 /// Rename a file with a fallback to copy that switches over on the first failure.

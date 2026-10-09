@@ -36,9 +36,7 @@ use uv_test::archive::write_tar_gz;
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
 use uv_test::package_server::PackageServer;
-#[cfg(windows)]
-use uv_test::packse::generate_wheel_with_files;
-use uv_test::packse::{PackseServer, generate_wheel};
+use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, apply_filters, download_to_disk, get_bin, uv_snapshot,
     venv_bin_path,
@@ -231,6 +229,473 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
         Ok::<(), anyhow::Error>(())
     }?;
 
+    Ok(())
+}
+
+fn write_shared_script_wheel(path: &Path, name: &str, data_script: Option<&str>) -> Result<()> {
+    let module = format!("def main():\n    print('{name}')\n");
+    let mut files = vec![(format!("{name}/cli.py"), module)];
+    if let Some(data_script) = data_script {
+        files.push((
+            format!(
+                "{name}-1.0.0.data/{data_script}{}",
+                std::env::consts::EXE_SUFFIX
+            ),
+            "#!python\nprint('data script')\n".to_string(),
+        ));
+    } else {
+        files.push((
+            format!("{name}-1.0.0.dist-info/entry_points.txt"),
+            format!("[console_scripts]\nshared-tool = {name}.cli:main\n"),
+        ));
+    }
+    let files = files
+        .iter()
+        .map(|(name, content)| (name.as_str(), content.as_str()))
+        .collect::<Vec<_>>();
+    let (_, wheel) = generate_wheel_with_files(
+        &name.parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &files,
+    );
+    fs::write(path, wheel)?;
+    Ok(())
+}
+
+#[test]
+fn install_bundled_wheel_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (first, wheel) = generate_wheel_with_files(
+        &"first".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("first/cli.py", "def main():\n    print('first')\n"),
+            (
+                "first-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nshared-tool = first.cli:main\n",
+            ),
+            (
+                "first-1.0.0.data/scripts/shared-tool-script.py",
+                "#!python\nprint('bundled wrapper')\n",
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&first), wheel)?;
+    let (second, wheel) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "second-1.0.0.data/scripts/shared-tool-script.py",
+            "#!python\nprint('standalone script')\n",
+        )],
+    );
+    fs::write(context.temp_dir.join(&second), wheel)?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&first).arg(&second), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + first==1.0.0 (from file://[TEMP_DIR]/first-1.0.0-py3-none-any.whl)
+     + second==1.0.0 (from file://[TEMP_DIR]/second-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), context.python_command().arg(venv_bin_path(&context.venv).join("shared-tool-script.py")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    standalone script
+    ");
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    let second = context.temp_dir.join("second-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    write_shared_script_wheel(&second, "second", None)?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&first).arg(&second), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `[VENV]/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    ");
+
+    assert!(
+        !context
+            .site_packages()
+            .join("first-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .site_packages()
+            .join("second-1.0.0.dist-info")
+            .exists()
+    );
+    let script_name = if cfg!(windows) {
+        "shared-tool.exe"
+    } else {
+        "shared-tool"
+    };
+    assert!(!venv_bin_path(&context.venv).join(script_name).exists());
+
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_data_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    let third = context.temp_dir.join("third-1.0.0-py3-none-any.whl");
+    let fourth = context.temp_dir.join("fourth-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&third, "third", None)?;
+    write_shared_script_wheel(&fourth, "fourth", Some("scripts/SHARED-TOOL"))?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&third).arg(&fourth), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `[VENV]/[BIN]/SHARED-TOOL` is provided by both `fourth-1.0.0-py3-none-any.whl` and `third-1.0.0-py3-none-any.whl`
+    ");
+
+    assert!(
+        !context
+            .site_packages()
+            .join("third-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .site_packages()
+            .join("fourth-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !venv_bin_path(&context.venv)
+            .join(format!("SHARED-TOOL{}", std::env::consts::EXE_SUFFIX))
+            .exists()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_environment_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    let fifth = context.temp_dir.join("fifth-1.0.0-py3-none-any.whl");
+    let sixth = context.temp_dir.join("sixth-1.0.0-py3-none-any.whl");
+    let scripts = venv_bin_path(&context.venv);
+    let scripts_relative = scripts.strip_prefix(context.venv.path())?;
+    let data_script = format!("data/{}/SHARED-TOOL", PortablePath::from(scripts_relative));
+    write_shared_script_wheel(&fifth, "fifth", None)?;
+    write_shared_script_wheel(&sixth, "sixth", Some(&data_script))?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&fifth).arg(&sixth), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `[VENV]/[BIN]/SHARED-TOOL` is provided by both `fifth-1.0.0-py3-none-any.whl` and `sixth-1.0.0-py3-none-any.whl`
+    ");
+
+    assert!(
+        !context
+            .site_packages()
+            .join("fifth-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .site_packages()
+            .join("sixth-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !venv_bin_path(&context.venv)
+            .join(format!("SHARED-TOOL{}", std::env::consts::EXE_SUFFIX))
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_target_root_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_filter((r"target[\\/]bin", "target/[BIN]"));
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    let script = format!("bin/shared-tool{}", std::env::consts::EXE_SUFFIX);
+    let (second, bytes) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(&script, "print('target script')\n")],
+    );
+    fs::write(context.temp_dir.join(&second), bytes)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&first)
+        .arg(&second)
+        .arg("--target").arg("target"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `target/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    ");
+    assert!(
+        !context
+            .temp_dir
+            .join("target/first-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .temp_dir
+            .join("target/second-1.0.0.dist-info")
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_target_purelib_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_filter((r"target[\\/]bin", "target/[BIN]"));
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    let script = format!(
+        "second-1.0.0.data/purelib/bin/shared-tool{}",
+        std::env::consts::EXE_SUFFIX
+    );
+    let (second, bytes) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(&script, "print('target script')\n")],
+    );
+    fs::write(context.temp_dir.join(&second), bytes)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&first)
+        .arg(&second)
+        .arg("--target").arg("target"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `target/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    ");
+    assert!(
+        !context
+            .temp_dir
+            .join("target/first-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .temp_dir
+            .join("target/second-1.0.0.dist-info")
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_target_platlib_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_filter((r"target[\\/]bin", "target/[BIN]"));
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    let script = format!(
+        "second-1.0.0.data/platlib/bin/shared-tool{}",
+        std::env::consts::EXE_SUFFIX
+    );
+    let (second, bytes) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(&script, "print('target script')\n")],
+    );
+    fs::write(context.temp_dir.join(&second), bytes)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&first)
+        .arg(&second)
+        .arg("--target").arg("target"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `target/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    ");
+    assert!(
+        !context
+            .temp_dir
+            .join("target/first-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .temp_dir
+            .join("target/second-1.0.0.dist-info")
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_scripts_before_uninstall() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    let (first, bytes) = generate_wheel_with_files(
+        &"first".parse()?,
+        &"0.9.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("first/cli.py", "VALUE = 1\n")],
+    );
+    fs::write(context.temp_dir.join(&first), bytes)?;
+    let (second, bytes) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"0.9.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("second/cli.py", "VALUE = 2\n")],
+    );
+    fs::write(context.temp_dir.join(&second), bytes)?;
+    context
+        .pip_install()
+        .arg(&first)
+        .arg(&second)
+        .assert()
+        .success();
+
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    let second = context.temp_dir.join("second-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    write_shared_script_wheel(&second, "second", None)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&first).arg(&second), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `[VENV]/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    ");
+    context.assert_installed("first", "0.9.0");
+    context.assert_installed("second", "0.9.0");
+    context
+        .assert_command("from first.cli import VALUE; assert VALUE == 1")
+        .success();
+    context
+        .assert_command("from second.cli import VALUE; assert VALUE == 2")
+        .success();
+    Ok(())
+}
+
+/// Later shared-build phases must not overwrite scripts installed by an earlier phase.
+#[test]
+fn reject_conflicting_wheel_scripts_across_phases() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    let second = context.temp_dir.join("second-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    write_shared_script_wheel(&second, "second", None)?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&first).arg(&second)
+        .arg("--no-build-isolation-package").arg("second"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+    Prepared 1 package without build isolation in [TIME]
+    error: Cannot install wheels with conflicting scripts: `[VENV]/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    "#);
+    context.assert_installed("first", "1.0.0");
+    assert!(
+        !context
+            .site_packages()
+            .join("second-1.0.0.dist-info")
+            .exists()
+    );
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv)
+        .join(format!("shared-tool{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+    ");
+
+    context.pip_uninstall().arg("first").assert().success();
+    // Warm caches must reject the same conflict before either package is installed.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&first).arg(&second)
+        .arg("--no-build-isolation-package").arg("second"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `[VENV]/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    "#);
+    assert!(
+        !context
+            .site_packages()
+            .join("first-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .site_packages()
+            .join("second-1.0.0.dist-info")
+            .exists()
+    );
     Ok(())
 }
 
@@ -15799,12 +16264,17 @@ fn reserved_script_name() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
     error: Failed to install: project-0.1.0-py3-none-any.whl (project==0.1.0 (from file://[TEMP_DIR]/))
       cause: Scripts must not use the reserved name `python`, got: `python`
     "
     );
 
+    context
+        .assert_command(
+            "from importlib.metadata import version; assert version('project') == '0.1.0'",
+        )
+        .success();
+    context.assert_command("import project").success();
     Ok(())
 }
 
