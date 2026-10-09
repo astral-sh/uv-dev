@@ -8692,28 +8692,38 @@ async fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
     let links = context.temp_dir.child("links");
     links.create_dir_all()?;
 
-    let write_wheels = |value: &str, timestamp: i64, transitive_requires| -> Result<()> {
-        for (name, requires) in [
-            ("direct", vec!["transitive==1.0.0".parse()?]),
-            ("transitive", transitive_requires),
-        ] {
-            let (filename, wheel) = generate_wheel_with_files(
-                &name.parse()?,
-                &"1.0.0".parse()?,
-                &requires,
-                &BTreeMap::new(),
-                None,
-                "py3-none-any",
-                &[(&format!("{name}/value.py"), &format!("VALUE = {value:?}\n"))],
-            );
-            let path = links.child(filename);
-            fs::write(&path, wheel)?;
-            filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(timestamp, 0))?;
-        }
-        Ok(())
-    };
+    let (filename, wheel) = generate_wheel_with_files(
+        &"direct".parse()?,
+        &"1.0.0".parse()?,
+        &["transitive==1.0.0".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("direct/value.py", "VALUE = 'before'\n")],
+    );
+    let direct = links.child(filename);
+    fs::write(&direct, wheel)?;
+    filetime::set_file_mtime(
+        &direct,
+        filetime::FileTime::from_unix_time(1_700_000_000, 0),
+    )?;
 
-    write_wheels("before", 1_700_000_000, Vec::new())?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"transitive".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("transitive/value.py", "VALUE = 'before'\n")],
+    );
+    let transitive = links.child(filename);
+    fs::write(&transitive, wheel)?;
+    filetime::set_file_mtime(
+        &transitive,
+        filetime::FileTime::from_unix_time(1_700_000_000, 0),
+    )?;
+
     let (filename, wheel) = generate_wheel(
         &"added".parse()?,
         &"1.0.0".parse()?,
@@ -8754,7 +8764,35 @@ async fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
      + transitive==1.0.0
     ");
 
-    write_wheels("after", 1_800_000_000, vec!["added==1.0.0".parse()?])?;
+    let (_, wheel) = generate_wheel_with_files(
+        &"direct".parse()?,
+        &"1.0.0".parse()?,
+        &["transitive==1.0.0".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("direct/value.py", "VALUE = 'after'\n")],
+    );
+    fs::write(&direct, wheel)?;
+    filetime::set_file_mtime(
+        &direct,
+        filetime::FileTime::from_unix_time(1_800_000_000, 0),
+    )?;
+
+    let (_, wheel) = generate_wheel_with_files(
+        &"transitive".parse()?,
+        &"1.0.0".parse()?,
+        &["added==1.0.0".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("transitive/value.py", "VALUE = 'after'\n")],
+    );
+    fs::write(&transitive, wheel)?;
+    filetime::set_file_mtime(
+        &transitive,
+        filetime::FileTime::from_unix_time(1_800_000_000, 0),
+    )?;
 
     // Without an upgrade, installed versions continue to satisfy named requirements.
     uv_snapshot!(context.filters(), context.pip_install()
