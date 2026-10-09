@@ -61,7 +61,7 @@ pub struct PackedArchiveEntry {
 
 impl PackedArchiveEntry {
     /// Locate an artifact under the same source and package shards used for cached wheels.
-    pub fn new(
+    fn new(
         cache: &Cache,
         index: Option<&IndexUrl>,
         name: &PackageName,
@@ -93,18 +93,78 @@ impl PackedArchiveEntry {
         }
     }
 
-    /// Preserve the wheel cache key, with a suffix identifying the packed representation.
-    pub fn wheel_key(filename: &WheelFilename) -> String {
-        format!("{}.whl", filename.cache_key())
+    /// Locate a wheel using its filename and source index.
+    pub fn wheel(
+        cache: &Cache,
+        index: Option<&IndexUrl>,
+        url: &DisplaySafeUrl,
+        filename: &WheelFilename,
+    ) -> Self {
+        Self::new(
+            cache,
+            index,
+            &filename.name,
+            url,
+            &format!("{}.whl", filename.cache_key()),
+        )
     }
 
-    /// Registry source archives are identified by version; direct sources by their URL shard.
-    pub fn source_key(version: Option<&Version>, extension: SourceDistExtension) -> String {
-        if let Some(version) = version {
-            format!("{version}.{extension}")
+    /// Locate a source archive; registry identity always includes its package version.
+    pub fn source(
+        cache: &Cache,
+        registry: Option<(&IndexUrl, &Version)>,
+        name: &PackageName,
+        url: &DisplaySafeUrl,
+        extension: SourceDistExtension,
+    ) -> Self {
+        let (index, key) = if let Some((index, version)) = registry {
+            (Some(index), format!("{version}.{extension}"))
         } else {
-            format!("archive.{extension}")
+            (None, format!("archive.{extension}"))
+        };
+        Self::new(cache, index, name, url, &key)
+    }
+
+    /// Return whether a local pointer is present; readers still verify its retained bytes.
+    pub fn has_local_pointer(&self) -> bool {
+        self.url.scheme() == "file" && self.entry.path().is_file()
+    }
+
+    /// Open a verified local archive, retaining the original file's revision timestamp.
+    ///
+    /// A changed source invalidates the packed copy. A missing source can still be served from
+    /// the retained bytes, unless the caller explicitly requested cache refresh.
+    pub async fn read_local(&self) -> Result<Option<(fs_err::tokio::File, Timestamp)>> {
+        if self.url.scheme() != "file" {
+            return Ok(None);
         }
+        let path = self
+            .url
+            .to_file_path()
+            .map_err(|()| anyhow::anyhow!("Invalid file URL: {}", self.url))?;
+        if self
+            .cache
+            .freshness(&self.entry, Some(&self.name), Some(&path))?
+            == Freshness::Stale
+        {
+            return Ok(None);
+        }
+        let bytes = match fs_err::tokio::read(self.entry.path()).await {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        let pointer: LocalPointer = rmp_serde::from_slice(&bytes)?;
+        match Timestamp::from_path(&path) {
+            Ok(timestamp) if timestamp != pointer.timestamp => return Ok(None),
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+        Ok(self
+            .read(&pointer.archive, None, None)
+            .await?
+            .map(|archive| (archive.into_file(), pointer.timestamp)))
     }
 
     pub(crate) fn cache_control(&self, client: &RegistryClient) -> Result<CacheControl> {
@@ -213,7 +273,11 @@ impl PackedArchiveEntry {
             .url
             .to_file_path()
             .map_err(|()| anyhow::anyhow!("Invalid file URL: {}", self.url))?;
-        let timestamp = Timestamp::from_path(&path)?;
+        let timestamp = match Timestamp::from_path(&path) {
+            Ok(timestamp) => Some(timestamp),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err.into()),
+        };
         if self
             .cache
             .freshness(&self.entry, Some(&self.name), Some(&path))?
@@ -222,7 +286,7 @@ impl PackedArchiveEntry {
             match fs_err::tokio::read(self.entry.path()).await {
                 Ok(bytes) => {
                     let pointer: LocalPointer = rmp_serde::from_slice(&bytes)?;
-                    if pointer.timestamp == timestamp
+                    if timestamp.is_none_or(|timestamp| pointer.timestamp == timestamp)
                         && self
                             .read(&pointer.archive, expected_hash, expected_size)
                             .await?
@@ -235,6 +299,12 @@ impl PackedArchiveEntry {
                 Err(err) => return Err(err.into()),
             }
         }
+        let timestamp = timestamp.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Local archive not found: {}", path.display()),
+            )
+        })?;
         let archive = self
             .persist(
                 fs_err::tokio::File::open(&path).await?,

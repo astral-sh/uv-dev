@@ -9,6 +9,7 @@ use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::Concurrency;
 use uv_environment_operations::install_target::InstallTarget;
 use uv_environment_operations::store_credentials_from_target;
+use uv_lock::LockedArtifactKind;
 use uv_lock_operations::LockTarget;
 use uv_preview::{Preview, PreviewFeature};
 use uv_settings::ResolverSettings;
@@ -78,16 +79,25 @@ pub async fn download(
         .map(|(name, artifact)| {
             let client = &client;
             async move {
-                PackedArchiveEntry::new(
-                    cache,
-                    artifact.index.as_ref(),
-                    &name,
-                    &artifact.url,
-                    &artifact.cache_key,
-                )
-                .download(client, artifact.hash.as_ref(), artifact.size)
-                .await
-                .with_context(|| format!("Failed to download `{name}` from {}", artifact.url))
+                let entry = match artifact.kind {
+                    LockedArtifactKind::Wheel { filename, index } => {
+                        PackedArchiveEntry::wheel(cache, index.as_ref(), &artifact.url, &filename)
+                    }
+                    LockedArtifactKind::Source {
+                        extension,
+                        registry,
+                    } => PackedArchiveEntry::source(
+                        cache,
+                        registry.as_ref().map(|(index, version)| (index, version)),
+                        &name,
+                        &artifact.url,
+                        extension,
+                    ),
+                };
+                entry
+                    .download(client, artifact.hash.as_ref(), artifact.size)
+                    .await
+                    .with_context(|| format!("Failed to download `{name}` from {}", artifact.url))
             }
         })
         .buffer_unordered(concurrency.downloads)
