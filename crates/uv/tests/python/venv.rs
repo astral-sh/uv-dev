@@ -19,7 +19,9 @@ use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
-use uv_test::{site_packages_path, uv_snapshot, venv_bin_path};
+#[cfg(feature = "test-python-eol")]
+use uv_test::venv_bin_path;
+use uv_test::{site_packages_path, uv_snapshot};
 
 #[test]
 fn create_venv() {
@@ -220,6 +222,38 @@ fn activate_venv_from_legacy_virtualenv_module() -> Result<()> {
     ----- stdout -----
     False
     True
+    1
+    ");
+    Ok(())
+}
+
+/// A legacy overlay installs the virtualenv hook before later startup files run.
+#[test]
+#[cfg(feature = "test-python-eol")]
+fn create_venv_legacy_overlay_initializes_finder() -> Result<()> {
+    let context = uv_test::test_context!("3.9");
+    let site_packages = context.site_packages();
+    let overlay = context.temp_dir.child("legacy-site");
+    overlay
+        .child("_virtualenv.pth")
+        .write_str("import _virtualenv\n")?;
+    overlay.child("finder_probe.pth").write_str(
+        "import sys, _virtualenv; sys._uv_finder_count = sum(isinstance(finder, _virtualenv._Finder) for finder in sys.meta_path)\n",
+    )?;
+    fs_err::write(
+        site_packages.join("_uv_ephemeral_overlay.pth"),
+        format!(
+            "import site; site.addsitedir({:?})\n",
+            overlay.path().to_string_lossy()
+        ),
+    )?;
+
+    uv_snapshot!(context.filters(), context.python_command().arg("-c").arg(indoc! {r"
+        import sys
+        print(sys._uv_finder_count)
+    "}), @"
+    exit_code: 0 (success)
+    ----- stdout -----
     1
     ");
     Ok(())
