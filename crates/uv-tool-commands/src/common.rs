@@ -28,7 +28,7 @@ use uv_distribution_types::{
 use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
 use uv_fs::replace_symlink;
-use uv_fs::{CWD, Simplified};
+use uv_fs::{CWD, Simplified, is_same_file_allow_missing};
 use uv_git::GitResolver;
 use uv_installer::SitePackages;
 use uv_lock::{Installable, Lock, ResolverManifest};
@@ -156,9 +156,22 @@ pub(crate) fn tool_entrypoints_are_fresh(tool: &Tool) -> bool {
     };
 
     tool.entrypoints().iter().all(|entrypoint| {
-        entrypoint.install_path.parent() == Some(executable_directory.as_path())
-            && entrypoint.install_path.exists()
+        entrypoint.install_path.file_name().is_some_and(|filename| {
+            same_entrypoint_destination(
+                &entrypoint.install_path,
+                &executable_directory.join(filename),
+            )
+        }) && entrypoint.install_path.exists()
     })
+}
+
+/// Compare destination directories without following an executable's own symlink.
+fn same_entrypoint_destination(left: &Path, right: &Path) -> bool {
+    left.file_name() == right.file_name()
+        && left
+            .parent()
+            .zip(right.parent())
+            .is_some_and(|(left, right)| is_same_file_allow_missing(left, right) == Some(true))
 }
 
 /// Remove the entrypoints at the given paths.
@@ -741,6 +754,32 @@ pub(super) async fn refine_interpreter(
     Ok(Some(interpreter))
 }
 
+/// Enumerate a package's executable sources and configured destinations.
+fn package_entrypoint_targets(
+    site_packages: &SitePackages,
+    package: &PackageName,
+    executable_directory: &Path,
+) -> anyhow::Result<Option<BTreeSet<(String, PathBuf, PathBuf)>>> {
+    let installed = site_packages.get_packages(package);
+    let Some(dist) = installed.first() else {
+        return Ok(None);
+    };
+    Ok(Some(
+        entrypoint_paths(site_packages, dist.name(), dist.version())?
+            .into_iter()
+            .map(|(name, source_path)| {
+                let target_path = executable_directory.join(
+                    source_path
+                        .file_name()
+                        .map(std::borrow::ToOwned::to_owned)
+                        .unwrap_or_else(|| OsString::from(name.clone())),
+                );
+                (name, source_path, target_path)
+            })
+            .collect(),
+    ))
+}
+
 /// Check destination conflicts before removing an existing tool's executables.
 pub(super) fn check_entrypoint_conflicts(
     environment: &PythonEnvironment,
@@ -756,25 +795,22 @@ pub(super) fn check_entrypoint_conflicts(
     let site_packages = SitePackages::from_environment(environment)?;
     let mut conflicts = BTreeSet::new();
     for package in entrypoints.iter().chain(std::iter::once(name)) {
-        let installed = site_packages.get_packages(package);
-        let Some(dist) = installed.first() else {
+        let Some(targets) =
+            package_entrypoint_targets(&site_packages, package, &executable_directory)?
+        else {
             continue;
         };
-        for (name, source) in entrypoint_paths(&site_packages, dist.name(), dist.version())? {
-            let filename = source
-                .file_name()
-                .map(std::borrow::ToOwned::to_owned)
-                .unwrap_or_else(|| OsString::from(name));
-            let target = executable_directory.join(&filename);
+        for (_, _, target) in targets {
             if target.exists()
                 && !receipt.is_some_and(|receipt| {
-                    receipt
-                        .entrypoints()
-                        .iter()
-                        .any(|entrypoint| entrypoint.install_path == target)
+                    receipt.entrypoints().iter().any(|entrypoint| {
+                        same_entrypoint_destination(&entrypoint.install_path, &target)
+                    })
                 })
             {
-                conflicts.insert(filename.to_string_lossy().into_owned());
+                if let Some(filename) = target.file_name() {
+                    conflicts.insert(filename.to_string_lossy().into_owned());
+                }
             }
         }
     }
@@ -840,8 +876,9 @@ pub(super) fn finalize_tool_install(
             debug!("Installing entrypoints for `{package}` as part of tool `{name}`");
         }
 
-        let installed = site_packages.get_packages(package);
-        let Some(dist) = installed.first() else {
+        let Some(target_entrypoints) =
+            package_entrypoint_targets(&site_packages, package, &executable_directory)?
+        else {
             if package != name {
                 bail!("Expected package `{package}` to be installed");
             }
@@ -864,22 +901,6 @@ pub(super) fn finalize_tool_install(
             }
             .into());
         };
-        let dist_entrypoints = entrypoint_paths(&site_packages, dist.name(), dist.version())?;
-
-        // Determine the entry points targets. Use a sorted collection for deterministic output.
-        let target_entrypoints = dist_entrypoints
-            .into_iter()
-            .map(|(name, source_path)| {
-                let target_path = executable_directory.join(
-                    source_path
-                        .file_name()
-                        .map(std::borrow::ToOwned::to_owned)
-                        .unwrap_or_else(|| OsString::from(name.clone())),
-                );
-                (name, source_path, target_path)
-            })
-            .collect::<BTreeSet<_>>();
-
         if target_entrypoints.is_empty() {
             let err = if package != name {
                 NoExecutablesError::Dependency {
