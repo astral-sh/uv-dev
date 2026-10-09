@@ -4894,8 +4894,7 @@ fn shared_dependency_extra() -> Result<()> {
         );
     });
 
-    // This shouldn't install two versions of `idna`, only one, `idna==3.5`.
-    // So this should remove `idna==3.6` installed above.
+    // Select only `idna==3.5` for this conflict branch.
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -4910,19 +4909,6 @@ fn shared_dependency_extra() -> Result<()> {
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra=bar"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Resolved 5 packages in [TIME]
-    Found up-to-date lockfile at: uv.lock
-    Would download 3 packages
-    Would install 3 packages
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Would use project environment at: .venv
@@ -5071,8 +5057,7 @@ fn shared_dependency_group() -> Result<()> {
         );
     });
 
-    // This shouldn't install two versions of `idna`, only one, `idna==3.5`.
-    // So this should remove `idna==3.6` installed above.
+    // Select only `idna==3.5` for this conflict branch.
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -5087,19 +5072,6 @@ fn shared_dependency_group() -> Result<()> {
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group=bar"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Resolved 5 packages in [TIME]
-    Found up-to-date lockfile at: uv.lock
-    Would download 3 packages
-    Would install 3 packages
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Would use project environment at: .venv
@@ -5255,8 +5227,7 @@ fn shared_dependency_mixed() -> Result<()> {
         );
     });
 
-    // This shouldn't install two versions of `idna`, only one, `idna==3.5`.
-    // So this should remove `idna==3.6` installed above.
+    // Select only `idna==3.5` for this conflict branch.
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -5271,19 +5242,6 @@ fn shared_dependency_mixed() -> Result<()> {
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group=bar"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Resolved 5 packages in [TIME]
-    Found up-to-date lockfile at: uv.lock
-    Would download 3 packages
-    Would install 3 packages
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Would use project environment at: .venv
