@@ -6,7 +6,7 @@ use thiserror::Error;
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::NoSources;
-use uv_distribution_types::{GitDirectorySourceUrl, IndexLocations, Requirement};
+use uv_distribution_types::{ConfigSettings, GitDirectorySourceUrl, IndexLocations, Requirement};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pypi_types::{HashDigests, ResolutionMetadata};
@@ -74,6 +74,9 @@ pub struct Metadata {
     pub provides_extra: Box<[ExtraName]>,
     pub dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
     pub dynamic: bool,
+    /// Build settings consumed to obtain this metadata, including an empty backend configuration.
+    /// Static metadata and prebuilt wheels do not consume build settings.
+    pub config_settings: Option<ConfigSettings>,
 }
 
 impl Metadata {
@@ -103,6 +106,7 @@ impl Metadata {
             provides_extra: metadata.provides_extra,
             dependency_groups: BTreeMap::default(),
             dynamic: metadata.dynamic,
+            config_settings: None,
         }
     }
 
@@ -154,7 +158,15 @@ impl Metadata {
             provides_extra,
             dependency_groups,
             dynamic,
+            config_settings: None,
         })
+    }
+
+    /// Record the settings consumed by a metadata build or its cached result.
+    #[must_use]
+    pub(crate) fn with_config_settings(mut self, config_settings: ConfigSettings) -> Self {
+        self.config_settings = Some(config_settings);
+        self
     }
 
     /// Set whether local dependency sources should be represented by relative paths.
