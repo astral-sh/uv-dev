@@ -544,7 +544,7 @@ impl PrioritizedDist {
     ///
     /// Unlike the distribution markers, this does not treat a source distribution as support for
     /// every environment.
-    pub fn implied_wheel_markers(
+    pub(crate) fn implied_wheel_markers(
         &self,
         minimum_libc_version: Option<MinimumLibcVersion>,
     ) -> MarkerTree {
