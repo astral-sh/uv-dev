@@ -8691,3 +8691,84 @@ fn run_pep723_requirements_preserves_index_declaration_order() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Differently named CLI indexes cannot discard a selected source endpoint's policy.
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_cli_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--index").arg(format!("mirror={}/simple", server.uri()))
+        .args(["--with-requirements", "requirements.py", "python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Configuration aliases are checked after same-name definitions have been replaced.
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_configured_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        [[index]]
+        name = "mirror"
+        url = "{url}/simple"
+    "#, url = server.uri()})?;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--with-requirements", "requirements.py", "python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}

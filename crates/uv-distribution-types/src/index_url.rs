@@ -66,18 +66,8 @@ impl SourceIndexes {
                 continue;
             }
             for existing in &self.0 {
-                if is_same_index(&existing.url, &index.url) {
-                    if existing.format != index.format
-                        || existing.authenticate != index.authenticate
-                        || existing.status_code_strategy() != index.status_code_strategy()
-                        || existing.simple_api_cache_control() != index.simple_api_cache_control()
-                        || existing.artifact_cache_control() != index.artifact_cache_control()
-                        || existing.hash_algorithm != index.hash_algorithm
-                        || existing.exclude_newer != index.exclude_newer
-                    {
-                        return Err(SourceIndexError::ConflictingUrl(index.url.clone()));
-                    }
-                } else if index.default && existing.default {
+                validate_source_index_policy(existing, &index)?;
+                if index.default && existing.default && !is_same_index(&existing.url, &index.url) {
                     return Err(SourceIndexError::MultipleDefaults);
                 }
             }
@@ -93,6 +83,22 @@ impl SourceIndexes {
     fn iter(&self) -> std::slice::Iter<'_, Index> {
         self.0.iter()
     }
+}
+
+/// URL-based policy lookups must agree even when an endpoint has multiple names.
+fn validate_source_index_policy(existing: &Index, index: &Index) -> Result<(), SourceIndexError> {
+    if is_same_index(&existing.url, &index.url)
+        && (existing.format != index.format
+            || existing.authenticate != index.authenticate
+            || existing.status_code_strategy() != index.status_code_strategy()
+            || existing.simple_api_cache_control() != index.simple_api_cache_control()
+            || existing.artifact_cache_control() != index.artifact_cache_control()
+            || existing.hash_algorithm != index.hash_algorithm
+            || existing.exclude_newer != index.exclude_newer)
+    {
+        return Err(SourceIndexError::ConflictingUrl(index.url.clone()));
+    }
+    Ok(())
 }
 
 impl<'a> IntoIterator for &'a SourceIndexes {
@@ -405,14 +411,19 @@ impl IndexLocations {
             .indexes
             .into_iter()
             .partition(|index| index.origin == Some(Origin::Cli));
+        let configured = configured
+            .into_iter()
+            .filter(|index| index.name.as_ref().is_none_or(|name| !names.contains(name)))
+            .collect::<Vec<_>>();
+        for index in &indexes {
+            for existing in command_line.iter().chain(&configured) {
+                validate_source_index_policy(existing, index)?;
+            }
+        }
         self.indexes = command_line
             .into_iter()
             .chain(indexes)
-            .chain(
-                configured
-                    .into_iter()
-                    .filter(|index| index.name.as_ref().is_none_or(|name| !names.contains(name))),
-            )
+            .chain(configured)
             .collect();
         Ok(self)
     }
