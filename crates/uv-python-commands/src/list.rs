@@ -122,7 +122,6 @@ pub async fn list(
             cache,
             install_mirrors.python_downloads_json_url.as_deref(),
             Some(download_request),
-            None,
         )
         .await?;
         let downloads = download_list

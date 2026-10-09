@@ -14,8 +14,11 @@ use insta::assert_snapshot;
 use uv_platform::Platform;
 use uv_platform::{Arch, Os};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
+#[cfg(feature = "test-python-managed")]
 use uv_python_managed::downloads::ManagedPythonDownloadList;
+#[cfg(feature = "test-python-managed")]
 use uv_python_types::{PythonDownloadRequest, PythonRequest};
+#[cfg(feature = "test-python-managed")]
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
@@ -794,6 +797,10 @@ fn python_pin_install() {
 fn python_pin_with_ndjson_manifest() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_sources()
+        .with_filtered_latest_python_versions()
+        .with_filtered_python_keys()
+        .with_filtered_python_install_bin()
+        .with_filtered_python_names()
         .with_managed_python_dirs()
         .with_empty_python_install_mirror();
 
@@ -823,12 +830,13 @@ fn python_pin_with_ndjson_manifest() {
     uv_snapshot!(context.filters(), context
         .python_pin()
         .arg("3.12")
+        .arg("--resolved")
         .arg("--python-downloads-json-url")
         .arg(manifest.path())
         .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Pinned `.python-version` to `3.12`
+    Pinned `.python-version` to `managed/cpython-3.12.[LATEST]-[PLATFORM]/[INSTALL-BIN]/[PYTHON]`
 
     ");
 }

@@ -473,7 +473,7 @@ async fn perform_install(
                 .map(|request| InstallRequest::new(request, python_arch, download_list))
                 .collect::<Result<Vec<_>>>()?
         }
-    } else if targets.len() == 1 {
+    } else if targets.len() == 1 && !reinstall {
         vec![
             InstallRequest::new_streaming(
                 PythonRequest::parse(&targets[0]),
@@ -550,19 +550,6 @@ async fn perform_install(
         }
     }
 
-    let reinstall_download_list = if reinstall && download_list.is_none() {
-        Some(
-            ManagedPythonDownloadList::new(
-                &client_builder,
-                cache,
-                install_mirrors.python_downloads_json_url.as_deref(),
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-
     // Find requests that are already satisfied
     let mut changelog = Changelog::default();
     let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall {
@@ -601,7 +588,6 @@ async fn perform_install(
                     python_arch,
                     download_list
                         .as_ref()
-                        .or(reinstall_download_list.as_ref())
                         .expect("reinstall requests should have a download list"),
                 ) {
                     Ok(request) => {

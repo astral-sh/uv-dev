@@ -4218,6 +4218,14 @@ fn python_install_with_ndjson_manifest() {
     Installed Python 3.14.[LATEST] in [TIME]
      + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
     ");
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.14", "--reinstall", "--python-downloads-json-url"])
+        .arg(manifest.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.[LATEST] in [TIME]
+     ~ cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
+    ");
 }
 
 #[cfg(unix)]
