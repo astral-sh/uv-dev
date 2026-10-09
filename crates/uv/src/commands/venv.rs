@@ -242,23 +242,29 @@ pub(crate) async fn venv(
         None
     };
 
-    let centralized_reference = is_centralized_environment_reference(&path, cache);
-    let owned_destination = centralized_workspace.is_some() || centralized_reference;
     let on_existing = match on_existing {
-        OnExisting::Prompt if owned_destination => {
+        OnExisting::Prompt
+            if centralized_workspace.is_some()
+                || is_centralized_environment_reference(&path, cache) =>
+        {
             // Centralized environments are managed by uv, so replace them without prompting.
             OnExisting::Replace {
                 reason: RemovalReason::ManagedEnvironment,
                 clear_non_virtualenv: ClearNonVirtualenv::Allow,
             }
         }
-        OnExisting::Clear { reason, .. } if owned_destination => OnExisting::Replace {
-            reason,
-            clear_non_virtualenv: ClearNonVirtualenv::Allow,
-        },
+        OnExisting::Clear { reason, .. }
+            if centralized_workspace.is_some()
+                || is_centralized_environment_reference(&path, cache) =>
+        {
+            OnExisting::Replace {
+                reason,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            }
+        }
         OnExisting::Allow
             if fs_err::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file())
-                && centralized_reference =>
+                && is_centralized_environment_reference(&path, cache) =>
         {
             // TODO(tk): Revisit after PEP 832.
             // Ignore uv-owned path files when creating a local environment.
