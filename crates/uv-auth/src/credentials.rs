@@ -208,7 +208,7 @@ impl fmt::Debug for Password {
 pub(crate) struct Token(Vec<u8>);
 
 impl Token {
-    pub(crate) fn new(token: Vec<u8>) -> Self {
+    fn new(token: Vec<u8>) -> Self {
         Self(token)
     }
 
@@ -260,7 +260,7 @@ impl Credentials {
     }
 
     /// Create a set of Bearer Authentication credentials.
-    pub fn bearer(token: Vec<u8>) -> Self {
+    pub(crate) fn bearer(token: Vec<u8>) -> Self {
         Self(CredentialsKind::Bearer {
             token: Token::new(token),
         })
@@ -434,7 +434,7 @@ impl Credentials {
         Ok(None)
     }
 
-    pub(crate) fn validate(&self) -> Result<(), InvalidCredentialsError> {
+    fn validate(&self) -> Result<(), InvalidCredentialsError> {
         let CredentialsKind::Basic { username, password } = &self.0 else {
             return Ok(());
         };

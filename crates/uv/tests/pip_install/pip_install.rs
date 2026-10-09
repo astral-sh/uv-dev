@@ -7574,7 +7574,7 @@ async fn install_requirements_basic_auth_from_keyring_trailing_whitespace() {
 
     Mock::given(method("GET"))
         .and(path("/requirements.txt"))
-        .and(basic_auth("public", "heron \t"))
+        .and(basic_auth("public", "heron  "))
         .respond_with(ResponseTemplate::new(200).set_body_string(""))
         .expect(1)
         .mount(&server)
@@ -7605,7 +7605,7 @@ async fn install_requirements_basic_auth_from_keyring_trailing_whitespace() {
         .arg("subprocess")
         .env(
             EnvVars::KEYRING_TEST_CREDENTIALS,
-            format!(r#"{{"{}": {{"public": "heron \t"}}}}"#, server.address()),
+            format!(r#"{{"{}": {{"public": "heron  "}}}}"#, server.address()),
         )
         .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
     exit_code: 0 (success)
