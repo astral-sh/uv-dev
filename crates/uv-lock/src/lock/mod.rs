@@ -1348,7 +1348,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                     if alternative.package() != &package_id.name {
                         continue;
                     }
-                    for parent_extra in expected.provides_extra {
+                    for parent_extra in expected.provides_extra.iter() {
                         for candidate in requirements.iter().filter(|candidate| {
                             candidate.name == package_id.name
                                 && candidate.extras.contains(alternative_extra)
@@ -1646,7 +1646,7 @@ struct ExpectedPackageDependencies<'lock> {
     lock: &'lock Lock,
     package: &'lock Package,
     declarations: BTreeSet<Requirement>,
-    provides_extra: &'lock [ExtraName],
+    provides_extra: Cow<'lock, [ExtraName]>,
     dependency_groups: BTreeMap<GroupName, BTreeSet<Requirement>>,
     source_requirements: &'lock DependencySources<'lock>,
     /// Marker environments and conflict contexts in which each requested extra is active.
@@ -1665,7 +1665,7 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
     fn new(
         lock: &'lock Lock,
         declarations: BTreeSet<Requirement>,
-        provides_extra: &'lock [ExtraName],
+        provides_extra: Cow<'lock, [ExtraName]>,
         dependency_groups: &BTreeMap<GroupName, BTreeSet<Requirement>>,
         source_requirements: &'lock DependencySources<'lock>,
         modifiers: &DependencyModifiers,
@@ -1773,10 +1773,17 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>, LockError>>()?;
+        // Legacy locks omit `provides-extras`, so incoming requests must still activate
+        // coverage checks when an entire optional dependency section is missing.
+        let provides_extra = if lock.supports_provides_extra() {
+            Cow::Borrowed(package.metadata.provides_extra.as_ref())
+        } else {
+            Cow::Owned(activated_extras.keys().cloned().collect())
+        };
         Ok(Self::new(
             lock,
             declarations,
-            &package.metadata.provides_extra,
+            provides_extra,
             &groups,
             source_requirements,
             modifiers,
@@ -4256,7 +4263,7 @@ impl Lock {
         let expected = ExpectedPackageDependencies::new(
             self,
             declarations,
-            provides_extra,
+            Cow::Borrowed(provides_extra),
             &expected_groups,
             source_requirements,
             modifiers,
@@ -11119,7 +11126,7 @@ source = { registry = "https://example.com/simple" }
         let expected = ExpectedPackageDependencies::new(
             &lock,
             package.metadata.requires_dist.clone(),
-            &[],
+            Cow::Borrowed(&[]),
             &BTreeMap::new(),
             &sources,
             &DependencyModifiers::default(),

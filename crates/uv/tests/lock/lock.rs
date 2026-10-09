@@ -2036,6 +2036,75 @@ fn lock_dependency_edges_reject_offline_url_omission() -> Result<()> {
     Ok(())
 }
 
+/// Legacy URL locks must cover requested extras even without `provides-extras` metadata.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_dependency_edges_reject_offline_legacy_url_extra_omission() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio[trio] @ https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 10 packages in [TIME]
+    ");
+
+    // Revision zero retains declarations but does not list the extras a package provides.
+    let mut lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
+    lock.remove("revision");
+    let Some(packages) = lock["package"].as_array_of_tables_mut() else {
+        anyhow::bail!("lockfile did not contain a package array");
+    };
+    for package in packages.iter_mut() {
+        if let Some(metadata) = package
+            .get_mut("metadata")
+            .and_then(toml_edit::Item::as_table_mut)
+        {
+            metadata.remove("provides-extras");
+        }
+    }
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.to_string())?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 10 packages in [TIME]
+    ");
+
+    let Some(package) = lock["package"]
+        .as_array_of_tables_mut()
+        .and_then(|packages| {
+            packages
+                .iter_mut()
+                .find(|package| package["name"].as_str() == Some("anyio"))
+        })
+    else {
+        anyhow::bail!("lockfile did not contain anyio");
+    };
+    let Some(optional_dependencies) = package["optional-dependencies"].as_table_mut() else {
+        anyhow::bail!("anyio did not contain optional dependencies");
+    };
+    assert!(optional_dependencies.remove("trio").is_some());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.to_string())?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download `anyio @ https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl`
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl
+    ");
+    Ok(())
+}
+
 /// Lock a requirement from a direct URL to a source distribution.
 #[cfg(feature = "test-universal")]
 #[test]
