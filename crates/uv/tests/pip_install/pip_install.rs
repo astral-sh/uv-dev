@@ -1678,6 +1678,8 @@ fn install_require_hashes_in_nested_constraints_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in `constraints.txt`
     "
     );
 
@@ -9506,6 +9508,54 @@ fn require_hashes_nested_constraint() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + anyio==4.0.0
+    ");
+
+    Ok(())
+}
+
+/// A direct constraint after a nested include supplies the final hash list.
+#[test]
+fn require_hashes_nested_constraint_declaration_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        --require-hashes
+        -c constraints.txt
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    "})?;
+    let constraints = context.temp_dir.child("constraints.txt");
+    constraints.write_str(indoc! {r"
+        -c old.txt
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    "})?;
+    context.temp_dir.child("old.txt").write_str(indoc! {r"
+        anyio==4.0.0 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("requirements.txt").arg("--no-deps"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + anyio==4.0.0
+    ");
+
+    constraints.write_str(indoc! {r"
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+        -c old.txt
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("requirements.txt").arg("--reinstall").arg("--no-deps"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but there were no overlapping hashes between the requirements and constraints for: anyio==4.0.0
+
+    hint: `--require-hashes` was enabled in `requirements.txt`
     ");
 
     Ok(())
