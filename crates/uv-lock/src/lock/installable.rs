@@ -74,6 +74,7 @@ fn resolve_conflict_activations<'lock>(
     lock: &'lock Lock,
     known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
     reachability: &FxHashMap<(PackageIndex, Option<&'lock ExtraName>), UniversalMarker>,
+    marker_env: Option<&ResolverMarkerEnvironment>,
 ) -> FxHashMap<ConflictItem, MarkerTree> {
     let mut pending = FxHashMap::<ConflictItem, MarkerTree>::default();
     for ((index, extra), marker) in reachability {
@@ -91,10 +92,21 @@ fn resolve_conflict_activations<'lock>(
         {
             continue;
         }
+        // Concrete Python and platform facts can make a recursive request certain.
+        let marker = marker_env.map_or_else(
+            || marker.combined(),
+            |environment| {
+                UniversalMarker::new(
+                    MarkerTree::TRUE,
+                    marker.conflict_for_environment(environment.markers()),
+                )
+                .combined()
+            },
+        );
         pending
             .entry(item)
-            .and_modify(|current| *current = current.or(marker.combined()))
-            .or_insert(marker.combined());
+            .and_modify(|current| *current = current.or(marker))
+            .or_insert(marker);
     }
 
     let mut resolved = known_conflicts
@@ -428,7 +440,8 @@ pub trait Installable<'lock> {
             }
         }
 
-        let activated = resolve_conflict_activations(lock, &known_conflicts, &reachability);
+        let activated =
+            resolve_conflict_activations(lock, &known_conflicts, &reachability, marker_env);
         let members = reachability
             .into_iter()
             .filter_map(|((index, extra), marker)| {
