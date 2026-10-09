@@ -154,10 +154,7 @@ async fn setup_mock_update(
 #[cfg(unix)]
 #[tokio::test]
 async fn self_update_astral_mirror_success_message() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_filter((
-        escape(&format!("v{}", env!("CARGO_PKG_VERSION"))),
-        "v[CURRENT_VERSION]",
-    ));
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_current_version();
     let receipt_dir = setup_mock_receipt(&context)?;
     let server = MockServer::start().await;
     let target_version = "9.9.9";
