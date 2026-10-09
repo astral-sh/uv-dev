@@ -70,6 +70,13 @@ impl<'lock> ExportableRequirements<'lock> {
         virtual_packages: VirtualPackages,
     ) -> Result<Self, LockError> {
         target.validate_workspace_resolution(extras, groups, None)?;
+        let root_requirements = match virtual_packages {
+            VirtualPackages::Exclude => {
+                Some(target.selected_root_python_requirements(groups)?)
+            }
+            // An SBOM can describe groups with incompatible Python requirements.
+            VirtualPackages::Include => None,
+        };
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut node_by_package = vec![None; size_guess];
@@ -103,9 +110,14 @@ impl<'lock> ExportableRequirements<'lock> {
                 .ok_or_else(|| LockErrorKind::MissingRootPackage {
                     name: root_name.clone(),
                 })?;
-            let root_marker = target
-                .lock()
-                .simplify_environment(dist.environment_marker());
+            let mut root_marker = dist.environment_marker();
+            if let Some(requirement) = root_requirements
+                .as_ref()
+                .and_then(|requirements| requirements.get(root_name))
+            {
+                root_marker = root_marker.and(requirement.to_exact_marker_tree());
+            }
+            let root_marker = target.lock().simplify_environment(root_marker);
 
             if root_kind == InstallableRootKind::Production && groups.prod() {
                 // Track the activated package in the list of known conflicts.
