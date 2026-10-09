@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22415,
+        "title": "Bump version to 0.13.0",
+        "url": "https://github.com/astral-sh/uv/pull/22415",
+        "state": "open",
+        "reason": "Tracks the remaining publication step. Its changelog explicitly includes CPython 3.15.0 from astral-sh/uv#22400. This PR predates the report, and 0.12.24 remains the latest published release."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22400,
+        "title": "Sync latest Python releases",
+        "url": "https://github.com/astral-sh/uv/pull/22400",
+        "state": "merged",
+        "reason": "Merged PBS 20261009 metadata for CPython 3.15.0 final before this issue opened. The current catalog contains final macOS ARM64 and Linux x86_64/aarch64 builds; release preparation is tracked by astral-sh/uv#22415."
+      },
+      {
+        "kind": "issue",
+        "number": 19788,
+        "title": "schedule uv to release with python releases",
+        "url": "https://github.com/astral-sh/uv/issues/19788",
+        "state": "closed",
+        "reason": "Historical release-availability discussion with the same download error for Python 3.14.6. Maintainers confirmed availability after astral-sh/uv#19787 and uv 0.11.21, and explained that releases are manual and generally occur within 24 hours. This provides context, not a guaranteed deadline."
+      },
+      {
+        "kind": "issue",
+        "number": 17240,
+        "title": "3.15.0a3 is not picked even though it's available",
+        "url": "https://github.com/astral-sh/uv/issues/17240",
+        "state": "closed",
+        "reason": "Analogous gap between merged metadata and a published uv release for an earlier 3.15 alpha. A maintainer pointed to the merged catalog update in astral-sh/uv#17165 and subsequent release preparation in astral-sh/uv#17254. Historical precedent rather than a regression."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs. Literal searches covered 3.15.0, 3.15.0rc3, cpython-3.15.0-macos-aarch64-none, and \"No download found for request\". Conceptual searches covered Python release availability, catalog synchronization, managed-version updates, and area:uv-python terminology without version/platform restrictions. Fix-oriented searches covered 20261009, \"Sync latest Python releases\", and 0.13.0; sparse PR results were supplemented by inspecting the latest 100 PRs across states. Read candidate bodies/comments and referenced catalog/release discussions, then checked release metadata, the tagged 0.12.24 catalog, and current source. Ruled out astral-sh/uv#22184 because explicit installation succeeds there and manual-download configuration hides available builds; astral-sh/uv#19283 concerns patch-prerelease parsing; astral-sh/uv#22421 and astral-sh/uv#22435 concern Docker base images. astral-sh/uv#13564 and astral-sh/uv#19044 request metadata updates independent of uv releases, a broader capability than this report requests."
+  },
+  "type": "duplicate",
+  "type_reason": "Shipping the already-merged CPython 3.15.0 final catalog is covered by the pre-existing open release PR astral-sh/uv#22415 and merged catalog PR astral-sh/uv#22400. Both predate this issue, so the classification is not based on a PR created in response. The 0.12.24 catalog contains 3.15.0rc3 but lacks the final macOS ARM64 entry; current source contains it. No previously released support has regressed.",
+  "summary": "astral-sh/uv#22415 tracks publication in uv 0.13.0 following the merged catalog update in astral-sh/uv#22400. astral-sh/uv#19788 and astral-sh/uv#17240 document analogous release-availability gaps.\n\nThe required issue-context README could not be updated: the read-only filesystem and sandbox rejected writes, including a temporary-directory fallback. No checkout files or GitHub content were changed.",
+  "draft_response": "CPython 3.15.0 final, including macOS ARM64, was added to the catalog in astral-sh/uv#22400. The latest published uv release is still 0.12.24, whose catalog contains 3.15.0rc3. Shipping the update is already tracked by the open uv 0.13.0 release PR, astral-sh/uv#22415. Please follow that PR for release status; once 0.13.0 is published and available through Homebrew, upgrade uv and retry `uv python install 3.15.0`."
+}
