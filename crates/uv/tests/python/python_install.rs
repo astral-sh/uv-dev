@@ -20,6 +20,10 @@ use uv_python_managed::{downloads::ManagedPythonDownloadList, platform_key_from_
 use uv_python_types::{PythonDownloadRequest, PythonRequest};
 use uv_static::EnvVars;
 use walkdir::WalkDir;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 #[test]
 fn python_install() {
@@ -4302,4 +4306,73 @@ fn python_install_with_debug_ndjson_manifest() {
     Installed Python 3.12.[LATEST] in [TIME]
      + cpython-3.12.[LATEST]+debug-[PLATFORM] (python3.12d)
     ");
+}
+
+/// An implicit catalog without a matching version is fetched only once.
+#[tokio::test]
+async fn python_install_implicit_catalog_miss_uses_one_scan() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"version":"3.99.1","artifacts":[]}"#,
+            "application/x-ndjson",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.python_install().arg("3.99")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "remote-python-download-metadata")
+        .env(EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL, format!("{}/versions.ndjson", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No download found for request: cpython-3.99-[PLATFORM]
+    ");
+    Ok(())
+}
+
+/// A prerelease retained during the stable search avoids a second catalog request.
+#[tokio::test]
+async fn python_install_implicit_prerelease_uses_one_scan() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+    let server = MockServer::start().await;
+    let downloads = ManagedPythonDownloadList::new_only_embedded()?;
+    let request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.14.0rc3"))
+        .context("version request supports managed downloads")?
+        .fill()
+        .context("native CPython platform is supported")?;
+    let download = downloads.find(&request)?;
+    let metadata = serde_json::json!({
+        "version": download.key().version().to_string(),
+        "artifacts": [{
+            "url": download.url(),
+            "platform": Platform::from_env()?.as_cargo_dist_triple(),
+            "sha256": download.sha256().context("CPython fixture has a hash")?.as_str(),
+            "variant": "install_only",
+        }],
+    });
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(metadata.to_string(), "application/x-ndjson"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.python_install().arg("3.14")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "remote-python-download-metadata")
+        .env(EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL, format!("{}/versions.ndjson", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.0rc3 in [TIME]
+     + cpython-3.14.0rc3-[PLATFORM] (python3.14)
+    ");
+    Ok(())
 }

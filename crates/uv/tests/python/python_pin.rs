@@ -890,7 +890,7 @@ async fn python_pin_custom_ndjson_url_reports_parse_errors() -> Result<()> {
         .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unable to parse NDJSON line at http://[LOCALHOST]/versions.ndjson
+    error: Unable to parse NDJSON line 1 at http://[LOCALHOST]/versions.ndjson
       cause: EOF while parsing an object at line 1 column 1
     ");
 

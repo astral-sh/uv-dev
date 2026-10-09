@@ -1071,21 +1071,7 @@ impl ManagedPythonDownloadList {
         {
             return find_in_embedded_downloads_with_prereleases(request);
         }
-        if let Some(download) =
-            find_matching_download(client_builder, &source, cache, request).await?
-        {
-            return Ok(Some(download));
-        }
-        if request.allows_prereleases() {
-            return Ok(None);
-        }
-        find_matching_download(
-            client_builder,
-            &source,
-            cache,
-            &request.clone().with_prereleases(true),
-        )
-        .await
+        find_matching_download(client_builder, &source, cache, request).await
     }
 
     /// Load available Python distributions from the compiled-in list only.
@@ -1222,14 +1208,6 @@ fn find_in_embedded_non_cpython(
         .find(|download| download.matches_request(request)))
 }
 
-fn find_in_embedded_downloads(
-    request: &PythonDownloadRequest,
-) -> Result<Option<ManagedPythonDownload>, Error> {
-    Ok(embedded_downloads()?
-        .into_iter()
-        .find(|download| download.matches_request(request)))
-}
-
 fn filter_downloads(
     mut downloads: Vec<ManagedPythonDownload>,
     filter: Option<&PythonDownloadRequest>,
@@ -1247,8 +1225,16 @@ fn find_matching_or_implicit_embedded(
     request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
     match download {
-        Some(download) => Ok(Some(download)),
-        None => source.find_in_implicit_embedded_non_cpython(request),
+        Some(download) if download.matches_request(request) => Ok(Some(download)),
+        download => {
+            if let Some(embedded) = source.find_in_implicit_embedded_non_cpython(request)? {
+                return Ok(Some(embedded));
+            }
+            if download.is_some() || request.allows_prereleases() {
+                return Ok(download);
+            }
+            source.find_in_implicit_embedded_non_cpython(&request.clone().with_prereleases(true))
+        }
     }
 }
 
@@ -1268,11 +1254,10 @@ async fn find_matching_download(
     cache: &Cache,
     request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
-    let predicate = |download: &ManagedPythonDownload| download.matches_request(request);
     let result = match &source.location {
         DownloadListLocation::Path(path) => fs_err::read(path.as_ref())
             .map_err(Error::from)
-            .and_then(|bytes| parse_ndjson_bytes_find(&path.to_string_lossy(), &bytes, predicate)),
+            .and_then(|bytes| parse_ndjson_bytes_find(&path.to_string_lossy(), &bytes, request)),
         DownloadListLocation::Http(urls) => {
             let client = client_builder
                 .clone()
@@ -1286,9 +1271,9 @@ async fn find_matching_download(
                 async |url| {
                     if client.connectivity().is_offline() {
                         let bytes = fetch_ndjson_cached(&client, &url, Some(cache)).await?;
-                        parse_ndjson_bytes_find(&url.to_string(), &bytes, predicate)
+                        parse_ndjson_bytes_find(&url.to_string(), &bytes, request)
                     } else {
-                        fetch_ndjson_find_cached(&client, &url, cache, predicate).await
+                        fetch_ndjson_find_cached(&client, &url, cache, request).await
                     }
                 },
             )
@@ -1297,7 +1282,7 @@ async fn find_matching_download(
     };
     match result {
         Ok(download) => find_matching_or_implicit_embedded(source, download, request),
-        Err(err) => source.on_error(err, || find_in_embedded_downloads(request)),
+        Err(err) => source.on_error(err, || find_in_embedded_downloads_with_prereleases(request)),
     }
 }
 
@@ -2168,18 +2153,41 @@ fn parse_ndjson_bytes_filtered(
     Ok(downloads)
 }
 
+/// Keep the first prerelease while looking for the first preferred download in catalog order.
+struct DownloadSearch<'a> {
+    request: &'a PythonDownloadRequest,
+    prerelease_request: PythonDownloadRequest,
+    prerelease: Option<ManagedPythonDownload>,
+}
+
+impl<'a> DownloadSearch<'a> {
+    fn new(request: &'a PythonDownloadRequest) -> Self {
+        Self {
+            request,
+            prerelease_request: request.clone().with_prereleases(true),
+            prerelease: None,
+        }
+    }
+
+    fn visit(&mut self, download: ManagedPythonDownload) -> ControlFlow<ManagedPythonDownload> {
+        if download.matches_request(self.request) {
+            return ControlFlow::Break(download);
+        }
+        if self.prerelease.is_none() && download.matches_request(&self.prerelease_request) {
+            self.prerelease = Some(download);
+        }
+        ControlFlow::Continue(())
+    }
+}
+
 fn parse_ndjson_bytes_find(
     source: &str,
     buf: &[u8],
-    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+    request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
-    parse_ndjson_bytes_with(source, buf, |download| {
-        if predicate(&download) {
-            ControlFlow::Break(download)
-        } else {
-            ControlFlow::Continue(())
-        }
-    })
+    let mut search = DownloadSearch::new(request);
+    let download = parse_ndjson_bytes_with(source, buf, |download| search.visit(download))?;
+    Ok(download.or(search.prerelease))
 }
 
 async fn fetch_ndjson_streaming<T>(
@@ -2218,47 +2226,42 @@ async fn fetch_ndjson_streaming<T>(
 async fn fetch_ndjson_find(
     client: &BaseClient,
     url: &DisplaySafeUrl,
-    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+    request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
-    fetch_ndjson_streaming(client, url, |download| {
-        if predicate(&download) {
-            ControlFlow::Break(download)
-        } else {
-            ControlFlow::Continue(())
-        }
-    })
-    .await
+    let mut search = DownloadSearch::new(request);
+    let download = fetch_ndjson_streaming(client, url, |download| search.visit(download)).await?;
+    Ok(download.or(search.prerelease))
 }
 
 async fn fetch_ndjson_find_cached(
     client: &BaseClient,
     url: &DisplaySafeUrl,
     cache: &Cache,
-    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+    request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
     let source = url.to_string();
     let cached = read_versions_cache_content(cache, url).await;
     if let Some((content, meta)) = &cached
         && versions_cache_is_fresh(cache, url, meta)
     {
-        return parse_ndjson_bytes_find(&source, content, predicate);
+        return parse_ndjson_bytes_find(&source, content, request);
     }
 
     if let Some((content, meta)) = &cached {
         let etag = fetch_versions_cache_etag(client, url).await;
         if etag.is_some() && etag == meta.etag {
             refresh_versions_cache_meta(cache, url, meta).await;
-            return parse_ndjson_bytes_find(&source, content, predicate);
+            return parse_ndjson_bytes_find(&source, content, request);
         }
     }
 
-    match fetch_ndjson_find(client, url, &predicate).await {
+    match fetch_ndjson_find(client, url, request).await {
         Ok(download) => Ok(download),
         Err(err @ Error::InvalidPythonDownloadsNdjsonLine(..)) => Err(err),
         Err(err) => {
             if let Some((content, _)) = cached {
                 debug!("Using stale cached Python downloads metadata after fetch failure");
-                return parse_ndjson_bytes_find(&source, &content, predicate);
+                return parse_ndjson_bytes_find(&source, &content, request);
             }
             Err(err)
         }
@@ -2708,17 +2711,36 @@ mod tests {
 {"version":"3.13.2","artifacts":[{"url":"https://example.com/cpython-3.13.2-aarch64-apple-darwin.tar.gz","platform":"aarch64-apple-darwin","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only"}]}
 "#;
 
-        let download = parse_ndjson_bytes_find("test.ndjson", ndjson, |download| {
-            download.key().version().to_string() == "3.13.2"
-        })
-        .expect("NDJSON should parse")
-        .expect("matching download should be found");
+        let request = PythonDownloadRequest::from_str("cpython-3.13.2-macos-aarch64-none")
+            .expect("valid download request");
+        let download = parse_ndjson_bytes_find("test.ndjson", ndjson, &request)
+            .expect("NDJSON should parse")
+            .expect("matching download should be found");
 
         assert_eq!(download.key().version().to_string(), "3.13.2");
         assert_eq!(
             download.url().as_ref(),
             "https://example.com/cpython-3.13.2-aarch64-apple-darwin.tar.gz"
         );
+    }
+
+    #[test]
+    fn parse_ndjson_bytes_find_prefers_stable_over_prerelease() {
+        let ndjson = br#"{"version":"3.14.1rc1","artifacts":[{"url":"https://example.com/prerelease.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+{"version":"3.14.0","artifacts":[{"url":"https://example.com/stable.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only"}]}
+"#;
+        let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu")
+            .expect("valid download request");
+        let download = parse_ndjson_bytes_find("test.ndjson", ndjson, &request)
+            .expect("NDJSON should parse")
+            .expect("matching stable download");
+        assert_eq!(download.key().version().to_string(), "3.14.0");
+
+        let request = request.with_prereleases(true);
+        let download = parse_ndjson_bytes_find("test.ndjson", ndjson, &request)
+            .expect("NDJSON should parse")
+            .expect("matching prerelease download");
+        assert_eq!(download.key().version().to_string(), "3.14.1rc1");
     }
 
     #[test]
@@ -2996,7 +3018,7 @@ mod tests {
         });
         let client = BaseClientBuilder::default().retries(0).build()?;
         let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson"))?;
-        let error = fetch_ndjson_find(&client, &url, |_| false)
+        let error = fetch_ndjson_find(&client, &url, &PythonDownloadRequest::from_str("3.99")?)
             .await
             .expect_err("third record is invalid");
         assert_matches!(error, Error::InvalidPythonDownloadsNdjsonLine(_, 3, _));
@@ -3244,12 +3266,10 @@ mod tests {
 
         let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu").unwrap();
         let client = BaseClientBuilder::default().retries(0).build().unwrap();
-        let download = fetch_ndjson_find_cached(&client, &url, &cache, |download| {
-            download.matches_request(&request)
-        })
-        .await
-        .unwrap()
-        .expect("matching download should be found");
+        let download = fetch_ndjson_find_cached(&client, &url, &cache, &request)
+            .await
+            .unwrap()
+            .expect("matching download should be found");
 
         assert_eq!(
             download.url().as_ref(),
@@ -3365,12 +3385,10 @@ mod tests {
 
         let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu").unwrap();
         let client = BaseClientBuilder::default().retries(0).build().unwrap();
-        let download = fetch_ndjson_find_cached(&client, &url, &cache, |download| {
-            download.matches_request(&request)
-        })
-        .await
-        .unwrap()
-        .expect("matching download should be found");
+        let download = fetch_ndjson_find_cached(&client, &url, &cache, &request)
+            .await
+            .unwrap()
+            .expect("matching download should be found");
 
         assert_eq!(
             download.url().as_ref(),
