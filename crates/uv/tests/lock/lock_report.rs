@@ -5,6 +5,8 @@ use indoc::{formatdoc, indoc};
 use serde_json::Value;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
+use uv_static::EnvVars;
+use uv_test::archive::write_tar_gz;
 use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
@@ -1156,5 +1158,103 @@ async fn lock_json_registry_metadata_authentication() -> Result<()> {
         .temp_dir
         .child("uv.lock")
         .assert(predicates::path::missing());
+    Ok(())
+}
+
+/// A registry source build failure retains the package and metadata classification in JSON.
+#[tokio::test]
+async fn lock_json_registry_build_failure() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let mut source = Vec::new();
+    write_tar_gz(
+        &mut source,
+        &[
+            (
+                "broken-1.0.0/pyproject.toml",
+                indoc! {r#"
+            [project]
+            name = "broken"
+            version = "1.0.0"
+            dynamic = ["dependencies"]
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#},
+            ),
+            (
+                "broken-1.0.0/backend.py",
+                indoc! {r#"
+            def get_requires_for_build_wheel(config_settings=None):
+                raise SystemExit("metadata build is unavailable")
+        "#},
+            ),
+        ],
+    )?;
+    Mock::given(path("/simple/broken/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "<a href=\"../../broken-1.0.0.tar.gz\">broken-1.0.0.tar.gz</a>",
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(path("/broken-1.0.0.tar.gz"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(source))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["broken"]
+    "#})?;
+    let output = uv_snapshot!(context.filters(), context.lock().args([
+        "--output-format", "json", "--preview-features", "json-output", "--index-url",
+    ]).arg(format!("{}/simple", server.uri())).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/uv.lock",
+      "status": "stale",
+      "dry_run": false,
+      "reason": {
+        "code": "missing_lockfile"
+      },
+      "error": {
+        "code": "metadata_unavailable",
+        "package": "broken",
+        "message": "Failed to build `broken==1.0.0`",
+        "causes": [
+          "The build backend returned an error",
+          "Call to `backend.get_requires_for_build_wheel` failed (exit status: 1)/n/n[stderr]/nmetadata build is unavailable/n"
+        ],
+        "hints": [
+          "`broken` (v1.0.0) was included because `project` (v0.1.0) depends on `broken`",
+          "Build failures usually indicate a problem with the package or the build environment"
+        ]
+      }
+    }
+
+    ----- stderr -----
+    error: Failed to build `broken==1.0.0`
+      cause: The build backend returned an error
+      cause: Call to `backend.get_requires_for_build_wheel` failed (exit status: 1)
+
+             [stderr]
+             metadata build is unavailable
+
+    hint: `broken` (v1.0.0) was included because `project` (v0.1.0) depends on `broken`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
+    serde_json::from_slice::<Value>(&output.stdout)?;
     Ok(())
 }

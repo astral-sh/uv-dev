@@ -1,4 +1,4 @@
-//! Machine-readable results for `uv lock`.
+//! Shared lockfile actions and machine-readable results for `uv lock`.
 
 use std::error::Error;
 use std::fmt::{Display, Write as _};
@@ -19,7 +19,7 @@ use uv_lock_operations::{
     LockValidationReasonCode, LockValidationValues,
 };
 use uv_normalize::PackageName;
-use uv_resolver::{NoSolutionError, PubGrubHint};
+use uv_resolver::{NoSolutionError, PubGrubHint, ResolveError};
 use uv_settings::{FrozenSource, LockCheck};
 
 #[derive(Debug, Default, Serialize)]
@@ -35,13 +35,46 @@ enum Status {
     Indeterminate,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+/// Represents the action taken during a lock.
+#[derive(Serialize, Debug, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
-enum Action {
+pub(crate) enum LockAction {
+    /// The lockfile was used without checking.
     Use,
+    /// The lockfile was checked.
     Check,
+    /// The lockfile was updated.
     Update,
+    /// A new lockfile was created.
     Create,
+}
+
+impl LockAction {
+    pub(crate) fn from_result(mode: &LockMode<'_>, result: &LockResult) -> Self {
+        match mode {
+            LockMode::Frozen(_) => Self::Use,
+            LockMode::Locked(..) => Self::Check,
+            LockMode::Write(_) | LockMode::DryRun(_) => match result {
+                LockResult::Unchanged(_) => Self::Check,
+                LockResult::Changed(None, _) => Self::Create,
+                LockResult::Changed(Some(_), _) => Self::Update,
+            },
+        }
+    }
+
+    pub(crate) fn message(self, dry_run: bool) -> Option<&'static str> {
+        let message = if dry_run {
+            match self {
+                Self::Use => return None,
+                Self::Check => "Found up-to-date",
+                Self::Update => "Would update",
+                Self::Create => "Would create",
+            }
+        } else {
+            return None;
+        };
+        Some(message)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -52,7 +85,7 @@ pub(crate) struct LockReport {
     status: Status,
     /// The lockfile action; create and update are proposed actions in a dry run.
     #[serde(skip_serializing_if = "Option::is_none")]
-    action: Option<Action>,
+    action: Option<LockAction>,
     dry_run: bool,
     #[serde(skip)]
     completed: bool,
@@ -72,10 +105,10 @@ impl LockReport {
         dry_run: DryRun,
     ) -> Self {
         let (action, dry_run) = if frozen.is_some() {
-            (Some(Action::Use), false)
+            (Some(LockAction::Use), false)
         } else {
             match lock_check {
-                LockCheck::Enabled(_) => (Some(Action::Check), false),
+                LockCheck::Enabled(_) => (Some(LockAction::Check), false),
                 LockCheck::Disabled => (None, dry_run.enabled()),
             }
         };
@@ -98,50 +131,35 @@ impl LockReport {
 
     pub(super) fn operation_success(&mut self, mode: &LockMode<'_>, result: &LockResult) {
         self.completed = true;
-        match mode {
-            LockMode::Frozen(_) => {
-                self.action = Some(Action::Use);
+        let action = LockAction::from_result(mode, result);
+        self.action = Some(action);
+        match action {
+            LockAction::Use => {
                 self.status = Status::NotChecked;
                 self.reason = None;
                 self.validation_error = None;
             }
-            LockMode::Locked(..) => {
-                self.action = Some(Action::Check);
-                match result {
-                    LockResult::Unchanged(_) => {
-                        self.status = Status::Fresh;
-                        self.reason = None;
-                        self.validation_error = None;
-                    }
-                    LockResult::Changed(..) => {
-                        self.status = Status::Stale;
-                        self.reason
-                            .get_or_insert_with(|| LockReason::new(ReasonCode::LockChanged));
-                    }
-                }
-            }
-            LockMode::Write(_) | LockMode::DryRun(_) => match result {
+            LockAction::Check => match result {
                 LockResult::Unchanged(_) => {
-                    self.action = Some(Action::Check);
                     self.status = Status::Fresh;
                     self.reason = None;
                     self.validation_error = None;
                 }
-                LockResult::Changed(previous, _) => {
-                    self.action = Some(if previous.is_some() {
-                        Action::Update
-                    } else {
-                        Action::Create
-                    });
-                    self.status = if self.dry_run {
-                        Status::Stale
-                    } else {
-                        Status::Fresh
-                    };
+                LockResult::Changed(..) => {
+                    self.status = Status::Stale;
                     self.reason
                         .get_or_insert_with(|| LockReason::new(ReasonCode::LockChanged));
                 }
             },
+            LockAction::Update | LockAction::Create => {
+                self.status = if self.dry_run {
+                    Status::Stale
+                } else {
+                    Status::Fresh
+                };
+                self.reason
+                    .get_or_insert_with(|| LockReason::new(ReasonCode::LockChanged));
+            }
         }
     }
 
@@ -475,6 +493,19 @@ impl ErrorReport {
     }
 
     fn resolution(&mut self, error: &uv_resolve_operations::Error) {
+        if let uv_resolve_operations::Error::Resolve(ResolveError::Dist(
+            _,
+            distribution,
+            _,
+            error,
+        )) = error
+        {
+            self.package = Some(distribution.name().clone());
+            if let ErrorCode::EvaluationFailed = self.code {
+                self.code = ErrorCode::MetadataUnavailable;
+            }
+            self.distribution(error);
+        }
         if let Some(error) = error.as_no_solution() {
             self.resolver_hints(error);
         }
