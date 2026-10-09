@@ -3920,12 +3920,11 @@ impl Lock {
     }
 
     /// Recover package reachability while retaining the activation markers of requested extras.
-    fn package_reachability_marker(
+    fn package_reachability_markers(
         &self,
-        target: &Package,
         root: &Path,
         root_requirements: &[Cow<'_, Requirement>],
-    ) -> Result<MarkerTree, LockError> {
+    ) -> Result<PackageMarkers<'_>, LockError> {
         let mut package_markers = PackageMarkers::default();
         let mut pending = VecDeque::new();
         let root_marker = self.fork_markers_union();
@@ -3990,18 +3989,19 @@ impl Lock {
             }
         }
 
-        Ok(package_markers.get(&target.id).unwrap_or(MarkerTree::FALSE))
+        Ok(package_markers)
     }
 
     /// Return a [`SatisfiesResult`] if the given requirements do not match the [`Package`] metadata.
     fn satisfies_requires_dist<'lock>(
-        &self,
+        &'lock self,
         requires_dist: Box<[Requirement]>,
         provides_extra: &[ExtraName],
         dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
         source_requirements: &DependencySources<'_>,
         modifiers: &DependencyModifiers,
         root_requirements: &[Cow<'_, Requirement>],
+        package_reachability: &mut Option<PackageMarkers<'lock>>,
         package_requires_python: Option<&VersionSpecifiers>,
         package_version: Option<&Version>,
         package: &'lock Package,
@@ -4028,17 +4028,24 @@ impl Lock {
             let unsupported_marker = self
                 .fork_markers_union()
                 .and(package_python_marker.negate());
-            if !unsupported_marker.is_false()
-                && !self
-                    .package_reachability_marker(package, root, root_requirements)?
+            if !unsupported_marker.is_false() {
+                let package_markers = match package_reachability {
+                    Some(package_markers) => package_markers,
+                    None => package_reachability
+                        .insert(self.package_reachability_markers(root, root_requirements)?),
+                };
+                if !package_markers
+                    .get(&package.id)
+                    .unwrap_or(MarkerTree::FALSE)
                     .and(unsupported_marker)
                     .is_false()
-            {
-                return Ok(SatisfiesResult::MismatchedPackageRequiresPython(
-                    &package.id.name,
-                    package.id.version.as_ref(),
-                    requires_python.clone(),
-                ));
+                {
+                    return Ok(SatisfiesResult::MismatchedPackageRequiresPython(
+                        &package.id.name,
+                        package.id.version.as_ref(),
+                        requires_python.clone(),
+                    ));
+                }
             }
         }
 
@@ -4331,6 +4338,7 @@ impl Lock {
     ) -> Result<SatisfiesResult<'_>, LockError> {
         let mut queue: VecDeque<PackageIndex> = VecDeque::new();
         let mut seen = FxHashSet::default();
+        let mut package_reachability = None;
         let mut activated_extras: FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>> =
             FxHashMap::default();
         let mut validated_extras: FxHashMap<PackageIndex, BTreeMap<ExtraName, UniversalMarker>> =
@@ -4878,6 +4886,7 @@ impl Lock {
                             &dependency_sources,
                             &dependency_modifiers,
                             &root_requirements,
+                            &mut package_reachability,
                             requires_python.as_ref(),
                             Some(version),
                             package,
@@ -4945,6 +4954,7 @@ impl Lock {
                         &dependency_sources,
                         &dependency_modifiers,
                         &root_requirements,
+                        &mut package_reachability,
                         metadata.requires_python.as_ref(),
                         Some(&metadata.version),
                         package,
@@ -5014,6 +5024,7 @@ impl Lock {
                         &dependency_sources,
                         &dependency_modifiers,
                         &root_requirements,
+                        &mut package_reachability,
                         requires_python.as_ref(),
                         None,
                         package,
@@ -5080,6 +5091,7 @@ impl Lock {
                         &dependency_sources,
                         &dependency_modifiers,
                         &root_requirements,
+                        &mut package_reachability,
                         metadata.requires_python.as_ref(),
                         Some(&metadata.version),
                         package,
