@@ -530,7 +530,7 @@ fn validate_requested_conflicts<'lock>(
     for request in requests.finish(&known_conflicts) {
         let (index, extra, marker) = request?;
         let package = lock.package(index);
-        if groups.prod() && lock.is_workspace_package(package) {
+        if extra.is_none() && lock.is_workspace_package(package) {
             activated
                 .entry(ConflictItem::from(package.name().clone()))
                 .and_modify(|current| *current = current.or(marker))

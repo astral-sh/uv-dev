@@ -110,7 +110,21 @@ impl<'lock> ConflictRequests<'lock> {
         );
     }
 
-    /// Resolve globally certain extra requests before evaluating guards on sibling paths.
+    /// Return the project or extra requested by a graph node.
+    fn requested_item(&self, node: &Node<'_>) -> Option<ConflictItem> {
+        match node {
+            Node::Root => None,
+            Node::Package(package, Some(extra)) => {
+                Some(ConflictItem::from((package.name().clone(), extra.clone())))
+            }
+            Node::Package(package, None) => self
+                .lock
+                .is_workspace_package(package)
+                .then(|| ConflictItem::from(package.name().clone())),
+        }
+    }
+
+    /// Resolve globally certain project and extra requests before evaluating sibling guards.
     /// Symbolic cycles stay local; every successful pass removes at least one pending item.
     fn global_conflicts(
         &self,
@@ -120,32 +134,32 @@ impl<'lock> ConflictRequests<'lock> {
             |_, _| (),
             |index, edge| {
                 let mut marker = UniversalMarker::from_combined(*edge.marker());
-                // A request activates its extra on this edge. Ancestor guards still determine which
-                // resolved package version can make the request.
+                // A request activates its own selection on this edge. Ancestor guards still
+                // determine which resolved package version can make the request.
                 if let Some((_, target)) = self.graph.edge_endpoints(index)
-                    && let Node::Package(package, Some(extra)) = &self.graph[target]
+                    && let Some(item) = self.requested_item(&self.graph[target])
                 {
-                    marker.assume_conflict_item(&ConflictItem::from((
-                        package.name().clone(),
-                        extra.clone(),
-                    )));
+                    marker.assume_conflict_item(&item);
                 }
                 marker.combined()
             },
         );
         let reachability = marker_reachability(&graph, &[]);
         let mut pending = FxHashMap::<ConflictItem, MarkerTree>::default();
-        for ((index, extra), node) in &self.nodes {
-            let Some(extra) = extra else {
+        for node in self.nodes.values() {
+            let Some(item) = self.requested_item(&self.graph[*node]) else {
                 continue;
             };
-            let package = self.lock.package(*index);
-            if !self.lock.conflicts().contains(package.name(), extra) {
+            if !self
+                .lock
+                .conflicts()
+                .contains(item.package(), item.kind().as_ref())
+            {
                 continue;
             }
             let marker = reachability.get(node).copied().unwrap_or(MarkerTree::FALSE);
             pending
-                .entry(ConflictItem::from((package.name().clone(), extra.clone())))
+                .entry(item)
                 .and_modify(|current| *current = current.or(marker))
                 .or_insert(marker);
         }
