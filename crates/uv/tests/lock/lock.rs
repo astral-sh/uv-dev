@@ -49046,5 +49046,124 @@ fn lock_workspace_nonproject_group_include_conflicts() -> Result<()> {
     └── example v1.0.0 (group: test)
     child v0.1.0
     "#);
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--only-group", "other", "--no-hashes", "--no-header"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Groups `other` and `test` are incompatible with the conflicts: {`tools:other`, `tools:test`}
+    "#);
+
+    Ok(())
+}
+
+/// Root group aliases retain their Python conditions when referencing member groups.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_nonproject_group_include_markers() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let scenario = toml::from_str(indoc! {r#"
+        name = "nonproject-root-group-markers"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [dependency-groups]
+        lint = [{ include-group = "check" }]
+        check = []
+        legacy = []
+        empty = []
+        [tool.uv.dependency-groups]
+        check = { requires-python = ">=3.13", include-workspace-groups = [{ package = "tools", group = "test" }] }
+        legacy = { requires-python = "<3.13", include-workspace-groups = [{ package = "tools", group = "test" }] }
+        empty = { requires-python = ">=3.14", include-workspace-groups = [{ package = "tools", group = "empty" }] }
+        [tool.uv.workspace]
+        members = ["tools"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+        empty = []
+    "#})?;
+    context
+        .lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_snapshot!(toml::to_string(&lock["manifest"]["dependency-group-includes"])?, @r#"
+    [[check]]
+    package = "tools"
+    group = "test"
+    marker = "python_full_version >= '3.13'"
+
+    [[empty]]
+    package = "tools"
+    group = "empty"
+    marker = "python_full_version >= '3.14'"
+
+    [[legacy]]
+    package = "tools"
+    group = "test"
+    marker = "python_full_version < '3.13'"
+
+    [[lint]]
+    package = "tools"
+    group = "test"
+    marker = "python_full_version >= '3.13'"
+    "#);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--locked", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--no-hashes", "--no-header"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0 ; python_full_version >= '3.13'
+    "#);
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--only-group", "legacy", "--no-hashes", "--no-header"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--python-version", "3.12"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tools v0.1.0
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    "#);
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--python-version", "3.13"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tools v0.1.0
+    └── example v1.0.0 (group: test)
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    "#);
     Ok(())
 }

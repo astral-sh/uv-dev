@@ -15,6 +15,7 @@ use uv_configuration::{
 };
 use uv_distribution_types::{Edge, FirstParty, Node, Resolution, ResolvedDist};
 use uv_normalize::{DefaultExtras, ExtraName, GroupName, PackageName};
+use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
 use uv_pypi_types::{ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 
@@ -108,22 +109,62 @@ pub trait Installable<'lock> {
         None
     }
 
-    /// Return whether a dependency group should be included for its owning package.
+    /// Return whether a group is selected directly for its owning package.
     ///
-    /// A `None` package represents groups defined directly on a non-project workspace root.
+    /// A `None` package represents groups defined on a non-project workspace root.
+    fn directly_includes_group(
+        &self,
+        _package: Option<&PackageName>,
+        group: &GroupName,
+        groups: &DependencyGroupsWithDefaults,
+    ) -> bool {
+        groups.contains(group)
+    }
+
+    /// Return the environments where a member group is selected directly or through root groups.
+    fn group_marker(
+        &self,
+        package: &PackageName,
+        group: &GroupName,
+        groups: &DependencyGroupsWithDefaults,
+    ) -> MarkerTree {
+        if self.directly_includes_group(Some(package), group, groups) {
+            MarkerTree::TRUE
+        } else {
+            self.lock()
+                .workspace_group_marker(package, group, |root_group| {
+                    self.directly_includes_group(None, root_group, groups)
+                })
+        }
+    }
+
+    /// Return whether a dependency group is selected directly or through root groups.
     fn includes_group(
         &self,
         package: Option<&PackageName>,
         group: &GroupName,
         groups: &DependencyGroupsWithDefaults,
     ) -> bool {
-        groups.contains(group)
-            || package.is_some_and(|package| {
-                self.lock()
-                    .includes_workspace_group(package, group, |group| {
-                        self.includes_group(None, group, groups)
-                    })
-            })
+        package.map_or_else(
+            || self.directly_includes_group(None, group, groups),
+            |package| !self.group_marker(package, group, groups).is_false(),
+        )
+    }
+
+    /// Return additional packages whose selected dependency groups are installation roots.
+    fn group_roots<'a>(&'a self, groups: &DependencyGroupsWithDefaults) -> BTreeSet<&'a PackageName>
+    where
+        'lock: 'a,
+    {
+        self.group_root(groups)
+            .into_iter()
+            .chain(
+                self.lock().workspace_group_roots(|group| {
+                    self.directly_includes_group(None, group, groups)
+                }),
+            )
+            .filter(|name| !self.roots().any(|root| root == *name))
+            .collect()
     }
 
     /// Return the [`PackageName`] of the target, if available.
@@ -355,11 +396,10 @@ trait InstallableExt<'lock>: Installable<'lock> {
             }
 
             for dist in roots.iter().copied().chain(group_roots()) {
-                for group in dist
-                    .dependency_groups
-                    .keys()
-                    .filter(|group| self.includes_group(Some(&dist.id.name), group, groups))
-                {
+                for group in dist.dependency_groups.keys().filter(|group| {
+                    self.group_marker(&dist.id.name, group, groups)
+                        .evaluate(marker_env, &[])
+                }) {
                     activated_groups.push((&dist.id.name, group));
                 }
             }
@@ -424,11 +464,17 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 })
                 .flatten()
             {
-                if validate_conflicts && dep.complexified_marker.has_conflict_marker() {
+                let mut marker = dep.complexified_marker;
+                marker.and(UniversalMarker::from_combined(self.group_marker(
+                    &dist.id.name,
+                    group,
+                    groups,
+                )));
+                if validate_conflicts && marker.has_conflict_marker() {
                     dependencies_for_conflict_validation.push((dist, dep));
                 }
                 let additional_activated_extras = newly_activated_extras(dep, &activated_extras);
-                if !dep.complexified_marker.evaluate(
+                if !marker.evaluate(
                     marker_env,
                     activated_projects.iter().copied(),
                     activated_extras
@@ -492,20 +538,12 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 }
 
                 // Push its dependencies on the queue.
-                add_reachability(
-                    &mut conflict_reachability,
-                    (dep.index, None),
-                    dep.complexified_marker,
-                );
+                add_reachability(&mut conflict_reachability, (dep.index, None), marker);
                 if seen.insert((dep.index, None)) {
                     queue.push_back((dep.index, None));
                 }
                 for extra in &dep.extra {
-                    add_reachability(
-                        &mut conflict_reachability,
-                        (dep.index, Some(extra)),
-                        dep.complexified_marker,
-                    );
+                    add_reachability(&mut conflict_reachability, (dep.index, Some(extra)), marker);
                     if seen.insert((dep.index, Some(extra))) {
                         queue.push_back((dep.index, Some(extra)));
                     }

@@ -2035,18 +2035,20 @@ pub fn detect_conflicts(
     // those should result in an error.
     let lock = target.lock();
     let packages = target.packages(extras, groups);
+    let group_roots = target.group_roots(groups);
     let conflicts = lock.conflicts();
     for set in conflicts.iter() {
         let mut conflicts: Vec<ConflictItem> = vec![];
         for item in set.iter() {
-            if !packages.contains(item.package()) {
-                // Ignore items that are not in the install targets
-                continue;
-            }
             let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
-                ConflictKind::Extra(extra) => extras.contains(extra),
-                ConflictKind::Group(group1) => groups.contains(group1),
+                ConflictKind::Project => packages.contains(item.package()) && groups.prod(),
+                ConflictKind::Extra(extra) => {
+                    packages.contains(item.package()) && extras.contains(extra)
+                }
+                ConflictKind::Group(group) => {
+                    (packages.contains(item.package()) || group_roots.contains(item.package()))
+                        && target.includes_group(Some(item.package()), group, groups)
+                }
             };
             if is_conflicting {
                 conflicts.push(item.clone());
