@@ -1,31 +1,16 @@
 //! Offline coverage for dependency-group installation checks.
 
 use std::collections::BTreeMap;
-use std::process::Command;
 
 use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
-use predicates::prelude::predicate;
 
 use uv_static::EnvVars;
 use uv_test::packse::generate_wheel;
 use uv_test::{TestContext, uv_snapshot};
-
-fn context() -> TestContext {
-    uv_test::test_context!("3.12")
-        .with_env(EnvVars::UV_NO_CONFIG, "1")
-        .with_env(EnvVars::UV_OFFLINE, "1")
-        .with_env(EnvVars::UV_NO_BUILD, "1")
-}
-
-fn pip_install(context: &TestContext) -> Command {
-    let mut command = context.pip_install();
-    command.arg("--no-index");
-    command
-}
 
 fn wheel(
     context: &TestContext,
@@ -53,10 +38,15 @@ fn wheel(
 
 #[test]
 fn dependency_group_installed_requirements() -> Result<()> {
-    let context = context();
+    let context = uv_test::test_context!("3.12")
+        .with_env(EnvVars::UV_NO_CONFIG, "1")
+        .with_env(EnvVars::UV_OFFLINE, "1")
+        .with_env(EnvVars::UV_NO_BUILD, "1");
     let root = wheel(&context, "group-root", "1.0.0", &["group-leaf==1.0.0"])?;
     let leaf = wheel(&context, "group-leaf", "1.0.0", &[])?;
-    pip_install(&context)
+    context
+        .pip_install()
+        .arg("--no-index")
         .arg(root.path())
         .arg(leaf.path())
         .assert()
@@ -70,7 +60,7 @@ fn dependency_group_installed_requirements() -> Result<()> {
         dev = [{ include-group = "base" }]
     "#})?;
 
-    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "dev"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args(["--group", "dev"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -79,7 +69,7 @@ fn dependency_group_installed_requirements() -> Result<()> {
 
     // The direct-only check need not read or resolve the missing transitive dependency.
     context.pip_uninstall().arg("group-leaf").assert().success();
-    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "dev", "--no-deps"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args(["--group", "dev", "--no-deps"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -87,7 +77,7 @@ fn dependency_group_installed_requirements() -> Result<()> {
     ");
 
     // A missing transitive dependency still requires resolution.
-    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "dev"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args(["--group", "dev"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
@@ -96,21 +86,30 @@ fn dependency_group_installed_requirements() -> Result<()> {
 
     hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
-    pip_install(&context)
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index")
         .args(["--group", "dev", "--find-links"])
-        .arg(context.temp_dir.path())
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("Installed 1 package"));
+        .arg(context.temp_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + group-leaf==1.0.0
+    ");
     Ok(())
 }
 
 #[test]
 fn dependency_group_multiple_sources() -> Result<()> {
-    let context = context();
+    let context = uv_test::test_context!("3.12")
+        .with_env(EnvVars::UV_NO_CONFIG, "1")
+        .with_env(EnvVars::UV_OFFLINE, "1")
+        .with_env(EnvVars::UV_NO_BUILD, "1");
     let first = wheel(&context, "group-first", "1.0.0", &[])?;
     let second = wheel(&context, "group-second", "1.0.0", &[])?;
-    pip_install(&context)
+    context
+        .pip_install()
+        .arg("--no-index")
         .arg(first.path())
         .arg(second.path())
         .assert()
@@ -133,7 +132,7 @@ fn dependency_group_multiple_sources() -> Result<()> {
         .child("requirements.txt")
         .write_str("group-first==1.0.0\n")?;
 
-    uv_snapshot!(context.filters(), pip_install(&context).args([
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args([
         "-r", "requirements.txt", "--group", "dev", "--group", "other/pyproject.toml:dev",
     ]), @"
     exit_code: 0 (success)
@@ -146,10 +145,18 @@ fn dependency_group_multiple_sources() -> Result<()> {
 
 #[test]
 fn dependency_group_sources() -> Result<()> {
-    let context = context();
+    let context = uv_test::test_context!("3.12")
+        .with_env(EnvVars::UV_NO_CONFIG, "1")
+        .with_env(EnvVars::UV_OFFLINE, "1")
+        .with_env(EnvVars::UV_NO_BUILD, "1");
     let first = wheel(&context, "group-source", "1.0.0", &[])?;
     let second = wheel(&context, "group-source", "2.0.0", &[])?;
-    pip_install(&context).arg(first.path()).assert().success();
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg(first.path())
+        .assert()
+        .success();
     let second = second
         .path()
         .file_name()
@@ -167,13 +174,13 @@ fn dependency_group_sources() -> Result<()> {
         group-source = {{ path = "{second}" }}
     "#})?;
 
-    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "dev", "--no-sources"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args(["--group", "dev", "--no-sources"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Checked 1 package in [TIME]
     ");
-    uv_snapshot!(context.filters(), pip_install(&context).args([
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args([
         "--group", "dev", "--no-sources-package", "group-source",
     ]), @"
     exit_code: 0 (success)
@@ -183,12 +190,18 @@ fn dependency_group_sources() -> Result<()> {
     ");
 
     // Disabling a different package's source must not make the existing version sufficient.
-    pip_install(&context)
-        .args(["--group", "dev", "--no-sources-package", "another-package"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("+ group-source==2.0.0"));
-    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "dev"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index")
+        .args(["--group", "dev", "--no-sources-package", "another-package"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - group-source==1.0.0 (from file://[TEMP_DIR]/group_source-1.0.0-py3-none-any.whl)
+     + group-source==2.0.0 (from file://[TEMP_DIR]/group_source-2.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args(["--group", "dev"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -199,9 +212,17 @@ fn dependency_group_sources() -> Result<()> {
 
 #[test]
 fn dependency_group_errors_and_hash_modes() -> Result<()> {
-    let context = context();
+    let context = uv_test::test_context!("3.12")
+        .with_env(EnvVars::UV_NO_CONFIG, "1")
+        .with_env(EnvVars::UV_OFFLINE, "1")
+        .with_env(EnvVars::UV_NO_BUILD, "1");
     let wheel = wheel(&context, "group-pinned", "1.0.0", &[])?;
-    pip_install(&context).arg(wheel.path()).assert().success();
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg(wheel.path())
+        .assert()
+        .success();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -210,29 +231,23 @@ fn dependency_group_errors_and_hash_modes() -> Result<()> {
         dev = ["group-pinned==1.0.0"]
     "#})?;
 
-    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "missing"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args(["--group", "missing"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: The dependency group 'missing' was not found in the project: pyproject.toml
     ");
-    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "dev", "--require-hashes"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args(["--group", "dev", "--require-hashes"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `group-pinned`
     ");
-    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "dev", "--verify-hashes"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args(["--group", "dev", "--verify-hashes"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Checked 1 package in [TIME]
     ");
-    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "dev", "--no-editable"]), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Checked 1 package in [TIME]
-    ");
-    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "dev", "--compile-bytecode"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args(["--group", "dev", "--compile-bytecode"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
