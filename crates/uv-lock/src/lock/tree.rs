@@ -1412,19 +1412,9 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
             return Vec::new();
         }
 
-        let packages = if self.tree.lock.members().is_empty() {
-            self.tree.lock.root().into_iter().collect::<Vec<_>>()
-        } else {
-            self.tree
-                .lock
-                .packages()
-                .iter()
-                .filter(|package| self.tree.lock.members().contains(&package.id.name))
-                .collect::<Vec<_>>()
-        };
-
-        packages
-            .into_iter()
+        self.tree
+            .lock
+            .workspace_packages()
             .filter(|package| {
                 let id = MetadataNodeId::from_package_id(
                     &self.workspace_root,
