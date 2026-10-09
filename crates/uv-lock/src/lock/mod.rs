@@ -4096,7 +4096,9 @@ impl Lock {
                     context.dependencies(package),
                     context,
                     expected.context_parent_marker(context).pep508(),
-                ) {
+                    package,
+                    root,
+                )? {
                     return Ok(SatisfiesResult::UncoveredPackageDependency(
                         &package.id.name,
                         package.id.version.as_ref(),
@@ -4256,7 +4258,13 @@ impl Lock {
         dependencies: &[Dependency],
         context: DependencyContext<'_>,
         parent_marker: MarkerTree,
-    ) -> Option<Requirement> {
+        package: &Package,
+        root: &Path,
+    ) -> Result<Option<Requirement>, LockError> {
+        let is_distribution_dependency = match context {
+            DependencyContext::Production | DependencyContext::Extra(_) => true,
+            DependencyContext::Group(_) => false,
+        };
         for requirement in requirements {
             let required = self.requires_python.simplify_markers(
                 context
@@ -4264,6 +4272,14 @@ impl Lock {
                     .and(parent_marker),
             );
             if required.is_false() {
+                continue;
+            }
+
+            // Self-constraints apply to the parent package without creating dependency edges.
+            if requirement.name == package.id.name && is_distribution_dependency {
+                if !Self::package_satisfies_requirement(package, requirement, root)? {
+                    return Ok(Some(requirement.clone()));
+                }
                 continue;
             }
 
@@ -4289,11 +4305,11 @@ impl Lock {
             }
 
             if !required.implies(covered).is_true() {
-                return Some(requirement.clone());
+                return Ok(Some(requirement.clone()));
             }
         }
 
-        None
+        Ok(None)
     }
 
     /// Check whether the lock matches the project structure, requirements and configuration.
@@ -10886,7 +10902,10 @@ source = { registry = "https://example.com/simple" }
                 &package.dependencies,
                 DependencyContext::Production,
                 lock.fork_markers_union(),
+                package,
+                Path::new("."),
             )
+            .expect("valid source")
             .is_none()
         );
     }
