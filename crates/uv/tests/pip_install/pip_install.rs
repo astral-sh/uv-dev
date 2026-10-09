@@ -1922,6 +1922,53 @@ fn reinstall_incomplete_directory_local_version() -> Result<()> {
     Ok(())
 }
 
+/// An inconsistent metadata directory version can repair that same directory.
+#[test]
+fn reinstall_incomplete_directory_version_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.child("demo-1.0.0-py3-none-any.whl");
+    let record_contents = indoc! {"
+        demo/__init__.py,,
+        demo-2.0.0.dist-info/METADATA,,
+        demo-2.0.0.dist-info/WHEEL,,
+        demo-2.0.0.dist-info/RECORD,,
+    "};
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (name, contents) in [
+        ("demo/__init__.py", "__version__ = '1.0.0'\n"),
+        (
+            "demo-2.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: demo\nVersion: 1.0.0\n",
+        ),
+        (
+            "demo-2.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        ("demo-2.0.0.dist-info/RECORD", record_contents),
+    ] {
+        let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+    }
+    wheel.write_binary(&block_on(writer.close())?)?;
+    context.pip_install().arg(wheel.path()).assert().success();
+    let record = context.site_packages().join("demo-2.0.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel.path()).arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/demo-2.0.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - demo==2.0.0 (from file://[TEMP_DIR]/demo-1.0.0-py3-none-any.whl)
+     + demo==1.0.0 (from file://[TEMP_DIR]/demo-1.0.0-py3-none-any.whl)
+    ");
+    assert!(record.is_file());
+    context.assert_installed("demo", "1.0.0");
+    Ok(())
+}
+
 /// The filename-check escape hatch permits an in-place repair from an inconsistent wheel.
 #[test]
 fn reinstall_incomplete_disabled_filename_validation() -> Result<()> {

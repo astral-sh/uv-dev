@@ -441,8 +441,9 @@ impl InstallationPlan {
             return Ok(Changelog::default());
         }
 
-        // Reject version changes only when the artifact establishes its version. The prepared
-        // metadata directory remains authoritative for local sources and local versions.
+        // Reject version changes only when both the replacement artifact and installed metadata
+        // establish their versions. The prepared metadata directory remains authoritative when
+        // an installed directory name disagrees with its metadata, or for local sources/versions.
         let check_wheel_filenames =
             !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK);
         let replacement_versions = resolution
@@ -467,6 +468,9 @@ impl InstallationPlan {
                     (*is_source || check_wheel_filenames)
                         && version.clone().without_local()
                             != dist_info.version().clone().without_local()
+                        && dist_info
+                            .read_metadata()
+                            .is_ok_and(|metadata| metadata.version == *dist_info.version())
                 }))
         })?;
 
