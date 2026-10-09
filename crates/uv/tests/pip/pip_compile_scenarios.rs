@@ -20,7 +20,7 @@ use uv_test::{TestContext, get_bin, python_path_with_versions, uv_snapshot};
 fn command(context: &TestContext, python_versions: &[&str], server: &PackseServer) -> Command {
     let python_path = python_path_with_versions(&context.temp_dir, python_versions)
         .expect("Failed to create Python test path");
-    let mut command = Command::new(get_bin!());
+    let mut command = context.external_command(get_bin!());
     command
         .arg("pip")
         .arg("compile")

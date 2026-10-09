@@ -3,7 +3,6 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use insta::assert_snapshot;
 use serde_json::json;
-use std::process::Command;
 
 use uv_fs::Simplified;
 use uv_static::EnvVars;
@@ -192,7 +191,7 @@ fn sync_centralized_env_survives_python_patch_upgrade() -> Result<()> {
         first.join("bin/python")
     };
     context.python_install().arg("3.12.11").assert().success();
-    uv_snapshot!(context.filters(), Command::new(&python).arg("--version"), @r#"
+    uv_snapshot!(context.filters(), context.external_command(&python).arg("--version"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.11
@@ -859,7 +858,7 @@ fn sync_replaces_environment_links_without_removing_cached_targets() -> Result<(
     } else {
         target.join("bin/python")
     };
-    uv_snapshot!(context.filters(), Command::new(python).arg("--version"), @r#"
+    uv_snapshot!(context.filters(), context.external_command(python).arg("--version"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]

@@ -2107,7 +2107,7 @@ fn path_with_trailing_space_gives_proper_error() {
         r"CACHEDIR.TAG`: .* \(os error 3\)",
         "CACHEDIR.TAG`: The system cannot find the path specified. (os error 3)",
     ));
-    uv_snapshot!(context.filters(), std::process::Command::new(uv_test::get_bin!())
+    uv_snapshot!(context.filters(), context.external_command(uv_test::get_bin!())
         .arg("venv")
         .env(EnvVars::UV_CACHE_DIR, path_with_trailing_slash), @r###"
     exit_code: 2 (failure)
@@ -2173,7 +2173,6 @@ fn create_venv_apostrophe() {
     use std::env;
     use std::ffi::OsString;
     use std::io::Write;
-    use std::process::Command;
     use std::process::Stdio;
 
     let context = uv_test::test_context_with_versions!(&["3.12"]);
@@ -2195,7 +2194,8 @@ fn create_venv_apostrophe() {
     // One of them should be commonly available on a linux developer machine, if not, we have to
     // extend the fallbacks.
     let shell = env::var_os(EnvVars::SHELL).unwrap_or(OsString::from("bash"));
-    let mut child = Command::new(shell)
+    let mut child = context
+        .external_command(shell)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .current_dir(&venv_dir)

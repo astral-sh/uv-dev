@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(feature = "test-git")]
 use std::ffi::OsString;
-use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -127,7 +126,7 @@ fn tool_install() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     black, 24.3.0 (compiled: yes)
@@ -178,7 +177,7 @@ fn tool_install() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
@@ -369,7 +368,7 @@ fn tool_install_from_directory_ignores_global_pin_outside_requires_python_range(
     Installed 1 executable: foo
     ");
 
-    uv_snapshot!(context.filters(), Command::new("foo")
+    uv_snapshot!(context.filters(), context.external_command("foo")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -442,7 +441,7 @@ fn tool_install_from_directory_uses_global_pin_within_requires_python_range() {
     Installed 1 executable: foo
     ");
 
-    uv_snapshot!(context.filters(), Command::new("foo")
+    uv_snapshot!(context.filters(), context.external_command("foo")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -486,7 +485,7 @@ fn tool_install_python_from_global_version_file() {
     ");
 
     // It should use the version from the global file
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
@@ -511,7 +510,7 @@ fn tool_install_python_from_global_version_file() {
     `flask` is already installed
     ");
 
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
@@ -532,7 +531,7 @@ fn tool_install_python_from_global_version_file() {
     ");
 
     // This will not change to the new global pin, since there was not a reinstall request
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
@@ -563,7 +562,7 @@ fn tool_install_python_from_global_version_file() {
 
     // This will change to the new global pin, since there was not an explicit request recorded in
     // the receipt
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.13.[X]
@@ -593,7 +592,7 @@ fn tool_install_python_from_global_version_file() {
     Installed 1 executable: flask
     ");
 
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.11.[X]
@@ -623,7 +622,7 @@ fn tool_install_python_from_global_version_file() {
     ");
 
     // We should continue to use the version from the install, not the global pin
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.11.[X]
@@ -665,7 +664,7 @@ fn tool_install_force_respects_global_python_change() {
     Installed 1 executable: flask
     ");
 
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
@@ -699,7 +698,7 @@ fn tool_install_force_respects_global_python_change() {
     Installed 1 executable: flask
     ");
 
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.13.[X]
@@ -812,7 +811,7 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
         .expect("failed to run uv tool install with --with-editable");
     assert!(status.success());
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, with_editable_bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, with_editable_bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -822,7 +821,7 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, with_editable_bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, with_editable_bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     CHANGED
@@ -845,7 +844,7 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
         .expect("failed to run uv tool install with --with");
     assert!(status.success());
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, with_bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, with_bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -855,7 +854,7 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, with_bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, with_bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -951,7 +950,7 @@ fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
         .expect("failed to run uv tool install with mixed workspace editability");
     assert!(status.success());
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.0 OK
@@ -961,7 +960,7 @@ fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.0 CHANGED
@@ -1058,7 +1057,7 @@ fn tool_install_preserves_mixed_workspace_member_non_editability() -> Result<()>
         .expect("failed to run uv tool install with mixed workspace editability");
     assert!(status.success());
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.0 OK
@@ -1068,7 +1067,7 @@ fn tool_install_preserves_mixed_workspace_member_non_editability() -> Result<()>
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.0 OK
@@ -1151,7 +1150,7 @@ fn tool_install_reinstall_converts_workspace_members_to_non_editable() -> Result
     Installed 1 executable: root_cli
     ");
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -1170,7 +1169,7 @@ fn tool_install_reinstall_converts_workspace_members_to_non_editable() -> Result
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -1252,7 +1251,7 @@ fn tool_install_workspace_members_are_non_editable_by_default() -> Result<()> {
     Installed 1 executable: root_cli
     ");
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -1262,7 +1261,7 @@ fn tool_install_workspace_members_are_non_editable_by_default() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -1345,7 +1344,7 @@ fn tool_install_workspace_members_honor_editable_flag() -> Result<()> {
     Installed 1 executable: root_cli
     ");
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -1355,7 +1354,7 @@ fn tool_install_workspace_members_honor_editable_flag() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     CHANGED
@@ -1439,7 +1438,7 @@ fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
     Installed 1 executable: root_cli
     ");
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     ROOT OK
@@ -1455,7 +1454,7 @@ fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
         "
     })?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     ROOT OK
@@ -1465,7 +1464,7 @@ fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     ROOT CHANGED
@@ -1710,7 +1709,7 @@ fn tool_install_version() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     black, 24.2.0 (compiled: yes)
@@ -1787,7 +1786,7 @@ fn tool_install_editable() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hello world!
@@ -2037,7 +2036,7 @@ fn tool_install_explicit_local_directory_respects_global_python_change() -> Resu
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), Command::new("local-tool")
+    uv_snapshot!(context.filters(), context.external_command("local-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2058,7 +2057,7 @@ fn tool_install_explicit_local_directory_respects_global_python_change() -> Resu
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), Command::new("local-tool")
+    uv_snapshot!(context.filters(), context.external_command("local-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2139,7 +2138,7 @@ fn tool_install_rebuilds_explicit_local_with_requirement() -> Result<()> {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), Command::new("local-tool")
+    uv_snapshot!(context.filters(), context.external_command("local-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2157,7 +2156,7 @@ fn tool_install_rebuilds_explicit_local_with_requirement() -> Result<()> {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), Command::new("local-tool")
+    uv_snapshot!(context.filters(), context.external_command("local-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2177,7 +2176,7 @@ fn tool_install_rebuilds_explicit_local_with_requirement() -> Result<()> {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), Command::new("local-tool")
+    uv_snapshot!(context.filters(), context.external_command("local-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2388,7 +2387,7 @@ fn tool_install_editable_from() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hello world!
@@ -2840,7 +2839,7 @@ fn tool_install_force() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     black, 24.3.0 (compiled: yes)
@@ -3235,7 +3234,7 @@ fn tool_install_unnamed_package() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     black, 24.4.2 (compiled: no)
@@ -3342,7 +3341,7 @@ fn tool_install_git_infers_static_requires_python() {
     Installed 1 executable: static-requires-python-tool
     ");
 
-    uv_snapshot!(context.filters(), Command::new("static-requires-python-tool")
+    uv_snapshot!(context.filters(), context.external_command("static-requires-python-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -3462,13 +3461,13 @@ fn tool_install_git_lfs() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("test-lfs-repo").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("test-lfs-repo").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hello from test-lfs-repo!
     ");
 
-    uv_snapshot!(context.filters(), Command::new("test-lfs-repo-assets").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("test-lfs-repo-assets").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hello from test-lfs-repo! LFS_TEST=True ANOTHER_LFS_TEST=True
@@ -3515,7 +3514,7 @@ fn tool_install_git_lfs() {
     ");
 
     #[cfg(not(windows))]
-    uv_snapshot!(context.filters(), Command::new("test-lfs-repo-assets").env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
+    uv_snapshot!(context.filters(), context.external_command("test-lfs-repo-assets").env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
     exit_code: [ERROR_CODE] (failure)
     ----- stderr -----
     Traceback (most recent call last):
@@ -3531,7 +3530,7 @@ fn tool_install_git_lfs() {
     "#);
 
     #[cfg(windows)]
-    uv_snapshot!(context.filters(), Command::new("test-lfs-repo-assets").env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
+    uv_snapshot!(context.filters(), context.external_command("test-lfs-repo-assets").env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
     exit_code: [ERROR_CODE] (failure)
     ----- stderr -----
     Traceback (most recent call last):
@@ -3646,7 +3645,7 @@ fn tool_install_unnamed_from() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     black, 24.4.2 (compiled: no)
@@ -3734,7 +3733,7 @@ fn tool_install_unnamed_with() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.external_command("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     black, 24.3.0 (compiled: yes)
@@ -5522,7 +5521,7 @@ fn tool_install_with_executables_from() -> Result<()> {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new(bin_dir.join("dep-one")), @"
+    uv_snapshot!(context.filters(), context.external_command(bin_dir.join("dep-one")), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hello from dependency-tool!
@@ -5565,7 +5564,7 @@ fn tool_install_sdist_entry_point() -> Result<()> {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), Command::new(bin_dir.join("scenario.tool")), @"
+    uv_snapshot!(context.filters(), context.external_command(bin_dir.join("scenario.tool")), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hello from scenario-tool!

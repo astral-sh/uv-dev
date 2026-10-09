@@ -396,7 +396,7 @@ fn render_compile(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
         "    let python_path = python_path_with_versions(&context.temp_dir, python_versions)\n",
     );
     output.push_str("        .expect(\"Failed to create Python test path\");\n");
-    output.push_str("    let mut command = Command::new(get_bin!());\n");
+    output.push_str("    let mut command = context.external_command(get_bin!());\n");
     output.push_str("    command\n");
     output.push_str("        .arg(\"pip\")\n");
     output.push_str("        .arg(\"compile\")\n");

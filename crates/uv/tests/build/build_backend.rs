@@ -8,7 +8,6 @@ use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_json_snapshot, assert_snapshot};
 use std::io::BufReader;
 use std::path::Path;
-use std::process::Command;
 use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
 use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -88,7 +87,7 @@ fn built_by_uv_direct_wheel() -> Result<()> {
     Area of a circle with r=2: 12.56636
     ");
 
-    uv_snapshot!(Command::new("say-hi")
+    uv_snapshot!(context.external_command("say-hi")
         .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -301,7 +300,7 @@ fn preserve_executable_bit() -> Result<()> {
         .join("preserve_executable_bit-0.1.0-py3-none-any.whl");
     context.pip_install().arg(wheel).assert().success();
 
-    uv_snapshot!(Command::new("greet.sh")
+    uv_snapshot!(context.external_command("greet.sh")
         .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
     exit_code: 0 (success)
     ----- stdout -----

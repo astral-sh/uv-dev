@@ -1,7 +1,9 @@
 #[cfg(windows)]
 use std::path::PathBuf;
 
-use std::{env, path::Path, process::Command};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use std::process::Command;
+use std::{env, path::Path};
 
 use anyhow::Context;
 use assert_cmd::assert::OutputAssertExt;
@@ -67,7 +69,7 @@ fn python_install() {
     }
 
     // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.as_os_str())
         .arg("-c").arg("import subprocess; print('hello world')"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -594,7 +596,7 @@ fn python_install_preview() {
     }
 
     // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.as_os_str())
         .arg("-c").arg("import subprocess; print('hello world')"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -1035,7 +1037,7 @@ fn python_install_freethreaded() {
     bin_python.assert(predicate::path::is_symlink());
 
     // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.as_os_str())
         .arg("-c").arg("import subprocess; print('hello world')"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -1334,7 +1336,7 @@ fn python_install_debug() {
     bin_python.assert(predicate::path::is_symlink());
 
     // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.as_os_str())
         .arg("-c").arg("import subprocess; print('hello world')"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -1433,7 +1435,7 @@ fn python_install_debug_freethreaded() {
     bin_python.assert(predicate::path::is_symlink());
 
     // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.as_os_str())
         .arg("-c").arg("import subprocess; print('hello world')"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2217,7 +2219,7 @@ fn python_install_relative_unmanaged_link() -> anyhow::Result<()> {
         fs_err::read_link(&bin_python)?,
         Path::new("unmanaged-python")
     );
-    uv_snapshot!(context.filters(), Command::new(bin_python.path())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.path())
         .args(["-I", "-c", "import sys; print('.'.join(map(str, sys.version_info[:2])))"]), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2238,7 +2240,7 @@ fn python_install_relative_unmanaged_link() -> anyhow::Result<()> {
             canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13"
         );
     });
-    uv_snapshot!(context.filters(), Command::new(bin_python.path())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.path())
         .args(["-I", "-c", "import sys; print(sys.version.split()[0])"]), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2287,7 +2289,7 @@ fn python_install_relative_broken_link() -> anyhow::Result<()> {
             canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13"
         );
     });
-    uv_snapshot!(context.filters(), Command::new(bin_python.path())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.path())
         .args(["-I", "-c", "import sys; print(sys.version.split()[0])"]), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -3505,7 +3507,7 @@ fn python_install_pyodide() {
     });
 
     // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.as_os_str())
         .arg("-c").arg("import subprocess; print('hello world')"), @"
     exit_code: 0 (success)
     ----- stdout -----
