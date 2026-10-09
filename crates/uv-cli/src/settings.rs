@@ -22,9 +22,10 @@ use uv_configuration::{
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
     KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
-    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
-    TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
+    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonInstallDefault,
+    PythonInstallForce, PythonReinstall, PythonUpgrade, PythonUpgradeSource, Reinstall,
+    RequiredVersion, RequirementsInput, ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost,
+    TrustedPublishing, Upgrade, VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
@@ -1519,13 +1520,13 @@ impl PythonDirSettings {
 pub struct PythonInstallSettings {
     pub install_dir: Option<PathBuf>,
     pub targets: Vec<String>,
-    pub reinstall: bool,
-    pub force: bool,
+    pub reinstall: PythonReinstall,
+    pub force: PythonInstallForce,
     pub upgrade: PythonUpgrade,
     pub bin: Option<bool>,
     pub registry: Option<bool>,
     pub install_mirrors: PythonInstallMirrors,
-    pub default: bool,
+    pub default: PythonInstallDefault,
     pub compile_bytecode: bool,
 }
 
@@ -1567,8 +1568,8 @@ impl PythonInstallSettings {
         Ok(Self {
             install_dir,
             targets,
-            reinstall,
-            force,
+            reinstall: reinstall.into(),
+            force: force.into(),
             upgrade: if upgrade {
                 PythonUpgrade::Enabled(PythonUpgradeSource::Install)
             } else {
@@ -1586,7 +1587,7 @@ impl PythonInstallSettings {
                 ),
             },
             install_mirrors,
-            default,
+            default: default.into(),
             compile_bytecode: flag(
                 compile_bytecode.compile_bytecode,
                 compile_bytecode.no_compile_bytecode,
@@ -1598,16 +1599,15 @@ impl PythonInstallSettings {
 }
 
 /// The resolved settings to use for a `python upgrade` invocation.
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct PythonUpgradeSettings {
     pub install_dir: Option<PathBuf>,
     pub targets: Vec<String>,
-    pub force: bool,
+    pub force: PythonInstallForce,
     pub registry: Option<bool>,
     pub install_mirrors: PythonInstallMirrors,
-    pub reinstall: bool,
-    pub default: bool,
+    pub reinstall: PythonReinstall,
+    pub default: PythonInstallDefault,
     pub bin: Option<bool>,
     pub compile_bytecode: bool,
 }
@@ -1654,11 +1654,11 @@ impl PythonUpgradeSettings {
         Ok(Self {
             install_dir,
             targets,
-            force,
+            force: force.into(),
             registry,
             install_mirrors,
-            reinstall,
-            default,
+            reinstall: reinstall.into(),
+            default: default.into(),
             bin,
             compile_bytecode: flag(
                 compile_bytecode.compile_bytecode,
