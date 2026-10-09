@@ -69,6 +69,72 @@ fn add_reachability<'lock>(
     }
 }
 
+/// Resolve certain project and extra requests before evaluating sibling version guards.
+fn resolve_conflict_activations<'lock>(
+    lock: &'lock Lock,
+    known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
+    reachability: &FxHashMap<(PackageIndex, Option<&'lock ExtraName>), UniversalMarker>,
+) -> FxHashMap<ConflictItem, MarkerTree> {
+    let mut pending = FxHashMap::<ConflictItem, MarkerTree>::default();
+    for ((index, extra), marker) in reachability {
+        let package = lock.package(*index);
+        let item = if let Some(extra) = extra {
+            ConflictItem::from((package.name().clone(), (*extra).clone()))
+        } else if lock.is_workspace_package(package) {
+            ConflictItem::from(package.name().clone())
+        } else {
+            continue;
+        };
+        if !lock
+            .conflicts()
+            .contains(item.package(), item.kind().as_ref())
+        {
+            continue;
+        }
+        pending
+            .entry(item)
+            .and_modify(|current| *current = current.or(marker.combined()))
+            .or_insert(marker.combined());
+    }
+
+    let mut resolved = known_conflicts
+        .iter()
+        .filter(|(_, marker)| !UniversalMarker::from_combined(**marker).has_conflict_marker())
+        .map(|(item, marker)| (item.clone(), *marker))
+        .collect::<FxHashMap<_, _>>();
+    for item in lock.conflicts().iter().flat_map(ConflictSet::iter) {
+        if !pending.contains_key(item) {
+            resolved.entry(item.clone()).or_insert(MarkerTree::FALSE);
+        }
+    }
+    while !pending.is_empty() {
+        let mut substitutions = resolved.clone();
+        for item in pending.keys() {
+            substitutions.entry(item.clone()).or_insert_with(|| {
+                UniversalMarker::new(MarkerTree::TRUE, ConflictMarker::from_conflict_item(item))
+                    .combined()
+            });
+        }
+        let remaining = pending.len();
+        pending.retain(|item, marker| {
+            let marker = resolve_activated_extras(*marker, Some(item.package()), &substitutions);
+            if UniversalMarker::from_combined(marker).has_conflict_marker() {
+                return true;
+            }
+            resolved
+                .entry(item.clone())
+                .and_modify(|current| *current = current.or(marker))
+                .or_insert(marker);
+            false
+        });
+        // Every successful pass resolves a pending selection, so cycles cannot prevent termination.
+        if pending.len() == remaining {
+            break;
+        }
+    }
+    resolved
+}
+
 /// Returns the dependencies a queued package contributes, either its own or those of one extra.
 fn package_dependencies<'a>(
     package: &'a Package,
@@ -145,9 +211,10 @@ pub trait Installable<'lock> {
             .flat_map(ConflictSet::iter)
             .map(|item| {
                 let selected = match item.kind() {
-                    ConflictKind::Extra(extra) => roots
-                        .contains(item.package())
-                        .then(|| groups.prod() && extras.contains(extra)),
+                    ConflictKind::Extra(extra) => {
+                        (roots.contains(item.package()) && groups.prod() && extras.contains(extra))
+                            .then_some(true)
+                    }
                     ConflictKind::Group(group) => (roots.contains(item.package())
                         || group_root == Some(item.package()))
                     .then(|| self.includes_group(Some(item.package()), group, groups)),
@@ -203,8 +270,8 @@ pub trait Installable<'lock> {
                                  selected: &FxHashMap<ConflictItem, MarkerTree>|
          -> Result<UniversalMarker, LockError> {
             let marker = dependency.activation_marker(requirements, lock, self.install_path())?;
-            let mut marker =
-                resolve_activated_extras(marker, Some(parent.name()), selected).without_extras();
+            // Keep selectors until dependency requests on sibling paths have been collected.
+            let mut marker = resolve_activated_extras(marker, Some(parent.name()), selected);
             let target = lock.package(dependency.index);
             if !target.fork_markers.is_empty() {
                 marker = marker.and(
@@ -214,12 +281,13 @@ pub trait Installable<'lock> {
                         .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508())),
                 );
             }
-            if marker_env.is_some_and(|environment| !marker.evaluate(environment.markers(), &[])) {
+            if marker_env.is_some_and(|environment| {
+                !marker.without_extras().evaluate(environment.markers(), &[])
+            }) {
                 marker = MarkerTree::FALSE;
             }
             Ok(UniversalMarker::from_combined(marker))
         };
-        let mut members = BTreeSet::new();
         let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
         let mut reachability = FxHashMap::default();
 
@@ -329,9 +397,6 @@ pub trait Installable<'lock> {
         while let Some((index, extra)) = queue.pop_front() {
             let parent_marker = reachability[&(index, extra)];
             let package = lock.package(index);
-            if lock.is_workspace_package(package) {
-                members.insert(package.name());
-            }
             let context = extra.map_or(DependencyContext::Production, DependencyContext::Extra);
             let requirements = package.dependency_requirements(
                 context,
@@ -363,6 +428,26 @@ pub trait Installable<'lock> {
             }
         }
 
+        let activated = resolve_conflict_activations(lock, &known_conflicts, &reachability);
+        let members = reachability
+            .into_iter()
+            .filter_map(|((index, extra), marker)| {
+                let package = lock.package(index);
+                if extra.is_some() || !lock.is_workspace_package(package) {
+                    return None;
+                }
+                let marker =
+                    resolve_activated_extras(marker.combined(), Some(package.name()), &activated)
+                        .without_extras();
+                if marker.is_false()
+                    || marker_env
+                        .is_some_and(|environment| !marker.evaluate(environment.markers(), &[]))
+                {
+                    return None;
+                }
+                Some(package.name())
+            })
+            .collect();
         Ok(members)
     }
 
