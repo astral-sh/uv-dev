@@ -796,23 +796,26 @@ fn workspace_metadata_script_stdin_sync() -> Result<()> {
         "metadata_stdin-0.1.0",
         &[("metadata_stdin/__init__.py", "")],
     )?;
-    let wheel_url = Url::from_file_path(wheel.path())
-        .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
-
+    // Stdin source paths are relative to the working directory, even with another project root.
+    context.temp_dir.child("other-dir").create_dir_all()?;
     let script = context.temp_dir.child("script.py");
-    script.write_str(&format!(
+    script.write_str(
         r#"# /// script
 # requires-python = ">=3.12"
-# dependencies = ["metadata-stdin @ {wheel_url}"]
+# dependencies = ["metadata-stdin"]
+# [tool.uv.sources]
+# metadata-stdin = { path = "metadata_stdin-0.1.0-py3-none-any.whl" }
 # ///
-"#
-    ))?;
+"#,
+    )?;
 
     let assert = context
         .workspace_metadata()
         .arg("--script")
         .arg("-")
         .arg("--sync")
+        .arg("--project")
+        .arg("other-dir")
         .stdin(File::open(script.path())?.into_file())
         .assert()
         .success();
