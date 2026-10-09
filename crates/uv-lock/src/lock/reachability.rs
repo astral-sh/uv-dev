@@ -9,7 +9,7 @@ use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use uv_normalize::{ExtraName, GroupName};
 use uv_pep508::MarkerTree;
-use uv_pypi_types::{ConflictItem, ConflictSet};
+use uv_pypi_types::{ConflictItem, ConflictKindRef, ConflictSet};
 use uv_resolver_types::graph_ops::{Reachable, marker_reachability};
 use uv_resolver_types::universal_marker::resolve_activated_extras;
 use uv_resolver_types::{ConflictMarker, UniversalMarker};
@@ -204,7 +204,8 @@ impl<'lock> ConflictRequests<'lock> {
     ) -> impl Iterator<Item = Result<(PackageIndex, Option<ExtraName>, MarkerTree), LockError>>
     {
         let known_conflicts = self.global_conflicts(known_conflicts);
-        let reachability = conflict_marker_reachability(&self.graph, &[], &known_conflicts);
+        let reachability =
+            conflict_marker_reachability(self.lock, &self.graph, &[], &known_conflicts);
         let lock = self.lock;
         self.nodes
             .into_iter()
@@ -299,6 +300,7 @@ impl Reachable<MarkerTree> for Edge<'_> {
 /// when evaluating the marker for the node, we inline the conflict marker conditions, thus removing
 /// all conflict items from the marker expression.
 pub(super) fn conflict_marker_reachability<'lock>(
+    lock: &Lock,
     graph: &Graph<Node<'lock>, Edge<'lock>>,
     fork_markers: &[Edge<'lock>],
     known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
@@ -370,6 +372,16 @@ pub(super) fn conflict_marker_reachability<'lock>(
                 .unwrap_or_else(|| known_conflicts.clone());
 
             if let Node::Package(child, requested_extra) = &graph[child_edge.target()] {
+                // A dependency can request a workspace project's production context without
+                // selecting it as an installation root, including through a dependency group.
+                if requested_extra.is_none()
+                    && lock
+                        .conflicts()
+                        .contains(child.name(), ConflictKindRef::Project)
+                    && lock.is_workspace_package(child)
+                {
+                    parent_map.insert(ConflictItem::from(child.name().clone()), parent_marker);
+                }
                 for extra in child_edge
                     .weight()
                     .dep_extras()

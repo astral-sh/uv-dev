@@ -14357,6 +14357,115 @@ fn requirements_txt_undefined_registry_extra_conflict() -> Result<()> {
     Ok(())
 }
 
+/// Group dependencies activate workspace projects under the requesting group's marker.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_only_group_tracks_workspace_project_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["child; python_full_version < '3.13'"]
+        unused = []
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "child" }, { group = "unused" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "child" },
+            { package = "project", group = "unused" },
+        ]]
+
+        [manifest]
+        members = ["child", "project"]
+
+        [[package]]
+        name = "child"
+        version = "0.1.0"
+        source = { virtual = "child" }
+        dependencies = [{ name = "leaf", marker = "extra == 'project-5-child'" }]
+        [package.metadata]
+        requires-dist = [{ name = "leaf" }]
+
+        [[package]]
+        name = "leaf"
+        version = "1.0.0"
+        source = { registry = "https://example.com/simple" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        [package.dev-dependencies]
+        dev = [{ name = "child", marker = "python_full_version < '3.13'" }]
+        unused = []
+        [package.metadata.requires-dev]
+        dev = [{ name = "child", virtual = "child", marker = "python_full_version < '3.13'" }]
+        unused = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--only-group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==1.0.0 ; python_full_version < '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--all-packages", "--only-group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==1.0.0 ; python_full_version < '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--all-packages", "--only-group", "dev", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "leaf"
+    version = "1.0.0"
+    marker = "python_full_version < '3.13'"
+    index = "https://example.com/simple"
+    "#);
+    Ok(())
+}
+
 /// Group-only exports retain conditional dependencies from legacy project-conflict markers.
 #[cfg(feature = "test-universal")]
 #[test]
