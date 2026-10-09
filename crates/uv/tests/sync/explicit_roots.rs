@@ -3559,3 +3559,183 @@ fn explicit_roots_export_conflicts_use_root_python_domains() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Conflicting extras follow the disjoint Python domains of their owning roots.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_export_extras_use_root_python_domains() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["root-a", "root-b"]
+        roots = ["root-a", "root-b"]
+        [tool.uv]
+        conflicts = [[{ package = "root-a", extra = "feature" }, { package = "root-b", extra = "feature" }]]
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        [project.optional-dependencies]
+        feature = []
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/src/root_a/__init__.py")
+        .touch()?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = "==3.13.*"
+        [project.optional-dependencies]
+        feature = []
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/src/root_b/__init__.py")
+        .touch()?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-index", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--all-packages", "--extra", "feature", "--no-default-groups", "--format", "requirements.txt",
+        "--no-header", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./root-a ; python_full_version < '3.13'
+    -e ./root-b ; python_full_version >= '3.13'
+    ");
+    context.temp_dir.child("root-b/pyproject.toml").write_str(
+        &context
+            .read("root-b/pyproject.toml")
+            .replace("==3.13.*", "==3.12.*"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-index", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--all-packages", "--extra", "feature", "--no-default-groups", "--format", "requirements.txt",
+        "--no-header", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extras `feature` and `feature` are incompatible with the declared conflicts: {`root-a[feature]`, `root-b[feature]`}
+    ");
+    Ok(())
+}
+
+/// Conflicting groups follow the disjoint Python domains of their owning roots.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_export_groups_use_root_python_domains() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["root-a", "root-b"]
+        roots = ["root-a", "root-b"]
+        [tool.uv]
+        conflicts = [[{ package = "root-a", group = "feature" }, { package = "root-b", group = "feature" }]]
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        [dependency-groups]
+        feature = []
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/src/root_a/__init__.py")
+        .touch()?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = "==3.13.*"
+        [dependency-groups]
+        feature = []
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/src/root_b/__init__.py")
+        .touch()?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-index", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--all-packages", "--group", "feature", "--no-default-groups", "--format", "requirements.txt",
+        "--no-header", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./root-a ; python_full_version < '3.13'
+    -e ./root-b ; python_full_version >= '3.13'
+    ");
+    context.temp_dir.child("root-b/pyproject.toml").write_str(
+        &context
+            .read("root-b/pyproject.toml")
+            .replace("==3.13.*", "==3.12.*"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-index", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--all-packages", "--group", "feature", "--no-default-groups", "--format", "requirements.txt",
+        "--no-header", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Groups `feature` and `feature` are incompatible with the conflicts: {`root-a:feature`, `root-b:feature`}
+    ");
+    Ok(())
+}
