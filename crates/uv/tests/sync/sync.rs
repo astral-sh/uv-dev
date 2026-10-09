@@ -9870,31 +9870,34 @@ fn no_binary_package_empty_environment_variable() -> Result<()> {
 }
 
 #[test]
-fn no_binary_error() -> Result<()> {
+fn no_binary_relocks_to_source_distribution() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let server = PackseServer::new("wheels/build-policy-relock.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["odrive"]
-        "#,
-    )?;
-
-    context.lock().assert().success();
-
-    uv_snapshot!(context.filters(), context.sync().arg("--no-binary-package").arg("odrive"), @"
-    exit_code: 2 (failure)
+        dependencies = ["a"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).args(["--no-binary-package", "a"]), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    Resolved 31 packages in [TIME]
-    error: Distribution `odrive==0.6.8 @ registry+https://pypi.org/simple` can't be installed because it is marked as `--no-binary` but has no source distribution
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
     ");
-
     assert!(context.temp_dir.child("uv.lock").exists());
-
     Ok(())
 }
 
@@ -9963,31 +9966,39 @@ fn no_build_error() -> Result<()> {
         .success();
 
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--no-build-package").arg("a"), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
-    error: Distribution `a==1.0.0 @ registry+http://[LOCALHOST]/simple/` can't be installed because it is marked as `--no-build` but has no binary distribution
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--no-build"), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
-    error: Distribution `a==1.0.0 @ registry+http://[LOCALHOST]/simple/` can't be installed because it is marked as `--no-build` but has no binary distribution
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Wheels are required for `a` because building from source is disabled for all packages (i.e., with `--no-build`)
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--reinstall").env(EnvVars::UV_NO_BUILD, "1"), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
-    error: Distribution `a==1.0.0 @ registry+http://[LOCALHOST]/simple/` can't be installed because it is marked as `--no-build` but has no binary distribution
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Wheels are required for `a` because building from source is disabled for all packages (i.e., with `--no-build`)
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--reinstall").env(EnvVars::UV_NO_BUILD_PACKAGE, "a"), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
-    error: Distribution `a==1.0.0 @ registry+http://[LOCALHOST]/simple/` can't be installed because it is marked as `--no-build` but has no binary distribution
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--reinstall").env(EnvVars::UV_NO_BUILD, "a"), @"
