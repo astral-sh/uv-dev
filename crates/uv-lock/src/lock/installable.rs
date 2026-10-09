@@ -10,23 +10,23 @@ use petgraph::Graph;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_configuration::{
-    BuildOptions, DependencyGroupsWithDefaults, DependencyModifierScope, DependencyModifiers,
-    Excludes, ExtrasSpecification, ExtrasSpecificationWithDefaults, InstallOptions, Overrides,
+    BuildOptions, DependencyGroupsWithDefaults, DependencyModifierScope, ExtrasSpecification,
+    ExtrasSpecificationWithDefaults, InstallOptions,
 };
-use uv_distribution_types::{Edge, FirstParty, Node, Resolution, ResolvedDist};
+use uv_distribution_types::{Edge, FirstParty, Node, Requirement, Resolution, ResolvedDist};
 use uv_normalize::{DefaultExtras, ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
-use uv_pypi_types::{ConflictKind, ConflictSet, ResolverMarkerEnvironment};
+use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 
-use uv_resolver_types::UniversalMarker;
-use uv_resolver_types::universal_marker::ActivatedConflictItems;
+use uv_resolver_types::universal_marker::{ActivatedConflictItems, resolve_activated_extras};
+use uv_resolver_types::{ConflictMarker, UniversalMarker};
 
 use crate::lock::{
-    Dependency, DependencySelectionContext, HashedDist, LockErrorKind, Package, PackageIndex,
-    SelectedDependency, TagPolicy, normalize_requirement,
+    Dependency, DependencyContext, DependencySelectionContext, HashedDist, LockErrorKind, Package,
+    PackageIndex, SelectedDependency, TagPolicy, normalize_requirement,
 };
-use crate::{Lock, LockError};
+use crate::{Lock, LockError, implicit_constraints_marker};
 
 fn newly_activated_extras<'lock>(
     dep: &'lock Dependency,
@@ -87,7 +87,7 @@ fn package_dependencies<'a>(
 
 /// Determines which dependencies are included from an install target root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InstallableRootKind {
+pub(crate) enum InstallableRootKind {
     /// Include the root's production dependencies and selected dependency groups.
     Production,
     /// Include only the root's selected dependency groups.
@@ -126,30 +126,116 @@ pub trait Installable<'lock> {
         &self,
         extras: &ExtrasSpecification,
         groups: &DependencyGroupsWithDefaults,
+        marker_env: Option<&ResolverMarkerEnvironment>,
     ) -> Result<BTreeSet<&'lock PackageName>, LockError> {
         let lock = self.lock();
+        let modifiers = lock.dependency_modifiers()?;
+        let roots = self.roots().collect::<FxHashSet<_>>();
+        let group_root = self.group_root(groups);
+        let root_marker = UniversalMarker::from_combined(implicit_constraints_marker(
+            lock.requires_python().to_marker_tree(),
+            lock.supported_environments(),
+        ));
+        let known_conflicts = lock
+            .conflicts()
+            .iter()
+            .flat_map(ConflictSet::iter)
+            .map(|item| {
+                let selected = match item.kind() {
+                    ConflictKind::Extra(extra) => roots
+                        .contains(item.package())
+                        .then(|| groups.prod() && extras.contains(extra)),
+                    ConflictKind::Group(group) => (roots.contains(item.package())
+                        || group_root == Some(item.package()))
+                    .then(|| self.includes_group(Some(item.package()), group, groups)),
+                    ConflictKind::Project => {
+                        (groups.prod() && roots.contains(item.package())).then_some(true)
+                    }
+                };
+                let marker = selected.map_or_else(
+                    || {
+                        // Unresolved transitive selections remain possible until a path requests them.
+                        UniversalMarker::new(
+                            MarkerTree::TRUE,
+                            ConflictMarker::from_conflict_item(item),
+                        )
+                        .combined()
+                    },
+                    |selected| {
+                        if selected {
+                            MarkerTree::TRUE
+                        } else {
+                            MarkerTree::FALSE
+                        }
+                    },
+                );
+                (item.clone(), marker)
+            })
+            .collect::<FxHashMap<_, _>>();
+        let selected_conflicts = |parent: &Package, context: DependencyContext<'_>| {
+            let mut selected = known_conflicts.clone();
+            match context {
+                DependencyContext::Production => {
+                    selected.insert(ConflictItem::from(parent.name().clone()), MarkerTree::TRUE);
+                }
+                DependencyContext::Extra(extra) => {
+                    selected.insert(ConflictItem::from(parent.name().clone()), MarkerTree::TRUE);
+                    selected.insert(
+                        ConflictItem::from((parent.name().clone(), extra.clone())),
+                        MarkerTree::TRUE,
+                    );
+                }
+                DependencyContext::Group(group) => {
+                    selected.insert(
+                        ConflictItem::from((parent.name().clone(), group.clone())),
+                        MarkerTree::TRUE,
+                    );
+                }
+            }
+            selected
+        };
+        let dependency_marker = |dependency: &Dependency,
+                                 requirements: Option<&[Requirement]>,
+                                 parent: &Package,
+                                 selected: &FxHashMap<ConflictItem, MarkerTree>|
+         -> Result<UniversalMarker, LockError> {
+            let marker = dependency.activation_marker(requirements, lock, self.install_path())?;
+            let mut marker =
+                resolve_activated_extras(marker, Some(parent.name()), selected).without_extras();
+            let target = lock.package(dependency.index);
+            if !target.fork_markers.is_empty() {
+                marker = marker.and(
+                    target
+                        .fork_markers
+                        .iter()
+                        .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508())),
+                );
+            }
+            if marker_env.is_some_and(|environment| !marker.evaluate(environment.markers(), &[])) {
+                marker = MarkerTree::FALSE;
+            }
+            Ok(UniversalMarker::from_combined(marker))
+        };
         let mut members = BTreeSet::new();
         let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
-        let mut seen = FxHashSet::default();
+        let mut reachability = FxHashMap::default();
 
-        for (name, root_kind) in self
-            .roots()
+        for (name, root_kind) in roots
+            .iter()
+            .copied()
             .map(|name| (name, InstallableRootKind::Production))
-            .chain(
-                self.group_root(groups)
-                    .map(|name| (name, InstallableRootKind::DependencyGroups)),
-            )
+            .chain(group_root.map(|name| (name, InstallableRootKind::DependencyGroups)))
         {
             let Some(&index) = lock.workspace_members.get(name) else {
                 continue;
             };
             let package = lock.package(index);
             if root_kind == InstallableRootKind::Production && groups.prod() {
-                if seen.insert((index, None)) {
+                if add_reachability(&mut reachability, (index, None), root_marker) {
                     queue.push_back((index, None));
                 }
                 for extra in extras.extra_names(package.optional_dependencies().keys()) {
-                    if seen.insert((index, Some(extra))) {
+                    if add_reachability(&mut reachability, (index, Some(extra)), root_marker) {
                         queue.push_back((index, Some(extra)));
                     }
                 }
@@ -159,12 +245,34 @@ pub trait Installable<'lock> {
                 if !self.includes_group(Some(package.name()), group, groups) {
                     continue;
                 }
+                let context = DependencyContext::Group(group);
+                let requirements = package.dependency_requirements(
+                    context,
+                    &modifiers,
+                    self.install_path(),
+                    lock.requires_python(),
+                )?;
+                let selected = selected_conflicts(package, context);
                 for dependency in dependencies {
-                    if seen.insert((dependency.index, None)) {
+                    let mut marker = root_marker;
+                    marker.and(dependency_marker(
+                        dependency,
+                        requirements.as_deref(),
+                        package,
+                        &selected,
+                    )?);
+                    if marker.is_false() {
+                        continue;
+                    }
+                    if add_reachability(&mut reachability, (dependency.index, None), marker) {
                         queue.push_back((dependency.index, None));
                     }
                     for extra in dependency.extra() {
-                        if seen.insert((dependency.index, Some(extra))) {
+                        if add_reachability(
+                            &mut reachability,
+                            (dependency.index, Some(extra)),
+                            marker,
+                        ) {
                             queue.push_back((dependency.index, Some(extra)));
                         }
                     }
@@ -172,11 +280,6 @@ pub trait Installable<'lock> {
             }
         }
 
-        let modifiers = DependencyModifiers::new(
-            Overrides::from_entries(lock.manifest.overrides.iter().cloned().collect())
-                .map_err(LockErrorKind::InvalidScopedOverride)?,
-            Excludes::from_entries(lock.manifest.excludes.iter().cloned()),
-        );
         let requirements = lock.requirements().iter().filter(|_| groups.prod()).chain(
             lock.dependency_groups()
                 .iter()
@@ -191,19 +294,28 @@ pub trait Installable<'lock> {
             )?;
             for package in lock.packages_for_name(&requirement.name) {
                 if !Lock::package_satisfies_requirement(package, &requirement, self.install_path())?
-                    || lock
-                        .root_requirement_marker(&requirement, package)
-                        .is_none_or(MarkerTree::is_false)
+                {
+                    continue;
+                }
+                let Some(marker) = lock.root_requirement_marker(&requirement, package) else {
+                    continue;
+                };
+                let mut marker = UniversalMarker::from_combined(marker);
+                marker.and(root_marker);
+                if marker.is_false()
+                    || marker_env.is_some_and(|environment| {
+                        !marker.pep508().evaluate(environment.markers(), &[])
+                    })
                 {
                     continue;
                 }
                 let index = lock.by_id[&package.id];
-                if seen.insert((index, None)) {
+                if add_reachability(&mut reachability, (index, None), marker) {
                     queue.push_back((index, None));
                 }
                 for extra in &requirement.extras {
                     if let Some((extra, _)) = package.optional_dependencies().get_key_value(extra)
-                        && seen.insert((index, Some(extra)))
+                        && add_reachability(&mut reachability, (index, Some(extra)), marker)
                     {
                         queue.push_back((index, Some(extra)));
                     }
@@ -212,16 +324,36 @@ pub trait Installable<'lock> {
         }
 
         while let Some((index, extra)) = queue.pop_front() {
+            let parent_marker = reachability[&(index, extra)];
             let package = lock.package(index);
             if lock.is_workspace_package(package) {
                 members.insert(package.name());
             }
+            let context = extra.map_or(DependencyContext::Production, DependencyContext::Extra);
+            let requirements = package.dependency_requirements(
+                context,
+                &modifiers,
+                self.install_path(),
+                lock.requires_python(),
+            )?;
+            let selected = selected_conflicts(package, context);
             for dependency in package_dependencies(package, extra) {
-                if seen.insert((dependency.index, None)) {
+                let mut marker = parent_marker;
+                marker.and(dependency_marker(
+                    dependency,
+                    requirements.as_deref(),
+                    package,
+                    &selected,
+                )?);
+                if marker.is_false() {
+                    continue;
+                }
+                if add_reachability(&mut reachability, (dependency.index, None), marker) {
                     queue.push_back((dependency.index, None));
                 }
                 for extra in dependency.extra() {
-                    if seen.insert((dependency.index, Some(extra))) {
+                    if add_reachability(&mut reachability, (dependency.index, Some(extra)), marker)
+                    {
                         queue.push_back((dependency.index, Some(extra)));
                     }
                 }
