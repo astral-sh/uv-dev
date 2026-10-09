@@ -2,7 +2,7 @@
 
 use std::assert_matches;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Display;
@@ -24,7 +24,9 @@ use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
 use uv_once_map::OnceMap;
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerTree, VerbatimUrl};
-use uv_pypi_types::{ConflictError, Conflicts, SupportedEnvironments, VerbatimParsedUrl};
+use uv_pypi_types::{
+    ConflictError, Conflicts, DependencyGroupSpecifier, SupportedEnvironments, VerbatimParsedUrl,
+};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
@@ -884,10 +886,39 @@ impl Workspace {
             for (package, member) in self.packages() {
                 if let Some(groups) = &member.pyproject_toml().dependency_groups {
                     for (group, _) in groups {
-                        for (included_package, included_group) in
-                            member.pyproject_toml().workspace_group_includes(group)
-                        {
+                        let mut includes = member
+                            .pyproject_toml()
+                            .workspace_group_includes(group)
+                            .collect::<VecDeque<_>>();
+                        let mut seen = FxHashSet::default();
+                        while let Some((included_package, included_group)) = includes.pop_front() {
+                            if !seen.insert((included_package, included_group)) {
+                                continue;
+                            }
                             let Some(included_package) = included_package.or(root_package) else {
+                                // A non-project root has no conflict identity of its own. Follow
+                                // its aliases until they reach a named member group.
+                                includes.extend(
+                                    self.pyproject_toml()
+                                        .workspace_group_includes(included_group),
+                                );
+                                if let Some(specifiers) = self
+                                    .pyproject_toml()
+                                    .dependency_groups
+                                    .as_ref()
+                                    .and_then(|groups| groups.get(included_group))
+                                {
+                                    includes.extend(specifiers.iter().filter_map(|specifier| {
+                                        if let DependencyGroupSpecifier::IncludeGroup {
+                                            include_group,
+                                        } = specifier
+                                        {
+                                            Some((None, include_group))
+                                        } else {
+                                            None
+                                        }
+                                    }));
+                                }
                                 continue;
                             };
                             if let Some(included_member) = self.packages().get(included_package)

@@ -11,7 +11,7 @@ use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
 use uv_normalize::{DEV_DEPENDENCIES, GroupName, PackageName};
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::Pep508Error;
+use uv_pep508::{Pep508Error, RequirementOrigin};
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{DependencyGroupSpecifier, VerbatimParsedUrl};
 use uv_warnings::warn_user_once;
@@ -189,12 +189,25 @@ impl FlatDependencyGroups {
         }
 
         let workspace_groups = WorkspaceDependencyGroups { root, packages };
-        let groups = Self::from_pyproject_toml_with_workspace(
+        let mut groups = Self::from_pyproject_toml_with_workspace(
             path,
             pyproject_toml,
             &workspace_groups,
             selected_groups.as_ref(),
         )?;
+        // Root-only groups inherit the member scope of imported requirements. Named member
+        // groups own their flattened requirements, including their transitive includes.
+        if let Some(project) = &pyproject_toml.project {
+            for (group, dependencies) in &mut groups.0 {
+                for requirement in &mut dependencies.requirements {
+                    requirement.origin = Some(RequirementOrigin::Group(
+                        path.join("pyproject.toml"),
+                        Some(project.name.clone()),
+                        group.clone(),
+                    ));
+                }
+            }
+        }
         for (group, dependencies) in &groups.0 {
             resolved.insert((path.to_path_buf(), group.clone()), dependencies.clone());
         }
