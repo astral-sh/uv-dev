@@ -93,21 +93,13 @@ impl uv_errors::Hinted for AddDependencyError {
 }
 
 /// Add one or more packages to the project requirements.
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn add(
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
     no_sync: bool,
-    no_install_project: bool,
-    only_install_project: bool,
-    no_install_workspace: bool,
-    only_install_workspace: bool,
-    no_install_local: bool,
-    only_install_local: bool,
-    no_install_package: Vec<PackageName>,
-    only_install_package: Vec<PackageName>,
+    install_options: InstallOptions,
     requirements: Vec<RequirementsSource>,
     constraints: Vec<RequirementsSource>,
     marker: Option<MarkerTree>,
@@ -796,14 +788,7 @@ pub async fn add(
         lock_state,
         sync_state,
         lock_check,
-        no_install_project,
-        only_install_project,
-        no_install_workspace,
-        only_install_workspace,
-        no_install_local,
-        only_install_local,
-        no_install_package.clone(),
-        only_install_package.clone(),
+        install_options,
         &defaulted_extras,
         &defaulted_groups,
         raw,
@@ -1074,7 +1059,6 @@ fn edits(
 }
 
 /// Re-lock and re-sync the project after a series of edits.
-#[expect(clippy::fn_params_excessive_bools)]
 async fn lock_and_sync(
     mut target: EditTarget,
     python_target: &PythonTarget,
@@ -1083,14 +1067,7 @@ async fn lock_and_sync(
     mut lock_state: UniversalState,
     sync_state: PlatformState,
     lock_check: LockCheck,
-    no_install_project: bool,
-    only_install_project: bool,
-    no_install_workspace: bool,
-    only_install_workspace: bool,
-    no_install_local: bool,
-    only_install_local: bool,
-    no_install_package: Vec<PackageName>,
-    only_install_package: Vec<PackageName>,
+    install_options: InstallOptions,
     extras: &ExtrasSpecificationWithDefaults,
     groups: &DependencyGroupsWithDefaults,
     raw: bool,
@@ -1106,16 +1083,6 @@ async fn lock_and_sync(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
 ) -> Result<(), ProjectError> {
-    let install_options = InstallOptions::new(
-        no_install_project,
-        only_install_project,
-        no_install_workspace,
-        only_install_workspace,
-        no_install_local,
-        only_install_local,
-        no_install_package,
-        only_install_package,
-    );
     let first_party_exclusions = match &target {
         EditTarget::Project(project) => {
             PackageSelection::from_args(false, &[], project.project_name()).first_party_exclusions(

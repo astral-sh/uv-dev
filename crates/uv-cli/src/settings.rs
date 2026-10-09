@@ -21,8 +21,8 @@ use uv_configuration::{
     DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
-    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
+    InstallSelection, KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override,
+    PackageOverride, PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
     PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
     TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
 };
@@ -1995,12 +1995,9 @@ impl SyncSettings {
                 no_editable_package,
             ),
             install_options: InstallOptions::new(
-                no_install_project,
-                only_install_project,
-                no_install_workspace,
-                only_install_workspace,
-                no_install_local,
-                only_install_local,
+                InstallSelection::from_args(no_install_project, only_install_project),
+                InstallSelection::from_args(no_install_workspace, only_install_workspace),
+                InstallSelection::from_args(no_install_local, only_install_local),
                 no_install_package,
                 only_install_package,
             ),
@@ -2215,7 +2212,6 @@ impl MetadataSettings {
 }
 
 /// The resolved settings to use for a `add` invocation.
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct AddSettings {
     pub lock_check: LockCheck,
@@ -2239,14 +2235,7 @@ pub struct AddSettings {
     pub script: Option<PathBuf>,
     pub python: Option<String>,
     pub workspace: Option<bool>,
-    pub no_install_project: bool,
-    pub only_install_project: bool,
-    pub no_install_workspace: bool,
-    pub only_install_workspace: bool,
-    pub no_install_local: bool,
-    pub only_install_local: bool,
-    pub no_install_package: Vec<PackageName>,
-    pub only_install_package: Vec<PackageName>,
+    pub install_options: InstallOptions,
     pub install_mirrors: PythonInstallMirrors,
     pub refresh: Refresh,
     pub indexes: Vec<Index>,
@@ -2431,12 +2420,18 @@ impl AddSettings {
             check_conflicts(install_flag, no_sync)?;
         }
 
-        let no_install_project = no_install_project.is_enabled();
-        let only_install_project = only_install_project.is_enabled();
-        let no_install_workspace = no_install_workspace.is_enabled();
-        let only_install_workspace = only_install_workspace.is_enabled();
-        let no_install_local = no_install_local.is_enabled();
-        let only_install_local = only_install_local.is_enabled();
+        let install_project = InstallSelection::from_args(
+            no_install_project.is_enabled(),
+            only_install_project.is_enabled(),
+        );
+        let install_workspace = InstallSelection::from_args(
+            no_install_workspace.is_enabled(),
+            only_install_workspace.is_enabled(),
+        );
+        let install_local = InstallSelection::from_args(
+            no_install_local.is_enabled(),
+            only_install_local.is_enabled(),
+        );
 
         let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
         let active = flag(active, no_active, "active")?.into();
@@ -2473,14 +2468,13 @@ impl AddSettings {
             script,
             python: python.and_then(Maybe::into_option),
             workspace,
-            no_install_project,
-            only_install_project,
-            no_install_workspace,
-            only_install_workspace,
-            no_install_local,
-            only_install_local,
-            no_install_package,
-            only_install_package,
+            install_options: InstallOptions::new(
+                install_project,
+                install_workspace,
+                install_local,
+                no_install_package,
+                only_install_package,
+            ),
             editable,
             extras: extra.unwrap_or_default(),
             refresh,
@@ -2956,12 +2950,9 @@ impl ExportSettings {
             ),
             hashes: flag(hashes, no_hashes, "hashes")?.unwrap_or(true),
             install_options: InstallOptions::new(
-                no_emit_project,
-                only_emit_project,
-                no_emit_workspace,
-                only_emit_workspace,
-                no_emit_local,
-                only_emit_local,
+                InstallSelection::from_args(no_emit_project, only_emit_project),
+                InstallSelection::from_args(no_emit_workspace, only_emit_workspace),
+                InstallSelection::from_args(no_emit_local, only_emit_local),
                 no_emit_package,
                 only_emit_package,
             ),
