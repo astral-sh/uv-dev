@@ -7,7 +7,7 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
-use insta::{allow_duplicates, assert_snapshot};
+use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
@@ -4826,7 +4826,7 @@ fn run_active_script_environment_inspection_error() -> Result<()> {
 }
 
 #[test]
-fn run_script_environment_cache_repair() -> Result<()> {
+fn run_script_environment_cache_repair_missing_marker() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context.temp_dir.child("main.py").write_str(indoc! { r#"
         # /// script
@@ -4852,35 +4852,108 @@ fn run_script_environment_cache_repair() -> Result<()> {
     let environment = ChildPath::new(String::from_utf8(output.stdout)?.trim());
     assert!(environment.path().starts_with(context.cache_dir.path()));
 
-    for malformed_marker in [false, true] {
-        uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
-        environment.create_dir_all()?;
-        environment
-            .child("stale.txt")
-            .write_str("stale cache data")?;
-        if malformed_marker {
-            environment.child("pyvenv.cfg").create_dir_all()?;
-        }
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
+    environment.create_dir_all()?;
+    environment
+        .child("stale.txt")
+        .write_str("stale cache data")?;
 
-        // A damaged derived cache entry belongs to uv and can still be replaced.
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), context.run()
-                .arg("--script")
-                .arg("main.py")
-                .env_remove(EnvVars::RUST_LOG), @"
-            exit_code: 0 (success)
-            ----- stdout -----
-            [CACHE_DIR]/environments-v2/main-[HASH]
-            ");
-        }
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
 
-        environment
-            .child("pyvenv.cfg")
-            .assert(predicate::path::is_file());
-        environment
-            .child("stale.txt")
-            .assert(predicate::path::missing());
-    }
+    environment
+        .child("pyvenv.cfg")
+        .assert(predicate::path::is_file());
+    environment
+        .child("stale.txt")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn run_script_environment_cache_repair_directory_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("main.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        import sys
+
+        print(sys.prefix)
+        "#
+    })?;
+
+    let output = uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+
+    let environment = ChildPath::new(String::from_utf8(output.stdout)?.trim());
+    assert!(environment.path().starts_with(context.cache_dir.path()));
+
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
+    environment.create_dir_all()?;
+    environment
+        .child("stale.txt")
+        .write_str("stale cache data")?;
+    environment.child("pyvenv.cfg").create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+
+    environment
+        .child("pyvenv.cfg")
+        .assert(predicate::path::is_file());
+    environment
+        .child("stale.txt")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn run_script_environment_cache_repair_linked_entry() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("main.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        import sys
+
+        print(sys.prefix)
+        "#
+    })?;
+
+    let output = uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+
+    let environment = ChildPath::new(String::from_utf8(output.stdout)?.trim());
+    assert!(environment.path().starts_with(context.cache_dir.path()));
 
     // Replacing the owned cache entry must not clear a directory outside the cache.
     uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
@@ -4902,6 +4975,36 @@ fn run_script_environment_cache_repair() -> Result<()> {
         .child("pyvenv.cfg")
         .assert(predicate::path::missing());
     assert!(fs_err::read_link(environment.path()).is_err());
+
+    Ok(())
+}
+
+#[test]
+fn run_script_environment_cache_repair_dangling_link() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("main.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        import sys
+
+        print(sys.prefix)
+        "#
+    })?;
+
+    let output = uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+
+    let environment = ChildPath::new(String::from_utf8(output.stdout)?.trim());
+    assert!(environment.path().starts_with(context.cache_dir.path()));
 
     // A dangling link at the same owned entry can also be replaced.
     uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
