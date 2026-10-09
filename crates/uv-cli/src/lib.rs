@@ -6964,7 +6964,7 @@ pub struct BuildPolicyArgs {
     ///
     /// This option is in preview and may change in any future release.
     #[arg(long, value_enum, env = EnvVars::UV_BUILD_POLICY, help_heading = "Build options")]
-    pub build_policy: Option<BuildPolicy>,
+    pub(crate) build_policy: Option<BuildPolicy>,
 
     /// Control source builds for a specific package.
     ///
@@ -6974,7 +6974,7 @@ pub struct BuildPolicyArgs {
     ///
     /// This option is in preview and may change in any future release.
     #[arg(long, help_heading = "Build options", value_hint = ValueHint::Other)]
-    pub build_policy_package: Option<Vec<BuildPolicyPackageEntry>>,
+    pub(crate) build_policy_package: Option<Vec<BuildPolicyPackageEntry>>,
 }
 
 #[derive(Args)]
