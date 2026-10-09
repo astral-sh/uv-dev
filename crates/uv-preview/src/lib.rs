@@ -377,6 +377,10 @@ pub enum PreviewFeature {
     /// feature silences the preview warning.
     #[preview(alias = "check")]
     CheckCommand,
+    /// The `uv run --profile` option profiles Python scripts and modules with Python's sampling
+    /// profiler. It requires CPython 3.15 or later and writes an HTML flame graph to
+    /// `profile.html` unless another output path is selected.
+    RunProfile,
     /// The `uv init` command creates a packaged application by default, with a `src/` layout, a
     /// build system, and a script entry point. This gives new applications an installable package
     /// structure without requiring `--package`.

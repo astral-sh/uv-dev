@@ -3281,7 +3281,7 @@ pub struct RunArgs {
     #[arg(short, long, conflicts_with_all = ["script", "gui_script"])]
     pub module: bool,
 
-    /// Profile a Python script or module with Python's sampling profiler.
+    /// Profile a Python script or module with Python's sampling profiler (preview).
     ///
     /// Requires CPython 3.15 or later. Writes an HTML flame graph to `profile.html` unless
     /// `--profile-output` is provided. The exit status is supplied by the profiler.
