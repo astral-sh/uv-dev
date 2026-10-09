@@ -34,11 +34,8 @@ use uv_pep440::{VersionSpecifier, VersionSpecifiers};
 use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
-use uv_python_discovery::PythonInstallation;
 use uv_python_interpreter::PythonEnvironment;
-use uv_python_types::{
-    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
-};
+use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_shell::WindowsRunnable;
@@ -816,38 +813,35 @@ async fn get_or_create_environment(
         client_builder,
     )
     .await?;
-    let requires_python = spec.requires_python.clone();
 
-    let python_request = ToolPython::from_request(
+    let tool_python = ToolPython::from_request(
         python_request,
         unresolved_target_requirement
             .as_ref()
             .map(|requirement| &requirement.requirement),
-        requires_python.as_ref(),
+        spec.requires_python.as_ref(),
         ConfigDiscovery::Enabled,
         lfs,
         state.git(),
         client_builder,
         cache,
     )
-    .await?
-    .python_request;
+    .await?;
 
     // Discover an interpreter.
-    let interpreter = PythonInstallation::find_or_download(
-        python_request.as_ref(),
-        EnvironmentPreference::OnlySystem,
-        python_preference,
-        python_arch,
-        python_downloads,
-        client_builder,
-        cache,
-        Some(&reporter),
-        install_mirrors.mirrors(),
-        install_mirrors.python_downloads_json_url.as_deref(),
-    )
-    .await?
-    .into_interpreter();
+    let interpreter = tool_python
+        .find_or_download(
+            python_preference,
+            python_arch,
+            python_downloads,
+            client_builder,
+            cache,
+            &reporter,
+            &install_mirrors,
+        )
+        .await?;
+    let requires_python = &tool_python.requires_python;
+    let python_request = &tool_python.python_request;
 
     let build_constraints = Constraints::from_specifications(
         operations::read_constraints(build_constraints, client_builder).await?,
@@ -1033,15 +1027,6 @@ async fn get_or_create_environment(
         None
     };
 
-    if let Some(requires_python) = requires_python.as_ref()
-        && !requires_python.contains(interpreter.python_version())
-    {
-        return Err(anyhow::anyhow!(
-            "Python {} is incompatible with the PEP 723 `requires-python` value from `--with-requirements`: `{requires_python}`",
-            interpreter.python_version()
-        )
-        .into());
-    }
     let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
 
     // Resolve the `--from` and `--with` requirements.

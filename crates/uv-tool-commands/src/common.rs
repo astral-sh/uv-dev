@@ -175,6 +175,8 @@ pub(super) struct ToolPython {
     /// The selected Python request, computed by considering an explicit request, a global
     /// version file, and static `requires-python` metadata from the source requirement.
     pub(super) python_request: Option<PythonRequest>,
+    /// Compatibility required by inline requirements metadata, including explicit requests.
+    pub(super) requires_python: Option<RequiresPython>,
 }
 
 impl ToolPython {
@@ -258,7 +260,44 @@ impl ToolPython {
         Ok(Self {
             source,
             python_request,
+            requires_python: requires_python_bound.cloned(),
         })
+    }
+
+    /// Discover an interpreter and validate its requirements bound before it can run build hooks.
+    pub(super) async fn find_or_download(
+        &self,
+        python_preference: PythonPreference,
+        python_arch: Option<PythonArchitecture>,
+        python_downloads: PythonDownloads,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        reporter: &PythonDownloadReporter,
+        install_mirrors: &PythonInstallMirrors,
+    ) -> anyhow::Result<Interpreter> {
+        let interpreter = PythonInstallation::find_or_download(
+            self.python_request.as_ref(),
+            EnvironmentPreference::OnlySystem,
+            python_preference,
+            python_arch,
+            python_downloads,
+            client_builder,
+            cache,
+            Some(reporter),
+            install_mirrors.mirrors(),
+            install_mirrors.python_downloads_json_url.as_deref(),
+        )
+        .await?
+        .into_interpreter();
+        if let Some(requires_python) = self.requires_python.as_ref()
+            && !requires_python.contains(interpreter.python_version())
+        {
+            bail!(
+                "Python {} is incompatible with the PEP 723 `requires-python` value from `--with-requirements`: `{requires_python}`",
+                interpreter.python_version()
+            );
+        }
+        Ok(interpreter)
     }
 
     /// Returns `true` if the selected request was explicitly provided by the user.

@@ -1,18 +1,14 @@
-use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
-use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 #[cfg(unix)]
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
-use uv_test::packse::generate_wheel_with_files;
 use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
@@ -3645,39 +3641,15 @@ async fn tool_run_latest_keyring_auth() {
     ");
 }
 
-fn write_python_version_tool(wheels: &ChildPath, requires_python: Option<&str>) -> Result<()> {
-    let requires_python = requires_python.map(str::parse).transpose()?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"bound-tool".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        requires_python.as_ref(),
-        "py3-none-any",
-        &[
-            (
-                "bound_tool/cli.py",
-                "import sys\ndef main():\n    print(f'{sys.version_info.major}.{sys.version_info.minor}')\n",
-            ),
-            (
-                "bound_tool-1.0.0.dist-info/entry_points.txt",
-                "[console_scripts]\nbound-tool = bound_tool.cli:main\n",
-            ),
-        ],
-    );
-    wheels.child(filename).write_binary(&wheel)?;
-    Ok(())
-}
-
 #[test]
-fn tool_pep723_requirements_reject_incompatible_environment() -> Result<()> {
+fn tool_run_pep723_requirements_reject_incompatible_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin = context.temp_dir.child("bin");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    write_python_version_tool(&wheels, None)?;
+    crate::write_python_version_tool(&wheels, None)?;
     context
         .tool_install()
         .args([
@@ -3711,33 +3683,15 @@ fn tool_pep723_requirements_reject_incompatible_environment() -> Result<()> {
      + bound-tool==1.0.0
     ");
 
-    context
-        .tool_install()
-        .args([
-            "--with-requirements",
-            "requirements.py",
-            "--no-index",
-            "--find-links",
-            "wheels",
-            "bound-tool",
-        ])
-        .env(EnvVars::PATH, bin.as_os_str())
-        .assert()
-        .success();
-    uv_snapshot!(context.filters(), Command::new(bin.join(format!("bound-tool{}", std::env::consts::EXE_SUFFIX))), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    3.11
-    ");
     Ok(())
 }
 
 #[test]
-fn tool_pep723_requirements_bound_interpreter_refinement() -> Result<()> {
+fn tool_run_pep723_requirements_bound_interpreter_refinement() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_tool_dirs();
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    write_python_version_tool(&wheels, Some(">=3.12"))?;
+    crate::write_python_version_tool(&wheels, Some(">=3.12"))?;
     context
         .temp_dir
         .child("requirements.py")
@@ -3754,22 +3708,23 @@ fn tool_pep723_requirements_bound_interpreter_refinement() -> Result<()> {
       cause: Because the current Python version (3.11.[X]) does not satisfy Python>=3.12 and bound-tool==1.0.0 depends on Python>=3.12, we can conclude that bound-tool==1.0.0 cannot be used.
              And because only bound-tool==1.0.0 is available and you require bound-tool, we can conclude that your requirements are unsatisfiable.
     "#);
-    uv_snapshot!(context.filters(), context.tool_install().args(["--with-requirements", "requirements.py", "--python", ">=3.11", "--no-index", "--from", "wheels/bound_tool-1.0.0-py3-none-any.whl", "bound-tool"]), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because the current Python version (3.11.[X]) does not satisfy Python>=3.12 and bound-tool==1.0.0 depends on Python>=3.12, we can conclude that bound-tool==1.0.0 cannot be used.
-             And because only bound-tool==1.0.0 is available and you require bound-tool, we can conclude that your requirements are unsatisfiable.
-    "#);
     Ok(())
 }
 
 #[test]
-fn tool_pep723_requirements_reject_explicit_python() -> Result<()> {
+fn tool_run_pep723_requirements_reject_explicit_python() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_tool_dirs();
-    let wheels = context.temp_dir.child("wheels");
-    wheels.create_dir_all()?;
-    write_python_version_tool(&wheels, None)?;
+    let marker = context.temp_dir.child("backend-ran");
+    let archive = uv_test::archive::generate_source_archive(
+        &"bound-tool".parse()?,
+        &"1.0.0".parse()?,
+        "",
+        Some(marker.path()),
+    )?;
+    context
+        .temp_dir
+        .child("source.tar.gz")
+        .write_binary(&archive)?;
     context
         .temp_dir
         .child("requirements.py")
@@ -3779,15 +3734,11 @@ fn tool_pep723_requirements_reject_explicit_python() -> Result<()> {
         # dependencies = []
         # ///
     "#})?;
-    uv_snapshot!(context.filters(), context.tool_run().args(["--python", "3.12", "--with-requirements", "requirements.py", "--no-index", "--find-links", "wheels", "bound-tool"]), @r#"
+    uv_snapshot!(context.filters(), context.tool_run().args(["--python", "3.12", "--with-requirements", "requirements.py", "--no-index", "--from", "source.tar.gz", "bound-tool"]), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Python 3.12.[X] is incompatible with the PEP 723 `requires-python` value from `--with-requirements`: `<3.12`
     "#);
-    uv_snapshot!(context.filters(), context.tool_install().args(["--python", "3.12", "--with-requirements", "requirements.py", "--no-index", "--find-links", "wheels", "bound-tool"]), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Python 3.12.[X] is incompatible with the PEP 723 `requires-python` value from `--with-requirements`: `<3.12`
-    "#);
+    marker.assert(predicates::path::missing());
     Ok(())
 }
