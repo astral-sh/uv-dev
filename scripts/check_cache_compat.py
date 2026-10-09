@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from zipfile import ZipFile
 
 logger = logging.getLogger(__name__)
 
@@ -63,33 +62,13 @@ def clean_cache(*, uv: str):
 def check_local_wheel_cache(*, uv_current: str, uv_previous: str):
     """Check that an older uv can read a wheel cached by the current uv."""
 
-    package = "uv-cache-compatibility"
-    distribution = package.replace("-", "_")
-    version = "1.0.0"
-    wheel = Path(temp_dir) / f"{distribution}-{version}-py3-none-any.whl"
-    dist_info = f"{distribution}-{version}.dist-info"
-    files = {
-        f"{distribution}/__init__.py": "",
-        f"{dist_info}/METADATA": (
-            f"Metadata-Version: 2.1\nName: {package}\nVersion: {version}\n"
-        ),
-        f"{dist_info}/WHEEL": (
-            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
-        ),
-    }
-    record = "".join(f"{path},,\n" for path in files)
-    files[f"{dist_info}/RECORD"] = f"{record}{dist_info}/RECORD,,\n"
-
-    with ZipFile(wheel, "w") as archive:
-        for path, contents in files.items():
-            archive.writestr(path, contents)
-
-    install_package(uv=uv_current, package=str(wheel), flags=[], installed_name=package)
+    wheel = Path(__file__).resolve().parents[1] / "test/links/ok-1.0.0-py3-none-any.whl"
+    install_package(uv=uv_current, package=str(wheel), flags=[], installed_name="ok")
     install_package(
         uv=uv_previous,
         package=str(wheel),
         flags=["--reinstall"],
-        installed_name=package,
+        installed_name="ok",
     )
 
 
