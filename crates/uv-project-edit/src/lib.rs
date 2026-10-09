@@ -1149,16 +1149,16 @@ impl PyProjectTomlMut {
         };
 
         let remove = if let Some(source) = source.as_table_like() {
-            is_unscoped_source(source)
+            is_removable_raw_source(source)
         } else if let Some(source) = source.as_array_mut() {
             source.retain(|source| {
                 source
                     .as_inline_table()
-                    .is_none_or(|source| !is_unscoped_source(source))
+                    .is_none_or(|source| !is_removable_raw_source(source))
             });
             source.is_empty()
         } else if let Some(source) = source.as_array_of_tables_mut() {
-            source.retain(|source| !is_unscoped_source(source));
+            source.retain(|source| !is_removable_raw_source(source));
             source.is_empty()
         } else {
             false
@@ -1725,8 +1725,10 @@ fn find_source(name: &PackageName, sources: &dyn TableLike) -> Option<String> {
     None
 }
 
-fn is_unscoped_source(source: &dyn TableLike) -> bool {
-    !source.contains_key("extra")
+fn is_removable_raw_source(source: &dyn TableLike) -> bool {
+    // Workspace members require an explicit declaration even for raw URL requirements.
+    source.get("workspace").and_then(Item::as_bool) != Some(true)
+        && !source.contains_key("extra")
         && !source.contains_key("group")
         && source.get("marker").is_none_or(|marker| {
             marker

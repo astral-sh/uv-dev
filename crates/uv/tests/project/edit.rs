@@ -1145,6 +1145,65 @@ fn add_raw_retains_workspace_dependency_source() -> Result<()> {
     Ok(())
 }
 
+/// A raw URL targeting a workspace member retains its required source declaration.
+#[test]
+fn add_raw_member_path_retains_workspace_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
+
+        [tool.uv.workspace]
+        members = ["dep"]
+
+        [tool.uv.sources]
+        dep = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("dep/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("./dep").arg("--raw").arg("--no-sync"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "dep @ file://[TEMP_DIR]/dep",
+        ]
+
+        [tool.uv.workspace]
+        members = ["dep"]
+
+        [tool.uv.sources]
+        dep = { workspace = true }
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
 /// Raw version-bound selection retains the workspace source for this dependency scope.
 #[test]
 fn add_raw_retains_workspace_dev_source() -> Result<()> {
