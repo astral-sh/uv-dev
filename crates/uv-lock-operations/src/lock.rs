@@ -779,7 +779,7 @@ async fn do_lock(
             &validation_build_dispatch,
             concurrency.downloads_semaphore.clone(),
         )
-        .with_first_party_packages(&first_party_packages);
+        .with_first_party_packages(Some(&first_party_packages));
         match Box::pin(ValidatedLock::validate(
             existing_lock,
             target.install_path(),
@@ -867,7 +867,7 @@ async fn do_lock(
                 concurrency.downloads_semaphore.clone(),
             )
             .with_recorder(recorder.clone())
-            .with_first_party_packages(&first_party_packages);
+            .with_first_party_packages(Some(&first_party_packages));
 
             // Determine whether we can reuse the existing package versions.
             let versions_lock = existing_lock.as_ref().and_then(|lock| match &lock {
@@ -959,6 +959,7 @@ async fn do_lock(
                 // The root is always null in workspaces, it "depends on" the projects
                 None,
                 workspace_members,
+                Some(&first_party_packages),
                 &extras,
                 &groups,
                 preferences,

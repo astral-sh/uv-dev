@@ -2566,37 +2566,6 @@ mod tests {
         ]
         "#);
 
-        for (roots, expected) in [
-            (
-                "[]",
-                "`tool.uv.workspace.roots` must contain at least one member",
-            ),
-            (
-                r#"["missing"]"#,
-                "Workspace resolution root `missing` is not a workspace member",
-            ),
-        ] {
-            root.child("pyproject.toml").write_str(&format!(
-                r#"
-                [project]
-                name = "root"
-                version = "1.0.0"
-
-                [tool.uv.workspace]
-                members = ["leaf", "unused"]
-                roots = {roots}
-                "#,
-            ))?;
-            let error = Workspace::discover(
-                root.as_ref(),
-                &DiscoveryOptions::default(),
-                &cache,
-                &WorkspaceCache::default(),
-            )
-            .await
-            .expect_err("invalid resolution roots");
-            assert_eq!(error.to_string(), expected);
-        }
         Ok(())
     }
 

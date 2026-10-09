@@ -580,6 +580,7 @@ pub async fn pip_compile(
         source_trees,
         project,
         BTreeMap::default(),
+        None,
         &extras,
         &groups,
         preferences,

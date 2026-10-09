@@ -456,6 +456,7 @@ pub async fn pip_sync(
             source_trees,
             project,
             BTreeMap::default(),
+            None,
             extras,
             &groups,
             preferences,
