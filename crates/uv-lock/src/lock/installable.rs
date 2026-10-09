@@ -10,11 +10,12 @@ use petgraph::Graph;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_configuration::{
-    BuildOptions, DependencyGroupsWithDefaults, ExtrasSpecification,
-    ExtrasSpecificationWithDefaults, InstallOptions,
+    BuildOptions, DependencyGroupsWithDefaults, DependencyModifierScope, DependencyModifiers,
+    Excludes, ExtrasSpecification, ExtrasSpecificationWithDefaults, InstallOptions, Overrides,
 };
 use uv_distribution_types::{Edge, FirstParty, Node, Resolution, ResolvedDist};
 use uv_normalize::{DefaultExtras, ExtraName, GroupName, PackageName};
+use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
 use uv_pypi_types::{ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 
@@ -23,7 +24,7 @@ use uv_resolver_types::universal_marker::ActivatedConflictItems;
 
 use crate::lock::{
     Dependency, DependencySelectionContext, HashedDist, LockErrorKind, Package, PackageIndex,
-    SelectedDependency, TagPolicy,
+    SelectedDependency, TagPolicy, normalize_requirement,
 };
 use crate::{Lock, LockError};
 
@@ -118,6 +119,116 @@ pub trait Installable<'lock> {
         groups: &DependencyGroupsWithDefaults,
     ) -> bool {
         groups.contains(group)
+    }
+
+    /// Return workspace members reachable through the selected roots, extras, and groups.
+    fn selected_workspace_members(
+        &self,
+        extras: &ExtrasSpecification,
+        groups: &DependencyGroupsWithDefaults,
+    ) -> Result<BTreeSet<&'lock PackageName>, LockError> {
+        let lock = self.lock();
+        let mut members = BTreeSet::new();
+        let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
+        let mut seen = FxHashSet::default();
+
+        for (name, root_kind) in self
+            .roots()
+            .map(|name| (name, InstallableRootKind::Production))
+            .chain(
+                self.group_root(groups)
+                    .map(|name| (name, InstallableRootKind::DependencyGroups)),
+            )
+        {
+            let Some(&index) = lock.workspace_members.get(name) else {
+                continue;
+            };
+            let package = lock.package(index);
+            if root_kind == InstallableRootKind::Production && groups.prod() {
+                if seen.insert((index, None)) {
+                    queue.push_back((index, None));
+                }
+                for extra in extras.extra_names(package.optional_dependencies().keys()) {
+                    if seen.insert((index, Some(extra))) {
+                        queue.push_back((index, Some(extra)));
+                    }
+                }
+            }
+
+            for (group, dependencies) in package.resolved_dependency_groups() {
+                if !self.includes_group(Some(package.name()), group, groups) {
+                    continue;
+                }
+                for dependency in dependencies {
+                    if seen.insert((dependency.index, None)) {
+                        queue.push_back((dependency.index, None));
+                    }
+                    for extra in dependency.extra() {
+                        if seen.insert((dependency.index, Some(extra))) {
+                            queue.push_back((dependency.index, Some(extra)));
+                        }
+                    }
+                }
+            }
+        }
+
+        let modifiers = DependencyModifiers::new(
+            Overrides::from_entries(lock.manifest.overrides.iter().cloned().collect())
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(lock.manifest.excludes.iter().cloned()),
+        );
+        let requirements = lock.requirements().iter().filter(|_| groups.prod()).chain(
+            lock.dependency_groups()
+                .iter()
+                .filter(|(group, _)| self.includes_group(None, group, groups))
+                .flat_map(|(_, requirements)| requirements),
+        );
+        for requirement in modifiers.apply(DependencyModifierScope::Global, requirements) {
+            let requirement = normalize_requirement(
+                requirement.into_owned(),
+                self.install_path(),
+                lock.requires_python(),
+            )?;
+            for package in lock.packages_for_name(&requirement.name) {
+                if !Lock::package_satisfies_requirement(package, &requirement, self.install_path())?
+                    || lock
+                        .root_requirement_marker(&requirement, package)
+                        .is_none_or(MarkerTree::is_false)
+                {
+                    continue;
+                }
+                let index = lock.by_id[&package.id];
+                if seen.insert((index, None)) {
+                    queue.push_back((index, None));
+                }
+                for extra in &requirement.extras {
+                    if let Some((extra, _)) = package.optional_dependencies().get_key_value(extra)
+                        && seen.insert((index, Some(extra)))
+                    {
+                        queue.push_back((index, Some(extra)));
+                    }
+                }
+            }
+        }
+
+        while let Some((index, extra)) = queue.pop_front() {
+            let package = lock.package(index);
+            if lock.is_workspace_package(package) {
+                members.insert(package.name());
+            }
+            for dependency in package_dependencies(package, extra) {
+                if seen.insert((dependency.index, None)) {
+                    queue.push_back((dependency.index, None));
+                }
+                for extra in dependency.extra() {
+                    if seen.insert((dependency.index, Some(extra))) {
+                        queue.push_back((dependency.index, Some(extra)));
+                    }
+                }
+            }
+        }
+
+        Ok(members)
     }
 
     /// Return the [`PackageName`] of the target, if available.
