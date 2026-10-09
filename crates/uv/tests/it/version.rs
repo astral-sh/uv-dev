@@ -103,7 +103,7 @@ fn version_get_json() -> Result<()> {
 
 #[test]
 fn version_get_jsonl() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"

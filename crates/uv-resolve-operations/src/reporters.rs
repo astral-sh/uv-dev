@@ -4,7 +4,7 @@ use std::time::Duration;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use uv_command_support::{
     Printer,
-    progress::{JsonlProgressEvent, ProgressReporter, ProgressStatus},
+    progress::{JsonlProgressEvent, ProgressPhase, ProgressReporter, ProgressStatus},
 };
 use uv_distribution_types::BuildableSource;
 use uv_distribution_types::VersionOrUrlRef;
@@ -23,8 +23,10 @@ impl ResolverReporter {
         if self.reporter.printer.emits_jsonl_progress()
             && !self.started.swap(true, Ordering::Relaxed)
         {
-            self.reporter
-                .emit_progress(&JsonlProgressEvent::new("resolve", ProgressStatus::Started));
+            self.reporter.emit_progress(&JsonlProgressEvent::new(
+                ProgressPhase::Resolve,
+                ProgressStatus::Started,
+            ));
         }
     }
 
@@ -32,7 +34,7 @@ impl ResolverReporter {
     pub(super) fn with_length(self, length: u64) -> Self {
         self.reporter.root.set_length(length);
         self.start();
-        let mut event = JsonlProgressEvent::new("resolve", ProgressStatus::Updated);
+        let mut event = JsonlProgressEvent::new(ProgressPhase::Resolve, ProgressStatus::Updated);
         event.total = Some(length);
         self.reporter.emit_progress(&event);
         self
@@ -70,7 +72,8 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
             }
         }
         if self.reporter.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("resolve", ProgressStatus::Updated);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Resolve, ProgressStatus::Updated);
             event.name = Some(name.to_string());
             match version_or_url {
                 VersionOrUrlRef::Version(version) => event.version = Some(version.to_string()),
@@ -84,7 +87,7 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
         self.start();
         self.reporter.root.set_message("");
         self.reporter.emit_progress(&JsonlProgressEvent::new(
-            "resolve",
+            ProgressPhase::Resolve,
             ProgressStatus::Completed,
         ));
         self.reporter.root.finish_and_clear();

@@ -2145,7 +2145,9 @@ async fn sync_jsonl_streaming_fallback_completes_every_download() -> Result<()> 
     use async_zip::{Compression, ZipEntryBuilder};
     use futures::io::AsyncWriteExt;
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     let server = MockServer::start().await;
     let filename = "jsonl_fallback-1.0.0-py3-none-any.whl";
     let mut writer = ZipFileWriter::new(Vec::new());
@@ -2213,41 +2215,36 @@ async fn sync_jsonl_streaming_fallback_completes_every_download() -> Result<()> 
         [package.metadata]
         requires-dist = [{{ name = "jsonl-fallback" }}]
     "#, url=server.uri()})?;
-    let output = context
-        .sync()
-        .args([
-            "--frozen",
-            "--output-format",
-            "jsonl",
-            "--preview-features",
-            "jsonl",
-        ])
-        .output()?;
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let events = String::from_utf8(output.stdout)?
-        .lines()
-        .map(serde_json::from_str::<serde_json::Value>)
-        .collect::<Result<Vec<_>, _>>()?;
-    let downloads = events
-        .iter()
-        .filter(|event| event["phase"] == "download" && event["status"] != "updated")
-        .collect::<Vec<_>>();
-    insta::assert_json_snapshot!(downloads.iter().map(|event| &event["status"]).collect::<Vec<_>>(), @r#"
-    [
-      "started",
-      "failed",
-      "started",
-      "completed"
-    ]
+    let mut filters = context.filters();
+    filters.push((
+        r#"(?m)^\{"type":"progress","phase":"download","status":"updated",[^\n]*\}\n"#,
+        "",
+    ));
+    filters.push((
+        r#"("phase":"download","status":"failed",[^}\n]*"completed":)\d+"#,
+        "${1}[BYTES]",
+    ));
+    uv_snapshot!(filters, context.sync()
+        .args(["--frozen", "--output-format", "jsonl", "--preview-features", "jsonl"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"prepare","status":"started","total":1}
+    {"type":"progress","phase":"download","status":"started","id":1,"name":"jsonl-fallback","total":1233}
+    {"type":"progress","phase":"download","status":"failed","id":1,"name":"jsonl-fallback","completed":[BYTES],"total":1233}
+    {"type":"progress","phase":"download","status":"started","id":2,"name":"jsonl-fallback","total":1233}
+    {"type":"progress","phase":"download","status":"completed","id":2,"name":"jsonl-fallback","completed":1233,"total":1233}
+    {"type":"progress","phase":"prepare","status":"updated","name":"jsonl-fallback==1.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"prepare","status":"completed","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"started","total":1}
+    {"type":"progress","phase":"install","status":"updated","name":"jsonl-fallback==1.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"completed","completed":1,"total":1}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[{"name":"jsonl-fallback","version":"1.0.0","action":"installed"}]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + jsonl-fallback==1.0.0
     "#);
-    assert_eq!(downloads[0]["id"], downloads[1]["id"]);
-    assert_eq!(downloads[2]["id"], downloads[3]["id"]);
-    assert_ne!(downloads[0]["id"], downloads[2]["id"]);
-    assert_eq!(events.last().unwrap()["type"], "result");
     Ok(())
 }
 
