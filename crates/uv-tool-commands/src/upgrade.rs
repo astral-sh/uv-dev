@@ -1,4 +1,4 @@
-use crate::common::finalize_tool_install;
+use crate::common::{EntrypointConflictPolicy, finalize_tool_install};
 use anyhow::{Context, Result};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
@@ -32,8 +32,7 @@ use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
 use crate::common::{
-    ToolLock, prepare_tool_executable_dir, remove_entrypoints, tool_entrypoints_are_fresh,
-    tool_environment_spec,
+    ToolLock, prepare_tool_executable_dir, tool_entrypoints_are_fresh, tool_environment_spec,
 };
 use uv_command_support::{ExitStatus, Printer, conjunction};
 use uv_environment_operations::{
@@ -604,10 +603,6 @@ async fn upgrade_tool(
     {
         prepare_tool_executable_dir()?;
 
-        // At this point, we updated the existing environment, so we should remove any of its
-        // existing executables.
-        remove_entrypoints(&existing_tool_receipt);
-
         let entrypoints: Vec<_> = existing_tool_receipt
             .entrypoints()
             .iter()
@@ -621,13 +616,8 @@ async fn upgrade_tool(
             &entrypoints,
             installed_tools,
             &ToolOptions::from(options),
-            true,
-            match outcome {
-                UpgradeOutcome::UpgradeEnvironment => true,
-                UpgradeOutcome::UpgradeTool
-                | UpgradeOutcome::UpgradeDependencies
-                | UpgradeOutcome::NoOp => false,
-            },
+            EntrypointConflictPolicy::Overwrite,
+            existing_tool_receipt.entrypoints(),
             existing_tool_receipt.python().to_owned(),
             existing_tool_receipt.requirements().to_vec(),
             existing_tool_receipt.constraints().to_vec(),

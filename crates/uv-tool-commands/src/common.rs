@@ -838,6 +838,26 @@ pub(super) fn check_entrypoint_conflicts(
 
 /// Finalizes a tool installation, after creation of an environment.
 ///
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum EntrypointConflictPolicy {
+    Overwrite,
+    RejectAndRetainEnvironment,
+    RejectAndRemoveEnvironment,
+}
+
+/// Remove newly created destinations while retaining entrypoints from the previous receipt.
+fn remove_new_entrypoint_paths<'a>(
+    paths: impl IntoIterator<Item = &'a Path>,
+    previous: &[ToolEntrypoint],
+) {
+    remove_entrypoint_paths(paths.into_iter().filter(|path| {
+        !previous
+            .iter()
+            .any(|entry| same_entrypoint_destination(path, &entry.install_path))
+            && fs_err::symlink_metadata(path).is_ok()
+    }));
+}
+
 /// Installs tool executables for a given package, handling any conflicts.
 ///
 /// Adds a receipt for the tool.
@@ -847,8 +867,8 @@ pub(super) fn finalize_tool_install(
     entrypoints: &[PackageName],
     installed_tools: &InstalledTools,
     options: &ToolOptions,
-    force: bool,
-    remove_environment_on_conflict: bool,
+    conflict_policy: EntrypointConflictPolicy,
+    previous_entrypoints: &[ToolEntrypoint],
     python: Option<PythonRequest>,
     requirements: Vec<Requirement>,
     constraints: Vec<Requirement>,
@@ -894,10 +914,11 @@ pub(super) fn finalize_tool_install(
                 "No executables are provided by package `{}`; removing tool",
                 package.cyan()
             )?;
-            remove_entrypoint_paths(
+            remove_new_entrypoint_paths(
                 installed_entrypoints
                     .iter()
                     .map(|entrypoint| entrypoint.install_path.as_path()),
+                previous_entrypoints,
             );
             installed_tools.remove_environment(name)?;
 
@@ -943,10 +964,11 @@ pub(super) fn finalize_tool_install(
             )?;
 
             // Clean up the environment we just created.
-            remove_entrypoint_paths(
+            remove_new_entrypoint_paths(
                 installed_entrypoints
                     .iter()
                     .map(|entrypoint| entrypoint.install_path.as_path()),
+                previous_entrypoints,
             );
             installed_tools.remove_environment(name)?;
 
@@ -954,19 +976,25 @@ pub(super) fn finalize_tool_install(
         }
 
         // Error if we're overwriting an existing entrypoint, unless the user passed `--force`.
-        if !force {
+        if conflict_policy != EntrypointConflictPolicy::Overwrite {
             let mut existing_entrypoints = target_entrypoints
                 .iter()
-                .filter(|(_, _, target_path)| target_path.exists())
+                .filter(|(_, _, target_path)| {
+                    target_path.exists()
+                        && !previous_entrypoints.iter().any(|entry| {
+                            same_entrypoint_destination(target_path, &entry.install_path)
+                        })
+                })
                 .peekable();
             if existing_entrypoints.peek().is_some() {
                 // Clean up the environment we just created
-                remove_entrypoint_paths(
+                remove_new_entrypoint_paths(
                     installed_entrypoints
                         .iter()
                         .map(|entrypoint| entrypoint.install_path.as_path()),
+                    previous_entrypoints,
                 );
-                if remove_environment_on_conflict {
+                if conflict_policy == EntrypointConflictPolicy::RejectAndRemoveEnvironment {
                     installed_tools.remove_environment(name)?;
                 }
 
@@ -996,16 +1024,33 @@ pub(super) fn finalize_tool_install(
         for (name, src, target) in target_entrypoints {
             debug!("Installing executable: {name}");
 
-            #[cfg(unix)]
-            replace_symlink(src, &target).context("Failed to install executable")?;
-
-            #[cfg(windows)]
-            if itself.as_ref().is_some_and(|itself| {
-                std::path::absolute(&target).is_ok_and(|target| *itself == target)
-            }) {
-                self_replace::self_replace(src).context("Failed to install entrypoint")?;
-            } else {
-                fs_err::copy(src, &target).context("Failed to install entrypoint")?;
+            let result = {
+                #[cfg(unix)]
+                {
+                    replace_symlink(src, &target).context("Failed to install executable")
+                }
+                #[cfg(windows)]
+                {
+                    if itself.as_ref().is_some_and(|itself| {
+                        std::path::absolute(&target).is_ok_and(|target| *itself == target)
+                    }) {
+                        self_replace::self_replace(src).context("Failed to install entrypoint")
+                    } else {
+                        fs_err::copy(src, &target)
+                            .map(|_| ())
+                            .context("Failed to install entrypoint")
+                    }
+                }
+            };
+            if let Err(err) = result {
+                remove_new_entrypoint_paths(
+                    installed_entrypoints
+                        .iter()
+                        .map(|entrypoint| entrypoint.install_path.as_path())
+                        .chain(std::iter::once(target.as_path())),
+                    previous_entrypoints,
+                );
+                return Err(err);
             }
 
             let tool_entry = ToolEntrypoint::new(&name, target, package.to_string());
@@ -1028,6 +1073,15 @@ pub(super) fn finalize_tool_install(
     }
 
     debug!("Adding receipt for tool `{name}`");
+    let obsolete_entrypoints = previous_entrypoints
+        .iter()
+        .filter(|previous| {
+            !installed_entrypoints.iter().any(|installed| {
+                same_entrypoint_destination(&previous.install_path, &installed.install_path)
+            })
+        })
+        .map(|entry| entry.install_path.as_path())
+        .collect::<Vec<_>>();
     let tool = Tool::new(
         requirements,
         constraints,
@@ -1040,6 +1094,8 @@ pub(super) fn finalize_tool_install(
     );
     ToolLock::write(&installed_tools.tool_dir(name), lock)?;
     installed_tools.add_tool_receipt(name, tool)?;
+    // A bin-directory migration keeps the old launchers until every replacement is available.
+    remove_entrypoint_paths(obsolete_entrypoints);
 
     warn_out_of_path(&executable_directory);
 
