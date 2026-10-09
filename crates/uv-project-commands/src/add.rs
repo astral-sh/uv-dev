@@ -40,6 +40,7 @@ use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, Pa
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
 use uv_project_edit::{ArrayEdit, DependencyTarget, PyProjectTomlMut};
+use uv_pypi_types::ParsedUrl;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -196,6 +197,10 @@ pub async fn add(
     // Default groups we need the actual project for, interpreter discovery will use this!
     let defaulted_groups;
 
+    let requirements_client_builder = client_builder
+        .clone()
+        .keyring(settings.resolver.keyring_provider);
+    let mut specification = None;
     let _metadata_lock;
     let (mut target, python_target) = if let Some(script) = script {
         // If we found a PEP 723 script and the user provided a project-only setting, warn.
@@ -295,8 +300,7 @@ pub async fn add(
             .await?
         };
 
-        let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
-        _metadata_lock = lock;
+        let (project, mut lock) = MetadataLock::admitted_project(admission.take(), project)?;
 
         // For non-project workspace roots, allow dev dependencies, but nothing else.
         // TODO(charlie): Automatically "upgrade" the project by adding a `[project]` table.
@@ -318,6 +322,54 @@ pub async fn add(
                 DependencyType::Dev => (),
             }
         }
+
+        // Requirements can introduce workspace members. Admit their previous metadata resources
+        // before environment creation or interpreter locking, which can itself wait on a writer.
+        let parsed = RequirementsSpecification::from_sources(
+            &requirements,
+            &constraints,
+            &[],
+            &[],
+            None,
+            &requirements_client_builder,
+        )
+        .await?;
+        let mut members = Vec::new();
+        for requirement in &parsed.requirements {
+            let install_path = match &requirement.requirement {
+                UnresolvedRequirement::Named(requirement) => {
+                    if let RequirementSource::Directory { install_path, .. } = &requirement.source {
+                        Some(install_path)
+                    } else {
+                        None
+                    }
+                }
+                UnresolvedRequirement::Unnamed(requirement) => {
+                    if let ParsedUrl::Directory(directory) = &requirement.url.parsed_url {
+                        Some(&directory.install_path)
+                    } else {
+                        None
+                    }
+                }
+            };
+            let Some(install_path) = install_path else {
+                continue;
+            };
+            let path = if install_path.is_absolute() {
+                install_path.to_path_buf()
+            } else {
+                project.root().join(install_path)
+            };
+            // Membership policy uses the declared path; canonicalization only identifies locks.
+            if workspace.unwrap_or_else(|| path.starts_with(project.workspace().install_path()))
+                && !project.workspace().includes(&path)?
+            {
+                members.push(path);
+            }
+        }
+        lock.admit_members(&members, cache).await?;
+        _metadata_lock = lock;
+        specification = Some(parsed);
 
         // Enable the default groups of the project
         defaulted_groups = groups.with_defaults(project.default_groups()?);
@@ -392,24 +444,26 @@ pub async fn add(
         })
         .ok();
 
-    let client_builder = client_builder
-        .clone()
-        .keyring(settings.resolver.keyring_provider);
+    let client_builder = requirements_client_builder;
 
     // Read the requirements.
     let RequirementsSpecification {
         requirements,
         constraints,
         ..
-    } = RequirementsSpecification::from_sources(
-        &requirements,
-        &constraints,
-        &[],
-        &[],
-        None,
-        &client_builder,
-    )
-    .await?;
+    } = if let Some(specification) = specification {
+        specification
+    } else {
+        RequirementsSpecification::from_sources(
+            &requirements,
+            &constraints,
+            &[],
+            &[],
+            None,
+            &client_builder,
+        )
+        .await?
+    };
 
     // Initialize any shared state.
     let state = PlatformState::default();

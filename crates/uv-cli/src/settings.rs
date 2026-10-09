@@ -79,6 +79,7 @@ use crate::{
 #[derive(Clone, Copy)]
 pub enum MetadataTarget<'a> {
     Project,
+    ProjectEdit(Option<&'a PackageName>),
     Workspace,
     Script(&'a Path),
     ParentWorkspace(Option<&'a Path>),
@@ -112,12 +113,24 @@ pub fn metadata_target<'a>(
                     Some(MetadataTarget::ParentWorkspace(args.path.as_deref()))
                 }
             }
-            ProjectCommand::Add(args) => Some(target(args.script.as_ref())),
-            ProjectCommand::Remove(args) => Some(target(args.script.as_ref())),
-            ProjectCommand::Upgrade(_) => Some(MetadataTarget::Project),
+            ProjectCommand::Add(args) => Some(
+                args.script
+                    .as_ref()
+                    .map_or(MetadataTarget::ProjectEdit(args.package.as_ref()), |path| {
+                        MetadataTarget::Script(path)
+                    }),
+            ),
+            ProjectCommand::Remove(args) => Some(
+                args.script
+                    .as_ref()
+                    .map_or(MetadataTarget::ProjectEdit(args.package.as_ref()), |path| {
+                        MetadataTarget::Script(path)
+                    }),
+            ),
+            ProjectCommand::Upgrade(_) => Some(MetadataTarget::ProjectEdit(None)),
             ProjectCommand::Version(args) => (!args.dry_run
                 && (args.value.is_some() || !args.bump.is_empty()))
-            .then_some(MetadataTarget::Project),
+            .then_some(MetadataTarget::ProjectEdit(args.package.as_ref())),
             ProjectCommand::Run(args) => {
                 if !writable(args.locked, args.no_locked, args.frozen, args.no_frozen) {
                     None

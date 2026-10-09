@@ -55,12 +55,10 @@ fn export_reuses_admitted_workspace_discovery() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --no-hashes
 
     ----- stderr -----
-    DEBUG Found project root: [TEMP_DIR]/
     DEBUG Found workspace root: [TEMP_DIR]/
     TRACE Discovering workspace members for: [TEMP_DIR]/
     DEBUG Adding root workspace member: [TEMP_DIR]/
     DEBUG Ignoring workspace member: [TEMP_DIR]/member
-    DEBUG Found project root: [TEMP_DIR]/
     DEBUG Found workspace root: [TEMP_DIR]/
     TRACE Discovering workspace members for: [TEMP_DIR]/
     DEBUG Adding root workspace member: [TEMP_DIR]/

@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -7,19 +8,22 @@ use anyhow::{Context, Result, ensure};
 use uv_cache::Cache;
 use uv_cache_key::cache_digest;
 use uv_fs::{LockedFile, LockedFileMode, Simplified, normalize_path};
+use uv_normalize::PackageName;
 use uv_scripts::Pep723Script;
 use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache, WorkspaceError,
+    WorkspaceErrorKind,
 };
 
 /// The caller's accepted project roots, including whether dependency-group-only roots are valid.
 #[derive(Clone, Copy)]
-pub enum MetadataDiscovery {
+pub enum MetadataDiscovery<'a> {
     Project,
+    ProjectEdit(Option<&'a PackageName>),
     Workspace,
 }
 
-impl MetadataDiscovery {
+impl MetadataDiscovery<'_> {
     async fn root(
         self,
         directory: &Path,
@@ -27,13 +31,26 @@ impl MetadataDiscovery {
         cache: &Cache,
         workspace_cache: &WorkspaceCache,
     ) -> Result<PathBuf, WorkspaceError> {
-        match self {
-            Self::Project => VirtualProject::discover(directory, options, cache, workspace_cache)
-                .await
-                .map(|project| project.workspace().install_path().clone()),
-            Self::Workspace => Workspace::discover(directory, options, cache, workspace_cache)
-                .await
-                .map(|workspace| workspace.install_path().clone()),
+        // Workspace discovery reports deprecations and retains root-level sources and indexes.
+        // Dependency-group-only roots additionally require project discovery.
+        match (
+            self,
+            Workspace::discover(directory, options, cache, workspace_cache).await,
+        ) {
+            (Self::Project | Self::ProjectEdit(_) | Self::Workspace, Ok(workspace)) => {
+                Ok(workspace.install_path().clone())
+            }
+            (Self::Project | Self::ProjectEdit(_), Err(error))
+                if matches!(
+                    error.as_ref(),
+                    WorkspaceErrorKind::MissingProject(_) | WorkspaceErrorKind::NonWorkspace(_)
+                ) =>
+            {
+                VirtualProject::discover(directory, options, cache, &WorkspaceCache::default())
+                    .await
+                    .map(|project| project.workspace().install_path().clone())
+            }
+            (Self::Project | Self::ProjectEdit(_) | Self::Workspace, Err(error)) => Err(error),
         }
     }
 }
@@ -42,7 +59,8 @@ impl MetadataDiscovery {
 #[must_use]
 #[derive(Clone)]
 pub struct MetadataLock {
-    file: Arc<LockedFile>,
+    files: BTreeMap<PathBuf, Arc<LockedFile>>,
+    project: Option<PathBuf>,
     resource: PathBuf,
     kind: &'static str,
 }
@@ -54,14 +72,16 @@ impl MetadataLock {
         cache: &Cache,
         workspace_cache: &mut WorkspaceCache,
         members: MemberDiscovery,
-        discovery: MetadataDiscovery,
+        discovery: MetadataDiscovery<'_>,
     ) -> Result<Option<Self>> {
         let directory = std::path::absolute(directory)?;
         let directory = normalize_path(&directory);
         let options = DiscoveryOptions {
             members: MemberDiscovery::None,
+            suppress_warnings: true,
             ..DiscoveryOptions::default()
         };
+        let mut resources = BTreeSet::new();
         loop {
             let Ok(root) = discovery
                 .root(&directory, &options, cache, &WorkspaceCache::default())
@@ -70,30 +90,92 @@ impl MetadataLock {
                 return Ok(None);
             };
             let root = fs_err::canonicalize(root)?;
-            let lock = Self::workspace(&root).await?;
+            resources.insert(root.clone());
+            let mut files = BTreeMap::new();
+            for resource in &resources {
+                files.insert(
+                    resource.clone(),
+                    Arc::new(Self::acquire_file(resource, "workspace").await?),
+                );
+            }
+            let mut lock = Self {
+                files,
+                project: None,
+                resource: root.clone(),
+                kind: "workspace",
+            };
             let fresh_cache = WorkspaceCache::default();
             let discovered = discovery
                 .root(
                     &directory,
                     &DiscoveryOptions {
                         members: members.clone(),
+                        suppress_warnings: members == MemberDiscovery::None,
                         ..DiscoveryOptions::default()
                     },
                     cache,
                     &fresh_cache,
                 )
                 .await;
-            match discovered {
-                Ok(current) if fs_err::canonicalize(&current)? != root => {
-                    // Drop this guard before retrying admission for the new workspace root.
+            let mut current_resources = BTreeSet::new();
+            if let Ok(current) = discovered {
+                current_resources.insert(fs_err::canonicalize(current)?);
+                if let MetadataDiscovery::ProjectEdit(package) = discovery {
+                    // Project selection can name a member outside the workspace's directory tree.
+                    // Its physical metadata resource also admits writers invoked in that member.
+                    let project_cache = WorkspaceCache::default();
+                    let selected = if let Some(package) = package {
+                        VirtualProject::discover_with_package(
+                            &directory,
+                            &DiscoveryOptions::default(),
+                            cache,
+                            &fresh_cache,
+                            package.clone(),
+                        )
+                        .await
+                    } else {
+                        VirtualProject::discover(
+                            &directory,
+                            &DiscoveryOptions::default(),
+                            cache,
+                            // A group-only project must not populate the strict workspace cache
+                            // used to select filesystem configuration.
+                            if Workspace::discover(
+                                &directory,
+                                &DiscoveryOptions::default(),
+                                cache,
+                                &fresh_cache,
+                            )
+                            .await
+                            .is_ok()
+                            {
+                                &fresh_cache
+                            } else {
+                                &project_cache
+                            },
+                        )
+                        .await
+                    };
+                    if let Ok(project) = selected {
+                        let selected = fs_err::canonicalize(project.root())?;
+                        current_resources.insert(selected.clone());
+                        lock.project = Some(selected);
+                    }
                 }
-                Ok(_) | Err(_) => {
-                    // Configuration and command discovery share the admitted result, including
-                    // discovery errors. Invalid workspaces are reported by the command itself.
-                    *workspace_cache = fresh_cache;
-                    return Ok(Some(lock));
+                if current_resources != resources {
+                    resources = current_resources;
+                    // Release the entire ordered set before retrying, while no settings or
+                    // command metadata have been derived from the admitted discovery.
+                    continue;
                 }
             }
+            *workspace_cache = fresh_cache;
+            if matches!(discovery, MetadataDiscovery::ProjectEdit(_)) && lock.project.is_none() {
+                // A later command may rediscover through a different cache. A failed selection
+                // must not become a valid edit admission without its physical project guard.
+                return Ok(None);
+            }
+            return Ok(Some(lock));
         }
     }
 
@@ -105,6 +187,7 @@ impl MetadataLock {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn workspace(root: &Path) -> Result<Self> {
         Self::acquire(&fs_err::canonicalize(root)?, "workspace").await
     }
@@ -128,18 +211,79 @@ impl MetadataLock {
         Self::acquire(&path, "script").await
     }
 
-    async fn acquire(path: &Path, kind: &'static str) -> Result<Self> {
-        let lock = LockedFile::acquire(
+    async fn acquire_file(path: &Path, kind: &'static str) -> Result<LockedFile> {
+        Ok(LockedFile::acquire(
             std::env::temp_dir().join(format!("uv-{kind}-metadata-{}.lock", cache_digest(&path))),
             LockedFileMode::Exclusive,
             path.simplified_display(),
         )
-        .await?;
+        .await?)
+    }
+
+    async fn acquire(path: &Path, kind: &'static str) -> Result<Self> {
+        let lock = Self::acquire_file(path, kind).await?;
         Ok(Self {
-            file: Arc::new(lock),
+            files: BTreeMap::from([(path.to_path_buf(), Arc::new(lock))]),
+            project: None,
             resource: path.to_path_buf(),
             kind,
         })
+    }
+
+    /// Admit a prospective member and its previous workspace before resolving its metadata.
+    ///
+    /// The original resources stay locked because settings have already been read. A contended
+    /// lower key requires a fresh command rather than introducing a reverse-order wait.
+    pub async fn admit_members(&mut self, paths: &[PathBuf], cache: &Cache) -> Result<()> {
+        loop {
+            let mut resources = BTreeSet::new();
+            for path in paths {
+                resources.insert(fs_err::canonicalize(path)?);
+                if let Ok(workspace) = Workspace::discover(
+                    path,
+                    &DiscoveryOptions {
+                        members: MemberDiscovery::None,
+                        suppress_warnings: true,
+                        ..DiscoveryOptions::default()
+                    },
+                    cache,
+                    &WorkspaceCache::default(),
+                )
+                .await
+                {
+                    resources.insert(fs_err::canonicalize(workspace.install_path())?);
+                }
+            }
+            if resources
+                .iter()
+                .all(|resource| self.files.contains_key(resource))
+            {
+                return Ok(());
+            }
+            for resource in resources {
+                if self.files.contains_key(&resource) {
+                    continue;
+                }
+                let file = if self
+                    .files
+                    .last_key_value()
+                    .is_some_and(|(held, _)| resource < *held)
+                {
+                    LockedFile::acquire_no_wait(
+                    std::env::temp_dir().join(format!("uv-workspace-metadata-{}.lock", cache_digest(&resource))),
+                    LockedFileMode::Exclusive, resource.simplified_display(),
+                ).with_context(|| format!(
+                    "Could not immediately acquire metadata for `{}` while admitting a workspace member; run the command again",
+                    resource.user_display(),
+                ))?
+                } else {
+                    Self::acquire_file(&resource, "workspace").await?
+                };
+                self.files.insert(resource, Arc::new(file));
+            }
+            // A candidate may have joined another workspace while admission was queued. Re-read
+            // its roots with the physical project guard held before deriving build metadata.
+        }
     }
 
     /// Reuse the project discovered while holding its metadata resource.
@@ -150,6 +294,12 @@ impl MetadataLock {
         let lock = admission
             .context("Workspace changed before metadata admission; run the command again")?;
         lock.check_resource(project.workspace().install_path(), "workspace")?;
+        if let Some(selected) = &lock.project {
+            ensure!(
+                *selected == fs_err::canonicalize(project.root())?,
+                "Selected project changed after settings were read; run the command again"
+            );
+        }
         Ok((project, lock))
     }
 
@@ -218,9 +368,8 @@ impl MetadataLock {
         self,
         write: impl FnOnce() -> io::Result<()> + Send + 'static,
     ) -> io::Result<()> {
-        let lock = self.file;
         tokio::task::spawn_blocking(move || {
-            let _lock = lock;
+            let _lock = self;
             write()
         })
         .await
@@ -241,17 +390,25 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    use uv_cache::Cache;
     use uv_cache_key::cache_digest;
     use uv_fs::{LockedFile, LockedFileMode};
 
-    use super::MetadataLock;
+    use uv_normalize::PackageName;
+    use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
+
+    use super::{MetadataDiscovery, MetadataLock};
 
     #[tokio::test]
     async fn cancelled_write_retains_metadata_admission() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
         let root = fs_err::canonicalize(directory.path())?;
         let path = root.join("uv.lock");
-        let lock = MetadataLock::workspace(&root).await?;
+        let mut lock = MetadataLock::workspace(&root).await?;
+        let member = root.join("member");
+        fs_err::create_dir(&member)?;
+        lock.admit_members(std::slice::from_ref(&member), &Cache::temp()?)
+            .await?;
         let (started, started_receiver) = tokio::sync::oneshot::channel();
         let (release, release_receiver) = mpsc::channel();
         let (finished, finished_receiver) = tokio::sync::oneshot::channel();
@@ -283,12 +440,83 @@ mod tests {
             "metadata writer",
         )
         .is_none();
+        let member_contended = LockedFile::acquire_no_wait(
+            std::env::temp_dir().join(format!(
+                "uv-workspace-metadata-{}.lock",
+                cache_digest(&member)
+            )),
+            LockedFileMode::Exclusive,
+            "member metadata writer",
+        )
+        .is_none();
         release.send(())?;
         tokio::time::timeout(Duration::from_secs(30), finished_receiver).await??;
         let _next =
             tokio::time::timeout(Duration::from_secs(30), MetadataLock::workspace(&root)).await??;
         assert!(contended);
+        assert!(member_contended);
         assert_eq!(fs_err::read_to_string(path)?, "completed lockfile");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_member_discovery_cannot_authorize_a_later_edit() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("workspace");
+        let member = directory.path().join("external-member");
+        fs_err::create_dir(&root)?;
+        fs_err::create_dir(&member)?;
+        fs_err::write(
+            root.join("pyproject.toml"),
+            format!(
+                "[tool.uv.workspace]\nmembers = [{}]\n",
+                toml::Value::String(member.to_string_lossy().into_owned()),
+            ),
+        )?;
+        let manifest = member.join("pyproject.toml");
+        fs_err::write(&manifest, "[invalid")?;
+        let _writer = MetadataLock::workspace(&member).await?;
+        let cache = Cache::temp()?;
+        let package: PackageName = "dep".parse()?;
+        let admission = MetadataLock::discover(
+            &root,
+            &cache,
+            &mut WorkspaceCache::default(),
+            MemberDiscovery::All,
+            MetadataDiscovery::ProjectEdit(Some(&package)),
+        )
+        .await?;
+
+        fs_err::write(&manifest, "[project]\nname = 'dep'\nversion = '1.0.0'\n")?;
+        // Filesystem configuration can select a new cache directory after initial admission.
+        let project = VirtualProject::discover_with_package(
+            &root,
+            &DiscoveryOptions::default(),
+            &cache,
+            &WorkspaceCache::default(),
+            package,
+        )
+        .await?;
+        assert!(MetadataLock::admitted_project(admission, project).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contended_lower_member_requires_fresh_admission() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let earlier = directory.path().join("a-member");
+        let later = directory.path().join("z-workspace");
+        fs_err::create_dir(&earlier)?;
+        fs_err::create_dir(&later)?;
+        let _member = MetadataLock::workspace(&earlier).await?;
+        let mut lock = MetadataLock::workspace(&later).await?;
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            lock.admit_members(&[earlier], &Cache::temp()?),
+        )
+        .await?
+        .expect_err("a reverse-order wait requires a fresh command");
+        assert!(error.to_string().contains("run the command again"));
         Ok(())
     }
 

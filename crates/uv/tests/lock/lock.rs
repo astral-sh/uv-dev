@@ -26790,6 +26790,77 @@ fn lock_non_project_group_standard() -> Result<()> {
     Ok(())
 }
 
+/// Group-only roots are valid project inputs even when excluded from workspace discovery.
+#[cfg(feature = "test-python")]
+#[test]
+fn lock_non_project_group_unmanaged() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r"
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        managed = false
+    "})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved in [TIME]
+    ");
+    Ok(())
+}
+
+/// Filesystem configuration follows the invocation directory for group-only projects.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_non_project_uses_subdirectory_config() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let index = PackseServer::new("simple/single-package.toml");
+    let unused_index = PackseServer::empty();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {
+            r#"
+        [dependency-groups]
+        dev = ["a==1.0.0"]
+
+        [[tool.uv.index]]
+        url = "{url}"
+        default = true
+        "#,
+            url = unused_index.index_url(),
+        })?;
+    let subdirectory = context.temp_dir.child("subdirectory");
+    subdirectory.create_dir_all()?;
+    subdirectory.child("uv.toml").write_str(&formatdoc! {
+        r#"
+        [[index]]
+        url = "{url}"
+        default = true
+        "#,
+        url = index.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.lock().current_dir(&subdirectory), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved 1 package in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock["package"][0]["source"]["registry"].as_str(),
+        Some(index.index_url().as_str())
+    );
+    Ok(())
+}
+
 /// Lock a non-project workspace root with `tool.uv.sources`.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -27939,10 +28010,10 @@ fn lock_explicit_default_index() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--verbose"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    DEBUG Found project root: [TEMP_DIR]/
-    DEBUG No workspace root found, using project root
-    DEBUG Found project root: [TEMP_DIR]/
-    DEBUG No workspace root found, using project root
+    DEBUG Found workspace root: [TEMP_DIR]/
+    DEBUG Adding root workspace member: [TEMP_DIR]/
+    DEBUG Found workspace root: [TEMP_DIR]/
+    DEBUG Adding root workspace member: [TEMP_DIR]/
     DEBUG Found workspace configuration at `[TEMP_DIR]/pyproject.toml`
     DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
     DEBUG uv [VERSION] ([COMMIT] DATE)

@@ -2310,6 +2310,16 @@ async fn claim_metadata(
             )
             .await
         }
+        Some(settings::MetadataTarget::ProjectEdit(package)) => {
+            MetadataLock::discover(
+                project_dir,
+                cache,
+                workspace_cache,
+                MemberDiscovery::All,
+                MetadataDiscovery::ProjectEdit(package),
+            )
+            .await
+        }
         Some(settings::MetadataTarget::Workspace) => {
             MetadataLock::discover(
                 project_dir,

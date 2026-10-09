@@ -232,6 +232,9 @@ async fn workspace_membership_does_not_hold_the_members_interpreter_before_admis
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = []
+
+        [tool.uv]
+        package = false
     "#})?;
     local_wheel(&context, "alpha")?;
 
@@ -274,6 +277,9 @@ async fn workspace_membership_does_not_hold_the_members_interpreter_before_admis
     dependencies = [
         "alpha==1",
     ]
+
+    [tool.uv]
+    package = false
     "#);
     Ok(())
 }
@@ -576,6 +582,51 @@ async fn queued_lock_uses_the_current_manifest() -> Result<()> {
         toml::from_str(&fs_err::read_to_string(context.temp_dir.join("uv.lock"))?)?;
     assert_eq!(lock["package"][0]["name"].as_str(), Some("project"));
     assert_eq!(lock["package"][0]["version"].as_str(), Some("0.2.0"));
+    Ok(())
+}
+
+#[test]
+fn initialization_reports_complete_workspace_deprecations_once() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        dev-dependencies = []
+
+        [tool.uv.workspace]
+        members = ["child"]
+    "#})?;
+    let child = context.temp_dir.child("child");
+    child.create_dir_all()?;
+    child.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        dev-dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.init().args([
+        "new", "--bare", "--vcs", "none", "--author-from", "none",
+        "--no-pin-python", "--python", "3.12",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `child/pyproject.toml`, `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Adding `new` as member of workspace `[TEMP_DIR]/`
+    Initialized project `new` at `[TEMP_DIR]/new`
+    ");
     Ok(())
 }
 
