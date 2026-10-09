@@ -74,7 +74,7 @@ impl<'lock> ExportableRequirements<'lock> {
 
         let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
         let mut seen = FxHashSet::default();
-        let mut activated_items = FxHashSet::default();
+        let mut activated_items = FxHashMap::default();
 
         let root = graph.add_node(Node::Root);
 
@@ -84,18 +84,8 @@ impl<'lock> ExportableRequirements<'lock> {
             .map(|root| (root, InstallableRootKind::Production))
             .chain(
                 target
-                    .group_root(groups)
-                    .map(|root| (root, InstallableRootKind::DependencyGroups)),
-            )
-            .chain(
-                target
-                    .lock()
-                    .workspace_group_roots(|group| target.includes_group(None, group, groups))
+                    .group_roots(groups)
                     .into_iter()
-                    .filter(|name| {
-                        !target.roots().any(|root| root == *name)
-                            && target.group_root(groups) != Some(*name)
-                    })
                     .map(|root| (root, InstallableRootKind::DependencyGroups)),
             )
         {
@@ -115,7 +105,10 @@ impl<'lock> ExportableRequirements<'lock> {
 
             if root_kind == InstallableRootKind::Production && groups.prod() {
                 // Track the activated package in the list of known conflicts.
-                activated_items.insert(ConflictItem::from(dist.id.name.clone()));
+                activated_items.insert(
+                    ConflictItem::from(dist.id.name.clone()),
+                    MarkerTree::TRUE,
+                );
 
                 let package_index = target.lock().by_id[&dist.id];
 
@@ -135,8 +128,10 @@ impl<'lock> ExportableRequirements<'lock> {
                 queue.push_back((package_index, None));
                 for extra in extras.extra_names(dist.optional_dependencies.keys()) {
                     queue.push_back((package_index, Some(extra)));
-                    activated_items
-                        .insert(ConflictItem::from((dist.id.name.clone(), extra.clone())));
+                    activated_items.insert(
+                        ConflictItem::from((dist.id.name.clone(), extra.clone())),
+                        MarkerTree::TRUE,
+                    );
                 }
             }
 
@@ -146,8 +141,12 @@ impl<'lock> ExportableRequirements<'lock> {
                 .iter()
                 .filter(|(group, _)| target.includes_group(Some(&dist.id.name), group, groups))
             {
-                // Empty selected groups still participate in conflicts.
-                activated_items.insert(ConflictItem::from((dist.id.name.clone(), group.clone())));
+                let group_marker = target.group_marker(&dist.id.name, group, groups);
+                // Track the environments where the selected group participates in conflicts.
+                activated_items.insert(
+                    ConflictItem::from((dist.id.name.clone(), group.clone())),
+                    group_marker,
+                );
 
                 for dep in dependencies {
                     if prune.contains(&dep.package_id.name) {
@@ -167,7 +166,10 @@ impl<'lock> ExportableRequirements<'lock> {
                         root,
                         dep_index,
                         Edge::Prod {
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
+                            marker: dep
+                                .simplified_marker
+                                .as_simplified_marker_tree()
+                                .and(group_marker),
                             dep_extras: dep.extra.iter().collect(),
                         },
                     );
@@ -434,7 +436,7 @@ impl Edge<'_> {
 fn conflict_marker_reachability<'lock>(
     graph: &Graph<Node<'lock>, Edge<'lock>>,
     root: NodeIndex,
-    known_conflicts: &FxHashSet<ConflictItem>,
+    known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
     conflicts: &Conflicts,
     include_package: impl Fn(&Package) -> bool,
 ) -> Result<FxHashMap<NodeIndex, MarkerTree>, LockError> {
@@ -477,15 +479,14 @@ fn conflict_marker_reachability<'lock>(
         if let Node::Package(package) = graph[package_index] {
             let item = ConflictItem::from((package.name().clone(), extra.clone()));
             solver.nodes[extra_index].extra_fact = variables.by_item.get(&item).copied();
-            if known_conflicts.contains(&item) {
-                // Selected extras belong to unique, unconditionally reached production roots.
-                solver.add_reachability(extra_index, MarkerTree::TRUE);
+            if let Some(marker) = known_conflicts.get(&item) {
+                solver.add_reachability(extra_index, *marker);
             }
         }
     }
-    for item in known_conflicts {
+    for (item, marker) in known_conflicts {
         if let Some(&fact) = variables.by_item.get(item) {
-            solver.activations[fact] = MarkerTree::TRUE;
+            solver.activations[fact] = *marker;
         }
     }
     solver.add_reachability(root.index(), MarkerTree::TRUE);
@@ -537,7 +538,7 @@ struct ConflictVariables {
 impl ConflictVariables {
     fn from_graph(
         graph: &Graph<Node<'_>, Edge<'_>>,
-        known_conflicts: &FxHashSet<ConflictItem>,
+        known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
         conflicts: &Conflicts,
     ) -> Self {
         let mut referenced_names = FxHashSet::default();
@@ -572,7 +573,7 @@ impl ConflictVariables {
         for item in &conflict_items {
             add_fact((*item).clone());
         }
-        for item in known_conflicts {
+        for item in known_conflicts.keys() {
             add_fact(item.clone());
         }
 

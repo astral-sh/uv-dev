@@ -1455,7 +1455,7 @@ impl Metadata {
                                     MetadataNodeKind::Group(included.group.clone()),
                                 )
                                 .to_flat(),
-                                marker: None,
+                                marker: included.marker.contents().map(|marker| marker.to_string()),
                             });
                         }
                     }

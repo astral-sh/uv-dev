@@ -17,7 +17,7 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
-use uv_lock::{GroupMetadata, Lock, ResolverManifest};
+use uv_lock::{GroupMetadata, Lock, ResolverManifest, RootDependencyGroup};
 use uv_normalize::PackageName;
 use uv_pep508::RequirementOrigin;
 use uv_preview::{Preview, PreviewFeature};
@@ -458,7 +458,13 @@ async fn do_lock(
                 client_builder.credentials_cache(),
             )
             .await?;
-        lowered_dependency_groups.insert(name, requirements);
+        lowered_dependency_groups.insert(
+            name,
+            RootDependencyGroup {
+                requirements,
+                workspace_includes: group.workspace_includes,
+            },
+        );
     }
     let dependency_groups = lowered_dependency_groups;
 
@@ -929,7 +935,7 @@ async fn do_lock(
                     .chain(
                         dependency_groups
                             .values()
-                            .flat_map(|requirements| requirements.iter().cloned())
+                            .flat_map(|group| group.requirements.iter().cloned())
                             // Imported requirements already enter resolution through their
                             // member groups above. Their flattened lock-manifest copies must
                             // not become unconditional root dependencies.

@@ -201,20 +201,12 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         includes_root_group.then_some(root.name())
     }
 
-    fn includes_group(
+    fn directly_includes_group(
         &self,
         package: Option<&PackageName>,
         group: &GroupName,
         groups: &DependencyGroupsWithDefaults,
     ) -> bool {
-        if package.is_some_and(|package| {
-            self.lock()
-                .includes_workspace_group(package, group, |group| {
-                    self.includes_group(None, group, groups)
-                })
-        }) {
-            return true;
-        }
         if !groups.contains(group) {
             return false;
         }
@@ -827,7 +819,8 @@ impl<'lock> InstallTarget<'lock> {
                     .copied()
                     .map(|name| (name, InstallableRootKind::Production))
                     .chain(
-                        self.group_root(groups)
+                        self.group_roots(groups)
+                            .into_iter()
                             .map(|name| (name, InstallableRootKind::DependencyGroups)),
                     )
                 {

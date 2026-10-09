@@ -11,7 +11,7 @@ use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
 use uv_normalize::{DEV_DEPENDENCIES, GroupName, PackageName};
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::{Pep508Error, RequirementOrigin};
+use uv_pep508::{MarkerTree, Pep508Error, RequirementOrigin};
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{DependencyGroupSpecifier, VerbatimParsedUrl};
 use uv_warnings::warn_user_once;
@@ -29,6 +29,20 @@ pub struct FlatDependencyGroups(BTreeMap<GroupName, FlatDependencyGroup>);
 pub struct FlatDependencyGroup {
     pub requirements: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
     pub requires_python: Option<VersionSpecifiers>,
+    /// Workspace group references, retaining conditions added by their importing groups.
+    pub workspace_includes: Vec<WorkspaceGroupReference>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceGroupReference {
+    pub package: PackageName,
+    pub group: GroupName,
+    #[serde(
+        default,
+        skip_serializing_if = "uv_pep508::marker::ser::is_empty",
+        serialize_with = "uv_pep508::marker::ser::serialize"
+    )]
+    pub marker: MarkerTree,
 }
 
 #[derive(Debug, Default)]
@@ -332,6 +346,7 @@ impl FlatDependencyGroups {
 
             parents.push(name);
             let mut requirements = Vec::with_capacity(specifiers.len());
+            let mut workspace_includes = Vec::new();
             let mut requires_python_intersection = VersionSpecifiers::empty();
             for specifier in *specifiers {
                 match specifier {
@@ -358,6 +373,7 @@ impl FlatDependencyGroups {
                         )?;
                         if let Some(included) = resolved.get(include_group) {
                             requirements.extend(included.requirements.iter().cloned());
+                            workspace_includes.extend(included.workspace_includes.iter().cloned());
 
                             // Intersect the requires-python for this group with the included group's
                             requires_python_intersection = requires_python_intersection
@@ -427,6 +443,18 @@ impl FlatDependencyGroups {
                 }
 
                 requirements.extend(included.requirements.iter().cloned());
+                match include {
+                    WorkspaceGroupInclude::Root(_) => {
+                        workspace_includes.extend(included.workspace_includes.iter().cloned());
+                    }
+                    WorkspaceGroupInclude::Package(include) => {
+                        workspace_includes.push(WorkspaceGroupReference {
+                            package: include.package.clone(),
+                            group: include.group.clone(),
+                            marker: MarkerTree::TRUE,
+                        });
+                    }
+                }
                 requires_python_intersection = requires_python_intersection
                     .into_iter()
                     .chain(included.requires_python.clone().into_iter().flatten())
@@ -444,10 +472,13 @@ impl FlatDependencyGroups {
                 // Add the group requires-python as a marker to each requirement
                 // We don't use `requires_python_intersection` because each `include-group`
                 // should already have its markers applied to these.
+                let extra_markers =
+                    RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree();
                 for requirement in &mut requirements {
-                    let extra_markers =
-                        RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree();
                     requirement.marker = requirement.marker.and(extra_markers);
+                }
+                for include in &mut workspace_includes {
+                    include.marker = include.marker.and(extra_markers);
                 }
             }
 
@@ -457,6 +488,7 @@ impl FlatDependencyGroups {
                 name.clone(),
                 FlatDependencyGroup {
                     requirements,
+                    workspace_includes,
                     requires_python: if requires_python_intersection.is_empty() {
                         None
                     } else {
