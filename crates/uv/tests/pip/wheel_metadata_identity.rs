@@ -428,18 +428,19 @@ fn installed_wheel_metadata_can_omit_local_version() -> Result<()> {
 fn complete_wheel_version_mismatch_backtracks() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let marker = context.temp_dir.child("backend-ran");
-    let dependency = context.temp_dir.child("child-1.0.tar.gz");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let dependency = wheels.child("child-1.0.tar.gz");
     dependency.write_binary(&generate_source_archive(
         &"child".parse()?,
         &"1.0".parse()?,
         "",
         Some(marker.path()),
     )?)?;
-    let dependency_url = Url::from_file_path(dependency.path()).expect("absolute fixture path");
     let (_, invalid) = generate_wheel(
         &"demo".parse()?,
         &"3.0".parse()?,
-        &[format!("child @ {dependency_url}").parse()?],
+        &["child==1.0".parse()?],
         &BTreeMap::new(),
         None,
         "py3-none-any",
@@ -454,8 +455,6 @@ fn complete_wheel_version_mismatch_backtracks() -> Result<()> {
         "py3-none-any",
         &[],
     );
-    let wheels = context.temp_dir.child("wheels");
-    wheels.create_dir_all()?;
     wheels
         .child("demo-2.0-py3-none-any.whl")
         .write_binary(&invalid)?;
