@@ -20,7 +20,7 @@ use uv_configuration::{
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
+use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, HashCollection, Index, IndexLocations,
     MinimumLibcVersion, NameRequirementSpecification, Origin, PackageConfigSettings, Requirement,

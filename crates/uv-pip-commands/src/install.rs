@@ -16,7 +16,7 @@ use uv_configuration::{
     Modifications, NoSources, Override, PipInstallFormat, Reinstall, TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
+use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, Name,
     NameRequirementSpecification, Origin, PackageConfigSettings, Requirement, Resolution,

@@ -21,7 +21,7 @@ use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, Excludes, GitLfsSetting,
     Overrides, TargetTriple, ToolRunCommand,
 };
-use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
+use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
     IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,

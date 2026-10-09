@@ -15,7 +15,7 @@ use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, DryRun, Excludes, GitLfsSetting,
     HashCheckingMode, Modifications, Overrides, Reinstall, TargetTriple, Upgrade,
 };
-use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
+use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
     RequirementSource, UnresolvedRequirementSpecification,

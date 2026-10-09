@@ -14,7 +14,7 @@ use uv_configuration::{
     ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
-use uv_distribution::{DistributionDatabase, LoweringContext, SourcedDependencyGroups};
+use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
 use uv_distribution_types::{
     Diagnostic, NameRequirementSpecification, Requirement, RequirementScope, RequirementSource,
     ResolutionDiagnostic, ResolutionRecorder, UnresolvedRequirement,

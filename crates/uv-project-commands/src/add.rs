@@ -20,7 +20,7 @@ use uv_configuration::{
     GitLfsSetting, InstallOptions, Modifications, NoSources,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
-use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, LoweringContext};
+use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     Identifier, Index, IndexLocations, IndexName, IndexUrl, NameRequirementSpecification,
     Requirement, RequirementSource, UnresolvedRequirement,

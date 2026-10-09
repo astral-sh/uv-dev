@@ -24,7 +24,7 @@ use uv_configuration::{
     IndexStrategy, KeyringProviderType, NoSources,
 };
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
+use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_filename::{
     DistFilename, SourceDistExtension, SourceDistFilename, WheelFilename,
 };
