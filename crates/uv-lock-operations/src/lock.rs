@@ -915,20 +915,23 @@ async fn do_lock(
                     }),
             );
 
-            // Expand the available extras for each workspace member.
-            let member_requirements = ExtrasResolver::new(&hasher, state.index(), database)
+            // Every workspace member retains its local source, even when it is only a transitive
+            // dependency of a resolution root.
+            let workspace_members = target
+                .members_requirements()
+                .map(|requirement| (requirement.name, requirement.source))
+                .collect();
+
+            // Expand the available extras only for workspace resolution roots.
+            let root_requirements = ExtrasResolver::new(&hasher, state.index(), database)
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(target.members_requirements())
+                .resolve(target.resolution_root_requirements())
                 .await
                 .map_err(ResolveError::from)?;
-            let workspace_members = member_requirements
-                .iter()
-                .map(|requirement| (requirement.name.clone(), requirement.source.clone()))
-                .collect();
 
             // Resolve the requirements.
             let (resolution, _) = uv_resolve_operations::resolve(
-                member_requirements
+                root_requirements
                     .into_iter()
                     .chain(target.group_requirements())
                     .chain(requirements.iter().cloned())

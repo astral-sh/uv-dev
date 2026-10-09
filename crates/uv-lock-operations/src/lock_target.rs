@@ -193,11 +193,19 @@ impl<'lock> LockTarget<'lock> {
         match self {
             Self::Workspace(workspace) => workspace.resolution_roots().map(|_| {
                 workspace
-                    .members_requirements()
+                    .resolution_root_requirements()
                     .map(|requirement| (requirement.name, requirement.marker))
                     .collect()
             }),
             Self::Script(_) => None,
+        }
+    }
+
+    /// Returns the workspace requirements that seed resolution.
+    pub(crate) fn resolution_root_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
+        match self {
+            Self::Workspace(workspace) => Either::Left(workspace.resolution_root_requirements()),
+            Self::Script(_) => Either::Right(std::iter::empty()),
         }
     }
 
