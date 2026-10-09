@@ -863,7 +863,11 @@ pub async fn install(
                     },
                 ..
             } = &settings;
-            let extra_build_requires = extra_build_requires.match_runtime(&resolution)?;
+            let extra_build_requires = if locked {
+                extra_build_requires.match_runtime(&resolution)?
+            } else {
+                extra_build_requires
+            };
             let tags = resolution_tags(None, python_platform.as_ref(), environment.interpreter())?;
             let hash_strategy =
                 HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
@@ -1108,7 +1112,11 @@ pub async fn install(
                 (resolution.into(), interpreter, None)
             }
         };
-        let extra_build_requires = extra_build_requires.match_runtime(&resolution)?;
+        let extra_build_requires = if locked {
+            extra_build_requires.match_runtime(&resolution)?
+        } else {
+            extra_build_requires
+        };
         let hash_strategy = if tool_lock.is_some() {
             HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?
         } else {
