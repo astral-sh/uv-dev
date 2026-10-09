@@ -69,7 +69,7 @@ use uv_resolver_types::{
 use uv_small_str::SmallString;
 use uv_types::{BuildContext, HashStrategy};
 use uv_warnings::warn_user_once;
-use uv_workspace::dependency_groups::DependencyGroupError;
+use uv_workspace::dependency_groups::{DependencyGroupError, WorkspaceGroupReference};
 use uv_workspace::{Editability, WorkspaceMember};
 
 pub use crate::lock::deserialize::Error as CanonicalLockError;
@@ -3306,20 +3306,32 @@ impl Lock {
     }
 
     /// Return whether a selected non-project root group includes the given member group.
-    pub fn includes_workspace_group(
+    fn includes_workspace_group(
         &self,
         package: &PackageName,
         group: &GroupName,
         includes_root: impl Fn(&GroupName) -> bool,
     ) -> bool {
+        !self
+            .workspace_group_marker(package, group, includes_root)
+            .is_false()
+    }
+
+    /// Return the environments where selected root groups include a member group.
+    fn workspace_group_marker(
+        &self,
+        package: &PackageName,
+        group: &GroupName,
+        includes_root: impl Fn(&GroupName) -> bool,
+    ) -> MarkerTree {
         self.manifest
             .dependency_group_includes
             .iter()
-            .any(|(root_group, includes)| {
-                includes_root(root_group)
-                    && includes
-                        .iter()
-                        .any(|included| &included.package == package && &included.group == group)
+            .filter(|(root_group, _)| includes_root(root_group))
+            .flat_map(|(_, includes)| includes)
+            .filter(|included| &included.package == package && &included.group == group)
+            .fold(MarkerTree::FALSE, |marker, included| {
+                marker.or(included.marker)
             })
     }
 
@@ -3409,6 +3421,9 @@ impl Lock {
             }
             for (group, includes) in &self.manifest.dependency_group_includes {
                 for included in includes {
+                    if !included.marker.evaluate(marker_environment, &[]) {
+                        continue;
+                    }
                     let Some(member) = self.find_by_name(&included.package)? else {
                         continue;
                     };
@@ -4276,7 +4291,7 @@ impl Lock {
         overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
         build_constraints: &Constraints,
-        dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
+        dependency_groups: &BTreeMap<GroupName, RootDependencyGroup>,
         workspace_group_metadata: &BTreeMap<GroupName, GroupMetadata>,
         member_group_metadata: &BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>,
         workspace_default_groups: Option<&DefaultGroups>,
@@ -4588,9 +4603,11 @@ impl Lock {
         let root_requirements = dependency_modifiers
             .apply(
                 DependencyModifierScope::Global,
-                requirements
-                    .iter()
-                    .chain(dependency_groups.values().flatten()),
+                requirements.iter().chain(
+                    dependency_groups
+                        .values()
+                        .flat_map(|group| &group.requirements),
+                ),
             )
             .collect::<Vec<_>>();
         let dependency_sources = if allow_missing_package_metadata {
@@ -6400,7 +6417,7 @@ pub struct ResolverManifest {
     dependency_groups: BTreeMap<GroupName, BTreeSet<Requirement>>,
     /// Member groups included by groups on a non-project workspace root.
     #[serde(default)]
-    dependency_group_includes: BTreeMap<GroupName, BTreeSet<WorkspaceGroup>>,
+    dependency_group_includes: BTreeMap<GroupName, BTreeSet<WorkspaceGroupReference>>,
     /// The constraints provided to the resolver.
     #[serde(default)]
     constraints: BTreeSet<Requirement>,
@@ -6418,40 +6435,44 @@ pub struct ResolverManifest {
     dependency_metadata: BTreeSet<StaticMetadata>,
 }
 
-/// A dependency group whose resolved edges belong to a workspace member.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, serde::Serialize)]
-struct WorkspaceGroup {
-    package: PackageName,
-    group: GroupName,
+/// Lowered declarations and workspace references for a non-project root dependency group.
+#[derive(Clone, Debug, Default)]
+pub struct RootDependencyGroup {
+    pub requirements: Vec<Requirement>,
+    pub workspace_includes: Vec<WorkspaceGroupReference>,
 }
 
 #[derive(Default)]
 struct ManifestDependencyGroups {
     requirements: BTreeMap<GroupName, Vec<Requirement>>,
-    includes: BTreeMap<GroupName, BTreeSet<WorkspaceGroup>>,
+    includes: BTreeMap<GroupName, BTreeSet<WorkspaceGroupReference>>,
 }
 
 impl ManifestDependencyGroups {
-    fn from_requirements(groups: impl IntoIterator<Item = (GroupName, Vec<Requirement>)>) -> Self {
+    fn from_requirements(
+        groups: impl IntoIterator<Item = (GroupName, RootDependencyGroup)>,
+    ) -> Self {
         let mut manifest = Self::default();
-        for (group, requirements) in groups {
-            let direct = manifest.requirements.entry(group.clone()).or_default();
-            for requirement in requirements {
-                if let Some(RequirementOrigin::Group(_, Some(package), source_group)) =
-                    &requirement.origin
-                {
-                    manifest
-                        .includes
-                        .entry(group.clone())
-                        .or_default()
-                        .insert(WorkspaceGroup {
-                            package: package.clone(),
-                            group: source_group.clone(),
-                        });
-                } else {
-                    direct.push(requirement);
-                }
+        for (group, input) in groups {
+            if !input.workspace_includes.is_empty() {
+                manifest.includes.insert(
+                    group.clone(),
+                    input.workspace_includes.into_iter().collect(),
+                );
             }
+            manifest.requirements.insert(
+                group,
+                input
+                    .requirements
+                    .into_iter()
+                    .filter(|requirement| {
+                        !matches!(
+                            requirement.origin,
+                            Some(RequirementOrigin::Group(_, Some(_), _))
+                        )
+                    })
+                    .collect(),
+            );
         }
         manifest
     }
@@ -6489,7 +6510,7 @@ impl ResolverManifest {
         overrides: impl IntoIterator<Item = Override<Requirement>>,
         excludes: impl IntoIterator<Item = ExcludeDependency>,
         build_constraints: impl IntoIterator<Item = NameRequirementSpecification>,
-        dependency_groups: impl IntoIterator<Item = (GroupName, Vec<Requirement>)>,
+        dependency_groups: impl IntoIterator<Item = (GroupName, RootDependencyGroup)>,
         dependency_metadata: impl IntoIterator<Item = StaticMetadata>,
     ) -> Self {
         let normalize = uv_preview::is_enabled(PreviewFeature::LockfileNormalization);

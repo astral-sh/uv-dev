@@ -10,7 +10,7 @@ use uv_configuration::{Constraints, ExcludeDependency, Override, Upgrade};
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{DependencyMetadata, IndexLocations, Requirement, RequiresPython};
-use uv_lock::{GroupMetadata, Lock, SatisfiesResult};
+use uv_lock::{GroupMetadata, Lock, RootDependencyGroup, SatisfiesResult};
 use uv_normalize::{DefaultGroups, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{Conflicts, SupportedEnvironments};
@@ -46,7 +46,7 @@ impl ValidatedLock {
         members: &[PackageName],
         required_members: &BTreeMap<PackageName, Editability>,
         requirements: &[Requirement],
-        dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
+        dependency_groups: &BTreeMap<GroupName, RootDependencyGroup>,
         workspace_group_metadata: &BTreeMap<GroupName, GroupMetadata>,
         member_group_metadata: &BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>,
         workspace_default_groups: Option<&DefaultGroups>,

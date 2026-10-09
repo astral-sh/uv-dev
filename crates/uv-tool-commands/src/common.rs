@@ -32,7 +32,7 @@ use uv_fs::{CWD, Simplified};
 use uv_git::GitResolver;
 use uv_installer::SitePackages;
 use uv_lock::{Installable, Lock, ResolverManifest};
-use uv_normalize::{DefaultExtras, GroupName, PackageName};
+use uv_normalize::{DefaultExtras, PackageName};
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
@@ -330,7 +330,7 @@ impl ToolLock {
             overrides.iter().cloned().map(Override::Requirement),
             excludes.iter().cloned(),
             build_constraints.iter().cloned(),
-            std::iter::empty::<(GroupName, Vec<Requirement>)>(),
+            std::iter::empty(),
             dependency_metadata.values().cloned(),
         )
     }
