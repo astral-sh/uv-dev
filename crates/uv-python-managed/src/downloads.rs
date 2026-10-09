@@ -327,13 +327,12 @@ fn parse_ndjson_variant(
         }
     }
 
-    match (debug, freethreaded, flavor) {
-        (true, true, _) => Some(PythonVariant::FreethreadedDebug),
-        (true, false, _) => Some(PythonVariant::Debug),
-        (false, true, _) => Some(PythonVariant::Freethreaded),
-        (false, false, "install_only" | "install_only_stripped") => Some(PythonVariant::default()),
-        _ => None,
-    }
+    Some(match (debug, freethreaded) {
+        (true, true) => PythonVariant::FreethreadedDebug,
+        (true, false) => PythonVariant::Debug,
+        (false, true) => PythonVariant::Freethreaded,
+        (false, false) => PythonVariant::Default,
+    })
 }
 
 /// Prefer stripped install-only archives and optimized full archives for each Python variant.
@@ -396,8 +395,8 @@ fn parse_ndjson_artifact(
     build: Option<&'static str>,
     artifact: NdjsonPythonArtifact,
 ) -> Option<ManagedPythonDownload> {
-    // Platform suffixes and the archive variant both contribute flags before full archives
-    // are filtered. A plain full archive may still be a debug or freethreaded build.
+    // Platform suffixes and the archive variant both contribute flags. A plain full archive
+    // may still be a debug or freethreaded build.
     let mut platform = artifact.platform.as_str();
     let mut debug = false;
     let mut freethreaded = false;
@@ -1983,7 +1982,10 @@ mod tests {
             Some(PythonVariant::FreethreadedDebug)
         );
 
-        assert_eq!(parse_ndjson_variant("pgo+lto+full", false, false), None);
+        assert_eq!(
+            parse_ndjson_variant("pgo+lto+full", false, false),
+            Some(PythonVariant::Default)
+        );
         assert_eq!(
             parse_ndjson_variant("debug+static+full", false, false),
             None
@@ -2060,6 +2062,35 @@ mod tests {
             assert_eq!(download.key().version().to_string(), "3.12.1");
             assert_eq!(download.build(), Some("20240815"));
         }
+    }
+
+    #[test]
+    fn test_parse_ndjson_version_info_full_archive_fallback() -> Result<(), Error> {
+        let downloads = parse_ndjson_bytes(
+            "test",
+            br#"{"version":"3.10.0+20211017","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"pgo+lto+full","url":"https://example.com/full.tar.zst","sha256":null}]}"#,
+        )?;
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].key().variant(), &PythonVariant::Default);
+        assert_eq!(
+            downloads[0].url().as_ref(),
+            "https://example.com/full.tar.zst"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_ndjson_version_info_prefers_install_only_to_full() -> Result<(), Error> {
+        let downloads = parse_ndjson_bytes(
+            "test",
+            br#"{"version":"3.12.1+20240815","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"pgo+lto+full","url":"https://example.com/full.tar.zst","sha256":null},{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/install-only.tar.gz","sha256":null}]}"#,
+        )?;
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].url().as_ref(),
+            "https://example.com/install-only.tar.gz"
+        );
+        Ok(())
     }
 
     #[test]
