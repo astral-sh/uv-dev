@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
-use insta::{assert_json_snapshot, assert_snapshot};
+use insta::assert_snapshot;
 use url::Url;
 
 use uv_test::packse::PackseServer;
@@ -18,7 +18,6 @@ use uv_test::uv_snapshot;
 /// Virtual root projects can select incompatible subsets of discovered workspace members.
 #[test]
 fn project_conflicts_with_explicit_workspace_roots() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
     let scenario = toml::from_str::<Scenario>(
         r#"
         name = "virtual-workspace-roots"
@@ -34,6 +33,11 @@ fn project_conflicts_with_explicit_workspace_roots() -> Result<()> {
         "#,
     )?;
     let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
         [project]
@@ -56,30 +60,66 @@ fn project_conflicts_with_explicit_workspace_roots() -> Result<()> {
         next = { workspace = true }
         "#,
     )?;
-    for (name, dependency) in [
-        ("common", "common-leaf==1"),
-        ("legacy", "shared-leaf<2"),
-        ("next", "shared-leaf>=2"),
-        ("unused", "missing-package==1"),
-    ] {
-        context
-            .temp_dir
-            .child("members")
-            .child(name)
-            .child("pyproject.toml")
-            .write_str(&format!(
-                r#"
-                [project]
-                name = "{name}"
-                version = "0.1.0"
-                requires-python = ">=3.12"
-                dependencies = ["{dependency}"]
+    context
+        .temp_dir
+        .child("members/common/pyproject.toml")
+        .write_str(
+            r#"
+        [project]
+        name = "common"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["common-leaf==1"]
 
-                [tool.uv]
-                package = false
-                "#,
-            ))?;
-    }
+        [tool.uv]
+        package = false
+        "#,
+        )?;
+    context
+        .temp_dir
+        .child("members/legacy/pyproject.toml")
+        .write_str(
+            r#"
+        [project]
+        name = "legacy"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf<2"]
+
+        [tool.uv]
+        package = false
+        "#,
+        )?;
+    context
+        .temp_dir
+        .child("members/next/pyproject.toml")
+        .write_str(
+            r#"
+        [project]
+        name = "next"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf>=2"]
+
+        [tool.uv]
+        package = false
+        "#,
+        )?;
+    context
+        .temp_dir
+        .child("members/unused/pyproject.toml")
+        .write_str(
+            r#"
+        [project]
+        name = "unused"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["missing-package==1"]
+
+        [tool.uv]
+        package = false
+        "#,
+        )?;
     context
         .temp_dir
         .child("groups/root-b/pyproject.toml")
@@ -152,54 +192,124 @@ fn project_conflicts_with_explicit_workspace_roots() -> Result<()> {
     error: Package `root-a` and package `root-b` are incompatible with the declared conflicts: {root-a, root-b}
     ");
 
-    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
-    let packages = lock["package"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|package| {
-            Some((
-                package.get("name")?.as_str()?,
-                package.get("version")?.as_str()?,
-            ))
-        })
-        .collect::<Vec<_>>();
-    assert_json_snapshot!(packages, @r#"
-    [
-      [
-        "common",
-        "0.1.0"
-      ],
-      [
-        "common-leaf",
-        "1.0.0"
-      ],
-      [
-        "legacy",
-        "0.1.0"
-      ],
-      [
-        "next",
-        "0.1.0"
-      ],
-      [
-        "root-a",
-        "0.1.0"
-      ],
-      [
-        "root-b",
-        "0.1.0"
-      ],
-      [
-        "shared-leaf",
-        "1.0.0"
-      ],
-      [
-        "shared-leaf",
-        "2.0.0"
-      ]
-    ]
-    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "root-a" },
+            { package = "root-b" },
+        ]]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        members = [
+            "root-a",
+            "root-b",
+        ]
+        workspace-members = [
+            "common",
+            "legacy",
+            "next",
+            "root-a",
+            "root-b",
+            "unused",
+        ]
+
+        [[package]]
+        name = "common"
+        version = "0.1.0"
+        source = { virtual = "members/common" }
+        dependencies = [
+            { name = "common-leaf", marker = "extra == 'project-6-root-a' or extra == 'project-6-root-b'" },
+        ]
+
+        [package.metadata]
+        requires-python = ">=3.12"
+        requires-dist = [{ name = "common-leaf", specifier = "==1" }]
+
+        [[package]]
+        name = "common-leaf"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/common_leaf-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:common_leaf-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "legacy"
+        version = "0.1.0"
+        source = { virtual = "members/legacy" }
+        dependencies = [
+            { name = "shared-leaf", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "extra == 'project-6-root-a'" },
+        ]
+
+        [package.metadata]
+        requires-python = ">=3.12"
+        requires-dist = [{ name = "shared-leaf", specifier = "<2" }]
+
+        [[package]]
+        name = "next"
+        version = "0.1.0"
+        source = { virtual = "members/next" }
+        dependencies = [
+            { name = "shared-leaf", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "extra == 'project-6-root-b'" },
+        ]
+
+        [package.metadata]
+        requires-python = ">=3.12"
+        requires-dist = [{ name = "shared-leaf", specifier = ">=2" }]
+
+        [[package]]
+        name = "root-a"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "common", marker = "extra == 'project-6-root-a'" },
+            { name = "legacy", marker = "extra == 'project-6-root-a'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "common", virtual = "members/common" },
+            { name = "legacy", virtual = "members/legacy" },
+        ]
+
+        [[package]]
+        name = "root-b"
+        version = "0.1.0"
+        source = { virtual = "groups/root-b" }
+        dependencies = [
+            { name = "common", marker = "extra == 'project-6-root-b'" },
+            { name = "next", marker = "extra == 'project-6-root-b'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "common", virtual = "members/common" },
+            { name = "next", virtual = "members/next" },
+        ]
+
+        [[package]]
+        name = "shared-leaf"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared_leaf-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:shared_leaf-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "shared-leaf"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared_leaf-2.0.0-py3-none-any.whl", hash = "sha256:[SHA256:shared_leaf-2.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#);
+    });
     Ok(())
 }
 
