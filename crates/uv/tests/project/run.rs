@@ -2017,10 +2017,18 @@ fn run_with_overlay_startup_files() -> Result<()> {
         .arg("--quiet")
         .arg("--no-index")
         .arg("--with").arg(&filename)
-        .arg("python").arg("-c").arg("import sys; print(sys._uv_overlay_events)"), @"
+        .arg("python").arg("-c").arg(indoc! {r"
+            import sys
+            import sysconfig
+            from pathlib import Path
+
+            print(sys._uv_overlay_events)
+            print((Path(sysconfig.get_path('purelib')) / '_uv_ephemeral_overlay.start').is_file())
+        "}), @"
     exit_code: 0 (success)
     ----- stdout -----
     ['project path']
+    True
     ");
     Ok(())
 }
