@@ -1,12 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use uv_configuration::{DependencyGroupsWithDefaults, ExtrasSpecification};
+use uv_configuration::{
+    DependencyGroupsWithDefaults, DependencyModifierScope, ExtrasSpecification,
+};
 use uv_pep508::MarkerTree;
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 
 use crate::lock::installable::InstallableRootKind;
 use crate::lock::reachability::ConflictRequests;
-use crate::lock::{DependencyContext, LockErrorKind};
+use crate::lock::{DependencyContext, LockErrorKind, normalize_requirement};
 use crate::{Installable, LockError, implicit_constraints_marker};
 
 /// Return the conditions under which selected packages, extras, and groups are requested.
@@ -112,14 +114,26 @@ pub fn activated_conflicts<'lock>(
             }
         }
     }
-    for requirement in lock.requirements().iter().chain(
+    let requirements = lock.requirements().iter().filter(|_| groups.prod()).chain(
         lock.dependency_groups()
             .iter()
             .filter(|(group, _)| target.includes_group(None, group, groups))
             .flat_map(|(_, requirements)| requirements),
-    ) {
+    );
+    for requirement in modifiers.apply(DependencyModifierScope::Global, requirements) {
+        let requirement = normalize_requirement(
+            requirement.into_owned(),
+            target.install_path(),
+            lock.requires_python(),
+        )?;
         for package in lock.packages_for_name(&requirement.name) {
-            let Some(marker) = lock.root_requirement_marker(requirement, package) else {
+            if !package
+                .id
+                .satisfies_requirement(&requirement, target.install_path())?
+            {
+                continue;
+            }
+            let Some(marker) = lock.root_requirement_marker(&requirement, package) else {
                 continue;
             };
             let index = lock.by_id[&package.id];

@@ -10198,6 +10198,7 @@ fn sync_transitive_extra_conflict_registry_forks() -> Result<()> {
 }
 
 /// Registry edges still activate workspace projects before package-conflict validation.
+#[cfg(feature = "test-universal")]
 #[test]
 fn sync_registry_dependency_activates_workspace_conflict() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -10343,6 +10344,7 @@ fn sync_detects_dynamic_scoped_override_conflict() -> Result<()> {
 }
 
 /// Scoped overrides can add an empty conflicting extra to an otherwise dependency-free root.
+#[cfg(feature = "test-universal")]
 #[test]
 fn sync_scoped_override_adds_conflicting_empty_extra() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -10470,7 +10472,118 @@ fn sync_transitive_extra_conflict_platform() -> Result<()> {
     Ok(())
 }
 
+/// Manifest-owned groups apply global overrides before activating conflicting extras.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_manifest_group_override_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["child[feature]"]
+
+        [tool.uv]
+        override-dependencies = ["child"]
+        conflicts = [[
+            { package = "child", extra = "feature" },
+            { package = "child", group = "dev" },
+        ]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = []
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--group", "dev", "--no-install-workspace", "--offline", "--no-index",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--group", "dev", "--no-install-workspace", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--offline", "--no-header", "--no-hashes",
+    ]), @"exit_code: 0 (success)");
+    context
+        .lock()
+        .args([
+            "--upgrade",
+            "--offline",
+            "--no-index",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--group", "dev", "--no-install-workspace", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--offline", "--no-header", "--no-hashes",
+    ]), @"exit_code: 0 (success)");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(r#"dev = ["child[feature]"]"#, r#"dev = ["child"]"#)
+            .replace(
+                r#"override-dependencies = ["child"]"#,
+                r#"override-dependencies = ["child[feature]"]"#,
+            ),
+    )?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--group", "dev", "--no-install-workspace", "--offline", "--no-index",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `child:dev`}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--group", "dev", "--no-install-workspace", "--offline",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `child:dev`}
+    ");
+    Ok(())
+}
+
 /// Overrides can remove a conflicting extra from an unconditional dependency.
+#[cfg(feature = "test-universal")]
 #[test]
 fn sync_override_removes_conflicting_dependency_extra() -> Result<()> {
     let context = uv_test::test_context!("3.12");
