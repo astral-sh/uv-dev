@@ -1410,18 +1410,19 @@ mod tests {
     #[test]
     fn find_matching_bin_link_uses_first_installation_for_shared_executable() -> Result<()> {
         let temp_dir = Cache::temp()?;
+        let root = dunce::canonicalize(temp_dir.root())?;
         let downloads = ManagedPythonDownloadList::new_only_embedded()?;
 
         let changed = ManagedPythonInstallation::new(
-            temp_dir.root().join("shared"),
+            root.join("shared"),
             downloads.find(&PythonDownloadRequest::from_str("3.12.8")?.fill()?)?,
         )?;
         let existing = ManagedPythonInstallation::new(
-            temp_dir.root().join("shared"),
+            root.join("shared"),
             downloads.find(&PythonDownloadRequest::from_str("3.12.6")?.fill()?)?,
         )?;
         let other = ManagedPythonInstallation::new(
-            temp_dir.root().join("other"),
+            root.join("other"),
             downloads.find(&PythonDownloadRequest::from_str("3.11.9")?.fill()?)?,
         )?;
 
@@ -1433,8 +1434,8 @@ mod tests {
             fs_err::write(executable, "python")?;
         }
 
-        let shared_link = temp_dir.root().join("bin/python3.12");
-        let other_link = temp_dir.root().join("bin/python3.11");
+        let shared_link = root.join("bin/python3.12");
+        let other_link = root.join("bin/python3.11");
         create_link_to_executable(&shared_link, PythonExecutable::console(&shared_executable))?;
         create_link_to_executable(&other_link, PythonExecutable::console(&other_executable))?;
 
@@ -1457,28 +1458,28 @@ mod tests {
             Some(other.key())
         );
 
-        let foreign_executable = temp_dir.root().join("foreign/python");
+        let foreign_executable = root.join("foreign/python");
         fs_err::create_dir_all(
             foreign_executable
                 .parent()
                 .context("missing foreign executable parent")?,
         )?;
         fs_err::write(&foreign_executable, "python")?;
-        let foreign_link = temp_dir.root().join("bin/foreign");
+        let foreign_link = root.join("bin/foreign");
         create_link_to_executable(
             &foreign_link,
             PythonExecutable::console(&foreign_executable),
         )?;
         assert!(find_matching_bin_link(&installations_by_executable, &foreign_link).is_none());
 
-        let unmanaged_file = temp_dir.root().join("bin/unmanaged");
+        let unmanaged_file = root.join("bin/unmanaged");
         fs_err::write(&unmanaged_file, "python")?;
         assert!(find_matching_bin_link(&installations_by_executable, &unmanaged_file).is_none());
 
         #[cfg(unix)]
         {
-            let broken_link = temp_dir.root().join("bin/broken");
-            fs_err::os::unix::fs::symlink(temp_dir.root().join("missing"), &broken_link)?;
+            let broken_link = root.join("bin/broken");
+            fs_err::os::unix::fs::symlink(root.join("missing"), &broken_link)?;
             assert!(find_matching_bin_link(&installations_by_executable, &broken_link).is_none());
         }
 
