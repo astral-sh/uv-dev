@@ -6287,6 +6287,43 @@ fn run_no_sync_incompatible_python() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-managed")]
+#[test]
+fn run_no_sync_does_not_download_incompatible_python_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.12")?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.14"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run().args(["--no-sync", "python", "--version"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The Python request from `.python-version` resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.14` (from `project.requires-python`)
+    Use `uv python pin` to update the `.python-version` file to a compatible version
+    ");
+
+    context
+        .temp_dir
+        .child("managed")
+        .assert(predicate::path::missing());
+    context.venv.assert(predicate::path::missing());
+
+    Ok(())
+}
+
 #[test]
 fn run_python_preference_no_project() {
     let context =

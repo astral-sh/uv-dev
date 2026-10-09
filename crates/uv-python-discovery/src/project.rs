@@ -69,21 +69,24 @@ pub struct ProjectPythonRequirement {
     pub source: PythonRequirementSource,
 }
 
-/// The resolved Python request and requirement for a workspace or frozen lockfile.
+/// A Python selection whose compatibility with the project has not been checked.
+///
+/// Warning-only commands and existing environments retained by `--no-sync` can use this selection.
+/// Construct a [`ProjectPythonRequest`] before selecting an interpreter for a new project environment.
 #[derive(Debug, Clone)]
-pub struct ProjectPythonRequest {
+pub struct ProjectPythonSelection {
     /// The source of the Python request.
     source: PythonRequestSource,
     /// The resolved Python request, computed by considering (1) any explicit request from the user
     /// via `--python`, (2) any implicit request from the user via `.python-version`, and (3) the
     /// workspace or lockfile's `Requires-Python` specifier.
-    pub python_request: Option<PythonRequest>,
+    python_request: Option<PythonRequest>,
     /// The resolved Python requirement for the project and its source.
     requirement: Option<ProjectPythonRequirement>,
 }
 
-impl ProjectPythonRequest {
-    /// Determine the [`ProjectPythonRequest`] for the current [`Workspace`].
+impl ProjectPythonSelection {
+    /// Determine the [`ProjectPythonSelection`] for the current [`Workspace`].
     pub async fn from_request(
         python_request: Option<PythonRequest>,
         workspace: Option<&Workspace>,
@@ -165,34 +168,20 @@ impl ProjectPythonRequest {
         })
     }
 
+    pub fn python_request(&self) -> Option<&PythonRequest> {
+        self.python_request.as_ref()
+    }
+
     pub fn requires_python(&self) -> Option<&RequiresPython> {
         self.requirement
             .as_ref()
             .map(|requirement| &requirement.requires_python)
     }
 
-    /// Reject a pinned Python request that cannot satisfy the project requirement.
-    pub fn validate_request(&self) -> Result<(), PythonSelectionError> {
-        if let Some(python_request) = self.python_request.as_ref()
-            && let Some(requirement) = self.requirement.as_ref()
-            && !python_request.intersects_specifiers(requirement.requires_python.specifiers())
-            && let Some(version) = python_request.as_pep440_version()
-        {
-            validate_project_requires_python_version(
-                &version,
-                &requirement.requires_python,
-                &self.source,
-                &requirement.source,
-                Some(python_request),
-            )?;
-        }
-        Ok(())
-    }
-
     /// Check the interpreter against the stored project and selected group requirements.
     ///
-    /// Unlike [`Self::validate`], this borrows the interpreter so warning-only commands can
-    /// continue using it after an incompatibility.
+    /// Unlike [`ProjectPythonRequest::validate`], this borrows the interpreter so warning-only
+    /// commands can continue using it after an incompatibility.
     pub fn check(&self, interpreter: &Interpreter) -> Result<(), PythonSelectionError> {
         let Some(requirement) = &self.requirement else {
             return Ok(());
@@ -204,6 +193,85 @@ impl ProjectPythonRequest {
             &requirement.source,
         )
     }
+}
+
+/// A project Python request checked for incompatible version pins.
+///
+/// Construction rejects version pins whose ranges do not overlap the requirement. Requests that
+/// need interpreter discovery, such as executable paths, are checked by [`Self::validate`].
+#[derive(Debug, Clone)]
+pub struct ProjectPythonRequest(ProjectPythonSelection);
+
+impl ProjectPythonRequest {
+    /// Select and check a Python request for the current [`Workspace`].
+    pub async fn from_request(
+        python_request: Option<PythonRequest>,
+        workspace: Option<&Workspace>,
+        groups: &DependencyGroupsWithDefaults,
+        project_dir: &Path,
+        config_discovery: ConfigDiscovery,
+    ) -> Result<Self, PythonSelectionError> {
+        Self::new(
+            ProjectPythonSelection::from_request(
+                python_request,
+                workspace,
+                groups,
+                project_dir,
+                config_discovery,
+            )
+            .await?,
+        )
+    }
+
+    /// Select and check a Python request using a project's root and Python requirement.
+    pub async fn from_requirements(
+        python_request: Option<PythonRequest>,
+        workspace_root: Option<&Path>,
+        requirement: Option<ProjectPythonRequirement>,
+        project_dir: &Path,
+        config_discovery: ConfigDiscovery,
+    ) -> Result<Self, PythonSelectionError> {
+        Self::new(
+            ProjectPythonSelection::from_requirements(
+                python_request,
+                workspace_root,
+                requirement,
+                project_dir,
+                config_discovery,
+            )
+            .await?,
+        )
+    }
+
+    /// Reject a selected version pin that cannot satisfy the project requirement.
+    pub fn new(selection: ProjectPythonSelection) -> Result<Self, PythonSelectionError> {
+        if let Some(python_request) = selection.python_request.as_ref()
+            && let Some(requirement) = selection.requirement.as_ref()
+            && !python_request.intersects_specifiers(requirement.requires_python.specifiers())
+            && let Some(version) = python_request.as_pep440_version()
+        {
+            validate_project_requires_python_version(
+                &version,
+                &requirement.requires_python,
+                &selection.source,
+                &requirement.source,
+                Some(python_request),
+            )?;
+        }
+        Ok(Self(selection))
+    }
+
+    pub fn as_selection(&self) -> &ProjectPythonSelection {
+        &self.0
+    }
+
+    pub fn python_request(&self) -> Option<&PythonRequest> {
+        self.0.python_request()
+    }
+
+    pub fn requires_python(&self) -> Option<&RequiresPython> {
+        self.0.requires_python()
+    }
 
     /// Validate a discovered interpreter before accepting it for a new project environment.
     ///
@@ -213,7 +281,7 @@ impl ProjectPythonRequest {
         &self,
         interpreter: Interpreter,
     ) -> Result<CompatibleProjectPython, PythonSelectionError> {
-        self.check(&interpreter)?;
+        self.0.check(&interpreter)?;
         Ok(CompatibleProjectPython(interpreter))
     }
 
@@ -231,12 +299,8 @@ impl ProjectPythonRequest {
         reporter: &PythonDownloadReporter,
         install_mirrors: &PythonInstallMirrors,
     ) -> Result<CompatibleProjectPython, PythonSelectionError> {
-        // Avoid downloading a pinned interpreter when its version range cannot satisfy the
-        // project's Python requirement.
-        self.validate_request()?;
-
         let interpreter = PythonInstallation::find_or_download(
-            self.python_request.as_ref(),
+            self.python_request(),
             environment_preference,
             python_preference,
             python_arch,
@@ -518,4 +582,49 @@ pub fn format_requires_python_sources(conflicts: &RequiresPythonSources) -> Stri
         .iter()
         .map(|(source, specifiers)| format!("- {source}: {specifiers}"))
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    use anyhow::Result;
+    use uv_distribution_types::RequiresPython;
+    use uv_python_types::PythonRequest;
+
+    use super::{ProjectPythonRequest, ProjectPythonRequirement, PythonRequirementSource};
+    use crate::ConfigDiscovery;
+
+    #[tokio::test]
+    async fn request_construction_checks_version_ranges() -> Result<()> {
+        let requires_python = RequiresPython::from_specifiers(">=3.12.5".parse()?);
+        let requirement = ProjectPythonRequirement {
+            requires_python: requires_python.clone(),
+            source: PythonRequirementSource::Lockfile {
+                locked: requires_python,
+                groups: BTreeMap::new(),
+            },
+        };
+
+        for (request, compatible) in [
+            ("3.11", false),
+            ("3.12.4", false),
+            ("3.12", true),
+            ("3.12.5", true),
+            ("python", true),
+        ] {
+            let result = ProjectPythonRequest::from_requirements(
+                Some(PythonRequest::parse(request)),
+                None,
+                Some(requirement.clone()),
+                Path::new("."),
+                ConfigDiscovery::Disabled,
+            )
+            .await;
+            assert_eq!(result.is_ok(), compatible, "request: {request}");
+        }
+
+        Ok(())
+    }
 }

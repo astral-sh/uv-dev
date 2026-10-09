@@ -46,7 +46,7 @@ use uv_environment_operations::{
 };
 use uv_install_operations::Changelog;
 use uv_install_operations::loggers::{DefaultInstallLogger, InstallLogger};
-use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::ProjectPythonSelection;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::report_interpreter;
 
@@ -150,7 +150,7 @@ pub(crate) async fn venv(
         None => DefaultGroups::default(),
     };
     let groups = DependencyGroups::default().with_defaults(default_groups);
-    let project_python = ProjectPythonRequest::from_request(
+    let project_python = ProjectPythonSelection::from_request(
         python_request,
         project.as_ref().map(VirtualProject::workspace),
         &groups,
@@ -162,7 +162,7 @@ pub(crate) async fn venv(
     // Locate the Python interpreter to use in the environment
     let interpreter = {
         let python = PythonInstallation::find_or_download(
-            project_python.python_request.as_ref(),
+            project_python.python_request(),
             EnvironmentPreference::OnlySystem,
             python_preference,
             python_arch,
@@ -179,8 +179,7 @@ pub(crate) async fn venv(
     };
 
     let upgradeable = project_python
-        .python_request
-        .as_ref()
+        .python_request()
         .is_none_or(|request| !request.includes_patch());
 
     // Determine the default path.

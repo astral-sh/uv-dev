@@ -30,9 +30,9 @@ mod virtualenv_discovery;
 mod windows_registry;
 
 pub use project::{
-    CompatibleProjectPython, ProjectPythonRequest, ProjectPythonRequirement, PythonRequestSource,
-    PythonRequirementConflicts, PythonRequirementSource, find_requires_python,
-    format_requires_python_sources,
+    CompatibleProjectPython, ProjectPythonRequest, ProjectPythonRequirement,
+    ProjectPythonSelection, PythonRequestSource, PythonRequirementConflicts,
+    PythonRequirementSource, find_requires_python, format_requires_python_sources,
 };
 pub use reporter::{PythonDownloadReporter, report_interpreter};
 pub use script::{

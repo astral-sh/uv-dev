@@ -54,10 +54,10 @@ use uv_install_operations::loggers::InstallLogger;
 use uv_python_discovery::CompatibleProjectPython;
 use uv_python_discovery::EnvironmentIncompatibilityError;
 use uv_python_discovery::EnvironmentKind;
-use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::check_environment_compatibility;
+use uv_python_discovery::{ProjectPythonRequest, ProjectPythonSelection};
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::{InstallerSettingsRef, ResolverInstallerSettings, ResolverSettings};
@@ -614,21 +614,17 @@ impl ProjectInterpreter {
         )
     }
 
-    /// Discover an interpreter for a workspace or frozen lockfile.
-    pub async fn discover(
+    /// Discover an existing environment using the selected request and compatibility policy.
+    fn discover_environment(
         target: ProjectEnvironmentTarget<'_>,
-        project_python: ProjectPythonRequest,
-        client_builder: &BaseClientBuilder<'_>,
+        project_python: &ProjectPythonSelection,
         python_preference: PythonPreference,
         python_arch: Option<PythonArchitecture>,
-        python_downloads: PythonDownloads,
-        install_mirrors: &PythonInstallMirrors,
         policy: ProjectEnvironmentPolicy,
         active: ActiveEnvironment,
         cache: &Cache,
-        printer: Printer,
-    ) -> Result<Self, EnvironmentError> {
-        let python_request = project_python.python_request.as_ref();
+    ) -> Result<Option<PythonEnvironment>, EnvironmentError> {
+        let python_request = project_python.python_request();
         let requires_python = project_python.requires_python();
 
         let environment_selection =
@@ -663,7 +659,7 @@ impl ProjectInterpreter {
                     centralized,
                     cache,
                 )? {
-                    return Ok(Self::Environment(environment));
+                    return Ok(Some(environment));
                 }
             }
         } else {
@@ -686,13 +682,71 @@ impl ProjectInterpreter {
                     cache,
                 )?
             {
-                return Ok(Self::Environment(environment));
+                return Ok(Some(environment));
             }
         }
 
-        // Avoid downloading a pinned interpreter when its version range cannot satisfy the
-        // project's Python requirement.
-        project_python.validate_request()?;
+        // Without a project link, `--no-sync` can still reuse a centralized environment selected
+        // by an installed interpreter, even when the project's Python requirement has changed.
+        if centralized
+            && matches!(policy, ProjectEnvironmentPolicy::Preserve)
+            && let Ok(python) = PythonInstallation::find_existing(
+                python_request.unwrap_or(&PythonRequest::Default),
+                EnvironmentPreference::OnlySystem,
+                python_preference,
+                python_arch,
+                cache,
+            )
+        {
+            let root =
+                centralized_environment_root(target, python.interpreter(), upgradeable, cache);
+            return discover_project_environment(
+                &root,
+                python_request,
+                python_preference,
+                python_arch,
+                requires_python,
+                policy,
+                centralized,
+                cache,
+            );
+        }
+
+        Ok(None)
+    }
+
+    /// Discover an interpreter for a workspace or frozen lockfile.
+    pub async fn discover(
+        target: ProjectEnvironmentTarget<'_>,
+        project_python: ProjectPythonRequest,
+        client_builder: &BaseClientBuilder<'_>,
+        python_preference: PythonPreference,
+        python_arch: Option<PythonArchitecture>,
+        python_downloads: PythonDownloads,
+        install_mirrors: &PythonInstallMirrors,
+        policy: ProjectEnvironmentPolicy,
+        active: ActiveEnvironment,
+        cache: &Cache,
+        printer: Printer,
+    ) -> Result<Self, EnvironmentError> {
+        if let Some(environment) = Self::discover_environment(
+            target,
+            project_python.as_selection(),
+            python_preference,
+            python_arch,
+            policy,
+            active,
+            cache,
+        )? {
+            return Ok(Self::Environment(environment));
+        }
+
+        let python_request = project_python.python_request();
+        let requires_python = project_python.requires_python();
+        let environment_selection =
+            ProjectEnvironmentSelection::from_install_path(target.install_path(), active);
+        let centralized = centralized_environments_enabled(&environment_selection, cache);
+        let upgradeable = python_request.is_none_or(|request| !request.includes_patch());
 
         let reporter = PythonDownloadReporter::single(printer);
 
@@ -877,7 +931,7 @@ impl ProjectEnvironment {
             }),
         });
         let project_python = if let Some(frozen_target) = frozen_target {
-            ProjectPythonRequest::from_requirements(
+            ProjectPythonSelection::from_requirements(
                 python,
                 Some(frozen_target.install_path()),
                 Some(frozen_target.python_requirement(groups)?),
@@ -886,7 +940,7 @@ impl ProjectEnvironment {
             )
             .await?
         } else {
-            ProjectPythonRequest::from_request(
+            ProjectPythonSelection::from_request(
                 python,
                 target.workspace(),
                 groups,
@@ -896,29 +950,47 @@ impl ProjectEnvironment {
             .await?
         };
         let upgradeable = project_python
-            .python_request
-            .as_ref()
+            .python_request()
             .is_none_or(|request| !request.includes_patch());
 
-        match ProjectInterpreter::discover(
-            target,
-            project_python,
-            client_builder,
-            python_preference,
-            python_arch,
-            python_downloads,
-            install_mirrors,
-            if no_sync {
-                ProjectEnvironmentPolicy::Preserve
-            } else {
-                ProjectEnvironmentPolicy::Compatible
-            },
-            active,
-            cache,
-            printer,
-        )
-        .await?
-        {
+        let policy = if no_sync {
+            ProjectEnvironmentPolicy::Preserve
+        } else {
+            ProjectEnvironmentPolicy::Compatible
+        };
+        let environment = if no_sync {
+            ProjectInterpreter::discover_environment(
+                target,
+                &project_python,
+                python_preference,
+                python_arch,
+                policy,
+                active,
+                cache,
+            )?
+        } else {
+            None
+        };
+        let interpreter = if let Some(environment) = environment {
+            ProjectInterpreter::Environment(environment)
+        } else {
+            ProjectInterpreter::discover(
+                target,
+                ProjectPythonRequest::new(project_python)?,
+                client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                install_mirrors,
+                policy,
+                active,
+                cache,
+                printer,
+            )
+            .await?
+        };
+
+        match interpreter {
             // Use the environment accepted by the compatibility policy.
             ProjectInterpreter::Environment(environment) => {
                 if centralized && !dry_run.enabled() {

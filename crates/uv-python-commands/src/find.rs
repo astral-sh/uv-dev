@@ -19,7 +19,7 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceEr
 
 use uv_command_support::ExitStatus;
 use uv_command_support::Printer;
-use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::ProjectPythonSelection;
 use uv_python_discovery::ScriptInterpreter;
 
 /// Find a Python interpreter.
@@ -75,7 +75,7 @@ pub async fn find(
 
     // Don't enable the requires-python settings on groups
     let groups = DependencyGroupsWithDefaults::none();
-    let project_python = ProjectPythonRequest::from_request(
+    let project_python = ProjectPythonSelection::from_request(
         request.map(|request| PythonRequest::parse(&request)),
         project.as_ref().map(VirtualProject::workspace),
         &groups,
@@ -85,8 +85,7 @@ pub async fn find(
     .await?;
 
     let python_request = project_python
-        .python_request
-        .as_ref()
+        .python_request()
         .unwrap_or(&PythonRequest::Default);
     let python = PythonInstallation::find_existing(
         python_request,
