@@ -5671,11 +5671,8 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "indexmap",
  "indoc",
  "insta",
- "itertools 0.14.0",
- "jiff",
  "owo-colors",
  "predicates",
  "regex",
@@ -5968,7 +5965,6 @@ dependencies = [
  "uv-cli-arguments",
  "uv-cli-types",
  "uv-client",
- "uv-command-support",
  "uv-configuration",
  "uv-dispatch",
  "uv-distribution",
@@ -6337,7 +6333,6 @@ dependencies = [
  "uv-torch",
  "uv-version",
  "uv-warnings",
- "uv-workspace",
 ]
 
 [[package]]
@@ -6355,11 +6350,11 @@ version = "0.0.96"
 dependencies = [
  "anstream",
  "anyhow",
+ "either",
  "fs-err",
  "indicatif",
  "owo-colors",
  "rustc-hash",
- "tokio",
  "tracing",
  "uv-bin-install",
  "uv-cache",
@@ -6519,32 +6514,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "uv-command-support"
-version = "0.0.96"
-dependencies = [
- "anstream",
- "anyhow",
- "dotenvy",
- "either",
- "fs-err",
- "indicatif",
- "nix 0.31.3",
- "owo-colors",
- "rustc-hash",
- "thiserror",
- "tokio",
- "tracing",
- "uv-cli-output",
- "uv-console",
- "uv-fs",
- "uv-redacted",
- "uv-shell",
- "uv-static",
- "uv-warnings",
-]
-
-[[package]]
-name = "uv-configuration"
+ name = "uv-configuration"
 version = "0.0.96"
 dependencies = [
  "anstream",
@@ -7824,10 +7794,8 @@ dependencies = [
  "assert_fs",
  "astral-reqwest-retry",
  "fs-err",
- "indicatif",
  "indoc",
  "itertools 0.14.0",
- "owo-colors",
  "rayon",
  "regex",
  "rustc-hash",
@@ -7839,12 +7807,8 @@ dependencies = [
  "tokio",
  "tracing",
  "uv-cache",
- "uv-cache-key",
  "uv-client",
- "uv-command-support",
- "uv-configuration",
  "uv-dirs",
- "uv-distribution-types",
  "uv-errors",
  "uv-fs",
  "uv-macros",
@@ -7854,12 +7818,9 @@ dependencies = [
  "uv-python-interpreter",
  "uv-python-managed",
  "uv-python-types",
- "uv-scripts",
- "uv-settings",
  "uv-state",
  "uv-static",
  "uv-warnings",
- "uv-workspace",
  "which",
  "windows",
  "windows-registry",
@@ -7988,11 +7949,9 @@ name = "uv-remove-command"
 version = "0.0.96"
 dependencies = [
  "anyhow",
- "fs-err",
  "owo-colors",
  "thiserror",
  "tracing",
- "uv-add-command",
  "uv-cache",
  "uv-cli-error",
  "uv-cli-output",
@@ -8179,7 +8138,6 @@ dependencies = [
  "url",
  "uv-cache",
  "uv-child-process",
- "uv-cli-arguments",
  "uv-cli-error",
  "uv-cli-output",
  "uv-cli-settings",
@@ -8739,7 +8697,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tracing",
- "uv-add-command",
  "uv-cache",
  "uv-cli-arguments",
  "uv-cli-error",
@@ -8851,9 +8808,7 @@ version = "0.0.96"
 dependencies = [
  "anstream",
  "anyhow",
- "fs-err",
  "owo-colors",
- "thiserror",
  "tracing",
  "uv-cache",
  "uv-cli-error",

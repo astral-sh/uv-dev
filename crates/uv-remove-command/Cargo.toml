@@ -12,7 +12,6 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-uv-add-command = { workspace = true }
 uv-cache = { workspace = true }
 uv-cli-error = { workspace = true }
 uv-cli-output = { workspace = true }
@@ -37,7 +36,6 @@ uv-warnings = { workspace = true }
 uv-workspace = { workspace = true }
 
 anyhow = { workspace = true }
-fs-err = { workspace = true }
 owo-colors = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

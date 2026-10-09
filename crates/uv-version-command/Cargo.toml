@@ -12,7 +12,6 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-uv-add-command = { workspace = true }
 uv-cache = { workspace = true }
 uv-cli-arguments = { workspace = true }
 uv-cli-error = { workspace = true }
