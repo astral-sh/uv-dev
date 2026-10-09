@@ -1549,6 +1549,7 @@ fn explicit_roots_non_root_production_preserves_platform_domain() -> Result<()> 
     ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    warning: `uv export --format=cyclonedx1.5` is experimental and may change without warning. Pass `--preview-features sbom-export` to disable this warning.
     error: Dependencies for workspace member `shared` were not resolved for this selection
 
     hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependencies.
@@ -3869,5 +3870,157 @@ fn explicit_roots_reject_unrepresentable_python_union() -> Result<()> {
         .temp_dir
         .child("uv.lock")
         .assert(predicates::path::missing());
+    Ok(())
+}
+
+/// Universal pylock exports retain each selected root's supported Python domain.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_pylock_uses_selected_root_union() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["root-a", "root-b"]
+        roots = ["root-a", "root-b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/src/root_a/__init__.py")
+        .touch()?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = "==3.13.*"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/src/root_b/__init__.py")
+        .touch()?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--all-packages", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12, <3.14"
+
+    [[packages]]
+    name = "root-a"
+    marker = "python_full_version < '3.13'"
+    directory = { path = "root-a", editable = true }
+
+    [[packages]]
+    name = "root-b"
+    marker = "python_full_version >= '3.13'"
+    directory = { path = "root-b", editable = true }
+    "#);
+    Ok(())
+}
+
+/// Group Python requirements constrain their owning root before universal export domains merge.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_pylock_scopes_group_python_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["root-a", "root-b"]
+        roots = ["root-a", "root-b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { requires-python = ">=3.13" }
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/src/root_a/__init__.py")
+        .touch()?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.14,<3.16"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { requires-python = ">=3.15" }
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/src/root_b/__init__.py")
+        .touch()?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--all-packages", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.13, !=3.14.*, <3.16"
+
+    [[packages]]
+    name = "root-a"
+    marker = "python_full_version < '3.14'"
+    directory = { path = "root-a", editable = true }
+
+    [[packages]]
+    name = "root-b"
+    marker = "python_full_version >= '3.14'"
+    directory = { path = "root-b", editable = true }
+    "#);
     Ok(())
 }

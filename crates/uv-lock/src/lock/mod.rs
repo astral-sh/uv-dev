@@ -10276,6 +10276,9 @@ enum LockErrorKind {
     #[error("Selected workspace members have conflicting Python requirements with the lockfile")]
     DisjointWorkspaceRequiresPython,
 
+    #[error("The selected workspace Python domains cannot be represented by `requires-python`")]
+    UnrepresentableExportRequiresPython,
+
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),
