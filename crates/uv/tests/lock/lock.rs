@@ -13603,7 +13603,7 @@ fn lock_index_strategy() -> Result<()> {
 
     let lock = context.read("uv.lock");
     insta::with_settings!({ filters => context.filters() }, {
-        assert_snapshot!(lock.lines().take(7).collect::<Vec<_>>().join("\n"), @r#"
+        assert_snapshot!(lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -13611,6 +13611,26 @@ fn lock_index_strategy() -> Result<()> {
         [options]
         index-strategy = "unsafe-best-match"
         exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/a-2.0.0.tar.gz", hash = "sha256:9610291c2bd57390019f58ca72d0dd4584bb9e7073fa347633ed8bc7267fccfe", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl", hash = "sha256:833374310e0a15880f3be9e6d082f527c9ac70129b2054d733da9b754315361f", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a" }]
         "#);
     });
 
