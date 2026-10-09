@@ -75,7 +75,15 @@ fn initialized_state(dependencies: Vec<PubGrubDependency>) -> (ForkState, InMemo
     state.decision_journal = Some(Vec::new());
 
     let root = state.pubgrub.root_package;
-    assert!(state.pubgrub.unit_propagation(root).unwrap().is_empty());
+    assert!(
+        state
+            .pubgrub
+            .unit_propagation(root)
+            .unwrap()
+            .into_iter()
+            .next()
+            .is_none()
+    );
     state.add_package_version_dependencies(
         root,
         &MIN_VERSION,
@@ -83,7 +91,15 @@ fn initialized_state(dependencies: Vec<PubGrubDependency>) -> (ForkState, InMemo
         &index,
         &EmptyInstalledPackages,
     );
-    assert!(state.pubgrub.unit_propagation(root).unwrap().is_empty());
+    assert!(
+        state
+            .pubgrub
+            .unit_propagation(root)
+            .unwrap()
+            .into_iter()
+            .next()
+            .is_none()
+    );
     (state, index)
 }
 
@@ -139,7 +155,15 @@ fn records_only_committed_dependency_decisions() {
     assert_journal(&state, &[], &prefix);
 
     // Reprioritization retracts the decision and invalidates its journal.
-    assert!(state.pubgrub.unit_propagation(b_id).unwrap().is_empty());
+    assert!(
+        state
+            .pubgrub
+            .unit_propagation(b_id)
+            .unwrap()
+            .into_iter()
+            .next()
+            .is_none()
+    );
     state.conflict_tracker.deprioritize.push(b_id);
     state.reprioritize_conflicts();
     assert!(state.decision_journal.is_none());
@@ -149,7 +173,15 @@ fn records_only_committed_dependency_decisions() {
     // Re-establish the observation baseline, then restore the compatible dependency decision.
     state.decision_journal = Some(Vec::new());
     state.add_decision(b_id, one.clone());
-    assert!(state.pubgrub.unit_propagation(b_id).unwrap().is_empty());
+    assert!(
+        state
+            .pubgrub
+            .unit_propagation(b_id)
+            .unwrap()
+            .into_iter()
+            .next()
+            .is_none()
+    );
     assert_journal(&state, &retained, &[(b_id, one.clone())]);
 
     // After a backtrack, a dependency conflict rejects the candidate before adding a decision.

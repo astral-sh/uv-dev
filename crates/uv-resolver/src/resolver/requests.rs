@@ -16,9 +16,7 @@ use crate::prioritized_distribution::RegistryVariantsJson;
 use crate::pubgrub::Range;
 use crate::resolved::ResolvedDistRef;
 use crate::resolver::index::ParsedVariantsJsonResponse;
-use crate::resolver::{
-    InMemoryIndex, MetadataResponse, Request, Response, VersionsResponse,
-};
+use crate::resolver::{InMemoryIndex, MetadataResponse, Request, Response, VersionsResponse};
 use crate::{PythonRequirement, ResolveError};
 
 /// A blocking solver-side handle for requesting metadata from the asynchronous fetcher.

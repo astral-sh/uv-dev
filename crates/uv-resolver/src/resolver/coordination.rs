@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use pubgrub::{Id, Incompatibility, Term};
+use pubgrub::Id;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
@@ -12,7 +12,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin, VerbatimUrl};
 use uv_pypi_types::{ConflictItem, ConflictKindRef, VerbatimParsedUrl};
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 use uv_resolver_types::PackageNodeKind;
 use uv_types::InstalledPackagesProvider;
 
@@ -26,8 +26,9 @@ use crate::universal_marker::{ConflictMarker, UniversalMarker};
 
 use super::selected_versions::SiblingPreference;
 use super::{
-    ForkContinuation, ForkMap, ForkOutcome, ForkState, MetadataRequests, RequirementContext,
-    RequirementExpander, Resolution, ResolverState, UnavailableReason, VersionsResponse,
+    ForkContinuation, ForkMap, ForkOutcome, ForkState, MetadataRequests, PendingFork,
+    RequirementContext, RequirementExpander, Resolution, ResolverState, UnavailableReason,
+    VersionsResponse,
 };
 
 /// Coordination is an optimization of an already valid resolution, not an unbounded search for a
@@ -42,7 +43,7 @@ type Agreements = BTreeMap<RegistryPackage, Version>;
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Source {
     Registry(IndexUrl),
-    Url(DisplaySafeUrl),
+    Url(SafeUrl),
     Other(ResourceId),
 }
 
@@ -492,6 +493,11 @@ struct LiveFork {
     observations: ForkObservations,
 }
 
+enum ScheduledFork {
+    Pending(PendingFork),
+    Live(Box<LiveFork>),
+}
+
 impl LiveFork {
     fn new(
         mut state: ForkState,
@@ -563,7 +569,7 @@ enum CoordinationOutcome {
 
 pub(super) fn solve<InstalledPackages: InstalledPackagesProvider>(
     resolver: &ResolverState<InstalledPackages>,
-    initial: Vec<ForkState>,
+    initial: Vec<PendingFork>,
     requests: &MetadataRequests,
     visited: &mut FxHashSet<PackageName>,
 ) -> Result<Vec<Resolution>, ResolveError> {
@@ -574,48 +580,56 @@ pub(super) fn solve<InstalledPackages: InstalledPackagesProvider>(
     let mut live: VecDeque<_> = initial
         .into_iter()
         .rev()
-        .map(|state| LiveFork::new(state, &mut ledger, &mut identities))
+        .map(ScheduledFork::Pending)
         .collect();
     let mut completed = Vec::new();
     let mut budget = AttemptBudget::new(MAX_COORDINATION_ATTEMPTS);
 
     while let Some(fork) = live.pop_front() {
+        let fork = match fork {
+            ScheduledFork::Pending(fork) => LiveFork::new(
+                resolver.materialize_fork(fork, None, requests)?,
+                &mut ledger,
+                &mut identities,
+            ),
+            ScheduledFork::Live(fork) => *fork,
+        };
         let LiveFork {
             mut state,
             mut observations,
         } = fork;
         let preferences =
             ForkPreferences::shared(&resolver.preferences, &ledger, &observations.observations);
-        // Sibling decisions and newly fetched index metadata are revalidated lazily for each
-        // package when its next candidate is selected.
-        state.selected_versions.start_resume();
         let yield_decisions = !live.is_empty() || !completed.is_empty();
         if !yield_decisions {
             // No other owner can observe intermediate decisions until this fork splits or ends.
             state.decision_journal = None;
         }
-        match resolver.solve_fork(state, preferences, visited, requests, yield_decisions, None)? {
+        match resolver.solve_fork(
+            state,
+            preferences,
+            visited,
+            requests,
+            yield_decisions,
+            false,
+            None,
+        )? {
             ForkOutcome::Pending(mut state) => {
                 observations.refresh(&mut state, &mut ledger, &mut identities);
-                live.push_back(LiveFork {
+                live.push_back(ScheduledFork::Live(Box::new(LiveFork {
                     state,
                     observations,
-                });
+                })));
             }
-            ForkOutcome::Split(states) => {
+            ForkOutcome::Split { states, .. } => {
                 for observation in &observations.observations {
                     ledger.remove(observation);
                 }
-                live.extend(
-                    states
-                        .into_iter()
-                        .rev()
-                        .map(|state| LiveFork::new(state, &mut ledger, &mut identities)),
-                );
+                live.extend(states.into_iter().rev().map(ScheduledFork::Pending));
             }
             ForkOutcome::Complete(mut state) => {
                 if live.is_empty() && completed.is_empty() {
-                    return Ok(vec![state.into_resolution()]);
+                    return Ok(vec![state.into_resolution().0]);
                 }
                 observations.refresh(&mut state, &mut ledger, &mut identities);
                 completed.push(CompletedFork::new(state, observations.observations));
@@ -651,7 +665,7 @@ pub(super) fn solve<InstalledPackages: InstalledPackagesProvider>(
     Ok(completed
         .into_iter()
         .flat_map(|fork| fork.states)
-        .map(ForkState::into_resolution)
+        .map(|state| state.into_resolution().0)
         .collect())
 }
 
@@ -1202,13 +1216,11 @@ fn prepare_trial(
         state.decision_journal = None;
     }
     for (package, version) in &packages {
-        state
-            .pubgrub
-            .add_incompatibility(Incompatibility::custom_term(
-                *package,
-                Term::Positive(Range::singleton(version.clone()).complement()),
-                UnavailableReason::Coordinated(version.clone()),
-            ));
+        state.pubgrub.add_unavailable(
+            *package,
+            Range::singleton(version.clone()).complement(),
+            UnavailableReason::Coordinated(version.clone()),
+        );
     }
     state.selected_versions.clear();
     state.continuation = ForkContinuation::Propagate;
@@ -1225,11 +1237,12 @@ fn prepare_trial(
             *remaining_steps -= 1;
             state.next = *package;
             let conflicts = state.pubgrub.unit_propagation(*package).ok()?;
-            if !conflicts.is_empty() {
+            let mut conflicts = conflicts.into_iter().peekable();
+            if conflicts.peek().is_some() {
                 state.decision_journal = None;
             }
             for (affected, incompatibility) in conflicts {
-                state.record_conflict(affected, None, incompatibility);
+                state.record_conflict(affected, None, &incompatibility);
             }
         }
         if state.pubgrub.partial_solution.extract_solution().count() == decisions {
@@ -1257,10 +1270,13 @@ fn solve_trial<InstalledPackages: InstalledPackagesProvider>(
         debug!("Abandoned coordinated backtracking while propagating its agreements");
         return None;
     };
-    let mut pending = vec![state];
+    let mut pending = vec![PendingFork::initial(state)];
     let mut completed = Vec::new();
     let mut observations = external.clone();
-    while let Some(mut state) = pending.pop() {
+    while let Some(fork) = pending.pop() {
+        let state = resolver
+            .materialize_fork(fork, None, &trial_requests)
+            .ok()?;
         if !sources_fixed_by_manifest(resolver, &state) {
             debug!("Abandoned coordinated backtracking without fixed manifest source policy");
             return None;
@@ -1270,12 +1286,12 @@ fn solve_trial<InstalledPackages: InstalledPackagesProvider>(
             return None;
         }
         let preferences = preferences_for(resolver, &state, &observations);
-        state.selected_versions.clear();
         match resolver.solve_fork(
             state,
             ForkPreferences::fixed(&preferences),
             visited,
             &trial_requests,
+            false,
             false,
             Some(&mut remaining_steps),
         ) {
@@ -1290,7 +1306,7 @@ fn solve_trial<InstalledPackages: InstalledPackagesProvider>(
                 observations.extend(observe(&state));
                 completed.push(state);
             }
-            Ok(ForkOutcome::Split(states)) => {
+            Ok(ForkOutcome::Split { states, .. }) => {
                 debug!("Split coordinated backtracking into {} forks", states.len());
                 pending.extend(states);
             }

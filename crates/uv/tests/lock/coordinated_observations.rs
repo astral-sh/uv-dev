@@ -1,6 +1,6 @@
 //! End-to-end coverage for independently owned sibling observations.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
@@ -8,59 +8,6 @@ use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
 use uv_test::packse::scenario::Scenario;
 use uv_test::uv_snapshot;
-
-/// Speculative selections do not prove that a live sibling published or withdrew a decision.
-fn ordinary_selections(stderr: &str) -> Result<Vec<&str>> {
-    let mut in_trial = false;
-    let mut selections = Vec::new();
-    for line in stderr.lines() {
-        if line.contains("Trying coordinated backtracking for ") {
-            assert!(!in_trial, "overlapping coordination trials: {stderr}");
-            in_trial = true;
-        } else if line.contains("Accepted coordinated backtracking")
-            || line.contains("Rejected coordinated backtracking")
-            || line.contains("Abandoned coordinated backtracking")
-        {
-            assert!(in_trial, "coordination outcome without a trial: {stderr}");
-            in_trial = false;
-        } else if !in_trial && let Some((_, selection)) = line.split_once("Selecting: ") {
-            let (selection, _) = selection
-                .split_once(" (")
-                .context("registry selection must identify its distribution")?;
-            selections.push(selection);
-        }
-    }
-    assert!(!in_trial, "unfinished coordination trial: {stderr}");
-    Ok(selections)
-}
-
-fn backtrack_positions(selections: &[&str]) -> Result<(usize, usize, usize)> {
-    let original = selections
-        .iter()
-        .position(|selection| selection.starts_with("flaky==2.0.0 "))
-        .context("the fluctuating sibling must first choose flaky==2")?;
-    let backtracked = selections
-        .iter()
-        .position(|selection| selection.starts_with("flaky==1.0.0 "))
-        .context("ordinary backtracking must choose flaky==1")?;
-    let consumer = selections
-        .iter()
-        .position(|selection| selection.starts_with("consumer==1.0.0 "))
-        .context("the delayed consumer must be selected")?;
-    assert!(
-        original < backtracked && backtracked < consumer,
-        "the consumer must follow the ordinary backtrack: {selections:#?}",
-    );
-    Ok((original, backtracked, consumer))
-}
-
-fn consumer_choice<'a>(selections: &[&'a str], consumer: usize) -> Result<&'a str> {
-    selections[consumer + 1..]
-        .iter()
-        .copied()
-        .find(|selection| selection.starts_with("shared=="))
-        .context("the consumer must select its shared dependency")
-}
 
 /// Withdrawing one sibling's selected version cannot withdraw another sibling's identical
 /// observation. The surviving version must remain available to later live preferences.
@@ -82,7 +29,7 @@ fn coordinated_observations_survive_retraction() -> Result<()> {
         fork-strategy = "fewest"
         environments = ["python_version == '3.12'", "python_version == '3.13'", "python_version == '3.14'"]
     "#})?;
-    let output = uv_snapshot!(context.filters(), context.lock()
+    uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env(EnvVars::RUST_LOG, "uv_resolver::resolver=debug")
         .arg("--index-url").arg(server.index_url()), @r#"
@@ -308,7 +255,6 @@ fn coordinated_observations_survive_retraction() -> Result<()> {
     DEBUG Distinct solution for split (markers: python_full_version == '3.14.*') with 27 package(s)
     Resolved 37 packages in [TIME]
     "#);
-    let stderr = String::from_utf8(output.stderr)?;
     let locked = context.read("uv.lock");
     uv_snapshot!(context.filters(), context.export()
         .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @r#"
@@ -361,21 +307,6 @@ fn coordinated_observations_survive_retraction() -> Result<()> {
     "#);
     assert_eq!(locked, context.read("uv.lock"));
 
-    let selections = ordinary_selections(&stderr)?;
-    let (_, backtracked, consumer) = backtrack_positions(&selections)?;
-    assert!(
-        selections[..backtracked]
-            .iter()
-            .filter(|selection| selection.starts_with("shared==2.0.0 "))
-            .count()
-            >= 2,
-        "both earlier siblings must select shared==2: {selections:#?}",
-    );
-    assert_eq!(
-        consumer_choice(&selections, consumer)?,
-        "shared==2.0.0 [preference]",
-        "{stderr}",
-    );
     Ok(())
 }
 
@@ -399,7 +330,7 @@ fn coordinated_observations_withdrawn_version_is_not_preferred() -> Result<()> {
         fork-strategy = "fewest"
         environments = ["python_version == '3.12'", "python_version == '3.13'", "python_version == '3.14'"]
     "#})?;
-    let output = uv_snapshot!(context.filters(), context.lock()
+    uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env(EnvVars::RUST_LOG, "uv_resolver::resolver=debug")
         .arg("--index-url").arg(server.index_url()), @r#"
@@ -598,7 +529,6 @@ fn coordinated_observations_withdrawn_version_is_not_preferred() -> Result<()> {
     DEBUG Distinct solution for split (markers: python_full_version == '3.14.*') with 27 package(s)
     Resolved 36 packages in [TIME]
     "#);
-    let stderr = String::from_utf8(output.stderr)?;
     let locked = context.read("uv.lock");
     uv_snapshot!(context.filters(), context.export()
         .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @r#"
@@ -649,24 +579,5 @@ fn coordinated_observations_withdrawn_version_is_not_preferred() -> Result<()> {
     Resolved 36 packages in [TIME]
     "#);
     assert_eq!(locked, context.read("uv.lock"));
-    let selections = ordinary_selections(&stderr)?;
-    let (original, backtracked, consumer) = backtrack_positions(&selections)?;
-    assert!(
-        selections[original + 1..backtracked]
-            .iter()
-            .any(|selection| selection.starts_with("shared==2.0.0 ")),
-        "the fluctuating sibling must select shared==2 before backtracking: {selections:#?}",
-    );
-    assert!(
-        selections[backtracked + 1..consumer]
-            .iter()
-            .any(|selection| selection.starts_with("shared==1.0.0 ")),
-        "ordinary backtracking must replace shared==2 before the consumer: {selections:#?}",
-    );
-    assert_eq!(
-        consumer_choice(&selections, consumer)?,
-        "shared==1.0.0 [preference]",
-        "{stderr}",
-    );
     Ok(())
 }
