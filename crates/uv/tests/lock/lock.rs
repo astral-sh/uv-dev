@@ -48339,6 +48339,35 @@ fn lock_resolution_inputs_metadata_unknown_version() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
+    // The current local version is unknown when selecting configured metadata, so the previous
+    // lock version must not select a stale version-specific declaration.
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "2.0"
+        requires-python = ">=3.13"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and child==2.0 depends on Python>=3.13, we can conclude that child==2.0 cannot be used.
+             And because only child==2.0 is available and your project depends on child, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., child==2.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    "#);
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "1.0"
+    "#})?;
+
     // Complete declarations participate in validation, even for an unmatched version.
     pyproject.write_str(indoc! {r#"
         [project]

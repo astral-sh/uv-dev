@@ -6111,9 +6111,7 @@ impl Lock {
     ) -> Result<Option<SourceTreeRequiresDist>, LockError> {
         // Configured metadata is authoritative even when builds are disabled; obtaining it does
         // not require selecting or preparing a source distribution.
-        if let Some(metadata) =
-            database.dependency_metadata(&package.id.name, package.id.version.as_ref())
-        {
+        if let Some(metadata) = database.dependency_metadata(&package.id.name, None) {
             return Ok(Some(SourceTreeRequiresDist {
                 version: Some(metadata.version),
                 requires_python: metadata.requires_python,
