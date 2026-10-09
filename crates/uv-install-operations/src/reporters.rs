@@ -4,7 +4,9 @@ use std::time::Duration;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use uv_command_support::{
     Printer,
-    progress::{JsonlProgressEvent, ProgressReporter, ProgressStatus, emit_jsonl_progress},
+    progress::{
+        JsonlProgressEvent, ProgressPhase, ProgressReporter, ProgressStatus, emit_jsonl_progress,
+    },
 };
 use uv_distribution_types::BuildableSource;
 use uv_distribution_types::CachedDist;
@@ -37,7 +39,7 @@ impl PrepareReporter {
     #[must_use]
     pub(super) fn with_length(self, length: u64) -> Self {
         self.reporter.root.set_length(length);
-        let mut event = JsonlProgressEvent::new("prepare", ProgressStatus::Started);
+        let mut event = JsonlProgressEvent::new(ProgressPhase::Prepare, ProgressStatus::Started);
         event.total = Some(length);
         self.reporter.emit_progress(&event);
         self
@@ -48,7 +50,8 @@ impl uv_installer::PrepareReporter for PrepareReporter {
     fn on_progress(&self, dist: &CachedDist) {
         self.reporter.root.inc(1);
         if self.reporter.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("prepare", ProgressStatus::Updated);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Prepare, ProgressStatus::Updated);
             event.name = Some(dist.to_string());
             event.completed = Some(self.reporter.root.position());
             event.total = self.reporter.root.length();
@@ -61,7 +64,8 @@ impl uv_installer::PrepareReporter for PrepareReporter {
         // in Jupyter notebooks.
         self.reporter.root.set_message("");
         if self.reporter.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("prepare", ProgressStatus::Completed);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Prepare, ProgressStatus::Completed);
             event.completed = Some(self.reporter.root.position());
             event.total = self.reporter.root.length();
             self.reporter.emit_progress(&event);
@@ -134,7 +138,7 @@ impl InstallReporter {
     #[must_use]
     pub(super) fn with_length(self, length: u64) -> Self {
         self.progress.set_length(length);
-        let mut event = JsonlProgressEvent::new("install", ProgressStatus::Started);
+        let mut event = JsonlProgressEvent::new(ProgressPhase::Install, ProgressStatus::Started);
         event.total = Some(length);
         emit_jsonl_progress(self.printer, &event);
         self
@@ -147,7 +151,8 @@ impl uv_installer::InstallReporter for InstallReporter {
         self.progress.set_message(format!("{wheel}"));
         self.progress.inc(1);
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("install", ProgressStatus::Updated);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Install, ProgressStatus::Updated);
             event.name = Some(wheel.to_string());
             event.completed = Some(self.progress.position());
             event.total = self.progress.length();
@@ -159,7 +164,8 @@ impl uv_installer::InstallReporter for InstallReporter {
         let _guard = self.progress_lock.lock().unwrap();
         self.progress.set_message("");
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("install", ProgressStatus::Completed);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Install, ProgressStatus::Completed);
             event.completed = Some(self.progress.position());
             event.total = self.progress.length();
             emit_jsonl_progress(self.printer, &event);
