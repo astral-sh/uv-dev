@@ -12,6 +12,7 @@ use uv_configuration::{
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictItem;
+use uv_resolver_types::UniversalMarker;
 
 pub use crate::lock::export::metadata::{Metadata, PythonReport};
 pub(crate) use crate::lock::export::metadata::{
@@ -160,7 +161,12 @@ impl<'lock> ExportableRequirements<'lock> {
                     dep_index,
                     Edge::Dev {
                         group,
-                        marker: dep.simplified_marker.as_simplified_marker_tree(),
+                        marker: target
+                            .lock()
+                            .constrain_conflicts(UniversalMarker::from_combined(
+                                dep.simplified_marker.as_simplified_marker_tree(),
+                            ))
+                            .combined(),
                         dep_extras: target.lock().dependency_extras(dep).collect(),
                     },
                 );
@@ -293,20 +299,23 @@ impl<'lock> ExportableRequirements<'lock> {
                     .get_or_insert_with(|| graph.add_node(Node::Package(dep_dist, None)));
 
                 let dep_extras = target.lock().dependency_extras(dep).collect::<Vec<_>>();
+                let marker = target
+                    .lock()
+                    .constrain_conflicts(UniversalMarker::from_combined(
+                        dep.simplified_marker.as_simplified_marker_tree(),
+                    ))
+                    .combined();
                 graph.add_edge(
                     index,
                     dep_index,
                     if let Some(extra) = extra {
                         Edge::Optional {
                             extra,
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
+                            marker,
                             dep_extras,
                         }
                     } else {
-                        Edge::Prod {
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
-                            dep_extras,
-                        }
+                        Edge::Prod { marker, dep_extras }
                     },
                 );
 

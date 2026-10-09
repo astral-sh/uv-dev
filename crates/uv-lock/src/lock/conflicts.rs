@@ -85,7 +85,7 @@ pub fn activated_conflicts<'lock>(
             )?;
             for dependency in dependencies {
                 let (marker, extras) =
-                    dependency.activation(requirements.as_deref(), target.install_path())?;
+                    dependency.activation(lock, requirements.as_deref(), target.install_path())?;
                 requests.push(
                     requests.root,
                     dependency.index,
@@ -147,7 +147,7 @@ pub fn activated_conflicts<'lock>(
         )?;
         for dependency in context.dependencies(package) {
             let (marker, extras) =
-                dependency.activation(requirements.as_deref(), target.install_path())?;
+                dependency.activation(lock, requirements.as_deref(), target.install_path())?;
             requests.push(parent, dependency.index, None, marker);
             for (extra, marker) in extras {
                 requests.push(parent, dependency.index, Some(extra), marker);
