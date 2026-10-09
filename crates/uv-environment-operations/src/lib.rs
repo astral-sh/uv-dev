@@ -457,6 +457,24 @@ fn read_environment_path_file(path: &Path) -> io::Result<PathBuf> {
     })
 }
 
+/// Whether an existing link or path file already selects the accepted centralized environment.
+fn project_environment_reference_matches(reference: &Path, environment: &Path) -> bool {
+    let Ok(metadata) = fs_err::metadata(reference) else {
+        return false;
+    };
+    let resolved = if metadata.is_file() && metadata.len() <= 128 * 1024 {
+        read_environment_path_file(reference).and_then(fs_err::canonicalize)
+    } else if fs_err::symlink_metadata(reference).is_ok_and(|metadata| metadata.is_symlink()) {
+        fs_err::canonicalize(reference)
+    } else {
+        return false;
+    };
+    let Ok(resolved) = resolved else {
+        return false;
+    };
+    fs_err::canonicalize(environment).is_ok_and(|environment| environment == resolved)
+}
+
 /// Return whether `path` refers to an environment in the current cache's environment bucket.
 pub fn is_centralized_environment_reference(path: &Path, cache: &Cache) -> bool {
     is_centralized_environment_link(path, cache)
@@ -1050,10 +1068,8 @@ impl ProjectEnvironment {
         let reference = environment_selection
             .explicit_path()
             .map_or_else(|| target.install_path().join(".venv"), Path::to_path_buf);
-        let mut destination_lock =
-            lock_environment_destination(&reference, &reference, cache).await?;
-        loop {
-            let (selected, report) = ProjectInterpreter::discover_unreported(
+        let discover = || {
+            ProjectInterpreter::discover_unreported(
                 target,
                 project_python.clone(),
                 client_builder,
@@ -1070,7 +1086,27 @@ impl ProjectEnvironment {
                 cache,
                 printer,
             )
-            .await?;
+        };
+        if no_sync && !dry_run.enabled() {
+            let (selected, report) = discover().await?;
+            if let ProjectInterpreter::Environment(environment) = selected
+                && (!centralized
+                    || project_environment_reference_matches(&reference, environment.root()))
+            {
+                report.report(printer)?;
+                return Ok(Self::Existing(environment, None));
+            }
+            // Any creation or reference update requires admission and fresh discovery. Discard
+            // this preliminary report so only the accepted selection is printed.
+        }
+        let mut destination_lock = if dry_run.enabled() {
+            // Dry runs use a private temporary environment when creation would be required.
+            None
+        } else {
+            lock_environment_destination(&reference, &reference, cache).await?
+        };
+        loop {
+            let (selected, report) = discover().await?;
             let selected = match selected {
                 ProjectInterpreter::Environment(environment) => {
                     SelectedEnvironment::Existing(environment)
@@ -1375,8 +1411,11 @@ impl ScriptEnvironment {
             .is_none_or(|request| !request.includes_patch());
 
         let reference = ScriptInterpreter::root(script, active, cache);
-        let mut destination_lock =
-            lock_environment_destination(&reference, &reference, cache).await?;
+        let mut destination_lock = if dry_run.enabled() {
+            None
+        } else {
+            lock_environment_destination(&reference, &reference, cache).await?
+        };
         loop {
             let selected = match ScriptInterpreter::discover(
                 script,

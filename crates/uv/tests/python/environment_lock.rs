@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -13,7 +13,8 @@ use uv_environment_operations::is_centralized_environment_reference;
 use uv_fs::Simplified;
 use uv_python_interpreter::{EnvironmentLock, PythonEnvironment};
 use uv_static::EnvVars;
-use uv_test::packse::generate_wheel;
+use uv_test::{TestContext, packse::generate_wheel};
+use walkdir::WalkDir;
 
 struct QueuedCommand {
     child: tokio::process::Child,
@@ -372,6 +373,300 @@ async fn run_releases_destination_before_user_program() -> Result<()> {
     .context("destination admission")?;
     connection.write_all(b"x").await?;
     run.finish().await?;
+    drop(guard);
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_no_sync_reuses_environment_during_build() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.venv().arg("--no-project").assert().success();
+    let marker = context.venv.child("build-hook-owner");
+    marker.write_str("existing project environment")?;
+    let (filename, wheel) = generate_wheel(
+        &"project".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context.temp_dir.child(&filename).write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context
+        .temp_dir
+        .child("check_environment.py")
+        .write_str(indoc! {r#"
+        import sys
+        from pathlib import Path
+
+        project = Path(__file__).resolve().parent
+        environment = project / ".venv"
+        assert Path(sys.prefix).resolve() == environment.resolve()
+        assert sys.prefix != sys.base_prefix
+        assert (environment / "build-hook-owner").read_text() == "existing project environment"
+        (project / "nested-prefix").write_text(str(Path(sys.prefix).resolve()))
+    "#})?;
+    context
+        .temp_dir
+        .child("backend.py")
+        .write_str(&formatdoc! {r#"
+        import os
+        import shutil
+        import subprocess
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        WHEEL = Path(__file__).with_name("{filename}")
+        DIST_INFO = "project-0.1.0.dist-info"
+        PROJECT = Path(os.environ["UV_TEST_PROJECT_ROOT"])
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = Path(metadata_directory) / DIST_INFO
+            dist_info.mkdir()
+            with ZipFile(WHEEL) as wheel:
+                (dist_info / "METADATA").write_bytes(wheel.read(f"{{DIST_INFO}}/METADATA"))
+            return dist_info.name
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            subprocess.run(
+                [os.environ["UV_TEST_BIN"], "run", "--no-sync", "--offline", "python",
+                 str(PROJECT / "check_environment.py")],
+                cwd=PROJECT,
+                check=True,
+                timeout=20,
+            )
+            shutil.copyfile(WHEEL, Path(wheel_directory) / WHEEL.name)
+            return WHEEL.name
+    "#})?;
+
+    let mut command = context.sync();
+    let uv = command.get_program().to_os_string();
+    command
+        .args(["--offline", "--no-editable"])
+        .env("UV_TEST_BIN", uv)
+        .env("UV_TEST_PROJECT_ROOT", context.temp_dir.path());
+    QueuedCommand::spawn(command)?.finish().await?;
+    let prefix = fs_err::read_to_string(context.temp_dir.child("nested-prefix"))?;
+    assert_eq!(
+        fs_err::canonicalize(prefix)?,
+        fs_err::canonicalize(context.venv.path())?
+    );
+    marker.assert("existing project environment");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sync_dry_run_does_not_wait_for_destination() -> Result<()> {
+    assert_read_only_sync_does_not_wait("--dry-run").await
+}
+
+#[tokio::test]
+async fn sync_check_does_not_wait_for_destination() -> Result<()> {
+    assert_read_only_sync_does_not_wait("--check").await
+}
+
+fn empty_project_context() -> Result<TestContext> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    Ok(context)
+}
+
+async fn assert_read_only_sync_does_not_wait(mode: &str) -> Result<()> {
+    let context = empty_project_context()?;
+    context.sync().arg("--offline").assert().success();
+    let lockfile = fs_err::read(context.temp_dir.child("uv.lock"))?;
+    let environment_contents = || -> Result<_> {
+        let mut contents = BTreeMap::new();
+        for entry in WalkDir::new(context.venv.path()) {
+            let entry = entry?;
+            let bytes = if entry.file_type().is_file() {
+                Some(fs_err::read(entry.path())?)
+            } else {
+                None
+            };
+            let target = if entry.file_type().is_symlink() {
+                Some(fs_err::read_link(entry.path())?)
+            } else {
+                None
+            };
+            contents.insert(
+                entry
+                    .path()
+                    .strip_prefix(context.venv.path())?
+                    .to_path_buf(),
+                (entry.file_type(), bytes, target),
+            );
+        }
+        Ok(contents)
+    };
+    let before = environment_contents()?;
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
+    let destination = fs_err::canonicalize(context.venv.path())?;
+    let mut guard = EnvironmentLock::acquire_optional(&[destination], &cache)
+        .await?
+        .context("destination admission")?;
+    guard.finish_creation()?;
+    let mut command = context.sync();
+    command.args(["--offline", mode]);
+    QueuedCommand::spawn(command)?.finish().await?;
+    assert_eq!(environment_contents()?, before);
+    assert_eq!(fs_err::read(context.temp_dir.child("uv.lock"))?, lockfile);
+    drop(guard);
+    Ok(())
+}
+
+#[tokio::test]
+async fn no_sync_missing_environment_waits_for_destination() -> Result<()> {
+    let context = empty_project_context()?;
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
+    let destination = fs_err::canonicalize(context.temp_dir.path())?.join(".venv");
+    let guard = EnvironmentLock::acquire_optional(std::slice::from_ref(&destination), &cache)
+        .await?
+        .context("destination admission")?;
+    let mut command = context.run();
+    command.args(["--no-sync", "--offline", "python", "-c", "pass"]);
+    let mut run = QueuedCommand::spawn(command)?;
+    run.wait_for_destination(&destination).await?;
+    assert!(!context.venv.exists());
+    drop(guard);
+    run.finish().await?;
+    assert!(context.venv.child("pyvenv.cfg").is_file());
+    Ok(())
+}
+
+fn initialized_centralized_environment(context: &TestContext) -> Result<PathBuf> {
+    context
+        .sync()
+        .args([
+            "--offline",
+            "--preview-features",
+            "centralized-project-envs",
+        ])
+        .assert()
+        .success();
+    let output = context
+        .run()
+        .args([
+            "--offline",
+            "--preview-features",
+            "centralized-project-envs",
+            "--no-sync",
+            "python",
+            "-c",
+            "import sys; print(sys.prefix)",
+        ])
+        .assert()
+        .success();
+    Ok(fs_err::canonicalize(
+        std::str::from_utf8(&output.get_output().stdout)?.trim(),
+    )?)
+}
+
+#[tokio::test]
+async fn no_sync_reference_replacement_waits_for_destination() -> Result<()> {
+    let context = empty_project_context()?;
+    let cached = initialized_centralized_environment(&context)?;
+    fs_err::write(cached.join("cache-owner"), "accepted environment")?;
+    uv_fs::remove_virtualenv(context.venv.path())?;
+    context.venv().arg("--no-project").assert().success();
+    let marker = context.venv.child("local-owner");
+    marker.write_str("local environment")?;
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
+    let reference = fs_err::canonicalize(context.venv.path())?;
+    let guard = EnvironmentLock::acquire_optional(std::slice::from_ref(&reference), &cache)
+        .await?
+        .context("destination admission")?;
+    let mut command = context.run();
+    command
+        .args([
+            "--no-sync",
+            "--offline",
+            "--preview-features",
+            "centralized-project-envs",
+            "python",
+            "-c",
+            "import os, sys; from pathlib import Path; assert Path(sys.prefix).resolve() == Path(os.environ['UV_TEST_EXPECTED_PREFIX']).resolve()",
+        ])
+        .env("UV_TEST_EXPECTED_PREFIX", &cached);
+    let mut run = QueuedCommand::spawn(command)?;
+    run.wait_for_destination(&reference).await?;
+    marker.assert("local environment");
+    drop(guard);
+    run.finish().await?;
+    assert!(!marker.exists());
+    assert!(is_centralized_environment_reference(
+        context.venv.path(),
+        &cache
+    ));
+    assert_eq!(
+        fs_err::read_to_string(cached.join("cache-owner"))?,
+        "accepted environment"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn no_sync_reuses_centralized_indirect_path_file() -> Result<()> {
+    let context = empty_project_context()?;
+    let cached = initialized_centralized_environment(&context)?;
+    uv_fs::remove_virtualenv(context.venv.path())?;
+    let path_file = context.temp_dir.child("environment-path");
+    path_file.write_str(&cached.to_string_lossy())?;
+    fs_err::os::unix::fs::symlink("environment-path", context.venv.path())?;
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
+    let mut guard = EnvironmentLock::acquire_optional(
+        &[context.venv.path().to_path_buf(), cached.clone()],
+        &cache,
+    )
+    .await?
+    .context("destination admission")?;
+    guard.finish_creation()?;
+    let mut command = context.run();
+    command
+        .args([
+            "--no-sync",
+            "--offline",
+            "--preview-features",
+            "centralized-project-envs",
+            "python",
+            "-c",
+            "import os, sys; from pathlib import Path; assert Path(sys.prefix).resolve() == Path(os.environ['UV_TEST_EXPECTED_PREFIX']).resolve()",
+        ])
+        .env("UV_TEST_EXPECTED_PREFIX", &cached);
+    QueuedCommand::spawn(command)?.finish().await?;
+    assert_eq!(
+        fs_err::read_link(context.venv.path())?,
+        Path::new("environment-path")
+    );
+    assert_eq!(
+        fs_err::read_to_string(path_file.path())?,
+        cached.to_string_lossy()
+    );
     drop(guard);
     Ok(())
 }
