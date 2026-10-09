@@ -459,21 +459,6 @@ async fn download_replaces_prepared_sdist() -> Result<()> {
 
 #[tokio::test]
 async fn download_refresh() -> Result<()> {
-    refresh_packed_archive(&["--refresh"], 2).await
-}
-
-#[tokio::test]
-async fn download_refresh_package() -> Result<()> {
-    refresh_packed_archive(&["--refresh-package", "basic-package"], 2).await
-}
-
-#[tokio::test]
-async fn download_refresh_other_package() -> Result<()> {
-    refresh_packed_archive(&["--refresh-package", "other-package"], 1).await
-}
-
-/// Refresh applies to the packed entry even before a prepared HTTP entry exists.
-async fn refresh_packed_archive(args: &[&str], requests: u64) -> Result<()> {
     let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;
     let wheel = wheel("original")?;
@@ -496,19 +481,107 @@ async fn refresh_packed_archive(args: &[&str], requests: u64) -> Result<()> {
                 .insert_header("cache-control", "public, max-age=3600")
                 .set_body_bytes(wheel),
         )
-        .expect(requests)
+        .expect(2)
         .mount(&server)
         .await;
-    download(&context).assert().success();
-    allow_duplicates! {
-        uv_snapshot!(context.filters(), context.sync().arg("--frozen").args(args), @"
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").args(["--refresh"]), @"
         exit_code: 0 (success)
         ----- stderr -----
         Prepared 1 package in [TIME]
         Installed 1 package in [TIME]
          + basic-package==0.1.0
         ");
-    }
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn download_refresh_package() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = wheel("original")?;
+    let hash = digest(&wheel);
+    let url = server.uri();
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ registry = "{url}/simple" }}
+        wheels = [{{ url = "{url}/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(wheel),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").args(["--refresh-package", "basic-package"]), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + basic-package==0.1.0
+        ");
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn download_refresh_other_package() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = wheel("original")?;
+    let hash = digest(&wheel);
+    let url = server.uri();
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ registry = "{url}/simple" }}
+        wheels = [{{ url = "{url}/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(wheel),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").args(["--refresh-package", "other-package"]), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + basic-package==0.1.0
+        ");
     server.verify().await;
     Ok(())
 }
@@ -573,63 +646,6 @@ async fn download_refresh_metadata() -> Result<()> {
 
 #[tokio::test]
 async fn download_credentials_dependency() -> Result<()> {
-    download_credentials(
-        indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.13"
-        dependencies = ["basic-package @ {url}"]
-        "#},
-        None,
-    )
-    .await
-}
-
-#[tokio::test]
-async fn download_credentials_source() -> Result<()> {
-    download_credentials(
-        indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.13"
-        dependencies = ["basic-package"]
-
-        [tool.uv.sources]
-        basic-package = { url = "{url}" }
-        "#},
-        None,
-    )
-    .await
-}
-
-#[tokio::test]
-async fn download_credentials_workspace() -> Result<()> {
-    download_credentials(
-        indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.13"
-        dependencies = ["basic-package"]
-
-        [tool.uv.workspace]
-        members = ["member", "missing-member"]
-        "#},
-        Some(indoc! {r#"
-        [project]
-        name = "member"
-        version = "0.1.0"
-        requires-python = ">=3.13"
-        dependencies = ["basic-package @ {url}"]
-        "#}),
-    )
-    .await
-}
-
-/// Credentials are read from project files, since lockfile URLs do not contain credentials.
-async fn download_credentials(pyproject: &str, member: Option<&str>) -> Result<()> {
     let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;
     let wheel = wheel("original")?;
@@ -649,14 +665,13 @@ async fn download_credentials(pyproject: &str, member: Option<&str>) -> Result<(
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&pyproject.replace("{url}", &authenticated_url))?;
-    if let Some(member) = member {
-        context.temp_dir.child("member").create_dir_all()?;
-        context
-            .temp_dir
-            .child("member/pyproject.toml")
-            .write_str(&member.replace("{url}", &authenticated_url))?;
-    }
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package @ {authenticated_url}"]
+    "#})?;
     Mock::given(method("GET"))
         .and(path("/basic_package-0.1.0-py3-none-any.whl"))
         .respond_with(
@@ -677,13 +692,139 @@ async fn download_credentials(pyproject: &str, member: Option<&str>) -> Result<(
         .expect(1)
         .mount(&server)
         .await;
-    allow_duplicates! {
-        uv_snapshot!(context.filters(), download(&context), @"
+    uv_snapshot!(context.filters(), download(&context), @"
         exit_code: 0 (success)
         ----- stderr -----
         Downloaded 1 distributions (1 total)
         ");
-    }
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn download_credentials_source() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = wheel("original")?;
+    let hash = digest(&wheel);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ url = "{url}" }}
+        wheels = [{{ url = "{url}", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    let authenticated_url = url.replace("http://", "http://username:password@");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package"]
+        [tool.uv.sources]
+        basic-package = {{ url = "{authenticated_url}" }}
+    "#})?;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Basic realm=\"test\""),
+        )
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .and(basic_auth("username", "password"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(wheel),
+        )
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Downloaded 1 distributions (1 total)
+        ");
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn download_credentials_workspace() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = wheel("original")?;
+    let hash = digest(&wheel);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ url = "{url}" }}
+        wheels = [{{ url = "{url}", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    let authenticated_url = url.replace("http://", "http://username:password@");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package"]
+        [tool.uv.workspace]
+        members = ["member", "missing-member"]
+    "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package @ {authenticated_url}"]
+    "#})?;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Basic realm=\"test\""),
+        )
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .and(basic_auth("username", "password"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(wheel),
+        )
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Downloaded 1 distributions (1 total)
+        ");
     server.verify().await;
     Ok(())
 }
@@ -714,12 +855,18 @@ async fn download_rejects_hash_mismatch() -> Result<()> {
         wheels = [{{ url = "{url}/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:{hash}" }}]
     "#},
     )?;
-    uv_snapshot!(context.filters(), download(&context), @"
+    uv_snapshot!(context.filters(), download(&context), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
-      cause: Hash mismatch for http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl: expected sha256:0000000000000000000000000000000000000000000000000000000000000000
-    ");
+      cause: Hash mismatch for packed archive at `http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl`
+
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+               sha256:e7dc6be13be0055dd03d1fe10caf78db0daa6327eb1f5b08c3e2dc8c06431cd2
+    "#);
     assert!(
         !packed_url_shard(
             &context,
@@ -773,12 +920,18 @@ async fn download_repairs_corrupt_archive() -> Result<()> {
         .join(&hash),
         b"corrupt",
     )?;
-    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
-      cause: Hash or size mismatch for packed archive http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
-    ");
+      cause: Hash mismatch for packed archive at `http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl`
+
+             Expected:
+               sha256:7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82
+
+             Computed:
+               sha256:11d510e067d2cdcd7559bd86d27a2f4c20babd43670346b97af99b522c1f0075
+    "#);
     context
         .sync()
         .args(["--frozen", "--offline"])

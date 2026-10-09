@@ -1380,7 +1380,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         )
         .read_local()
         .await
-        .map_err(|err| Error::CacheRead(std::io::Error::other(err)))
+        .map_err(Error::Client)
     }
 
     /// Return the [`Revision`] for a local archive, refreshing it if necessary.

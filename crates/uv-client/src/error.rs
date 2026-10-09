@@ -172,6 +172,7 @@ impl Error {
             | ErrorKind::LocalPackageNotFound(_)
             | ErrorKind::LocalIndexNotFound(_)
             | ErrorKind::MetadataHashMismatch { .. }
+            | ErrorKind::PackedArchiveHashMismatch { .. }
             | ErrorKind::MetadataParseError(..)
             | ErrorKind::BadJson { .. }
             | ErrorKind::BadHtml { .. }
@@ -483,6 +484,16 @@ pub enum ErrorKind {
         "Hash mismatch for package metadata at `{url}`\n\nExpected:\n  {expected}\n\nComputed:\n  {actual}"
     )]
     MetadataHashMismatch {
+        url: DisplaySafeUrl,
+        expected: HashDigest,
+        actual: HashDigest,
+    },
+
+    /// A retained distribution archive did not match its expected digest.
+    #[error(
+        "Hash mismatch for packed archive at `{url}`\n\nExpected:\n  {expected}\n\nComputed:\n  {actual}"
+    )]
+    PackedArchiveHashMismatch {
         url: DisplaySafeUrl,
         expected: HashDigest,
         actual: HashDigest,

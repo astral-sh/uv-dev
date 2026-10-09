@@ -1445,10 +1445,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 BuiltDist::DirectUrl(_) | BuiltDist::GitPath(_) => None,
             };
             if let Some(entry) = entry {
-                entry
-                    .read_local()
-                    .await
-                    .map_err(|err| Error::CacheRead(std::io::Error::other(err)))?
+                entry.read_local().await.map_err(Error::Client)?
             } else {
                 None
             }

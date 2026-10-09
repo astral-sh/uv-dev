@@ -1122,11 +1122,7 @@ impl RegistryClient {
         let control = entry
             .cache_control(self)
             .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?;
-        let Some((archive, _)) = entry
-            .read_http(&request, &control)
-            .await
-            .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?
-        else {
+        let Some((archive, _)) = entry.read_http(&request, &control).await? else {
             return Ok(None);
         };
         let file = archive.into_file().into_std().await;
