@@ -79,13 +79,14 @@ fn creation_error(
     root: &Path,
     error: uv_virtualenv::Error,
 ) -> EnvironmentError {
-    let reason = match error {
+    let (reason, source) = match error {
         uv_virtualenv::Error::ClearNonVirtualenv { .. } => {
-            "it is not a virtual environment".to_string()
+            ("it is not a virtual environment", None)
         }
-        uv_virtualenv::Error::InspectExisting { source, .. } => {
-            format!("uv cannot determine if it is a virtual environment: {source}")
-        }
+        uv_virtualenv::Error::InspectExisting { source, .. } => (
+            "uv cannot determine if it is a virtual environment",
+            Some(source),
+        ),
         error @ (uv_virtualenv::Error::Io(_)
         | uv_virtualenv::Error::NotFound(_)
         | uv_virtualenv::Error::Python(_)
@@ -93,13 +94,23 @@ fn creation_error(
         | uv_virtualenv::Error::NonUtf8Path { .. }) => return error.into(),
     };
     match kind {
-        EnvironmentKind::Script => {
-            EnvironmentError::InvalidScriptEnvironmentDir(root.to_path_buf(), reason)
+        EnvironmentKind::Script => EnvironmentError::InvalidScriptEnvironmentDir {
+            path: root.to_path_buf(),
+            reason,
+            source,
+        },
+        EnvironmentKind::Project => {
+            let reason = match source {
+                Some(source) => format!("{reason}: {source}"),
+                None => reason.to_owned(),
+            };
+            EnvironmentError::InvalidProjectEnvironmentDir(
+                root.to_path_buf(),
+                format!(
+                    "it is not a compatible environment but cannot be recreated because {reason}"
+                ),
+            )
         }
-        EnvironmentKind::Project => EnvironmentError::InvalidProjectEnvironmentDir(
-            root.to_path_buf(),
-            format!("it is not a compatible environment but cannot be recreated because {reason}"),
-        ),
     }
 }
 
