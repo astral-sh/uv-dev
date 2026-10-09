@@ -5,7 +5,7 @@ use serde::Deserialize;
 use toml_edit::{Array, Item, Table, Value, value};
 
 use uv_configuration::{ExcludeDependency, Override};
-use uv_distribution_types::{NameRequirementSpecification, Requirement};
+use uv_distribution_types::{ExtraBuildRequires, NameRequirementSpecification, Requirement};
 use uv_fs::{PortablePath, Simplified};
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_types::PythonRequest;
@@ -28,6 +28,8 @@ pub struct Tool {
     excludes: Vec<ExcludeDependency>,
     /// The build constraints requested by the user during installation.
     build_constraints: Vec<NameRequirementSpecification>,
+    /// Build sources resolved from the source project during installation.
+    extra_build_requires: ExtraBuildRequires,
     /// The Python requested by the user during installation.
     python: Option<PythonRequest>,
     /// A mapping of entry point names to their metadata.
@@ -49,6 +51,8 @@ struct ToolWire {
     excludes: Vec<ExcludeDependency>,
     #[serde(default)]
     build_constraint_dependencies: Vec<NameRequirementSpecification>,
+    #[serde(default)]
+    extra_build_requires: ExtraBuildRequires,
     python: Option<PythonRequest>,
     entrypoints: Vec<ToolEntrypoint>,
     #[serde(default)]
@@ -77,6 +81,7 @@ impl From<Tool> for ToolWire {
             overrides: tool.overrides,
             excludes: tool.excludes,
             build_constraint_dependencies: tool.build_constraints,
+            extra_build_requires: tool.extra_build_requires,
             python: tool.python,
             entrypoints: tool.entrypoints,
             options: tool.options.into(),
@@ -101,6 +106,7 @@ impl TryFrom<ToolWire> for Tool {
             overrides: tool.overrides,
             excludes: tool.excludes,
             build_constraints: tool.build_constraint_dependencies,
+            extra_build_requires: tool.extra_build_requires,
             python: tool.python,
             entrypoints: tool.entrypoints,
             options: tool.options.into(),
@@ -189,6 +195,7 @@ impl Tool {
             overrides,
             excludes,
             build_constraints,
+            extra_build_requires: ExtraBuildRequires::default(),
             python,
             entrypoints,
             options,
@@ -199,6 +206,20 @@ impl Tool {
     #[must_use]
     pub fn with_options(self, options: ToolOptions) -> Self {
         Self { options, ..self }
+    }
+
+    /// Retain source-project build dependencies for subsequent upgrades.
+    #[must_use]
+    pub fn with_extra_build_requires(self, extra_build_requires: ExtraBuildRequires) -> Self {
+        Self {
+            extra_build_requires,
+            ..self
+        }
+    }
+
+    /// Build requirements whose source mappings were resolved during installation.
+    pub fn extra_build_requires(&self) -> &ExtraBuildRequires {
+        &self.extra_build_requires
     }
 
     /// Returns the TOML table for this tool.
@@ -313,6 +334,16 @@ impl Tool {
                 };
                 value(build_constraints)
             });
+        }
+
+        if !self.extra_build_requires.is_empty() {
+            table.insert(
+                "extra-build-requires",
+                value(serde::Serialize::serialize(
+                    &self.extra_build_requires,
+                    toml_edit::ser::ValueSerializer::new(),
+                )?),
+            );
         }
 
         if let Some(ref python) = self.python {
