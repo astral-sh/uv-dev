@@ -201,7 +201,9 @@ fn tool_audit_unknown_tool() {
 
 #[test]
 fn tool_audit_missing_lockfile() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_missing_file_error();
     install_tool(&context, "simple-launcher", false);
 
     uv_snapshot!(context.filters(), context.tool_audit()
@@ -210,7 +212,10 @@ fn tool_audit_missing_lockfile() {
         , @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Skipping tool `simple-launcher` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
+    warning: Skipping tool `simple-launcher` because it does not have a lockfile
+      cause: failed to open file `[TEMP_DIR]/tools/simple-launcher/uv.lock`: [OS ERROR 2]
+
+    hint: Reinstall the tool with `--preview-features tool-install-locks` to audit it.
     No auditable tools installed
     ");
 
@@ -240,7 +245,11 @@ fn tool_audit_invalid_receipt() -> Result<()> {
         , @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Ignoring malformed tool `simple-launcher` (run `uv tool uninstall simple-launcher` to remove)
+    warning: Ignoring malformed tool `simple-launcher`
+      cause: Failed to read `uv-receipt.toml` at `[TEMP_DIR]/tools/simple-launcher/uv-receipt.toml`
+      cause: Invalid TOML tool receipt at line 1, column 5
+
+    hint: Run `uv tool uninstall simple-launcher` to remove the tool.
     No auditable tools installed
     ");
 
@@ -253,6 +262,60 @@ fn tool_audit_invalid_receipt() -> Result<()> {
     error: Tool `simple-launcher` has an invalid receipt: Failed to read `uv-receipt.toml` at `[TEMP_DIR]/tools/simple-launcher/uv-receipt.toml`
     ");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_audit_skips_damaged_receipts_safely() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    install_tool(&context, "simple-launcher", true);
+    context
+        .temp_dir
+        .child("tools/bad-source/uv-receipt.toml")
+        .write_str("url = \"https://user:receipt-secret@example.com/\" trailing")?;
+    context
+        .temp_dir
+        .child("tools/bad-schema/uv-receipt.toml")
+        .write_str("[tool]\nrequirements = \"https://user:receipt-secret@example.com/\"")?;
+    context
+        .temp_dir
+        .child("tools/missing-receipt")
+        .create_dir_all()?;
+
+    let server = MockServer::start().await;
+    mount_clean_service(&server).await;
+    uv_snapshot!(context.filters(), context.tool_audit()
+        .arg("--all")
+        .arg("--service-url")
+        .arg(server.uri())
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Ignoring malformed tool `bad-schema`
+      cause: Failed to read `uv-receipt.toml` at `[TEMP_DIR]/tools/bad-schema/uv-receipt.toml`
+      cause: Invalid TOML tool receipt at line 2, column 16
+
+    hint: Run `uv tool uninstall bad-schema` to remove the tool.
+    warning: Ignoring malformed tool `bad-source`
+      cause: Failed to read `uv-receipt.toml` at `[TEMP_DIR]/tools/bad-source/uv-receipt.toml`
+      cause: Invalid TOML tool receipt at line 1, column 50
+
+    hint: Run `uv tool uninstall bad-source` to remove the tool.
+    warning: Ignoring malformed tool `missing-receipt`
+      cause: Failed to find a receipt for tool `missing-receipt` at `[TEMP_DIR]/tools/missing-receipt/uv-receipt.toml`
+
+    hint: Run `uv tool uninstall missing-receipt` to remove the tool.
+    Auditing `simple-launcher`
+    Found no known vulnerabilities and no adverse project statuses in 1 package
+    ");
+    uv_snapshot!(context.filters(), context.tool_audit()
+        .arg("--all")
+        .arg("--service-url")
+        .arg(server.uri())
+        .arg("--quiet")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks"), @"exit_code: 0 (success)");
     Ok(())
 }
 
@@ -272,12 +335,14 @@ fn tool_audit_invalid_lockfile() -> Result<()> {
         , @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` is invalid: TOML parse error at line 1, column 5
-      |
-    1 | not valid toml
-      |     ^
-    key with no value, expected `=`
+    warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` is invalid
+      cause: TOML parse error at line 1, column 5
+               |
+             1 | not valid toml
+               |     ^
+             key with no value, expected `=`
 
+    hint: Reinstall the tool with `--preview-features tool-install-locks` to recreate its lockfile.
     No auditable tools installed
     ");
 
@@ -294,6 +359,29 @@ fn tool_audit_invalid_lockfile() -> Result<()> {
     key with no value, expected `=`
     ");
 
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn tool_audit_unreadable_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    install_tool(&context, "simple-launcher", true);
+    let lock = context.temp_dir.child("tools/simple-launcher/uv.lock");
+    fs_err::remove_file(&lock)?;
+    lock.create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.tool_audit()
+        .arg("--all")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` could not be read
+      cause: failed to read from file `[TEMP_DIR]/tools/simple-launcher/uv.lock`: Is a directory (os error 21)
+
+    hint: Reinstall the tool with `--preview-features tool-install-locks` to recreate its lockfile.
+    No auditable tools installed
+    ");
     Ok(())
 }
 
@@ -316,7 +404,10 @@ fn tool_audit_unsupported_lockfile_version() -> Result<()> {
         , @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` uses an unsupported schema version (v2, but only v1 is supported)
+    warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` uses an unsupported schema version
+      cause: unsupported lockfile schema version (v2, but only v1 is supported)
+
+    hint: Update `uv`, or reinstall the tool with `--preview-features tool-install-locks` to recreate its lockfile.
     No auditable tools installed
     ");
 
@@ -339,10 +430,25 @@ fn tool_audit_unparsable_unsupported_lockfile_version() -> Result<()> {
     install_tool(&context, "simple-launcher", true);
 
     let lock_path = tool_dir.join("simple-launcher").join("uv.lock");
-    let contents = fs_err::read_to_string(&lock_path)?
-        .replacen("version = 1\n", "version = 2\n", 1)
-        .replacen("version = \"0.1.0\"\n", "version = false\n", 1);
-    fs_err::write(&lock_path, contents)?;
+    fs_err::write(&lock_path, "version = 2\nrequires-python = false\n")?;
+
+    uv_snapshot!(context.filters(), context.tool_audit()
+        .arg("--all")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
+        , @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` uses an unsupported schema version
+      cause: failed to parse lockfile using an unsupported schema version (v2, but only v1 is supported)
+      cause: TOML parse error at line 2, column 19
+               |
+             2 | requires-python = false
+               |                   ^^^^^
+             invalid type: boolean `false`, expected a string
+
+    hint: Update `uv`, or reinstall the tool with `--preview-features tool-install-locks` to recreate its lockfile.
+    No auditable tools installed
+    ");
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("simple-launcher")
@@ -428,7 +534,9 @@ async fn tool_audit_multiple_tools() {
 
 #[tokio::test]
 async fn tool_audit_mixed_lockfiles() {
-    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let context = uv_test::test_context!("3.13")
+        .with_tool_dirs()
+        .with_filtered_missing_file_error();
     install_tool(&context, "simple-launcher", true);
     install_tool(&context, "basic-app", false);
 
@@ -443,7 +551,10 @@ async fn tool_audit_mixed_lockfiles() {
         , @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Skipping tool `basic-app` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
+    warning: Skipping tool `basic-app` because it does not have a lockfile
+      cause: failed to open file `[TEMP_DIR]/tools/basic-app/uv.lock`: [OS ERROR 2]
+
+    hint: Reinstall the tool with `--preview-features tool-install-locks` to audit it.
     Auditing `simple-launcher`
     Found no known vulnerabilities and no adverse project statuses in 1 package
     ");
@@ -761,7 +872,9 @@ async fn tool_audit_sarif() {
 
 #[test]
 fn tool_audit_sarif_no_auditable_tools() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_missing_file_error();
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
@@ -795,7 +908,10 @@ fn tool_audit_sarif_no_auditable_tools() {
     }
 
     ----- stderr -----
-    warning: Skipping tool `simple-launcher` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
+    warning: Skipping tool `simple-launcher` because it does not have a lockfile
+      cause: failed to open file `[TEMP_DIR]/tools/simple-launcher/uv.lock`: [OS ERROR 2]
+
+    hint: Reinstall the tool with `--preview-features tool-install-locks` to audit it.
     "#);
 }
 

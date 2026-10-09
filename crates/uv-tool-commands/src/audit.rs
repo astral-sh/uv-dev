@@ -9,6 +9,7 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::AuditOutputFormat;
 use uv_configuration::{Concurrency, DependencyGroupsWithDefaults, ExtrasSpecification};
+use uv_errors::Hints;
 use uv_fs::Simplified;
 use uv_lock::{Lock, LockParseError};
 use uv_normalize::{DefaultExtras, PackageName};
@@ -16,7 +17,7 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::DisplaySafeUrl;
 use uv_settings::{Combine, ResolverInstallerOptions};
 use uv_tool::InstalledTools;
-use uv_warnings::warn_user;
+use uv_warnings::{warn_user, warn_user_with_chain};
 
 use uv_audit_operations::{
     AuditResults, artifact_uri, audit_lock, json, sarif, warn_unmatched_ignores,
@@ -24,6 +25,8 @@ use uv_audit_operations::{
 use uv_command_support::ExitStatus;
 use uv_command_support::Printer;
 use uv_settings::ResolverInstallerSettings;
+
+use crate::warnings::warn_malformed_tool;
 
 /// Audit selected installed tools, or every installed tool if no names are provided.
 pub async fn audit(
@@ -127,9 +130,7 @@ pub async fn audit(
                 if explicit_tool {
                     bail!("Tool `{name}` has an invalid receipt: {error}");
                 }
-                warn_user!(
-                    "Ignoring malformed tool `{name}` (run `uv tool uninstall {name}` to remove)"
-                );
+                warn_malformed_tool(&name, error);
                 continue;
             }
         };
@@ -144,8 +145,15 @@ pub async fn audit(
                         "Tool `{name}` does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it"
                     );
                 }
-                warn_user!(
-                    "Skipping tool `{name}` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it"
+                warn_user_with_chain!(
+                    anyhow::Error::from(error)
+                        .context(format!(
+                            "Skipping tool `{name}` because it does not have a lockfile"
+                        ))
+                        .as_ref(),
+                    Hints::from(
+                        "Reinstall the tool with `--preview-features tool-install-locks` to audit it."
+                    ),
                 );
                 continue;
             }
@@ -156,9 +164,16 @@ pub async fn audit(
                         lock_path.user_display()
                     );
                 }
-                warn_user!(
-                    "Skipping tool `{name}` because its lockfile at `{}` could not be read: {error}",
-                    lock_path.user_display()
+                warn_user_with_chain!(
+                    anyhow::Error::from(error)
+                        .context(format!(
+                            "Skipping tool `{name}` because its lockfile at `{}` could not be read",
+                            lock_path.user_display()
+                        ))
+                        .as_ref(),
+                    Hints::from(
+                        "Reinstall the tool with `--preview-features tool-install-locks` to recreate its lockfile."
+                    ),
                 );
                 continue;
             }
@@ -166,10 +181,10 @@ pub async fn audit(
         let lock = match Lock::from_toml(&contents) {
             Ok(lock) => lock,
             Err(
-                LockParseError::UnsupportedVersion { supported, version }
+                error @ (LockParseError::UnsupportedVersion { supported, version }
                 | LockParseError::UnparsableVersion {
                     supported, version, ..
-                },
+                }),
             ) => {
                 if explicit_tool {
                     bail!(
@@ -177,9 +192,11 @@ pub async fn audit(
                         lock_path.user_display()
                     );
                 }
-                warn_user!(
-                    "Skipping tool `{name}` because its lockfile at `{}` uses an unsupported schema version (v{version}, but only v{supported} is supported)",
-                    lock_path.user_display()
+                warn_user_with_chain!(
+                    anyhow::Error::from(error)
+                        .context(format!("Skipping tool `{name}` because its lockfile at `{}` uses an unsupported schema version", lock_path.user_display()))
+                        .as_ref(),
+                    Hints::from("Update `uv`, or reinstall the tool with `--preview-features tool-install-locks` to recreate its lockfile."),
                 );
                 continue;
             }
@@ -190,9 +207,16 @@ pub async fn audit(
                         lock_path.user_display()
                     );
                 }
-                warn_user!(
-                    "Skipping tool `{name}` because its lockfile at `{}` is invalid: {error}",
-                    lock_path.user_display()
+                warn_user_with_chain!(
+                    anyhow::Error::from(error)
+                        .context(format!(
+                            "Skipping tool `{name}` because its lockfile at `{}` is invalid",
+                            lock_path.user_display()
+                        ))
+                        .as_ref(),
+                    Hints::from(
+                        "Reinstall the tool with `--preview-features tool-install-locks` to recreate its lockfile."
+                    ),
                 );
                 continue;
             }

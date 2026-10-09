@@ -22,6 +22,7 @@ use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 
 pub(crate) use receipt::ToolReceipt;
+pub use receipt::ToolReceiptParseError;
 pub use tool::{Tool, ToolEntrypoint};
 
 mod receipt;
@@ -71,7 +72,7 @@ pub enum Error {
     #[error("Failed to update `uv-receipt.toml` at `{0}`")]
     ReceiptWrite(PathBuf, #[source] Box<toml_edit::ser::Error>),
     #[error("Failed to read `uv-receipt.toml` at `{0}`")]
-    ReceiptRead(PathBuf, #[source] Box<toml::de::Error>),
+    ReceiptRead(PathBuf, #[source] Box<ToolReceiptParseError>),
     #[error(transparent)]
     VirtualEnvError(#[from] uv_virtualenv::Error),
     #[error("Failed to read package entry points {0}")]
