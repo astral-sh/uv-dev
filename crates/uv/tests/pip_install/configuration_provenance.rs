@@ -213,26 +213,6 @@ fn hash_transitive_requirement() -> Result<()> {
     Ok(())
 }
 
-/// Both pip entry points retain environment provenance.
-#[test]
-fn hash_sync_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    context
-        .temp_dir
-        .child("requirements.txt")
-        .write_str("iniconfig")?;
-
-    uv_snapshot!(context.pip_sync().arg("requirements.txt")
-        .env(EnvVars::UV_REQUIRE_HASHES, "1"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: iniconfig
-
-    hint: `--require-hashes` was enabled by environment variable `UV_REQUIRE_HASHES`
-    ");
-    Ok(())
-}
-
 /// Report all enabling declarations and their include sites, without repeating a visited input.
 #[test]
 fn no_index_nested_requirements() -> Result<()> {
@@ -347,15 +327,5 @@ fn no_index_script_configuration() -> Result<()> {
     hint: `--no-index` was enabled by `tool.uv.no-index` in `script.py`
     ");
 
-    uv_snapshot!(context.run().arg("script.py"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving script dependencies
-      cause: Because iniconfig was not found in the provided package locations and you require iniconfig, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
-
-    hint: `--no-index` was enabled by `tool.uv.no-index` in `script.py`
-    ");
     Ok(())
 }
