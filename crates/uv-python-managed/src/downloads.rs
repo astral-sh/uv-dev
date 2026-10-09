@@ -723,29 +723,33 @@ async fn fetch_ndjson_cached(
         return Ok(content.clone());
     }
 
-    let head_result = client
-        .for_host(url)
-        .head(Url::from(url.clone()))
-        .send()
-        .await;
-    let head_response = match head_result {
-        Ok(response) => match response.error_for_status() {
-            Ok(response) => Some(response),
+    let head_response = if cached.is_some() {
+        let head_result = client
+            .for_host(url)
+            .head(Url::from(url.clone()))
+            .send()
+            .await;
+        match head_result {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => Some(response),
+                Err(err) => {
+                    debug!(
+                        "Failed to validate Python downloads metadata with HEAD request: {}",
+                        url.redact_in(&err.to_string())
+                    );
+                    None
+                }
+            },
             Err(err) => {
                 debug!(
-                    "Failed to validate Python downloads metadata with HEAD request: {}",
+                    "Failed to send HEAD request for Python downloads metadata: {}",
                     url.redact_in(&err.to_string())
                 );
                 None
             }
-        },
-        Err(err) => {
-            debug!(
-                "Failed to send HEAD request for Python downloads metadata: {}",
-                url.redact_in(&err.to_string())
-            );
-            None
         }
+    } else {
+        None
     };
 
     let Some(head_response) = head_response else {
@@ -2287,13 +2291,12 @@ async fn fetch_ndjson_collect_streaming_cached(
         return parse_ndjson_bytes_filtered(&source, content, predicate);
     }
 
-    let etag = fetch_versions_cache_etag(client, url).await;
-    if let Some((content, meta)) = &cached
-        && etag.is_some()
-        && etag == meta.etag
-    {
-        refresh_versions_cache_meta(cache, url, meta).await;
-        return parse_ndjson_bytes_filtered(&source, content, predicate);
+    if let Some((content, meta)) = &cached {
+        let etag = fetch_versions_cache_etag(client, url).await;
+        if etag.is_some() && etag == meta.etag {
+            refresh_versions_cache_meta(cache, url, meta).await;
+            return parse_ndjson_bytes_filtered(&source, content, predicate);
+        }
     }
 
     let response = match fetch_http_response(client, url).await {
@@ -2912,27 +2915,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn versions_cache_records_get_etag() {
+    async fn versions_cache_cold_load_records_get_etag() {
         let content = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
         for streaming in [false, true] {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let server = std::thread::spawn(move || {
-                for method in ["HEAD", "GET"] {
-                    let (mut stream, _) = listener.accept().unwrap();
-                    let request = read_http_request(&mut stream);
-                    assert!(request.starts_with(method));
-                    let etag = if method == "HEAD" { "old" } else { "new" };
-                    write!(
-                        stream,
-                        "HTTP/1.1 200 OK\r\nETag: \"{etag}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        content.len()
-                    )
-                    .unwrap();
-                    if method == "GET" {
-                        stream.write_all(content).unwrap();
-                    }
-                }
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream);
+                assert!(request.starts_with("GET "));
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nETag: \"new\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    content.len()
+                )
+                .unwrap();
+                stream.write_all(content).unwrap();
             });
             let cache = Cache::temp().unwrap().init().await.unwrap();
             let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();

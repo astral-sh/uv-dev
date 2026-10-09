@@ -5,13 +5,15 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::SystemTime;
 
 use assert_fs::fixture::{FileWriteStr, PathChild};
+use uv_cache::CacheBucket;
 use uv_platform::{Arch, Os, Platform};
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use indoc::indoc;
 use url::Url;
 use uv_test::uv_snapshot;
@@ -958,12 +960,8 @@ async fn python_list_remote_python_downloads_ndjson_default_source() -> Result<(
 
     Mock::given(method("HEAD"))
         .and(path("/versions.ndjson"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Length", remote_ndjson.len().to_string())
-                .insert_header("ETag", "\"v1\""),
-        )
-        .expect(1)
+        .respond_with(ResponseTemplate::new(405))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -1005,12 +1003,8 @@ async fn python_list_remote_python_downloads_ndjson_cache_reuse() -> Result<()> 
 
     Mock::given(method("HEAD"))
         .and(path("/versions.ndjson"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Length", remote_ndjson.len().to_string())
-                .insert_header("ETag", "\"v1\""),
-        )
-        .expect(1)
+        .respond_with(ResponseTemplate::new(405))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -1210,12 +1204,8 @@ async fn python_list_remote_python_downloads_ndjson_cache_keys_include_credentia
     Mock::given(method("HEAD"))
         .and(path("/versions.ndjson"))
         .and(header("authorization", "Basic dXNlcjp0b2tlbkE="))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Length", remote_ndjson_a.len().to_string())
-                .insert_header("ETag", "\"token-a\""),
-        )
-        .expect(1)
+        .respond_with(ResponseTemplate::new(405))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -1232,12 +1222,8 @@ async fn python_list_remote_python_downloads_ndjson_cache_keys_include_credentia
     Mock::given(method("HEAD"))
         .and(path("/versions.ndjson"))
         .and(header("authorization", "Basic dXNlcjp0b2tlbkI="))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Length", remote_ndjson_b.len().to_string())
-                .insert_header("ETag", "\"token-b\""),
-        )
-        .expect(1)
+        .respond_with(ResponseTemplate::new(405))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -1304,7 +1290,8 @@ async fn python_list_remote_python_downloads_ndjson_falls_back_to_embedded() -> 
 
     Mock::given(method("HEAD"))
         .and(path("/versions.ndjson"))
-        .respond_with(ResponseTemplate::new(500))
+        .respond_with(ResponseTemplate::new(405))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -1342,12 +1329,8 @@ async fn python_list_remote_python_downloads_ndjson_parse_error_falls_back() -> 
 
     Mock::given(method("HEAD"))
         .and(path("/versions.ndjson"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Length", remote_ndjson.len().to_string())
-                .insert_header("ETag", "\"v1\""),
-        )
-        .expect(1)
+        .respond_with(ResponseTemplate::new(405))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -1616,9 +1599,29 @@ async fn python_list_ndjson_head_failure_redacts_signed_url() -> Result<()> {
             r#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://example.com/python.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}"#,
             "application/x-ndjson",
         ))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
+    uv_snapshot!(context.filters(), context.python_list()
+        .args(["cpython-3.14-macos-aarch64-none", "--all-versions", "--all-platforms", "--all-arches", "--show-urls"])
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/versions.ndjson?X-Amz-Signature=secret-signature&safe=value", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.14.1-macos-aarch64-none https://example.com/python.tar.gz
+    ");
+    let metadata_path = context
+        .cache_files(CacheBucket::Python)?
+        .into_iter()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "python-build-standalone.meta.json")
+        })
+        .context("cached catalog metadata exists")?;
+    let mut metadata: serde_json::Value = serde_json::from_str(&context.read(&metadata_path))?;
+    metadata["checked_at"] = serde_json::to_value(SystemTime::UNIX_EPOCH)?;
+    fs_err::write(&metadata_path, serde_json::to_vec(&metadata)?)?;
     uv_snapshot!(context.filters(), context.python_list()
         .args(["cpython-3.14-macos-aarch64-none", "--all-versions", "--all-platforms", "--all-arches", "--show-urls"])
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
