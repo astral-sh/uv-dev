@@ -1399,14 +1399,13 @@ fn matches_build(download_build: Option<&str>, installation_build: Option<&str>)
 mod tests {
     use std::str::FromStr;
 
+    use super::{
+        ManagedPythonDownloadList, ManagedPythonInstallation, PythonDownloadRequest,
+        PythonExecutable, create_link_to_executable, find_matching_bin_link,
+        index_installations_by_executable,
+    };
     use anyhow::{Context, Result};
     use uv_cache::Cache;
-    use uv_python::downloads::{ManagedPythonDownloadList, PythonDownloadRequest};
-    use uv_python::managed::{
-        ManagedPythonInstallation, PythonExecutable, create_link_to_executable,
-    };
-
-    use super::{find_matching_bin_link, index_installations_by_executable};
 
     #[test]
     fn find_matching_bin_link_uses_first_installation_for_shared_executable() -> Result<()> {
