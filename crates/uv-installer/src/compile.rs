@@ -623,6 +623,7 @@ mod tests {
     use tempfile::TempDir;
     use uv_cache::Cache;
     use uv_configuration::Concurrency;
+    use uv_fs::Simplified;
     use uv_python::{EnvironmentPreference, PythonEnvironment, PythonPreference, PythonRequest};
 
     use super::compile_staged_tree;
@@ -647,7 +648,9 @@ mod tests {
                 &cache,
             )?;
             let base_executable = base.python_executable().to_owned();
-            let directory = Arc::new(tempfile::tempdir()?);
+            let directory = Arc::new(tempfile::tempdir_in(
+                std::env::temp_dir().simple_canonicalize()?,
+            )?);
             let output = Command::new(&base_executable)
                 .args(["-m", "venv", "--without-pip"])
                 .arg(directory.path())
