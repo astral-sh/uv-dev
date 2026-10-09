@@ -10149,6 +10149,222 @@ fn requirements_txt_same_named_member_options_do_not_conflict() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
+    // A dependency can still activate the child's extra with the same name.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&context.read("pyproject.toml").replace(
+            "dependencies = [\"child\"]",
+            "dependencies = [\"child[feature]\"]",
+        ))?;
+    uv_snapshot!(context.filters(), context.export().arg("--extra").arg("feature"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Found conflicting extras `child[feature]` and `project[feature]` enabled simultaneously
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--extra").arg("feature").arg("--prune").arg("child").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Selecting a member can still activate conflicting groups inherited from the workspace root.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_inherited_root_groups_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        a = []
+        b = []
+
+        [tool.uv]
+        conflicts = [[{ group = "a" }, { group = "b" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        project = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["project"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--package").arg("child").arg("--group").arg("a").arg("--group").arg("b"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Groups `a` and `b` are incompatible with the conflicts: {`project:a`, `project:b`}
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("child")
+        .arg("--group").arg("a").arg("--group").arg("b"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Groups `a` and `b` are incompatible with the conflicts: {`project:a`, `project:b`}
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--package").arg("child").arg("--group").arg("a").arg("--group").arg("b")
+        .arg("--no-install-workspace"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Groups `a` and `b` are incompatible with the conflicts: {`project:a`, `project:b`}
+    ");
+    Ok(())
+}
+
+/// Mutually exclusive platform paths cannot activate conflicting extras together.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_transitive_extra_conflict_disjoint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "child[a]; sys_platform == 'linux'",
+            "child[b]; sys_platform == 'win32'",
+        ]
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "a" }, { package = "child", extra = "b" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = []
+        b = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // Overlapping activations still conflict.
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("sys_platform == 'win32'", "sys_platform == 'linux'"),
+    )?;
+    uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Found conflicting extras `child[a]` and `child[b]` enabled simultaneously
+    ");
+    Ok(())
+}
+
+/// Conditions on parent packages also constrain the extras they activate.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_transitive_extra_conflict_disjoint_paths() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "left; sys_platform == 'linux'",
+            "right; sys_platform == 'win32'",
+        ]
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "a" }, { package = "child", extra = "b" }]]
+
+        [tool.uv.workspace]
+        members = ["child", "left", "right"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+        left = { workspace = true }
+        right = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("left/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "left"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[a]"]
+    "#})?;
+    context
+        .temp_dir
+        .child("right/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "right"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[b]"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = []
+        b = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
     Ok(())
 }
 

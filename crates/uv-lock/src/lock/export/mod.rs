@@ -1,7 +1,8 @@
-use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, VecDeque};
 
 use either::Either;
+use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::EdgeRef;
 use petgraph::visit::IntoNodeReferences;
@@ -13,7 +14,7 @@ use uv_configuration::{
 };
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
-use uv_pypi_types::ConflictItem;
+use uv_pypi_types::{ConflictItem, ConflictKind};
 
 use uv_resolver_types::graph_ops::Reachable;
 use uv_resolver_types::universal_marker::resolve_activated_extras;
@@ -58,6 +59,9 @@ impl<'lock> ExportableRequirements<'lock> {
         annotate: bool,
         install_options: &'lock InstallOptions,
     ) -> Result<Self, LockError> {
+        if !target.lock().conflicts().is_empty() {
+            validate_extra_conflicts(target, prune, extras, groups)?;
+        }
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
@@ -354,6 +358,163 @@ impl<'lock> ExportableRequirements<'lock> {
             .collect::<Vec<_>>();
 
         Ok(Self(nodes))
+    }
+}
+
+/// Validate requested extras before conflict guards can remove their resolved edges.
+fn validate_extra_conflicts<'lock>(
+    target: &impl Installable<'lock>,
+    prune: &[PackageName],
+    extras: &ExtrasSpecificationWithDefaults,
+    groups: &DependencyGroupsWithDefaults,
+) -> Result<(), LockError> {
+    let lock = target.lock();
+    let modifiers = lock.dependency_modifiers()?;
+    let root_marker = lock.requires_python.to_marker_tree();
+    let mut requests = ExtraRequests::default();
+    for (name, kind) in target
+        .roots()
+        .map(|name| (name, InstallableRootKind::Production))
+        .chain(
+            target
+                .group_root(groups)
+                .map(|name| (name, InstallableRootKind::DependencyGroups)),
+        )
+    {
+        if prune.contains(name) {
+            continue;
+        }
+        let package = lock
+            .find_by_name(name)
+            .map_err(|_| LockErrorKind::MultipleRootPackages { name: name.clone() })?
+            .ok_or_else(|| LockErrorKind::MissingRootPackage { name: name.clone() })?;
+        let index = lock.by_id[&package.id];
+        if kind == InstallableRootKind::Production && groups.prod() {
+            requests.push(index, None, root_marker);
+            for extra in extras.extra_names(
+                package
+                    .optional_dependencies
+                    .keys()
+                    .chain(package.metadata.provides_extra.iter()),
+            ) {
+                requests.push(index, Some(extra.clone()), root_marker);
+            }
+        }
+        for (group, dependencies) in &package.dependency_groups {
+            if !target.includes_group(Some(name), group, groups) {
+                continue;
+            }
+            let requirements = package.dependency_requirements(None, Some(group), &modifiers);
+            for dependency in dependencies {
+                if prune.contains(dependency.package_name()) {
+                    continue;
+                }
+                let (marker, extras) = dependency.activation(requirements.as_deref());
+                requests.push(dependency.index, None, root_marker.and(marker));
+                for (extra, marker) in extras {
+                    requests.push(dependency.index, Some(extra), root_marker.and(marker));
+                }
+            }
+        }
+    }
+    for requirement in lock.requirements().iter().chain(
+        lock.dependency_groups()
+            .iter()
+            .filter(|(group, _)| target.includes_group(None, group, groups))
+            .flat_map(|(_, requirements)| requirements),
+    ) {
+        if prune.contains(&requirement.name) {
+            continue;
+        }
+        for package in lock
+            .packages()
+            .iter()
+            .filter(|package| package.name() == &requirement.name)
+        {
+            let Some(marker) = lock.root_requirement_marker(requirement, package) else {
+                continue;
+            };
+            let index = lock.by_id[&package.id];
+            requests.push(index, None, root_marker.and(marker));
+            for extra in &requirement.extras {
+                requests.push(index, Some(extra.clone()), root_marker.and(marker));
+            }
+        }
+    }
+    let mut activated = BTreeMap::<(&PackageName, ExtraName), MarkerTree>::new();
+    while let Some((index, extra, parent_marker)) = requests.queue.pop_front() {
+        let package = lock.package(index);
+        if let Some(extra) = &extra {
+            activated
+                .entry((package.name(), extra.clone()))
+                .and_modify(|marker| *marker = marker.or(parent_marker))
+                .or_insert(parent_marker);
+        }
+        let requirements = package.dependency_requirements(extra.as_ref(), None, &modifiers);
+        let dependencies = if let Some(extra) = &extra {
+            Either::Left(
+                package
+                    .optional_dependencies
+                    .get(extra)
+                    .into_iter()
+                    .flatten(),
+            )
+        } else {
+            Either::Right(package.dependencies.iter())
+        };
+        for dependency in dependencies {
+            if prune.contains(dependency.package_name()) {
+                continue;
+            }
+            let (marker, extras) = dependency.activation(requirements.as_deref());
+            requests.push(dependency.index, None, parent_marker.and(marker));
+            for (extra, marker) in extras {
+                requests.push(dependency.index, Some(extra), parent_marker.and(marker));
+            }
+        }
+    }
+    for set in lock.conflicts().iter() {
+        let extras = set.iter().filter_map(|item| {
+            let ConflictKind::Extra(extra) = item.kind() else {
+                return None;
+            };
+            let marker = activated.get(&(item.package(), extra.clone()))?;
+            Some((item.package(), extra, marker))
+        });
+        for ((package1, extra1, marker1), (package2, extra2, marker2)) in
+            extras.tuple_combinations()
+        {
+            if !marker1.is_disjoint(*marker2) {
+                return Err(LockErrorKind::ConflictingExtra {
+                    package1: package1.clone(),
+                    extra1: extra1.clone(),
+                    package2: package2.clone(),
+                    extra2: extra2.clone(),
+                }
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct ExtraRequests {
+    queue: VecDeque<(PackageIndex, Option<ExtraName>, MarkerTree)>,
+    markers: FxHashMap<(PackageIndex, Option<ExtraName>), MarkerTree>,
+}
+
+impl ExtraRequests {
+    fn push(&mut self, index: PackageIndex, extra: Option<ExtraName>, marker: MarkerTree) {
+        let combined = self
+            .markers
+            .entry((index, extra.clone()))
+            .or_insert(MarkerTree::FALSE);
+        let expanded = combined.or(marker);
+        if expanded != *combined {
+            *combined = expanded;
+            self.queue.push_back((index, extra, expanded));
+        }
     }
 }
 

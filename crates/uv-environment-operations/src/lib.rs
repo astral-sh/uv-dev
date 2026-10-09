@@ -2030,21 +2030,23 @@ pub fn detect_conflicts(
     let lock = target.lock();
     let packages = target.packages(extras, groups);
     let roots = target.roots().collect::<FxHashSet<_>>();
+    let group_roots = roots
+        .iter()
+        .copied()
+        .chain(target.group_root(groups))
+        .collect::<FxHashSet<_>>();
     let conflicts = lock.conflicts();
     for set in conflicts.iter() {
         let mut conflicts: Vec<ConflictItem> = vec![];
         for item in set.iter() {
-            if !packages.contains(item.package()) {
-                // Ignore items that are not in the install targets
-                continue;
-            }
             let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
+                ConflictKind::Project => packages.contains(item.package()) && groups.prod(),
                 ConflictKind::Extra(extra) => {
                     roots.contains(item.package()) && extras.contains(extra)
                 }
-                ConflictKind::Group(group1) => {
-                    roots.contains(item.package()) && groups.contains(group1)
+                ConflictKind::Group(group) => {
+                    group_roots.contains(item.package())
+                        && target.includes_group(Some(item.package()), group, groups)
                 }
             };
             if is_conflicting {

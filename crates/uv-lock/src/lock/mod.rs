@@ -3145,6 +3145,15 @@ impl Lock {
         &self.conflicts
     }
 
+    /// Return the dependency overrides and exclusions recorded in the lockfile.
+    fn dependency_modifiers(&self) -> Result<DependencyModifiers, LockError> {
+        Ok(DependencyModifiers::new(
+            Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(self.manifest.excludes.iter().cloned()),
+        ))
+    }
+
     /// Returns the supported environments that were used to generate this lock.
     pub fn supported_environments(&self) -> &[MarkerTree] {
         &self.supported_environments
@@ -7386,6 +7395,36 @@ impl Package {
         &self.dependency_groups
     }
 
+    /// Prepare effective declarations once for a dependency section, when metadata is available.
+    fn dependency_requirements(
+        &self,
+        extra: Option<&ExtraName>,
+        group: Option<&GroupName>,
+        modifiers: &DependencyModifiers,
+    ) -> Option<Vec<Requirement>> {
+        let requirements = group
+            .map_or(Some(&self.metadata.requires_dist), |group| {
+                self.metadata.dependency_groups.get(group)
+            })
+            .filter(|requirements| !requirements.is_empty())?;
+        let context = match (group, extra) {
+            (Some(group), _) => DependencyContext::Group(group),
+            (None, Some(extra)) => DependencyContext::Extra(extra),
+            (None, None) => DependencyContext::Production,
+        };
+        let mut requirements = Lock::preprocess_requirements(
+            &self.id.name,
+            self.id.version.as_ref(),
+            &requirements.iter().cloned().collect::<Vec<_>>(),
+            context,
+            modifiers,
+        );
+        for requirement in &mut requirements {
+            requirement.marker = context.requirement_marker(requirement.marker);
+        }
+        Some(requirements)
+    }
+
     /// Returns an [`InstallTarget`] view for filtering decisions.
     fn as_install_target(&self) -> InstallTarget<'_> {
         InstallTarget {
@@ -9245,6 +9284,53 @@ impl Dependency {
     /// Returns the package name of this dependency.
     pub fn package_name(&self) -> &PackageName {
         &self.package_id.name
+    }
+
+    /// Return the conditions under which the effective declarations request this dependency.
+    fn activation(
+        &self,
+        requirements: Option<&[Requirement]>,
+    ) -> (MarkerTree, BTreeMap<ExtraName, MarkerTree>) {
+        let fallback = || {
+            let marker = self.complexified_marker.pep508();
+            (
+                marker,
+                self.extra
+                    .iter()
+                    .cloned()
+                    .map(|extra| (extra, marker))
+                    .collect(),
+            )
+        };
+        let Some(requirements) = requirements else {
+            return fallback();
+        };
+        let mut requirements = requirements
+            .iter()
+            .filter(|requirement| requirement.name == *self.package_name())
+            .peekable();
+        if requirements.peek().is_none() {
+            return fallback();
+        }
+        let mut marker = MarkerTree::FALSE;
+        let mut extras = BTreeMap::<ExtraName, MarkerTree>::new();
+        for requirement in requirements {
+            marker = marker.or(requirement.marker);
+            for extra in &requirement.extras {
+                extras
+                    .entry(extra.clone())
+                    .and_modify(|marker| *marker = marker.or(requirement.marker))
+                    .or_insert(requirement.marker);
+            }
+        }
+        // A merged edge may receive its extras from separate declarations.
+        for extra in &self.extra {
+            marker = marker.and(extras.get(extra).copied().unwrap_or(MarkerTree::FALSE));
+        }
+        for extra_marker in extras.values_mut() {
+            *extra_marker = extra_marker.and(marker);
+        }
+        (marker, extras)
     }
 
     /// Returns the extras specified on this dependency.
