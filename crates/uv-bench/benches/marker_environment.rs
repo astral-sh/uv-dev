@@ -1,8 +1,11 @@
+extern crate uv_performance_memory_allocator;
+
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder, MarkerTree};
+use uv_resolver::UniversalMarker;
 
 fn marker_environment(criterion: &mut Criterion) {
     let environment = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
@@ -31,9 +34,9 @@ fn marker_environment(criterion: &mut Criterion) {
             marker = marker.or(term);
         }
 
+        let marker = UniversalMarker::from_combined(marker);
         group.bench_function(BenchmarkId::new("bdd", alternatives), |benchmark| {
-            benchmark
-                .iter(|| black_box(marker).only_extras_for_environment(black_box(&environment)));
+            benchmark.iter(|| black_box(marker).conflict_for_environment(black_box(&environment)));
         });
     }
     group.finish();

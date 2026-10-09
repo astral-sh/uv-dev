@@ -5,7 +5,7 @@ use std::str::FromStr;
 use rustc_hash::FxHashMap;
 
 use uv_normalize::{ExtraName, GroupName, InvalidNameError, PackageName};
-use uv_pep508::{MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree};
+use uv_pep508::{MarkerEnvironment, MarkerOperator, MarkerTree};
 use uv_pypi_types::{ConflictItem, ConflictKind, Conflicts, Inference};
 
 #[derive(Debug, thiserror::Error)]
