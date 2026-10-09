@@ -3934,30 +3934,6 @@ impl Lock {
         overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
     ) -> Result<bool, LockError> {
-        type Activation = BTreeMap<(PackageName, Vec<ExtraName>), MarkerTree>;
-        fn activation(
-            requirements: impl IntoIterator<Item = (PackageName, Vec<ExtraName>, MarkerTree)>,
-        ) -> Activation {
-            let mut markers = BTreeMap::new();
-            for (name, extras, marker) in requirements {
-                markers
-                    .entry((name, extras))
-                    .and_modify(|value: &mut MarkerTree| {
-                        *value = value.or(marker);
-                    })
-                    .or_insert(marker);
-            }
-            markers
-        }
-        fn locked<'a>(requirements: impl IntoIterator<Item = &'a Requirement>) -> Activation {
-            activation(requirements.into_iter().map(|requirement| {
-                (
-                    requirement.name.clone(),
-                    requirement.extras.to_vec(),
-                    requirement.marker,
-                )
-            }))
-        }
         // Non-workspace mutable metadata is refreshed later during resolution. Its stored
         // dependency markers cannot establish inactivity before that refresh.
         if self.packages.iter().any(|package| {
@@ -4005,16 +3981,18 @@ impl Lock {
             return Ok(false);
         }
 
-        if locked(
+        if normalizer.requirements(
             requirements
                 .iter()
-                .chain(dependency_groups.values().flatten()),
-        ) != locked(
+                .chain(dependency_groups.values().flatten())
+                .cloned(),
+        )? != normalizer.requirements(
             self.manifest
                 .requirements
                 .iter()
-                .chain(self.manifest.dependency_groups.values().flatten()),
-        ) {
+                .chain(self.manifest.dependency_groups.values().flatten())
+                .cloned(),
+        )? {
             return Ok(false);
         }
 
@@ -4038,11 +4016,7 @@ impl Lock {
                 else {
                     return Ok(false);
                 };
-                current.push((
-                    requirement.name,
-                    requirement.extras.to_vec(),
-                    requirement.marker,
-                ));
+                current.push(Requirement::from(requirement));
             }
             let Ok(groups) =
                 FlatDependencyGroups::from_pyproject_toml(member.root(), member.pyproject_toml())
@@ -4050,13 +4024,7 @@ impl Lock {
                 return Ok(false);
             };
             for (_, group) in groups {
-                current.extend(group.requirements.into_iter().map(|requirement| {
-                    (
-                        requirement.name,
-                        requirement.extras.to_vec(),
-                        requirement.marker,
-                    )
-                }));
+                current.extend(group.requirements.into_iter().map(Requirement::from));
             }
             let all_extras = &package.metadata.provides_extra;
             let previous = package
@@ -4064,14 +4032,11 @@ impl Lock {
                 .requires_dist
                 .iter()
                 .chain(package.metadata.dependency_groups.values().flatten())
-                .map(|requirement| {
-                    (
-                        requirement.name.clone(),
-                        requirement.extras.to_vec(),
-                        requirement.marker.simplify_extras(all_extras),
-                    )
+                .map(|requirement| Requirement {
+                    marker: requirement.marker.simplify_extras(all_extras),
+                    ..requirement.clone()
                 });
-            if activation(current) != activation(previous) {
+            if normalizer.requirements(current)? != normalizer.requirements(previous)? {
                 return Ok(false);
             }
         }
