@@ -523,7 +523,7 @@ impl ManagedPythonInstallation {
         self.ensure_canonical_executables().await?;
         self.ensure_build_file().await?;
         if let Err(error) = self.ensure_dylib_patched_at(destination) {
-            error.warn_user(self);
+            error.warn_user(self.key());
         }
         Ok(())
     }
