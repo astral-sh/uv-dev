@@ -38,11 +38,11 @@ use uv_distribution_types::{
     ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
     DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
     FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
-    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId,
+    HashValidation, Identifier, Index, IndexFormat, IndexLocations, IndexMetadata, IndexUrl,
+    MetadataHashPolicy, MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SerializableStatusCode, SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString, VersionId,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -2629,6 +2629,7 @@ impl Lock {
             fork_strategy: resolution.options.fork_strategy,
             minimum_libc_version: resolution.options.minimum_libc_version,
             exclude_newer: resolution.options.exclude_newer.clone(),
+            indexes: ResolverIndex::from_locations(index_locations, root)?,
         };
         // Canonicalize the top-level fork markers to match what is persisted in
         // `uv.lock`. In particular, conflict-only fork markers can serialize to
@@ -3138,6 +3139,15 @@ impl Lock {
     /// Returns the exclude newer setting used to generate this lock.
     pub fn exclude_newer(&self) -> &ExcludeNewer {
         &self.options.exclude_newer
+    }
+
+    /// Return whether the ordered index policy matches the one used to generate this lock.
+    pub fn satisfies_index_locations(
+        &self,
+        index_locations: &IndexLocations,
+        root: &Path,
+    ) -> Result<bool, LockError> {
+        Ok(self.options.indexes == ResolverIndex::from_locations(index_locations, root)?)
     }
 
     /// Returns the conflicting groups that were used to generate this lock.
@@ -6209,6 +6219,8 @@ struct ResolverOptions {
     minimum_libc_version: Option<MinimumLibcVersion>,
     /// The [`ExcludeNewer`] setting used to generate this lock.
     exclude_newer: ExcludeNewer,
+    /// The ordered index policy used to generate this lock.
+    indexes: Vec<ResolverIndex>,
 }
 
 /// The serialized resolver options in the lockfile.
@@ -6229,6 +6241,149 @@ struct ResolverOptionsWire {
     /// The [`ExcludeNewer`] setting used to generate this lock.
     #[serde(flatten)]
     exclude_newer: ExcludeNewerWire,
+    /// The ordered index policy used to generate this lock.
+    #[serde(default)]
+    indexes: Vec<ResolverIndexWire>,
+}
+
+/// The policy-relevant settings for an index used during resolution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolverIndex {
+    url: RegistrySource,
+    explicit: bool,
+    default: bool,
+    format: IndexFormat,
+    find_links: bool,
+    ignore_error_codes: Option<BTreeSet<SerializableStatusCode>>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct ResolverIndexWire {
+    url: RegistrySourceWire,
+    #[serde(default)]
+    explicit: bool,
+    #[serde(default)]
+    default: bool,
+    #[serde(default)]
+    format: IndexFormat,
+    #[serde(default)]
+    find_links: bool,
+    #[serde(default)]
+    ignore_error_codes: Option<BTreeSet<SerializableStatusCode>>,
+}
+
+impl ResolverIndex {
+    fn normalize(indexes: &mut [Self]) {
+        // Explicit indexes are selected by name, independently of implicit index priority.
+        // Stable sorting retains declaration order for repeated URLs with different policies.
+        indexes.sort_by(|left, right| {
+            left.explicit.cmp(&right.explicit).then_with(|| {
+                if left.explicit {
+                    left.url.cmp(&right.url)
+                } else {
+                    (!left.find_links, !left.default).cmp(&(!right.find_links, !right.default))
+                }
+            })
+        });
+    }
+
+    fn from_index(index: &Index, find_links: bool, root: &Path) -> Result<Self, LockError> {
+        let url = match index.url() {
+            IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
+                // Routing parameters define index identity; signing credentials and metadata do
+                // not. Fragments are never sent to the index server.
+                let mut url = index.url().without_credentials().into_owned();
+                url.remove_sensitive_query_parameters();
+                url.remove_query_parameters(|key| {
+                    [
+                        "X-Amz-Algorithm",
+                        "X-Amz-Date",
+                        "X-Amz-Expires",
+                        "X-Amz-SignedHeaders",
+                    ]
+                    .iter()
+                    .any(|parameter| key.eq_ignore_ascii_case(parameter))
+                });
+                url.set_fragment(None);
+                if index.format == IndexFormat::Simple {
+                    // Match the client's single `pop_if_empty` before appending a package name.
+                    if let Some(path) = url.path().strip_suffix('/') {
+                        let path = path.to_owned();
+                        url.set_path(&path);
+                    }
+                }
+                RegistrySource::Url(UrlString::from(url))
+            }
+            IndexUrl::Path(_) => RegistrySource::from_index_url(index.url(), root)?,
+        };
+        Ok(Self {
+            url,
+            explicit: index.explicit,
+            default: index.default,
+            format: index.format,
+            find_links,
+            ignore_error_codes: index
+                .ignore_error_codes
+                .as_ref()
+                .map(|codes| codes.iter().copied().collect()),
+        })
+    }
+
+    fn from_locations(
+        index_locations: &IndexLocations,
+        root: &Path,
+    ) -> Result<Vec<Self>, LockError> {
+        if index_locations.is_none() {
+            return Ok(Vec::new());
+        }
+
+        // Compare normalized policies so naming or publishing metadata does not change
+        // whether the implicit PyPI fallback needs to be serialized.
+        let default_locations = IndexLocations::default();
+        let default_index = default_locations
+            .default_index()
+            .map(|index| Self::from_index(index, false, root))
+            .transpose()?;
+        let mut indexes = Vec::new();
+        // The default index always has lower priority than other configured indexes, regardless
+        // of its declaration position. Find-links inputs merge candidates instead of participating
+        // in first-index precedence, so retain their distinct input kind.
+        let configured = index_locations
+            .defined_indexes()
+            .filter(|index| !index.default)
+            .chain(index_locations.default_index());
+        for (index, find_links) in configured
+            .map(|index| (index, false))
+            .chain(index_locations.flat_indexes().map(|index| (index, true)))
+        {
+            let mut policy = Self::from_index(index, find_links, root)?;
+            // The client selects URL policies before explicit/default index ordering is applied.
+            policy.ignore_error_codes = index_locations
+                .ignored_error_codes_for(index.url())
+                .map(|codes| codes.iter().copied().collect());
+            let index = policy;
+            if Some(&index) != default_index.as_ref() && !indexes.contains(&index) {
+                indexes.push(index);
+            }
+        }
+        indexes.reverse();
+        Self::normalize(&mut indexes);
+        Ok(indexes)
+    }
+}
+
+impl From<ResolverIndexWire> for ResolverIndex {
+    fn from(wire: ResolverIndexWire) -> Self {
+        Self {
+            url: wire.url.into(),
+            explicit: wire.explicit,
+            default: wire.default,
+            format: wire.format,
+            find_links: wire.find_links,
+            ignore_error_codes: wire.ignore_error_codes,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -6569,6 +6724,12 @@ impl TryFrom<LockWire> for Lock {
             .map(|simplified_marker| simplified_marker.into_marker(&wire.requires_python))
             .collect();
         let mut options_wire = wire.options;
+        let mut indexes = options_wire
+            .indexes
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        ResolverIndex::normalize(&mut indexes);
         if options_wire.exclude_newer.exclude_newer_span.is_some() {
             options_wire.exclude_newer.exclude_newer = None;
         }
@@ -6578,6 +6739,7 @@ impl TryFrom<LockWire> for Lock {
             fork_strategy: options_wire.fork_strategy,
             minimum_libc_version: options_wire.minimum_libc_version,
             exclude_newer: options_wire.exclude_newer.into(),
+            indexes,
         };
         let lock = Self::new(
             wire.version,
@@ -7824,23 +7986,7 @@ impl Source {
     }
 
     fn from_index_url(index_url: &IndexUrl, root: &Path) -> Result<Self, LockError> {
-        match index_url {
-            IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
-                // Remove any sensitive credentials from the index URL.
-                let redacted = index_url.without_credentials();
-                let source = RegistrySource::Url(UrlString::from(redacted.as_ref()));
-                Ok(Self::Registry(source))
-            }
-            IndexUrl::Path(url) => {
-                let path = url
-                    .to_file_path()
-                    .map_err(|()| LockErrorKind::UrlToPath { url: url.to_url() })?;
-                let path = try_relative_to_if(&path, root, url.prefers_relative())
-                    .map_err(LockErrorKind::IndexRelativePath)?;
-                let source = RegistrySource::Path(path.into_boxed_path());
-                Ok(Self::Registry(source))
-            }
-        }
+        RegistrySource::from_index_url(index_url, root).map(Self::Registry)
     }
 
     fn from_git_path_built_dist(git_dist: &GitPathBuiltDist) -> Self {
@@ -8226,6 +8372,25 @@ enum RegistrySource {
     Url(UrlString),
     /// Ex) `../path/to/local/index`
     Path(Box<Path>),
+}
+
+impl RegistrySource {
+    fn from_index_url(index_url: &IndexUrl, root: &Path) -> Result<Self, LockError> {
+        match index_url {
+            IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
+                let redacted = index_url.without_credentials();
+                Ok(Self::Url(UrlString::from(redacted.as_ref())))
+            }
+            IndexUrl::Path(url) => {
+                let path = url
+                    .to_file_path()
+                    .map_err(|()| LockErrorKind::UrlToPath { url: url.to_url() })?;
+                let path = try_relative_to_if(&path, root, url.prefers_relative())
+                    .map_err(LockErrorKind::IndexRelativePath)?;
+                Ok(Self::Path(path.into_boxed_path()))
+            }
+        }
+    }
 }
 
 impl Display for RegistrySource {

@@ -121,6 +121,9 @@ fn wrong_backtracking_basic() -> Result<()> {
         revision = 5
         requires-python = ">=3.12"
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -284,6 +287,9 @@ fn wrong_backtracking_indirect() -> Result<()> {
         revision = 5
         requires-python = ">=3.12"
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "2.0.0"
@@ -428,6 +434,9 @@ fn fork_allows_non_conflicting_non_overlapping_dependencies() -> Result<()> {
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -535,6 +544,9 @@ fn fork_allows_non_conflicting_repeated_dependencies() -> Result<()> {
         revision = 5
         requires-python = ">=3.12"
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -636,6 +648,9 @@ fn fork_basic() -> Result<()> {
             "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
@@ -912,6 +927,9 @@ fn fork_filter_sibling_dependencies() -> Result<()> {
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "4.3.0"
@@ -1083,6 +1101,9 @@ fn fork_upgrade() -> Result<()> {
         revision = 5
         requires-python = ">=3.12"
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "bar"
         version = "2.0.0"
@@ -1205,6 +1226,9 @@ fn fork_incomplete_markers() -> Result<()> {
             "python_full_version == '3.13.*'",
             "python_full_version < '3.13'",
         ]
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
@@ -1351,6 +1375,9 @@ fn fork_marker_accrue() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.12"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
@@ -1557,6 +1584,9 @@ fn fork_marker_inherit_combined_allowed() -> Result<()> {
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -1735,6 +1765,9 @@ fn fork_marker_inherit_combined_disallowed() -> Result<()> {
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -1902,6 +1935,9 @@ fn fork_marker_inherit_combined() -> Result<()> {
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -2060,6 +2096,9 @@ fn fork_marker_inherit_isolated() -> Result<()> {
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -2205,6 +2244,9 @@ fn fork_marker_inherit_transitive() -> Result<()> {
             "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
@@ -2360,6 +2402,9 @@ fn fork_marker_inherit() -> Result<()> {
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -2495,6 +2540,9 @@ fn fork_marker_limited_inherit() -> Result<()> {
             "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
@@ -2649,6 +2697,9 @@ fn fork_marker_selection() -> Result<()> {
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "0.1.0"
@@ -2801,6 +2852,9 @@ fn fork_marker_track() -> Result<()> {
             "sys_platform != 'darwin' and sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.3.1"
@@ -2945,6 +2999,9 @@ fn fork_non_fork_marker_transitive() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.12"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
@@ -3238,6 +3295,9 @@ fn fork_overlapping_markers_basic() -> Result<()> {
             "python_full_version < '3.13'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.2.0"
@@ -3401,6 +3461,9 @@ fn preferences_dependent_forking_bistable() -> Result<()> {
             "sys_platform == 'linux'",
             "sys_platform != 'linux'",
         ]
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "cleaver"
@@ -3775,6 +3838,9 @@ fn preferences_dependent_forking_tristable() -> Result<()> {
             "sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "bar"
         version = "1.0.0"
@@ -4056,6 +4122,9 @@ fn preferences_dependent_forking() -> Result<()> {
             "sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "bar"
         version = "1.0.0"
@@ -4231,6 +4300,9 @@ fn fork_remaining_universe_partitioning() -> Result<()> {
             "sys_platform != 'illumos' and sys_platform != 'windows'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -4373,6 +4445,9 @@ fn fork_requires_python_full_prerelease() -> Result<()> {
         revision = 5
         requires-python = ">=3.10"
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "project"
         version = "0.1.0"
@@ -4453,6 +4528,9 @@ fn fork_requires_python_full() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.10"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "project"
@@ -4539,6 +4617,9 @@ fn fork_requires_python_patch_overlap() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.10.1"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
@@ -4630,6 +4711,9 @@ fn fork_requires_python() -> Result<()> {
         revision = 5
         requires-python = ">=3.10"
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "project"
         version = "0.1.0"
@@ -4718,6 +4802,9 @@ fn prerelease_base_marker_stable_preference_explicit_first() -> Result<()> {
             "sys_platform == 'linux'",
             "sys_platform != 'linux'",
         ]
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "c"
@@ -4822,6 +4909,9 @@ fn prerelease_base_marker_stable_preference_plain_first() -> Result<()> {
             "sys_platform != 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "c"
         version = "1.0.0"
@@ -4920,6 +5010,9 @@ fn prerelease_marker_equivalent_stable_preference() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.12"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "c"
@@ -5035,6 +5128,9 @@ fn prerelease_marker_stable_preference_backtracks() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.12"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
@@ -5161,6 +5257,9 @@ fn transitive_prerelease_forks() -> Result<()> {
             "sys_platform == 'linux'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -5278,6 +5377,9 @@ fn requires_python_wheels() -> Result<()> {
         revision = 5
         requires-python = ">=3.10"
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -5370,6 +5472,9 @@ fn unreachable_package() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.12"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
@@ -5468,6 +5573,9 @@ fn unreachable_wheels() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.12"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
@@ -5600,6 +5708,9 @@ fn marker_variants_have_different_extras() -> Result<()> {
             "platform_python_implementation == 'PyPy'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "project"
         version = "0.1.0"
@@ -5730,6 +5841,9 @@ fn virtual_package_extra_priorities() -> Result<()> {
         revision = 5
         requires-python = ">=3.12"
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "a"
         version = "1.0.0"
@@ -5843,6 +5957,9 @@ fn requires_python_subset() -> Result<()> {
             "sys_platform == 'win32'",
         ]
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+
         [[package]]
         name = "project"
         version = "0.1.0"
@@ -5941,6 +6058,9 @@ fn specific_architecture() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.12"
+
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
         [[package]]
         name = "a"
