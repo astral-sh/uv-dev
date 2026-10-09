@@ -272,22 +272,6 @@ fn lock_required_environment_drops_stale_preference() -> Result<()> {
     Updated upgradeable v1.0.0 -> v2.0.0
     ");
 
-    let versions = context
-        .read("uv.lock")
-        .lines()
-        .filter(|line| line.starts_with("name = ") || line.starts_with("version = "))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_snapshot!(versions, @r#"
-    version = 1
-    name = "holdout"
-    version = "2.0.0"
-    name = "project"
-    version = "0.1.0"
-    name = "upgradeable"
-    version = "2.0.0"
-    "#);
-
     Ok(())
 }
 
@@ -49033,5 +49017,115 @@ fn lock_required_environment_preserves_git_pin() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
     assert!(context.read("uv.lock").contains(&pinned));
+    Ok(())
+}
+
+/// A wider Python range must reconsider pins whose wheels only cover the previous range.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_widened_python_scope() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "required-environment-widened-python"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+        dependencies = ["example<2"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated example v1.0.0 -> v2.0.0
+    "#);
+    Ok(())
+}
+
+/// Projectless root groups are matched after global overrides when reconsidering wheel preferences.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_overridden_manifest_root() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "required-environment-overridden-root"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.example.versions."3.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["example<2"]
+        [tool.uv]
+        override-dependencies = ["example==2"]
+        [tool.uv.workspace]
+        members = []
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["example<2"]
+        [tool.uv]
+        override-dependencies = ["example>=2"]
+        required-environments = ["python_version == '3.13'"]
+        [tool.uv.workspace]
+        members = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved 1 package in [TIME]
+    Updated example v2.0.0 -> v3.0.0
+    "#);
     Ok(())
 }

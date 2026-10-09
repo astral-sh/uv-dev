@@ -1505,8 +1505,14 @@ pub async fn resolve_environment(
     // If an existing lockfile exists, build up a set of preferences.
     let preferences = match spec.preferences {
         Some(PreferenceLocation::Lock { lock, install_path }) => {
-            let LockedRequirements { preferences, git } =
-                read_lock_requirements(lock, install_path, &upgrade, &[], None)?;
+            let LockedRequirements { preferences, git } = read_lock_requirements(
+                lock,
+                install_path,
+                &upgrade,
+                lock.requires_python(),
+                &[],
+                None,
+            )?;
 
             // Populate the Git resolver.
             for ResolvedRepositoryReference { reference, sha } in git {
