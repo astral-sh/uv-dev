@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 use async_zip::base::write::ZipFileWriter;
@@ -223,7 +223,9 @@ fn workspace_metadata_jsonl() {
 #[test]
 #[cfg(feature = "test-pypi")]
 fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
         [project]
@@ -234,22 +236,44 @@ fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
         "#,
     )?;
 
-    let output = context
-        .workspace_metadata()
+    let mut filters = context.filters();
+    filters.push((
+        r#"(?m)^\{"type":"progress","phase":"download","status":"updated",[^\n]*\}\n"#,
+        "",
+    ));
+    let output = uv_snapshot!(filters, context.workspace_metadata()
         .arg("--sync")
-        .arg("--output-format")
-        .arg("jsonl")
-        .arg("--preview-features")
-        .arg("workspace-metadata,jsonl")
-        .output()?;
-    assert!(output.status.success());
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("workspace-metadata,jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"resolve","status":"started"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"project","version":"0.1.0"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"iniconfig","version":"2.0.0"}
+    {"type":"progress","phase":"resolve","status":"completed"}
+    {"type":"progress","phase":"prepare","status":"started","total":1}
+    {"type":"progress","phase":"download","status":"started","id":1,"name":"iniconfig","total":5892}
+    {"type":"progress","phase":"download","status":"completed","id":1,"name":"iniconfig","completed":5892,"total":5892}
+    {"type":"progress","phase":"prepare","status":"updated","name":"iniconfig==2.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"prepare","status":"completed","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"started","total":1}
+    {"type":"progress","phase":"install","status":"updated","name":"iniconfig==2.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"completed","completed":1,"total":1}
+    {"type":"result","schema":{"version":"preview"},"workspace_root":"[TEMP_DIR]/","environment":{"root":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"workspace":{"path":"[TEMP_DIR]/","id":"workspace+[TEMP_DIR]/"},"requires_python":">=3.12","conflicts":{"sets":[]},"module_owners":{"iniconfig":[{"package_id":"iniconfig==2.0.0@registry+https://pypi.org/simple"}],"iniconfig._parse":[{"package_id":"iniconfig==2.0.0@registry+https://pypi.org/simple"}],"iniconfig._version":[{"package_id":"iniconfig==2.0.0@registry+https://pypi.org/simple"}],"iniconfig.exceptions":[{"package_id":"iniconfig==2.0.0@registry+https://pypi.org/simple"}]},"members":[{"name":"project","path":"[TEMP_DIR]/","id":"project==0.1.0@virtual+[TEMP_DIR]/"}],"resolution":{"iniconfig==2.0.0@registry+https://pypi.org/simple":{"name":"iniconfig","version":"2.0.0","source":{"registry":{"url":"https://pypi.org/simple"}},"kind":"package","dependencies":[],"sdist":{"url":"https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz","hashes":{"sha256":"2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3"},"size":4646,"upload_time":"2023-01-07T11:08:11.254Z"},"wheels":[{"url":"https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl","hashes":{"sha256":"b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"},"size":5892,"upload_time":"2023-01-07T11:08:09.864Z","filename":"iniconfig-2.0.0-py3-none-any.whl"}]},"project==0.1.0@virtual+[TEMP_DIR]/":{"name":"project","version":"0.1.0","source":{"virtual":"[TEMP_DIR]/"},"kind":"package","dependencies":[{"id":"iniconfig==2.0.0@registry+https://pypi.org/simple"}]},"workspace+[TEMP_DIR]/":{"kind":"workspace","path":"[TEMP_DIR]/","dependencies":[]}}}
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    "#);
 
     let stdout = String::from_utf8(output.stdout)?;
     let items = stdout
         .lines()
         .map(serde_json::from_str::<serde_json::Value>)
         .collect::<Result<Vec<_>, _>>()?;
-    let Some((metadata, progress)) = items.split_last() else {
+    let Some((_metadata, progress)) = items.split_last() else {
         anyhow::bail!("expected JSONL progress and a final metadata report");
     };
 
@@ -270,41 +294,6 @@ fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
         previous = completed;
     }
     assert!(previous > 0);
-
-    let progress = progress
-        .iter()
-        .filter(|event| !(event["phase"] == "download" && event["status"] == "updated"))
-        .map(|event| {
-            let phase = event["phase"]
-                .as_str()
-                .ok_or_else(|| anyhow!("progress event is missing a phase"))?;
-            let status = event["status"]
-                .as_str()
-                .ok_or_else(|| anyhow!("progress event is missing a status"))?;
-            Ok(format!("{phase}:{status}"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    insta::assert_json_snapshot!(progress, @r#"
-    [
-      "resolve:started",
-      "resolve:updated",
-      "resolve:updated",
-      "resolve:completed",
-      "prepare:started",
-      "download:started",
-      "download:completed",
-      "prepare:updated",
-      "prepare:completed",
-      "install:started",
-      "install:updated",
-      "install:completed"
-    ]
-    "#
-    );
-
-    assert_eq!(metadata["type"], "result");
-    assert_eq!(metadata["schema"]["version"], "preview");
-    assert!(metadata.get("environment").is_some());
 
     Ok(())
 }

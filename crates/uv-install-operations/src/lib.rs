@@ -712,9 +712,7 @@ async fn execute_plan(
                 concurrency.downloads_semaphore.clone(),
             ),
         )
-        .with_reporter(Arc::new(
-            PrepareReporter::from(printer).with_length(remote.len() as u64),
-        ));
+        .with_reporter(Arc::new(PrepareReporter::new(printer, remote.len() as u64)));
 
         let wheels = preparer.prepare(remote, in_flight, resolution).await?;
 
@@ -778,9 +776,10 @@ async fn execute_plan(
             .with_link_mode(link_mode)
             .with_cache(cache)
             .with_installer_metadata(installer_metadata)
-            .with_reporter(Arc::new(
-                InstallReporter::from(printer).with_length(installs.len() as u64),
-            ))
+            .with_reporter(Arc::new(InstallReporter::new(
+                printer,
+                installs.len() as u64,
+            )))
             // This technically can block the runtime, but we are on the main thread and
             // have no other running tasks at this point, so this lets us avoid spawning a blocking
             // task.

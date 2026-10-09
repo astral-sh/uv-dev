@@ -18,8 +18,8 @@ pub(super) struct PrepareReporter {
     reporter: ProgressReporter,
 }
 
-impl From<Printer> for PrepareReporter {
-    fn from(printer: Printer) -> Self {
+impl PrepareReporter {
+    pub(super) fn new(printer: Printer, length: u64) -> Self {
         let multi_progress = MultiProgress::with_draw_target(printer.target());
         let root = multi_progress.add(ProgressBar::with_draw_target(None, printer.target()));
         root.enable_steady_tick(Duration::from_millis(200));
@@ -30,19 +30,12 @@ impl From<Printer> for PrepareReporter {
         );
         root.set_message("Preparing packages...");
 
+        root.set_length(length);
         let reporter = ProgressReporter::new(root, multi_progress, printer);
-        Self { reporter }
-    }
-}
-
-impl PrepareReporter {
-    #[must_use]
-    pub(super) fn with_length(self, length: u64) -> Self {
-        self.reporter.root.set_length(length);
         let mut event = JsonlProgressEvent::new(ProgressPhase::Prepare, ProgressStatus::Started);
         event.total = Some(length);
-        self.reporter.emit_progress(&event);
-        self
+        reporter.emit_progress(&event);
+        Self { reporter }
     }
 }
 
@@ -119,29 +112,22 @@ pub(super) struct InstallReporter {
     progress_lock: Mutex<()>,
 }
 
-impl From<Printer> for InstallReporter {
-    fn from(printer: Printer) -> Self {
+impl InstallReporter {
+    pub(super) fn new(printer: Printer, length: u64) -> Self {
         let progress = ProgressBar::with_draw_target(None, printer.target());
         progress.set_style(
             ProgressStyle::with_template("{bar:20} [{pos}/{len}] {wide_msg:.dim}").unwrap(),
         );
         progress.set_message("Installing wheels...");
+        progress.set_length(length);
+        let mut event = JsonlProgressEvent::new(ProgressPhase::Install, ProgressStatus::Started);
+        event.total = Some(length);
+        emit_jsonl_progress(printer, &event);
         Self {
             printer,
             progress,
             progress_lock: Mutex::new(()),
         }
-    }
-}
-
-impl InstallReporter {
-    #[must_use]
-    pub(super) fn with_length(self, length: u64) -> Self {
-        self.progress.set_length(length);
-        let mut event = JsonlProgressEvent::new(ProgressPhase::Install, ProgressStatus::Started);
-        event.total = Some(length);
-        emit_jsonl_progress(self.printer, &event);
-        self
     }
 }
 
