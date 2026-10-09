@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -14,7 +15,10 @@ use uv_normalize::{GroupName, PackageName};
 use uv_pep440::Version;
 use uv_python_types::PythonArchitecture;
 use uv_redacted::DisplaySafeUrl;
-use uv_static::{EnvVars, InvalidEnvironmentVariable, parse_boolish_environment_variable};
+use uv_static::{
+    EnvVars, InvalidEnvironmentVariable, parse_boolish_environment_value,
+    parse_boolish_environment_variable,
+};
 use uv_torch::AmdGpuArchitecture;
 use uv_warnings::warn_user;
 
@@ -752,7 +756,7 @@ pub struct EnvironmentOptions {
     pub require_metadata_range_requests: Option<bool>,
     pub hide_build_output: Option<bool>,
     pub python_arch: Option<PythonArchitecture>,
-    pub require_build_hashes: Option<bool>,
+    require_build_hashes: Option<OsString>,
     pub python_install_bin: Option<bool>,
     pub python_install_registry: Option<bool>,
     pub python_no_registry: EnvFlag,
@@ -813,6 +817,18 @@ pub struct EnvironmentOptions {
 }
 
 impl EnvironmentOptions {
+    /// Resolve the build-hash environment setting only when the CLI has not selected a value.
+    pub fn require_build_hashes(&self, cli: Option<bool>) -> Result<Option<bool>, Error> {
+        if let Some(value) = cli {
+            return Ok(Some(value));
+        }
+        self.require_build_hashes
+            .as_deref()
+            .map(|value| parse_boolish_environment_value(EnvVars::UV_REQUIRE_BUILD_HASHES, value))
+            .transpose()
+            .map_err(Error::from)
+    }
+
     /// Create a new [`EnvironmentOptions`] from environment variables.
     pub fn new() -> Result<Self, Error> {
         // Timeout options, matching https://doc.rust-lang.org/nightly/cargo/reference/config.html#httptimeout
@@ -843,9 +859,7 @@ impl EnvironmentOptions {
         };
 
         Ok(Self {
-            require_build_hashes: parse_boolish_environment_variable(
-                EnvVars::UV_REQUIRE_BUILD_HASHES,
-            )?,
+            require_build_hashes: std::env::var_os(EnvVars::UV_REQUIRE_BUILD_HASHES),
             ruff_path: parse_path_environment_variable(EnvVars::RUFF),
             ty_path: parse_path_environment_variable(EnvVars::TY),
             skip_wheel_filename_check: parse_boolish_environment_variable(

@@ -5577,3 +5577,818 @@ fn no_cache_env_override() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn require_build_hashes_cli_overrides_invalid_environment() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("require-build-hashes = false")?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.lock())
+        .arg("--show-settings")
+        .arg("--preview-features=build-dependency-hashes")
+        .arg("--require-build-hashes")
+        .env(EnvVars::UV_REQUIRE_BUILD_HASHES, "invalid"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [
+                BuildDependencyHashes,
+            ],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    LockSettings {
+        lock_check: Disabled,
+        frozen: None,
+        dry_run: Disabled,
+        script: None,
+        python: None,
+        install_mirrors: PythonInstallMirrors {
+            python_install_mirror: None,
+            pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
+            python_downloads_json_url: None,
+        },
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: ResolverSettings {
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+            },
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            link_mode: Clone,
+            build_hash_checking: Require,
+            build_isolation: Isolate,
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            resolution: Highest,
+            sources: None,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+        },
+    }
+    "#);
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn no_require_build_hashes_cli_overrides_invalid_environment() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("require-build-hashes = true")?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.sync())
+        .arg("--show-settings")
+        .arg("--preview-features=build-dependency-hashes")
+        .arg("--no-require-build-hashes")
+        .env(EnvVars::UV_REQUIRE_BUILD_HASHES, "invalid"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [
+                BuildDependencyHashes,
+            ],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    SyncSettings {
+        lock_check: Disabled,
+        frozen: None,
+        dry_run: Disabled,
+        script: None,
+        active: Warn,
+        extras: ExtrasSpecification(
+            ExtrasSpecificationInner {
+                include: Some(
+                    [],
+                ),
+                exclude: [],
+                only_extras: false,
+                history: ExtrasSpecificationHistory {
+                    extra: [],
+                    only_extra: [],
+                    no_extra: [],
+                    all_extras: false,
+                    no_default_extras: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        ),
+        groups: DependencyGroups(
+            DependencyGroupsInner {
+                include: Some(
+                    [],
+                ),
+                exclude: [],
+                only_groups: false,
+                history: DependencyGroupsHistory {
+                    dev_mode: None,
+                    group: [],
+                    only_group: [],
+                    no_group: [],
+                    all_groups: false,
+                    no_default_groups: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        ),
+        editable: None,
+        install_options: InstallOptions {
+            no_install_project: false,
+            only_install_project: false,
+            no_install_workspace: false,
+            only_install_workspace: false,
+            no_install_local: false,
+            only_install_local: false,
+            no_install_package: [],
+            only_install_package: [],
+        },
+        modifications: Exact,
+        all_packages: false,
+        package: [],
+        python: None,
+        python_platform: None,
+        install_mirrors: PythonInstallMirrors {
+            python_install_mirror: None,
+            pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
+            python_downloads_json_url: None,
+        },
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: ResolverInstallerSettings {
+            resolver: ResolverSettings {
+                build_options: BuildOptions {
+                    no_binary: None,
+                    no_build: None,
+                },
+                config_setting: ConfigSettings(
+                    {},
+                ),
+                config_settings_package: PackageConfigSettings(
+                    {},
+                ),
+                dependency_metadata: DependencyMetadata(
+                    {},
+                ),
+                exclude_newer: ExcludeNewer {
+                    global: None,
+                    package: ExcludeNewerPackage(
+                        {},
+                    ),
+                },
+                fork_strategy: RequiresPython,
+                index_locations: IndexLocations {
+                    indexes: [],
+                    flat_index: [],
+                    no_index: false,
+                },
+                index_strategy: FirstIndex,
+                keyring_provider: Disabled,
+                link_mode: Clone,
+                build_hash_checking: Verify,
+                build_isolation: Isolate,
+                extra_build_dependencies: ExtraBuildDependencies(
+                    {},
+                ),
+                extra_build_variables: ExtraBuildVariables(
+                    {},
+                ),
+                prerelease: Prerelease {
+                    global: IfNecessary,
+                    package: PrereleasePackage(
+                        {},
+                    ),
+                },
+                resolution: Highest,
+                sources: None,
+                torch_backend: None,
+                cuda_driver_version: None,
+                amd_gpu_architecture: None,
+                upgrade: Upgrade {
+                    strategy: None,
+                    constraints: {},
+                },
+            },
+            compile_bytecode: false,
+            reinstall: None,
+        },
+        output_format: Text,
+        malware_settings: MalwareCheckSettings {
+            enabled: false,
+            malware_check_url: None,
+        },
+    }
+    "#);
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn pip_require_build_hashes_cli_overrides_invalid_environment() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(indoc::indoc! {r"
+        require-build-hashes = true
+        [pip]
+        require-build-hashes = false
+    "})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.pip_compile())
+        .arg("requirements.in")
+        .arg("--show-settings")
+        .arg("--preview-features=build-dependency-hashes")
+        .arg("--require-build-hashes")
+        .env(EnvVars::UV_REQUIRE_BUILD_HASHES, "invalid"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [
+                BuildDependencyHashes,
+            ],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    PipCompileSettings {
+        format: None,
+        src_file: [
+            Local(
+                "requirements.in",
+            ),
+        ],
+        constraints: [],
+        overrides: [],
+        excludes: [],
+        build_constraints: [],
+        build_hash_checking: Require,
+        constraints_from_workspace: [],
+        overrides_from_workspace: [],
+        excludes_from_workspace: [],
+        build_constraints_from_workspace: [],
+        environments: SupportedEnvironments(
+            [],
+        ),
+        required_environments: SupportedEnvironments(
+            [],
+        ),
+        minimum_libc_version: None,
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: PipSettings {
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            python: None,
+            install_mirrors: PythonInstallMirrors {
+                python_install_mirror: None,
+                pypy_install_mirror: None,
+                graalpy_install_mirror: None,
+                pyodide_install_mirror: None,
+                python_downloads_json_url: None,
+            },
+            system: false,
+            extras: ExtrasSpecification(
+                ExtrasSpecificationInner {
+                    include: Some(
+                        [],
+                    ),
+                    exclude: [],
+                    only_extras: false,
+                    history: ExtrasSpecificationHistory {
+                        extra: [],
+                        only_extra: [],
+                        no_extra: [],
+                        all_extras: false,
+                        no_default_extras: false,
+                        defaults: List(
+                            [],
+                        ),
+                    },
+                },
+            ),
+            groups: [],
+            break_system_packages: false,
+            target: None,
+            prefix: None,
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            build_isolation: Isolate,
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+            },
+            allow_empty_requirements: false,
+            strict: false,
+            dependency_mode: Transitive,
+            resolution: Highest,
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            output_file: None,
+            no_strip_extras: false,
+            no_strip_markers: false,
+            no_annotate: false,
+            no_header: false,
+            custom_compile_command: None,
+            generate_hashes: false,
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            python_version: None,
+            python_platform: None,
+            universal: false,
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            no_emit_package: [],
+            emit_index_url: false,
+            emit_find_links: false,
+            emit_build_options: false,
+            emit_marker_expression: false,
+            emit_index_annotation: false,
+            annotation_style: Split,
+            link_mode: Clone,
+            compile_bytecode: false,
+            sources: None,
+            hash_checking: Some(
+                Verify,
+            ),
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+            reinstall: None,
+        },
+    }
+    "#);
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn require_build_hashes_invalid_environment_rejected() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("require-build-hashes = false")?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env(EnvVars::UV_REQUIRE_BUILD_HASHES, "invalid"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse environment variable `UV_REQUIRE_BUILD_HASHES` with invalid value `invalid`: expected a boolish value
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn pip_require_build_hashes_configuration_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(indoc::indoc! {r"
+        require-build-hashes = true
+        [pip]
+        require-build-hashes = false
+    "})?;
+
+    let configured = capture_uv_snapshot!(context.filters(), add_shared_args(context.pip_compile())
+        .arg("requirements.in")
+        .arg("--show-settings")
+        .arg("--preview-features=build-dependency-hashes"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [
+                BuildDependencyHashes,
+            ],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    PipCompileSettings {
+        format: None,
+        src_file: [
+            Local(
+                "requirements.in",
+            ),
+        ],
+        constraints: [],
+        overrides: [],
+        excludes: [],
+        build_constraints: [],
+        build_hash_checking: Verify,
+        constraints_from_workspace: [],
+        overrides_from_workspace: [],
+        excludes_from_workspace: [],
+        build_constraints_from_workspace: [],
+        environments: SupportedEnvironments(
+            [],
+        ),
+        required_environments: SupportedEnvironments(
+            [],
+        ),
+        minimum_libc_version: None,
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: PipSettings {
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            python: None,
+            install_mirrors: PythonInstallMirrors {
+                python_install_mirror: None,
+                pypy_install_mirror: None,
+                graalpy_install_mirror: None,
+                pyodide_install_mirror: None,
+                python_downloads_json_url: None,
+            },
+            system: false,
+            extras: ExtrasSpecification(
+                ExtrasSpecificationInner {
+                    include: Some(
+                        [],
+                    ),
+                    exclude: [],
+                    only_extras: false,
+                    history: ExtrasSpecificationHistory {
+                        extra: [],
+                        only_extra: [],
+                        no_extra: [],
+                        all_extras: false,
+                        no_default_extras: false,
+                        defaults: List(
+                            [],
+                        ),
+                    },
+                },
+            ),
+            groups: [],
+            break_system_packages: false,
+            target: None,
+            prefix: None,
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            build_isolation: Isolate,
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+            },
+            allow_empty_requirements: false,
+            strict: false,
+            dependency_mode: Transitive,
+            resolution: Highest,
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            output_file: None,
+            no_strip_extras: false,
+            no_strip_markers: false,
+            no_annotate: false,
+            no_header: false,
+            custom_compile_command: None,
+            generate_hashes: false,
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            python_version: None,
+            python_platform: None,
+            universal: false,
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            no_emit_package: [],
+            emit_index_url: false,
+            emit_find_links: false,
+            emit_build_options: false,
+            emit_marker_expression: false,
+            emit_index_annotation: false,
+            annotation_style: Split,
+            link_mode: Clone,
+            compile_bytecode: false,
+            sources: None,
+            hash_checking: Some(
+                Verify,
+            ),
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+            reinstall: None,
+        },
+    }
+    "#);
+
+    let required = diff_uv_snapshot!(context.filters(), &configured, add_shared_args(context.pip_compile())
+        .arg("requirements.in")
+        .arg("--show-settings")
+        .arg("--preview-features=build-dependency-hashes")
+        .env(EnvVars::UV_REQUIRE_BUILD_HASHES, "true"), @"
+    ...
+         overrides: [],
+         excludes: [],
+         build_constraints: [],
+    -    build_hash_checking: Verify,
+    +    build_hash_checking: Require,
+         constraints_from_workspace: [],
+         overrides_from_workspace: [],
+         excludes_from_workspace: [],
+    ...
+    ");
+
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("require-build-hashes = true")?;
+    diff_uv_snapshot!(context.filters(), &required, add_shared_args(context.pip_compile())
+        .arg("requirements.in")
+        .arg("--show-settings")
+        .arg("--preview-features=build-dependency-hashes"), @"");
+    Ok(())
+}
