@@ -1390,6 +1390,9 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
         let cache_dir = temp_dir.path().join("cache");
         fs_err::create_dir_all(&cache_dir).expect("cache directory should be created");
+        // Cached readers must wait before opening or decoding an existing archive.
+        fs_err::write(cache_dir.join("ababababa-python.zip"), b"cached archive")
+            .expect("cached archive should be written");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
