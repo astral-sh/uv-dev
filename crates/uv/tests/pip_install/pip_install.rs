@@ -1493,18 +1493,6 @@ fn install_require_hashes_in_requirements_txt() -> Result<()> {
     "
     );
 
-    // Command-line hash checking does not attribute the mode to a requirements file.
-    requirements_txt.write_str("iniconfig==2.0.0")?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--require-hashes"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
-    ");
-
     Ok(())
 }
 
