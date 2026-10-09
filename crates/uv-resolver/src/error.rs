@@ -142,6 +142,30 @@ pub enum ResolveError {
 }
 
 impl ResolveError {
+    /// Attach the input that enabled `--require-hashes` to errors caused by that mode.
+    pub fn attach_require_hashes_source(&mut self, source: Option<RequirementsInput>) {
+        match self {
+            Self::Dependencies(error, ..) => error.attach_require_hashes_source(source),
+            Self::UnhashedPackage(_, origin) => *origin = source.map(Box::new),
+            Self::Client(_)
+            | Self::Distribution(_)
+            | Self::ChannelClosed
+            | Self::UnregisteredTask(_)
+            | Self::ConflictingUrls { .. }
+            | Self::ConflictingIndexesForEnvironment { .. }
+            | Self::ConflictingIndexes(..)
+            | Self::DisallowedUrl { .. }
+            | Self::DistributionType(_)
+            | Self::Dist(..)
+            | Self::NoSolution(_)
+            | Self::InvalidVersion(_)
+            | Self::ConflictingDistribution(_)
+            | Self::PackageUnavailable(_)
+            | Self::ConflictMarker(_)
+            | Self::MismatchedPackageName { .. } => {}
+        }
+    }
+
     /// Return whether this is an expected user-facing failure.
     pub fn is_user_failure(&self) -> bool {
         match self {

@@ -9440,6 +9440,38 @@ fn require_hashes_missing_dependency() -> Result<()> {
     Ok(())
 }
 
+/// Hash failures wrapped by dependency resolution retain the input that enabled hash checking.
+#[test]
+fn require_hashes_url_constraint_dependency_origin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        -c constraints.txt
+        werkzeug==3.0.0 --hash=sha256:cbb2600f7eabe51dbc0502f58be0b3e1b96b893b05695ea2b35b43d4de2d9962
+    "})?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str(indoc! {r"
+        --require-hashes
+        markupsafe @ https://example.com/markupsafe-2.1.3-py3-none-any.whl
+    "})?;
+
+    uv_snapshot!(context.pip_install()
+        .args(["-r", "requirements.txt"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to resolve dependencies for package `werkzeug==3.0.0`
+      cause: In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `markupsafe`
+
+    hint: `--require-hashes` was enabled in `constraints.txt`
+    ");
+
+    Ok(())
+}
+
 /// Nested constraint includes retain the hashes that satisfy their required-hash policy.
 #[test]
 fn require_hashes_nested_constraint() -> Result<()> {

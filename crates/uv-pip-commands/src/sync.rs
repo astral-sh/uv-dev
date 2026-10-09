@@ -36,7 +36,7 @@ use uv_python_types::{
 use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
 use uv_resolver::{
     DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
-    ResolutionMode, ResolveError, ResolverEnvironment,
+    ResolutionMode, ResolverEnvironment,
 };
 use uv_settings::PythonInstallMirrors;
 use uv_torch::{AmdGpuArchitecture, TorchMode, TorchStrategy};
@@ -482,12 +482,8 @@ pub async fn pip_sync(
         {
             Ok((resolution, hasher)) => (Resolution::from(resolution), hasher),
             Err(mut err) => {
-                if let uv_resolve_operations::Error::Resolve(ResolveError::UnhashedPackage(
-                    _,
-                    origin,
-                )) = &mut err
-                {
-                    *origin = require_hashes.map(Box::new);
+                if let uv_resolve_operations::Error::Resolve(error) = &mut err {
+                    error.attach_require_hashes_source(require_hashes);
                 }
                 return Err(UvError::from(err).into());
             }
