@@ -3170,6 +3170,18 @@ impl Lock {
         &self.conflicts
     }
 
+    /// Exclude impossible conflict assignments before using resolved edges to infer activation.
+    fn constrain_conflicts(&self, mut marker: UniversalMarker) -> UniversalMarker {
+        if self.conflicts().is_empty() || !marker.has_conflict_marker() {
+            return marker;
+        }
+        marker.and(UniversalMarker::new(
+            MarkerTree::TRUE,
+            ConflictMarker::from_relevant_conflicts(self.conflicts(), [marker]),
+        ));
+        marker
+    }
+
     /// Return the dependency overrides and exclusions recorded in the lockfile.
     fn dependency_modifiers(&self) -> Result<DependencyModifiers, LockError> {
         Ok(DependencyModifiers::new(
@@ -9349,17 +9361,53 @@ impl Dependency {
     /// Return the conditions under which the effective declarations request this dependency.
     fn activation(
         &self,
+        lock: &Lock,
         requirements: Option<&[Requirement]>,
         root: &Path,
     ) -> Result<(MarkerTree, BTreeMap<ExtraName, MarkerTree>), LockError> {
+        let has_forks = lock
+            .packages_for_name(self.package_name())
+            .iter()
+            .any(|package| package.id != self.package_id);
+        // Declarations can match several locked versions or sources. Retain the selected
+        // destination's guard while allowing each requested item to reveal its own conflicts.
+        let selection_marker = |extra: Option<&ExtraName>| {
+            let mut marker = lock.constrain_conflicts(self.complexified_marker);
+            let requested = extra.map_or_else(
+                || ConflictItem::from(self.package_name().clone()),
+                |extra| ConflictItem::from((self.package_name().clone(), extra.clone())),
+            );
+            marker.assume_conflict_item(&requested);
+            for alternative in lock
+                .conflicts()
+                .iter()
+                .filter(|conflicts| conflicts.iter().any(|item| item == &requested))
+                .flat_map(ConflictSet::iter)
+                .filter(|item| *item != &requested)
+            {
+                marker.assume_not_conflict_item(alternative);
+            }
+            marker.combined()
+        };
         let fallback = || {
-            let marker = self.complexified_marker.combined();
+            let marker = if has_forks {
+                selection_marker(None)
+            } else {
+                self.complexified_marker.combined()
+            };
             Ok((
                 marker,
                 self.extra
                     .iter()
                     .cloned()
-                    .map(|extra| (extra, marker))
+                    .map(|extra| {
+                        let marker = if has_forks {
+                            selection_marker(Some(&extra))
+                        } else {
+                            marker
+                        };
+                        (extra, marker)
+                    })
                     .collect(),
             ))
         };
@@ -9391,8 +9439,14 @@ impl Dependency {
         for extra in &self.extra {
             marker = marker.and(extras.get(extra).copied().unwrap_or(MarkerTree::FALSE));
         }
-        for extra_marker in extras.values_mut() {
+        for (extra, extra_marker) in &mut extras {
             *extra_marker = extra_marker.and(marker);
+            if has_forks {
+                *extra_marker = extra_marker.and(selection_marker(Some(extra)));
+            }
+        }
+        if has_forks {
+            marker = marker.and(selection_marker(None));
         }
         Ok((marker, extras))
     }

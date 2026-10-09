@@ -14461,3 +14461,93 @@ fn requirements_txt_registry_parent_requests_empty_conflicting_extra() -> Result
     ");
     Ok(())
 }
+
+/// Registry extra requests follow the selected version when declarations are unpinned.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_extra_conflict_respects_selected_registry_version() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "registry-version-conflict-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.bridge.versions."1"]
+        extras = { a = [] }
+        sdist = false
+        [packages.bridge.versions."2"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["bridge[a]"]
+
+        [project.optional-dependencies]
+        first = ["bridge==1"]
+        second = ["bridge==2"]
+        feature = []
+
+        [tool.uv]
+        conflicts = [
+            [{ extra = "first" }, { extra = "second" }],
+            [{ extra = "feature" }, { package = "bridge", extra = "a" }],
+        ]
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--extra", "second", "--extra", "feature", "--no-header", "--no-hashes",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==2
+        # via project
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    warning: The package `bridge==2` does not have an extra named `a`
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "second", "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==2
+        # via project
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "first", "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting extras `bridge[a]` and `project[feature]` enabled simultaneously
+    ");
+    context
+        .lock()
+        .args(["--upgrade", "--preview-features", "lock-without-metadata"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "second", "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==2
+        # via project
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "first", "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting extras `bridge[a]` and `project[feature]` enabled simultaneously
+    ");
+    Ok(())
+}
