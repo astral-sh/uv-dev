@@ -63,6 +63,7 @@ fn show_settings_returns_before_running_commands() {
             connect_timeout: [TIME],
             retries: 3,
             metadata_range_request: Fallback,
+            github_fast_path_url: None,
         },
         concurrency: Concurrency {
             downloads: 50,
