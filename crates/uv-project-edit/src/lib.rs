@@ -963,119 +963,31 @@ impl PyProjectTomlMut {
         let mut removed = vec![false; names.len()];
         let mut applicable = false;
 
-        if matches!(dependency_type, DependencyType::Dev)
-            || matches!(dependency_type, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)
-        {
-            if let Some(dev_dependencies) = self
-                .doc
-                .get_mut("tool")
-                .map(|tool| tool.as_table_mut().ok_or(Error::MalformedDependencies))
-                .transpose()?
-                .and_then(|tool| tool.get_mut("uv"))
-                .map(|tool_uv| tool_uv.as_table_mut().ok_or(Error::MalformedDependencies))
-                .transpose()?
-                .and_then(|tool_uv| tool_uv.get_mut("dev-dependencies"))
-                .map(|dependencies| {
-                    dependencies
-                        .as_array_mut()
-                        .ok_or(Error::MalformedDependencies)
-                })
-                .transpose()?
-            {
+        let dev_group = DependencyType::Group(DEV_DEPENDENCIES.clone());
+        let dependency_types = match dependency_type {
+            DependencyType::Dev => [Some(&DependencyType::Dev), Some(&dev_group)],
+            DependencyType::Group(group) if group == &*DEV_DEPENDENCIES => {
+                [Some(&DependencyType::Dev), Some(dependency_type)]
+            }
+            DependencyType::Production | DependencyType::Optional(_) | DependencyType::Group(_) => {
+                [Some(dependency_type), None]
+            }
+        };
+        for dependency_type in dependency_types.into_iter().flatten() {
+            if let Some(dependencies) = self.dependency_type_array_mut(dependency_type)? {
                 applicable = true;
-                remove_dependency_batch(&positions, &mut removed, dev_dependencies);
-            }
-        }
-
-        match dependency_type {
-            DependencyType::Production => {
-                if let Some(dependencies) = self
-                    .project_mut()?
-                    .and_then(|project| project.get_mut("dependencies"))
-                    .map(|dependencies| {
-                        dependencies
-                            .as_array_mut()
-                            .ok_or(Error::MalformedDependencies)
-                    })
-                    .transpose()?
-                {
-                    applicable = true;
-                    remove_dependency_batch(&positions, &mut removed, dependencies);
-                }
-            }
-            DependencyType::Optional(extra) => {
-                if let Some(optional_dependencies) = self
-                    .project_mut()?
-                    .and_then(|project| project.get_mut("optional-dependencies"))
-                    .map(|extras| {
-                        extras
-                            .as_table_like_mut()
-                            .ok_or(Error::MalformedDependencies)
-                    })
-                    .transpose()?
-                    .and_then(|extras| {
-                        extras.iter_mut().find_map(|(key, value)| {
-                            if ExtraName::from_str(key.get()).is_ok_and(|group| group == *extra) {
-                                Some(value)
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .map(|dependencies| {
-                        dependencies
-                            .as_array_mut()
-                            .ok_or(Error::MalformedDependencies)
-                    })
-                    .transpose()?
-                {
-                    applicable = true;
-                    remove_dependency_batch(&positions, &mut removed, optional_dependencies);
-                }
-            }
-            DependencyType::Dev | DependencyType::Group(_) => {
-                let group = match dependency_type {
-                    DependencyType::Group(group) => group,
-                    DependencyType::Production
-                    | DependencyType::Dev
-                    | DependencyType::Optional(_) => &*DEV_DEPENDENCIES,
-                };
-
-                if let Some(group_dependencies) = self
-                    .doc
-                    .get_mut("dependency-groups")
-                    .map(|groups| {
-                        groups
-                            .as_table_like_mut()
-                            .ok_or(Error::MalformedDependencies)
-                    })
-                    .transpose()?
-                    .and_then(|groups| {
-                        groups.iter_mut().find_map(|(key, value)| {
-                            if GroupName::from_str(key.get())
-                                .is_ok_and(|existing| existing == *group)
-                            {
-                                Some(value)
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .map(|dependencies| {
-                        dependencies
-                            .as_array_mut()
-                            .ok_or(Error::MalformedDependencies)
-                    })
-                    .transpose()?
-                {
-                    applicable = true;
-                    remove_dependency_batch(&positions, &mut removed, group_dependencies);
-                }
+                remove_dependency_batch(&positions, &mut removed, dependencies);
             }
         }
 
         if applicable {
-            self.remove_sources(names)?;
+            // The caller reports the first missing argument. Source cleanup for later arguments
+            // must not replace that diagnostic with an unrelated malformed-source error.
+            let end = removed
+                .iter()
+                .position(|removed| !removed)
+                .map_or(names.len(), |index| index + 1);
+            self.remove_sources(&names[..end])?;
         }
 
         Ok(removed)
@@ -1875,6 +1787,8 @@ fn remove_dependency_batch(
         return;
     }
 
+    preserve_array_suffix(deps);
+
     // Comments belonging to a removed item are stored in its prefix. Accumulate those prefixes
     // and move them onto the next retained item (or the array trailing) before filtering.
     let mut prefix = String::new();
@@ -1965,6 +1879,22 @@ fn try_parse_requirement(req: &str) -> Option<Requirement> {
     Requirement::from_str(req).ok()
 }
 
+/// Move comments after the last item into the array decoration before removing or formatting it.
+fn preserve_array_suffix(deps: &mut Array) {
+    // Without a trailing comma, `toml_edit` stores comments after the final item in its
+    // suffix. Once we add a trailing comma, those comments must follow the comma instead.
+    if !deps.trailing_comma()
+        && let Some(last) = deps.iter_mut().last()
+        && let Some(suffix) = last.decor().suffix().and_then(RawString::as_str)
+        && suffix.contains('#')
+    {
+        let suffix = suffix.to_string();
+        last.decor_mut().set_suffix("");
+        let trailing = deps.trailing().as_str().unwrap_or_default();
+        deps.set_trailing(format!("{suffix}{trailing}"));
+    }
+}
+
 /// Reformats a TOML array to multi line while trying to preserve all comments
 /// and move them around. This also formats the array to have a trailing comma.
 fn reformat_array_multiline(deps: &mut Array) {
@@ -2015,18 +1945,7 @@ fn reformat_array_multiline(deps: &mut Array) {
         Box::new(iter)
     }
 
-    // Without a trailing comma, `toml_edit` stores comments after the final item in its
-    // suffix. Once we add a trailing comma, those comments must follow the comma instead.
-    if !deps.trailing_comma()
-        && let Some(last) = deps.iter_mut().last()
-        && let Some(suffix) = last.decor().suffix().and_then(RawString::as_str)
-        && suffix.contains('#')
-    {
-        let suffix = suffix.to_string();
-        last.decor_mut().set_suffix("");
-        let trailing = deps.trailing().as_str().unwrap_or_default();
-        deps.set_trailing(format!("{suffix}{trailing}"));
-    }
+    preserve_array_suffix(deps);
 
     let mut indentation_prefix = None;
 

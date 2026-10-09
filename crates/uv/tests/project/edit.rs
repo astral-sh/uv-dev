@@ -12819,6 +12819,72 @@ fn remove_batch_preserves_comments_and_sources() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn remove_batch_preserves_final_suffix() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "a",
+            "b" # keep
+        ]
+    "#})?;
+    uv_snapshot!(context.filters(), context.remove().args(["a", "b", "--frozen"]), @"
+    exit_code: 0 (success)
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        # keep
+    ]
+    "#);
+    Ok(())
+}
+
+#[test]
+fn remove_batch_missing_precedes_later_source_cleanup() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["present-pkg"]
+
+        [project.optional-dependencies]
+        extra = ["hint-pkg"]
+
+        [tool.uv]
+        sources = { present-pkg = { index = "custom" }, hint-pkg = { index = "custom" } }
+
+        [[tool.uv.index]]
+        name = "custom"
+        url = "https://example.com/simple"
+    "#})?;
+    let original = context.read("pyproject.toml");
+    uv_snapshot!(context.filters(), context.remove().args(["hint-pkg", "present-pkg", "--frozen"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The dependency `hint-pkg` could not be found in `project.dependencies`
+
+    hint: `hint-pkg` is an optional dependency (try: `uv remove hint-pkg --optional extra`)
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+    Ok(())
+}
+
 /// Batch development removals should update both development arrays and retain cross-type sources.
 #[test]
 fn remove_batch_both_dev_preserves_cross_type_source() -> Result<()> {
@@ -13008,14 +13074,14 @@ fn remove_batch_absent_array_preserves_missing_diagnostic() -> Result<()> {
     "#})?;
     let original = context.read("pyproject.toml");
 
-    uv_snapshot!(context.filters(), context.remove().args(["missing-pkg", "--frozen"]), @"
+    uv_snapshot!(context.filters(), context.remove().args(["missing-pkg", "another-missing-pkg", "--frozen"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: The dependency `missing-pkg` could not be found in `project.dependencies`
     ");
     assert_eq!(context.read("pyproject.toml"), original);
 
-    uv_snapshot!(context.filters(), context.remove().args(["missing-pkg", "--group", "absent", "--frozen"]), @"
+    uv_snapshot!(context.filters(), context.remove().args(["missing-pkg", "another-missing-pkg", "--group", "absent", "--frozen"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: The dependency `missing-pkg` could not be found in `dependency-groups.absent`
