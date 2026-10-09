@@ -547,7 +547,6 @@ async fn render_export<'output>(
     // Validate that the set of requested extras and development groups are defined in the lockfile.
     target.validate_extras(extras)?;
     target.validate_groups(groups)?;
-    target.validate_workspace_resolution(extras, groups, None)?;
 
     if output_file
         .and_then(Path::file_name)
@@ -586,7 +585,7 @@ async fn render_export<'output>(
     });
 
     let requires_python = match format {
-        ExportFormat::PylockToml => Cow::Owned(target.python_requirement(groups)?.requires_python),
+        ExportFormat::PylockToml => Cow::Owned(target.export_python_requirement(groups)?),
         ExportFormat::RequirementsTxt | ExportFormat::CycloneDX1_5 => {
             Cow::Borrowed(lock.requires_python())
         }

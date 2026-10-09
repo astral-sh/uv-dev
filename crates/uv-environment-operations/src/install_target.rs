@@ -298,7 +298,7 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
 
 impl<'lock> InstallTarget<'lock> {
     /// Intersect the lockfile's Python requirement with selected members, roots, and groups.
-    pub fn python_requirement(
+    pub(crate) fn python_requirement(
         &self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<ProjectPythonRequirement, EnvironmentError> {
