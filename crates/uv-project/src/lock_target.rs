@@ -52,7 +52,7 @@ impl<'lock> From<&'lock Pep723Script> for LockTarget<'lock> {
 impl<'lock> LockTarget<'lock> {
     /// Return the set of requirements that are attached to the target directly, as opposed to being
     /// attached to any members within the target.
-    pub fn requirements(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
+    pub(crate) fn requirements(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
         match self {
             Self::Workspace(workspace) => workspace.requirements(),
             Self::Script(script) => script.metadata.dependencies.clone().unwrap_or_default(),
@@ -60,7 +60,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of overrides for the [`LockTarget`].
-    pub fn overrides(self) -> Vec<OverrideDependency> {
+    pub(crate) fn overrides(self) -> Vec<OverrideDependency> {
         match self {
             Self::Workspace(workspace) => workspace.overrides(),
             Self::Script(script) => script
@@ -77,7 +77,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of dependency exclusions for the [`LockTarget`].
-    pub fn exclude_dependencies(self) -> Vec<ExcludeDependency> {
+    pub(crate) fn exclude_dependencies(self) -> Vec<ExcludeDependency> {
         match self {
             Self::Workspace(workspace) => workspace.exclude_dependencies(),
             Self::Script(script) => script
@@ -94,7 +94,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of constraints for the [`LockTarget`].
-    pub fn constraints(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
+    pub(crate) fn constraints(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
         match self {
             Self::Workspace(workspace) => workspace.constraints(),
             Self::Script(script) => script
@@ -129,7 +129,7 @@ impl<'lock> LockTarget<'lock> {
 
     /// Return the dependency groups that are attached to the target directly, as opposed to being
     /// attached to any members within the target.
-    pub fn dependency_groups(
+    pub(crate) fn dependency_groups(
         self,
     ) -> Result<BTreeMap<GroupName, FlatDependencyGroup>, DependencyGroupError> {
         match self {
@@ -139,7 +139,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Validate the dependency groups requested by `--upgrade-group`.
-    pub fn validate_upgrade_groups(self, upgrade: &Upgrade) -> Result<(), ProjectError> {
+    pub(crate) fn validate_upgrade_groups(self, upgrade: &Upgrade) -> Result<(), ProjectError> {
         let Some(groups) = upgrade.groups() else {
             return Ok(());
         };
@@ -180,7 +180,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of all members within the target.
-    pub fn members_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
+    pub(crate) fn members_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
         match self {
             Self::Workspace(workspace) => Either::Left(workspace.members_requirements()),
             Self::Script(_) => Either::Right(std::iter::empty()),
@@ -188,7 +188,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of all dependency groups within the target.
-    pub fn group_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
+    pub(crate) fn group_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
         match self {
             Self::Workspace(workspace) => Either::Left(workspace.group_requirements()),
             Self::Script(_) => Either::Right(std::iter::empty()),
@@ -196,7 +196,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Return the list of members to include in the [`Lock`].
-    pub fn members(self) -> Vec<PackageName> {
+    pub(crate) fn members(self) -> Vec<PackageName> {
         match self {
             Self::Workspace(workspace) => {
                 let mut members = workspace.packages().keys().cloned().collect::<Vec<_>>();
@@ -216,7 +216,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Return the list of packages.
-    pub fn packages(self) -> &'lock BTreeMap<PackageName, WorkspaceMember> {
+    pub(crate) fn packages(self) -> &'lock BTreeMap<PackageName, WorkspaceMember> {
         match self {
             Self::Workspace(workspace) => workspace.packages(),
             Self::Script(_) => {
@@ -228,7 +228,7 @@ impl<'lock> LockTarget<'lock> {
 
     /// Return the set of required workspace members, i.e., those that are required by other
     /// members.
-    pub fn required_members(self) -> &'lock BTreeMap<PackageName, Editability> {
+    pub(crate) fn required_members(self) -> &'lock BTreeMap<PackageName, Editability> {
         match self {
             Self::Workspace(workspace) => workspace.required_members(),
             Self::Script(_) => {
@@ -250,7 +250,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of required platforms for the [`LockTarget`].
-    pub fn required_environments(self) -> Option<&'lock SupportedEnvironments> {
+    pub(crate) fn required_environments(self) -> Option<&'lock SupportedEnvironments> {
         match self {
             Self::Workspace(workspace) => workspace.required_environments(),
             Self::Script(_) => {
@@ -261,7 +261,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the supported libc implementations and their minimum versions.
-    pub fn minimum_libc_version(self) -> Option<MinimumLibcVersion> {
+    pub(crate) fn minimum_libc_version(self) -> Option<MinimumLibcVersion> {
         match self {
             Self::Workspace(workspace) => workspace.minimum_libc_version(),
             Self::Script(_) => None,
@@ -269,7 +269,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of conflicts for the [`LockTarget`].
-    pub fn conflicts(self) -> Result<Conflicts, ProjectError> {
+    pub(crate) fn conflicts(self) -> Result<Conflicts, ProjectError> {
         match self {
             Self::Workspace(workspace) => Ok(workspace.conflicts()?),
             Self::Script(_) => Ok(Conflicts::empty()),
@@ -277,7 +277,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Return an iterator over the [`Index`] definitions in the [`LockTarget`].
-    pub fn indexes(self) -> impl Iterator<Item = &'lock Index> {
+    pub(crate) fn indexes(self) -> impl Iterator<Item = &'lock Index> {
         match self {
             Self::Workspace(workspace) => Either::Left(workspace.indexes().iter().chain(
                 workspace.packages().values().flat_map(|member| {
@@ -329,7 +329,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Return the filename of the lockfile, for use in user-facing messages.
-    pub fn lock_filename(self) -> PathBuf {
+    pub(crate) fn lock_filename(self) -> PathBuf {
         PathBuf::from(self.lock_path().file_name().unwrap())
     }
 
@@ -385,7 +385,7 @@ impl<'lock> LockTarget<'lock> {
     /// Read the lockfile and return the exact contents that were parsed.
     ///
     /// Returns `Ok(None)` if the lockfile does not exist.
-    pub async fn read_with_contents(self) -> Result<Option<(Lock, String)>, ProjectError> {
+    pub(crate) async fn read_with_contents(self) -> Result<Option<(Lock, String)>, ProjectError> {
         let lock_path = self.lock_path();
         match fs_err::tokio::read_to_string(&lock_path).await {
             Ok(encoded) => {
@@ -399,7 +399,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Write the lockfile to disk.
-    pub async fn commit(self, lock: &Lock) -> Result<(), ProjectError> {
+    pub(crate) async fn commit(self, lock: &Lock) -> Result<(), ProjectError> {
         let encoded = lock.to_toml()?;
         fs_err::tokio::write(self.lock_path(), encoded).await?;
         Ok(())
@@ -438,7 +438,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Lower the requirements for the [`LockTarget`], relative to the target root.
-    pub async fn lower(
+    pub(crate) async fn lower(
         self,
         requirements: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
         locations: &IndexLocations,
@@ -547,7 +547,7 @@ enum Bracket {
 ///
 /// This only checks the serialization shape. TOML validity and lockfile semantics are checked by
 /// the regular lockfile deserializer.
-pub fn find_lock_format_error(source: &str) -> Option<usize> {
+pub(crate) fn find_lock_format_error(source: &str) -> Option<usize> {
     let bytes = source.as_bytes();
     let mut brackets = Vec::with_capacity(4);
     let mut previous = None;

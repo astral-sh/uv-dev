@@ -75,13 +75,13 @@ use uv_cli_settings::{
     FrozenSource, LockCheck, LockedSource, ResolverInstallerSettings, ResolverSettings,
 };
 use uv_cli_types::exit::ExitStatus;
-use uv_lock_command::lock::LockMode;
 use uv_operations::installation::Modifications;
 use uv_operations::loggers::{
     DefaultInstallLogger, DefaultResolveLogger, SummaryInstallLogger, SummaryResolveLogger,
 };
 use uv_project::environment::{CachedEnvironment, EphemeralEnvironment};
 use uv_project::install_target::{InstallTarget, PackageSelection};
+use uv_project::lock_operation::LockMode;
 use uv_project::lock_target::LockTarget;
 use uv_project::malware::MalwareCheckContext;
 use uv_project::python::ProjectPythonRequest;
@@ -253,7 +253,7 @@ pub async fn run(
 
             // Generate a lockfile.
             let lock = match Box::pin(
-                uv_lock_command::lock::LockOperation::new(
+                uv_project::lock_operation::LockOperation::new(
                     mode,
                     &settings.resolver,
                     &client_builder,
@@ -766,7 +766,7 @@ pub async fn run(
                 };
 
                 let result = match Box::pin(
-                    uv_lock_command::lock::LockOperation::new(
+                    uv_project::lock_operation::LockOperation::new(
                         mode,
                         &settings.resolver,
                         &client_builder,

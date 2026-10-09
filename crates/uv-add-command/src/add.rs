@@ -51,11 +51,11 @@ use uv_cli_output::reporters::{PythonDownloadReporter, ResolverReporter};
 use uv_cli_settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
 use uv_cli_types::exit::ExitStatus;
 use uv_cli_types::script::ScriptPath;
-use uv_lock_command::lock::LockMode;
 use uv_operations::installation::Modifications;
 use uv_operations::loggers::{DefaultInstallLogger, DefaultResolveLogger, SummaryResolveLogger};
 use uv_project::edit::{EditTarget, ProjectEdit, PythonTarget};
 use uv_project::install_target::{InstallTarget, PackageSelection};
+use uv_project::lock_operation::LockMode;
 use uv_project::lock_target::LockTarget;
 use uv_project::malware::MalwareCheckContext;
 use uv_project::python::ProjectPythonRequest;
@@ -1116,7 +1116,7 @@ async fn lock_and_sync(
         EditTarget::Script(..) => BTreeSet::new(),
     };
     let mut lock = Box::pin(
-        uv_lock_command::lock::LockOperation::new(
+        uv_project::lock_operation::LockOperation::new(
             if let LockCheck::Enabled(lock_check) = lock_check {
                 LockMode::Locked(python_target.interpreter(), lock_check)
             } else if dry_run {
@@ -1246,7 +1246,7 @@ async fn lock_and_sync(
             // If the file was modified, we have to lock again, though the only expected change is
             // the addition of the minimum version specifiers.
             lock = Box::pin(
-                uv_lock_command::lock::LockOperation::new(
+                uv_project::lock_operation::LockOperation::new(
                     if let LockCheck::Enabled(lock_check) = lock_check {
                         LockMode::Locked(python_target.interpreter(), lock_check)
                     } else if dry_run {
