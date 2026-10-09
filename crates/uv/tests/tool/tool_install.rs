@@ -3801,7 +3801,8 @@ fn tool_install_preflight_preserves_shared_command_provider() -> Result<()> {
 fn tool_install_preflight_relocates_retained_data_scripts() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
-        .with_tool_dirs();
+        .with_tool_dirs()
+        .with_cache_dir("cache with spaces");
     let scenario = toml::from_str::<Scenario>(indoc! {r#"
         name = "tool-shared-build-environment"
         [root]
@@ -3844,6 +3845,16 @@ fn tool_install_preflight_relocates_retained_data_scripts() -> Result<()> {
         .env(EnvVars::PATH, bin.as_os_str())
         .assert()
         .success();
+    #[cfg(unix)]
+    {
+        let python = context.temp_dir.child("tools/tool/bin/python");
+        let mut script = format!("#!{}\n", python.path().display()).into_bytes();
+        script.extend_from_slice(b"# coding: latin-1\nlabel = 'caf\xe9'\nimport backend_helper\nassert backend_helper.__version__ == '2.0.0'\n");
+        context
+            .temp_dir
+            .child("tools/tool/bin/backend-data")
+            .write_binary(&script)?;
+    }
     let project = context.temp_dir.child("tool");
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]

@@ -455,6 +455,26 @@ fn relocate_scripts(
             .take(prefix_limit as u64)
             .read_to_end(&mut prefix)?;
         let permissions = reader.get_ref().metadata()?.permissions();
+        // Encoded shell wrappers place the Python cookie between the shebang and exec line.
+        let mut encoding = None;
+        if let Some(second_line) = prefix.strip_prefix(b"#!/bin/sh\n") {
+            if !second_line.contains(&b'\n') {
+                reader.read_until(b'\n', &mut prefix)?;
+            }
+            let start = b"#!/bin/sh\n".len();
+            let end = prefix[start..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(prefix.len(), |end| start + end + 1);
+            if let Some(cookie) = python_encoding(&prefix[start..end]) {
+                encoding = Some(cookie.to_owned());
+                prefix.drain(start..end);
+                reader
+                    .by_ref()
+                    .take((end - start) as u64)
+                    .read_to_end(&mut prefix)?;
+            }
+        }
         let contents = if let Some((previous, shell, current)) =
             prefixes.iter().find(|(previous, _, _)| {
                 prefix
@@ -467,7 +487,9 @@ fn relocate_scripts(
             }) {
             let mut remaining = prefix[previous.len()..].to_vec();
             reader.read_to_end(&mut remaining)?;
-            let Some(contents) = relocate_script_body(&remaining, *shell, current) else {
+            let Some(contents) =
+                relocate_script_body(&remaining, *shell, current, encoding.as_deref())
+            else {
                 continue;
             };
             contents
@@ -500,7 +522,22 @@ fn relocate_scripts(
 }
 
 /// Attach interpreter arguments to the command that executes Python, retaining the script body.
-fn relocate_script_body(remaining: &[u8], previous_shell: bool, current: &str) -> Option<Vec<u8>> {
+/// Return the ASCII codec name from a Python encoding declaration without decoding the script.
+fn python_encoding(line: &[u8]) -> Option<&str> {
+    static ENCODING: std::sync::LazyLock<regex::bytes::Regex> = std::sync::LazyLock::new(|| {
+        regex::bytes::Regex::new(r"(?-u)^[ \t\x0c]*#.*?coding[:=][ \t]*([-_.a-zA-Z0-9]+)")
+            .expect("valid Python encoding declaration regex")
+    });
+    let name = ENCODING.captures(line)?.get(1)?.as_bytes();
+    std::str::from_utf8(name).ok()
+}
+
+fn relocate_script_body(
+    remaining: &[u8],
+    previous_shell: bool,
+    current: &str,
+    encoding: Option<&str>,
+) -> Option<Vec<u8>> {
     let (arguments, body) = if previous_shell {
         let end = remaining
             .windows(SHELL_WRAPPER_SUFFIX.len())
@@ -536,7 +573,25 @@ fn relocate_script_body(remaining: &[u8], previous_shell: bool, current: &str) -
     let current = forced_shell.as_deref().unwrap_or(current);
     let mut contents = Vec::new();
     if let Some(command) = current.strip_suffix(SHELL_WRAPPER_SUFFIX) {
-        contents.extend_from_slice(command.as_bytes());
+        let encoding = encoding.or_else(|| {
+            if previous_shell {
+                return None;
+            }
+            let body = body
+                .strip_prefix(b"\r\n")
+                .or_else(|| body.strip_prefix(b"\n"))
+                .or_else(|| body.strip_prefix(b"\r"))?;
+            let line = body.split(|byte| matches!(byte, b'\r' | b'\n')).next()?;
+            python_encoding(line)
+        });
+        if let Some(encoding) = encoding {
+            let (shebang, command) = command.split_once('\n')?;
+            contents.extend_from_slice(shebang.as_bytes());
+            contents.extend_from_slice(format!("\n# coding: {encoding}\n").as_bytes());
+            contents.extend_from_slice(command.as_bytes());
+        } else {
+            contents.extend_from_slice(command.as_bytes());
+        }
         contents.extend_from_slice(arguments);
         contents.extend_from_slice(SHELL_WRAPPER_SUFFIX.as_bytes());
     } else {
@@ -1504,7 +1559,7 @@ mod test {
     #[test]
     fn relocated_simple_shebang_retains_interpreter_arguments() -> Result<()> {
         let current = format_shebang("/new path/python", "posix", false);
-        let contents = relocate_script_body(b" -O\nprint('body')\n", false, &current)
+        let contents = relocate_script_body(b" -O\nprint('body')\n", false, &current, None)
             .ok_or_else(|| anyhow::anyhow!("simple shebang should be relocated"))?;
         assert_eq!(
             contents.as_slice(),
@@ -1520,12 +1575,27 @@ mod test {
             b" -O -B \"$0\" \"$@\"\n' '''\nprint('body')\n",
             true,
             &current,
+            None,
         )
         .ok_or_else(|| anyhow::anyhow!("shell shebang should be relocated"))?;
         assert_eq!(
             contents.as_slice(),
             b"#!/bin/sh\n'''exec' '/new/python' -O -B \"$0\" \"$@\"\n' '''\nprint('body')\n",
         );
+        Ok(())
+    }
+
+    #[test]
+    fn relocated_simple_shebang_retains_source_encoding() -> Result<()> {
+        let current = format_shebang("/new path/python", "posix", false);
+        let contents = relocate_script_body(
+            b"\n# coding: latin-1\nprint('caf\xe9')\n",
+            false,
+            &current,
+            None,
+        )
+        .ok_or_else(|| anyhow::anyhow!("encoded script should be relocated"))?;
+        assert_eq!(contents.as_slice(), b"#!/bin/sh\n# coding: latin-1\n'''exec' '/new path/python' \"$0\" \"$@\"\n' '''\n# coding: latin-1\nprint('caf\xe9')\n");
         Ok(())
     }
 

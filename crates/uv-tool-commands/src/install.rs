@@ -20,7 +20,7 @@ use uv_configuration::{
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ExtraBuildRequires, IndexCapabilities, InstalledDistKind, NameRequirementSpecification,
-    Requirement, RequirementSource, ResolvedDist, UnresolvedRequirementSpecification,
+    Requirement, RequirementSource, Resolution, ResolvedDist, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -842,39 +842,33 @@ pub async fn install(
                         existing_receipt,
                     )?;
                 } else {
-                    let mut preflight = create_preflight_environment(
+                    let preflight = create_preflight_environment(
                         package_name,
                         environment.interpreter().clone(),
                         &state,
                         &cache,
                         Some(&environment),
                     )?;
-                    preflight.environment = sync_environment(
-                        preflight.environment,
-                        &resolution,
-                        hash_strategy.clone(),
-                        Modifications::Exact,
-                        Constraints::from_specifications(receipt_build_constraints.iter().cloned()),
-                        uv_settings::InstallerSettingsRef {
-                            compile_bytecode: false,
-                            ..(&settings).into()
-                        },
-                        &client_builder,
-                        &preflight.state,
-                        Box::new(DefaultInstallLogger),
-                        installer_metadata,
-                        &concurrency,
-                        &cache,
-                        Printer::Silent,
-                        preview,
-                    )
-                    .await?;
-                    check_tool_entrypoint_conflicts(
-                        &preflight.environment,
-                        package_name,
-                        entrypoints,
-                        existing_receipt,
-                    )?;
+                    preflight
+                        .sync_and_check(
+                            package_name,
+                            entrypoints,
+                            existing_receipt,
+                            None,
+                            SourceTreeEditablePolicy::Project,
+                            &resolution,
+                            hash_strategy.clone(),
+                            Constraints::from_specifications(
+                                receipt_build_constraints.iter().cloned(),
+                            ),
+                            (&settings).into(),
+                            &client_builder,
+                            installer_metadata,
+                            &concurrency,
+                            &cache,
+                            preview,
+                        )
+                        .await?;
                 }
             }
             let environment = if plan.is_empty() && !settings.compile_bytecode {
@@ -927,43 +921,33 @@ pub async fn install(
                             ResolvedDist::Installable { .. } => true,
                         });
                         if changes_packages {
-                            let mut preflight = create_preflight_environment(
+                            let preflight = create_preflight_environment(
                                 package_name,
                                 environment.interpreter().clone(),
                                 &state,
                                 &cache,
                                 Some(environment),
                             )?;
-                            preflight.environment = sync_environment_with_platform(
-                                preflight.environment,
-                                python_platform.as_ref(),
-                                SourceTreeEditablePolicy::Tool,
-                                resolution,
-                                hash_strategy.clone(),
-                                Modifications::Exact,
-                                Constraints::from_specifications(
-                                    receipt_build_constraints.iter().cloned(),
-                                ),
-                                uv_settings::InstallerSettingsRef {
-                                    compile_bytecode: false,
-                                    ..(&settings).into()
-                                },
-                                &client_builder,
-                                &preflight.state,
-                                Box::new(DefaultInstallLogger),
-                                installer_metadata,
-                                &concurrency,
-                                &cache,
-                                Printer::Silent,
-                                preview,
-                            )
-                            .await?;
-                            check_tool_entrypoint_conflicts(
-                                &preflight.environment,
-                                package_name,
-                                entrypoints,
-                                existing_receipt,
-                            )?;
+                            preflight
+                                .sync_and_check(
+                                    package_name,
+                                    entrypoints,
+                                    existing_receipt,
+                                    python_platform.as_ref(),
+                                    SourceTreeEditablePolicy::Tool,
+                                    resolution,
+                                    hash_strategy.clone(),
+                                    Constraints::from_specifications(
+                                        receipt_build_constraints.iter().cloned(),
+                                    ),
+                                    (&settings).into(),
+                                    &client_builder,
+                                    installer_metadata,
+                                    &concurrency,
+                                    &cache,
+                                    preview,
+                                )
+                                .await?;
                         } else {
                             check_tool_entrypoint_conflicts(
                                 environment,
@@ -1128,40 +1112,32 @@ pub async fn install(
             HashStrategy::default()
         };
         if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
-            let mut preflight = create_preflight_environment(
+            let preflight = create_preflight_environment(
                 package_name,
                 interpreter.clone(),
                 &state,
                 &cache,
                 None,
             )?;
-            preflight.environment = sync_environment(
-                preflight.environment,
-                &resolution,
-                hash_strategy.clone(),
-                Modifications::Exact,
-                Constraints::from_specifications(receipt_build_constraints.iter().cloned()),
-                uv_settings::InstallerSettingsRef {
-                    compile_bytecode: false,
-                    ..(&settings).into()
-                },
-                &client_builder,
-                &preflight.state,
-                Box::new(DefaultInstallLogger),
-                installer_metadata,
-                &concurrency,
-                &cache,
-                Printer::Silent,
-                preview,
-            )
-            .await
-            .map_err(UvError::from)?;
-            check_tool_entrypoint_conflicts(
-                &preflight.environment,
-                package_name,
-                entrypoints,
-                existing_receipt,
-            )?;
+            preflight
+                .sync_and_check(
+                    package_name,
+                    entrypoints,
+                    existing_receipt,
+                    None,
+                    SourceTreeEditablePolicy::Project,
+                    &resolution,
+                    hash_strategy.clone(),
+                    Constraints::from_specifications(receipt_build_constraints.iter().cloned()),
+                    (&settings).into(),
+                    &client_builder,
+                    installer_metadata,
+                    &concurrency,
+                    &cache,
+                    preview,
+                )
+                .await
+                .map_err(UvError::from)?;
         }
 
         let environment = installed_tools.create_environment(package_name, interpreter, &cache)?;
@@ -1230,6 +1206,52 @@ struct PreflightEnvironment {
     environment: PythonEnvironment,
     state: PlatformState,
     _temp_dir: tempfile::TempDir,
+}
+
+impl PreflightEnvironment {
+    /// Synchronize staged packages and check launchers before modifying the real environment.
+    async fn sync_and_check(
+        self,
+        name: &PackageName,
+        entrypoints: &[PackageName],
+        existing_tool: &Tool,
+        python_platform: Option<&TargetTriple>,
+        editable: SourceTreeEditablePolicy,
+        resolution: &Resolution,
+        hash_strategy: HashStrategy,
+        build_constraints: Constraints,
+        settings: uv_settings::InstallerSettingsRef<'_>,
+        client_builder: &BaseClientBuilder<'_>,
+        installer_metadata: bool,
+        concurrency: &Concurrency,
+        cache: &Cache,
+        preview: Preview,
+    ) -> Result<(), EnvironmentError> {
+        let environment = sync_environment_with_platform(
+            self.environment,
+            python_platform,
+            editable,
+            resolution,
+            hash_strategy,
+            Modifications::Exact,
+            build_constraints,
+            uv_settings::InstallerSettingsRef {
+                compile_bytecode: false,
+                ..settings
+            },
+            client_builder,
+            &self.state,
+            Box::new(DefaultInstallLogger),
+            installer_metadata,
+            concurrency,
+            cache,
+            Printer::Silent,
+            preview,
+        )
+        .await?;
+        check_tool_entrypoint_conflicts(&environment, name, entrypoints, existing_tool)?;
+        Ok(())
+    }
 }
 
 /// Create a temporary environment for checking tool entrypoint conflicts before updating a tool.
