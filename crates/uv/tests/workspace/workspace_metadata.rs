@@ -1129,7 +1129,10 @@ dependencies = [
 
 #[test]
 fn workspace_metadata_sync_centralized_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_centralized_environment_hashes();
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -1172,6 +1175,61 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
         metadata["environment"]["root"].as_str().map(Path::new),
         Some(target.as_path())
     );
+
+    // Existing centralized links retain their canonical paths when the feature is disabled.
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .args(["--preview-features", "workspace-metadata"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]",
+        "python": {
+          "path": "[CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "project",
+          "path": "[TEMP_DIR]/",
+          "id": "project==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "project==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "project",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
 
     // Reusing the cached environment must restore a missing project link.
     uv_fs::remove_symlink(context.temp_dir.child(".venv"))?;
