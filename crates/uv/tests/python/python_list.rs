@@ -979,7 +979,7 @@ async fn python_list_remote_ndjson_metadata() -> Result<()> {
     let server = MockServer::start().await;
     let platform = uv_platform::Platform::from_env()?.as_cargo_dist_triple();
     let metadata = serde_json::json!({
-        "version": "3.13.9+20250101",
+        "version": "3.13.9+20260101",
         "artifacts": [{
             "platform": platform,
             "variant": "install_only",
@@ -990,7 +990,9 @@ async fn python_list_remote_ndjson_metadata() -> Result<()> {
     Mock::given(method("GET"))
         .and(path("/python.ndjson"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_raw(metadata.to_string(), "application/x-ndjson"),
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_raw(format!("\r\n{metadata}\r\n \t\r\n"), "application/x-ndjson"),
         )
         .mount(&server)
         .await;
@@ -1008,6 +1010,20 @@ async fn python_list_remote_ndjson_metadata() -> Result<()> {
     uv_snapshot!(context.filters(), context.python_list()
         .arg("--python-downloads-json-url")
         .arg(format!("{}/python.ndjson?token=test", server.uri()))
+        .arg("cpython-3.13")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.9-[PLATFORM]    <download available>
+    ");
+
+    let url = format!("{}/python.ndjson", server.uri());
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    drop(server);
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("--offline")
+        .arg("--python-downloads-json-url")
+        .arg(url)
         .arg("cpython-3.13")
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)

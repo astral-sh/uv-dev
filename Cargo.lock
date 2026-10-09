@@ -7581,6 +7581,7 @@ dependencies = [
  "uv-macros",
  "uv-pep440",
  "uv-platform",
+ "uv-preview",
  "uv-pypi-types",
  "uv-python-interpreter",
  "uv-python-types",
