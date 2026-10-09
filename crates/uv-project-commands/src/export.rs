@@ -744,9 +744,8 @@ async fn render_export<'output>(
 fn cmd(invocation_args: &[OsString]) -> String {
     let args = invocation_args
         .iter()
-        .cloned()
         .skip(1)
-        .map(|arg| arg.to_string_lossy().to_string())
+        .map(|arg| arg.to_string_lossy())
         .scan(None, move |skip_next, arg| {
             if matches!(skip_next, Some(true)) {
                 // Reset state; skip this iteration.

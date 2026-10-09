@@ -61,9 +61,6 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 use crate::commands::{ParsedRunCommand, RunCommand, ScriptPath};
 
 mod commands;
-mod invocation;
-#[doc(hidden)]
-pub use invocation::run_with_args;
 #[cfg(not(feature = "self-update"))]
 mod install_source;
 mod logging;
@@ -134,6 +131,33 @@ impl uv_errors::Hinted for ExternallyInstalledError {
 #[instrument(skip_all)]
 #[doc(hidden)]
 pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
+    run_with_args(cli, global_initialization, std::env::args_os().collect()).await
+}
+
+/// Execute a command with its own invocation arguments.
+///
+/// Other process-global state is governed by [`GlobalInitialization`]. Concurrent commands
+/// with different process environments are not supported.
+#[instrument(skip_all)]
+#[doc(hidden)]
+pub async fn run_with_args(
+    cli: Cli,
+    global_initialization: GlobalInitialization,
+    invocation_args: Vec<OsString>,
+) -> Result<ExitStatus> {
+    Box::pin(run_with_args_inner(
+        cli,
+        global_initialization,
+        invocation_args,
+    ))
+    .await
+}
+
+async fn run_with_args_inner(
+    cli: Cli,
+    global_initialization: GlobalInitialization,
+    invocation_args: Vec<OsString>,
+) -> Result<ExitStatus> {
     let config_discovery = ConfigDiscovery::from_args(cli.top_level.no_config);
 
     // Configure color before resolving settings so argument errors retain their styling.
@@ -790,7 +814,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 !args.settings.no_annotate,
                 !args.settings.no_header,
                 args.settings.custom_compile_command,
-                invocation::args().collect(),
+                invocation_args,
                 args.settings.emit_index_url,
                 args.settings.emit_find_links,
                 args.settings.emit_build_options,
@@ -1468,6 +1492,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 filesystem,
                 cache,
                 &workspace_cache,
+                invocation_args,
                 printer,
             ))
             .await
@@ -1501,12 +1526,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             Ok(ExitStatus::Success)
         }
         #[cfg(not(feature = "self-update"))]
-        Commands::Self_(_) => {
-            return Err(ExternallyInstalledError {
-                install_source: InstallSource::detect(),
-            }
-            .into());
+        Commands::Self_(_) => Err(ExternallyInstalledError {
+            install_source: InstallSource::detect(),
         }
+        .into()),
         Commands::GenerateShellCompletion(args) => {
             args.shell.generate(&mut Cli::command(), &mut stdout());
             Ok(ExitStatus::Success)
@@ -2263,6 +2286,7 @@ async fn run_project(
     filesystem: Option<FilesystemOptions>,
     cache: Cache,
     workspace_cache: &WorkspaceCache,
+    invocation_args: Vec<OsString>,
     printer: Printer,
 ) -> Result<ExitStatus> {
     // Write out any resolved settings.
@@ -2860,7 +2884,7 @@ async fn run_project(
                 args.frozen,
                 args.include_annotations,
                 args.include_header,
-                invocation::args().collect(),
+                invocation_args,
                 args.include_index_url,
                 args.include_find_links,
                 script,
