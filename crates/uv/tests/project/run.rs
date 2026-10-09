@@ -7,6 +7,10 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+#[cfg(unix)]
+use std::fs::Permissions;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use uv_fs::copy_dir_all;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
@@ -144,6 +148,60 @@ fn run_with_python_version() -> Result<()> {
 
 #[test]
 #[cfg(unix)]
+fn run_with_python_executable_wrapper_reuses_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let python_dir = context.temp_dir.child("python-bin");
+    python_dir.create_dir_all()?;
+    let wrapper = python_dir.child("requested-python");
+    wrapper.write_str(&formatdoc! {r#"
+        #!/bin/sh
+        exec "{python}" "$@"
+    "#, python = context.python_versions[0].1.display()})?;
+    fs_err::set_permissions(wrapper.path(), Permissions::from_mode(0o755))?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("-p").arg("requested-python").arg("python").arg("--version")
+        .env(EnvVars::PATH, python_dir.as_os_str())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    let retained = context.temp_dir.child(".venv/keep");
+    retained.write_str("keep")?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("-p").arg("requested-python").arg("python").arg("--version")
+        .env(EnvVars::PATH, python_dir.as_os_str())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    retained.assert(predicate::path::exists());
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
 fn run_with_python_executable_name() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
@@ -181,8 +239,7 @@ fn run_with_python_executable_name() -> Result<()> {
         .arg("--version")
         .env(EnvVars::PATH, python_dir.as_os_str())
         .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_dir.as_os_str()), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     Python 3.11.[X]
 

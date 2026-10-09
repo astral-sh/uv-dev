@@ -849,20 +849,25 @@ impl Interpreter {
                 {
                     return true;
                 }
-                // ...or, on Windows, if both interpreters have the same base executable. On
-                // Windows, interpreters are copied rather than symlinked, so a virtual environment
-                // created from within a virtual environment will _not_ evaluate to the same
-                // `sys.executable`, but will have the same `sys._base_executable`.
-                if cfg!(windows) {
-                    if let Ok(file_interpreter) = Self::query(file, cache) {
-                        if let (Some(file_base), Some(interpreter_base)) = (
+                // A wrapper can report a different executable from the file used to invoke it.
+                if let Ok(file_interpreter) = Self::query(file, cache) {
+                    let executable = file_interpreter.sys_executable();
+                    if is_same_executable(executable, self.sys_executable())
+                        || self
+                            .sys_base_executable()
+                            .is_some_and(|base| is_same_executable(executable, base))
+                    {
+                        return true;
+                    }
+                    // Windows virtual environments copy their executables, so compare their bases.
+                    if cfg!(windows)
+                        && let (Some(file_base), Some(interpreter_base)) = (
                             file_interpreter.sys_base_executable(),
                             self.sys_base_executable(),
-                        ) {
-                            if is_same_executable(file_base, interpreter_base) {
-                                return true;
-                            }
-                        }
+                        )
+                        && is_same_executable(file_base, interpreter_base)
+                    {
+                        return true;
                     }
                 }
                 false
