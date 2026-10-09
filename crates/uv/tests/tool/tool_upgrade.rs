@@ -65,7 +65,11 @@ fn check_staged_python_upgrade(lock: bool) -> Result<()> {
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
     write_staged_upgrade_wheel(wheels.path(), "staged-tool", "1.0.0", true)?;
-    let feature = if lock { "tool-install-locks" } else { "" };
+    let features: &[&str] = if lock {
+        &["--preview-features", "tool-install-locks"]
+    } else {
+        &[]
+    };
     context
         .tool_install()
         .args([
@@ -76,7 +80,7 @@ fn check_staged_python_upgrade(lock: bool) -> Result<()> {
             "--find-links",
         ])
         .arg(wheels.path())
-        .env(EnvVars::UV_PREVIEW_FEATURES, feature)
+        .args(features)
         .assert()
         .success();
     let root = context.temp_dir.child("tools/staged-tool");
@@ -102,10 +106,12 @@ fn check_staged_python_upgrade(lock: bool) -> Result<()> {
     context
         .tool_upgrade()
         .args(["staged-tool", "--python", "3.13", "--compile-bytecode"])
-        .env(EnvVars::UV_PREVIEW_FEATURES, feature)
+        .args(features)
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("No executables are provided"));
+        .code(1)
+        .stderr(predicate::str::contains(
+            "Failed to install entrypoints for `staged-tool`",
+        ));
     assert_eq!(fs_err::read(root.join("uv-receipt.toml"))?, receipt);
     assert_eq!(fs_err::read(root.join("pyvenv.cfg"))?, configuration);
     assert_eq!(
@@ -128,7 +134,7 @@ fn check_staged_python_upgrade(lock: bool) -> Result<()> {
     context
         .tool_upgrade()
         .args(["staged-tool", "--python", "3.13", "--compile-bytecode"])
-        .env(EnvVars::UV_PREVIEW_FEATURES, feature)
+        .args(features)
         .assert()
         .success();
     let after = Command::new(command.path())
@@ -146,7 +152,11 @@ fn check_staged_python_upgrade(lock: bool) -> Result<()> {
     );
     for key in ["source", "executable"] {
         let path = Path::new(after[key].as_str().expect("path string"));
-        assert!(path.starts_with(root.path()), "{key}: {path:?}");
+        assert!(
+            fs_err::canonicalize(path.parent().expect("path parent"))?
+                .starts_with(fs_err::canonicalize(root.path())?),
+            "{key}: {path:?}"
+        );
         assert!(!path.to_string_lossy().contains(".uv-tool-staging-"));
     }
     assert!(
@@ -191,6 +201,99 @@ fn tool_upgrade_all_keeps_successful_replacements_when_another_tool_fails() -> R
         assert_eq!(output["version"], version);
         assert_eq!(output["python"], json!([3, python]));
     }
+    Ok(())
+}
+
+#[test]
+fn tool_upgrade_completed_cleanup_does_not_prevent_uninstall() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_tool_dirs();
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    write_staged_upgrade_wheel(wheels.path(), "cleanup-tool", "1.0.0", true)?;
+    context
+        .tool_install()
+        .args([
+            "cleanup-tool",
+            "--python",
+            "3.12",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(wheels.path())
+        .assert()
+        .success();
+    let (filename, wheel) = generate_wheel_with_files(
+        &"cleanup-tool".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("cleanup_tool/cli.py", "def main():\n    print('new')\n"),
+            (
+                "cleanup_tool-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\ncleanup-tool = cleanup_tool.cli:main\n",
+            ),
+            (
+                "staging-sidecar.pth",
+                "import pathlib, sys; p = pathlib.Path(sys.prefix); p.name == 'replacement' and p.parent.name.startswith('.uv-tool-staging-') and (p.parent / 'external').write_text('keep')\n",
+            ),
+        ],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    context
+        .tool_upgrade()
+        .args(["cleanup-tool", "--python", "3.13", "--compile-bytecode"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("replacement cleanup is pending"));
+    let tools = context.temp_dir.child("tools");
+    let staging = fs_err::read_dir(tools.path())?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".uv-tool-staging-")
+        })
+        .expect("retained staging directory")
+        .path();
+    let journal = tools.join(".uv-tool-environment-cleanup-tool.json");
+    assert!(journal.try_exists()?);
+    context
+        .tool_uninstall()
+        .arg("cleanup-tool")
+        .assert()
+        .success();
+    assert!(!tools.join("cleanup-tool").try_exists()?);
+    assert!(journal.try_exists()?);
+    assert_eq!(fs_err::read_to_string(staging.join("external"))?, "keep");
+
+    fs_err::remove_file(staging.join("external"))?;
+    context
+        .tool_install()
+        .args([
+            "cleanup-tool",
+            "--python",
+            "3.13",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(wheels.path())
+        .assert()
+        .success();
+    assert!(!journal.try_exists()?);
+    assert!(!staging.try_exists()?);
+    Command::new(
+        context
+            .temp_dir
+            .join(format!("bin/cleanup-tool{EXE_SUFFIX}")),
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::diff("new\n").normalize());
     Ok(())
 }
 

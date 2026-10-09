@@ -64,7 +64,10 @@ pub(crate) async fn upgrade(
 ) -> Result<ExitStatus> {
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let root_lock = Arc::new(installed_tools.lock().await?);
-    super::environment_transaction::recover_selected_environments(&installed_tools, &[]).await?;
+    if names.is_empty() {
+        super::environment_transaction::recover_selected_environments(&installed_tools, &[])
+            .await?;
+    }
 
     // Collect the tools to upgrade, along with any constraints.
     let names: BTreeMap<PackageName, Vec<Requirement>> = {
@@ -286,6 +289,7 @@ async fn upgrade_tool(
     preview: Preview,
 ) -> Result<UpgradeReport> {
     let tool_locks = preview.is_enabled(PreviewFeature::ToolInstallLocks);
+    super::environment_transaction::recover_tool_environment(installed_tools, name).await?;
     super::export_transaction::recover_tool_exports(installed_tools, name).await?;
     // Ensure the tool is installed.
     let existing_tool_receipt = match installed_tools.get_tool_receipt(name) {

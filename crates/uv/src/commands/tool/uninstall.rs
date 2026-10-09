@@ -43,7 +43,7 @@ pub(crate) async fn uninstall(name: Vec<PackageName>, printer: Printer) -> Resul
         Err(err) => return Err(err.into()),
     };
 
-    super::environment_transaction::recover_selected_environments(&installed_tools, &name).await?;
+    super::environment_transaction::recover_for_removal(&installed_tools, &name).await?;
     super::export_transaction::recover_selected_exports(&installed_tools, &name).await?;
 
     // Perform the uninstallation.

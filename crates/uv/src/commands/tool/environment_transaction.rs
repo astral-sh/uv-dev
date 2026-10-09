@@ -1,6 +1,7 @@
 //! Owned staging and recovery for interpreter-changing tool upgrades.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -20,8 +21,8 @@ use uv_warnings::warn_user;
 
 use super::export_transaction::{
     ExportDirectory, ExportIdentity, ExportVersion, JOURNAL_PREFIX, JournalExport, OwnedJournal,
-    cleanup_anchors, file_digest, new_anchor, old_anchor, publish_export, rollback_export,
-    sync_directory,
+    cleanup_anchors, file_digest, new_anchor, old_anchor, private_staging_directory,
+    publish_export, rollback_export, sync_directory,
 };
 use super::recovery::{ToolEntrypointPlan, ToolEntrypointSnapshot};
 use crate::printer::Printer;
@@ -108,9 +109,8 @@ impl StagedToolEnvironment {
         root_lock: Arc<LockedFile>,
     ) -> anyhow::Result<(Self, PythonEnvironment)> {
         original.check_current()?;
-        let directory = tempfile::Builder::new()
-            .prefix(TOOL_ENVIRONMENT_STAGING_PREFIX)
-            .tempdir_in(&original.tool_root)?;
+        let directory =
+            private_staging_directory(&original.tool_root, TOOL_ENVIRONMENT_STAGING_PREFIX)?;
         let environment = uv_virtualenv::create_venv(
             &directory.path().join(REPLACEMENT),
             interpreter,
@@ -255,9 +255,9 @@ impl StagedToolEnvironment {
             journal,
         )?;
         // The persisted record owns these directories from this point, including on sync failure.
-        owner.directory.keep();
+        let _ = owner.directory.keep();
         for staging in export_staging {
-            staging.keep();
+            let _ = staging.keep();
         }
         let mut transaction = EnvironmentTransaction {
             record,
@@ -307,9 +307,7 @@ fn stage_exports(
         fs_err::create_dir_all(directory)?;
         let directory = fs_err::canonicalize(directory)?;
         if !directories.contains_key(&directory) {
-            let staging = tempfile::Builder::new()
-                .prefix(JOURNAL_PREFIX)
-                .tempdir_in(&directory)?;
+            let staging = private_staging_directory(&directory, JOURNAL_PREFIX)?;
             let files = ExportDirectory {
                 directory: directory.clone(),
                 staging: staging
@@ -444,7 +442,7 @@ enum Phase {
     Committed,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum Publication {
     Exchange,
@@ -476,6 +474,27 @@ struct RemovedExport {
     original: ExportVersion,
 }
 
+#[derive(Debug)]
+struct RecoveryErrors(Vec<anyhow::Error>);
+
+impl fmt::Display for RecoveryErrors {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, error) in self.0.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str("; ")?;
+            }
+            write!(formatter, "{error:#}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for RecoveryErrors {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.first().map(|error| error.as_ref())
+    }
+}
+
 struct EnvironmentTransaction {
     record: OwnedJournal<EnvironmentJournal>,
     finished: bool,
@@ -483,6 +502,13 @@ struct EnvironmentTransaction {
 
 impl EnvironmentTransaction {
     fn publish(&mut self) -> anyhow::Result<()> {
+        self.publish_with_exchange(exchange)
+    }
+
+    fn publish_with_exchange(
+        &mut self,
+        exchange: impl FnOnce(&Path, &Path) -> io::Result<()>,
+    ) -> anyhow::Result<()> {
         self.record.check_current()?;
         let journal = &self.record.journal;
         journal.original.check_current()?;
@@ -493,12 +519,30 @@ impl EnvironmentTransaction {
         {
             bail!("Staged tool environment changed before publication");
         }
-        match journal.publication {
-            Publication::Exchange => exchange(&journal.original.path(), &replacement)?,
-            Publication::Rename => {
-                rename_directory(&journal.original.path(), &container.join(PREVIOUS))?;
-                rename_directory(&replacement, &journal.original.path())?;
+        if journal.publication == Publication::Exchange {
+            match exchange(&journal.original.path(), &replacement) {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Unsupported
+                            | io::ErrorKind::InvalidInput
+                            | io::ErrorKind::CrossesDevices
+                    ) =>
+                {
+                    // Exchange failures do not move either directory. Persist the fallback
+                    // protocol before its first rename so interrupted recovery uses the same mode.
+                    let mut fallback = journal.clone();
+                    fallback.publication = Publication::Rename;
+                    self.record.replace(fallback)?;
+                }
+                Err(error) => return Err(error.into()),
             }
+        }
+        let journal = &self.record.journal;
+        if journal.publication == Publication::Rename {
+            rename_directory(&journal.original.path(), &container.join(PREVIOUS))?;
+            rename_directory(&replacement, &journal.original.path())?;
         }
         sync_directory(&container)?;
         sync_directory(&journal.original.tool_root)?;
@@ -537,7 +581,13 @@ impl EnvironmentTransaction {
         let result = self.record.replace(committed);
         // A completed record replacement is the commit, including when its directory sync fails.
         self.finished = self.record.journal.phase == Phase::Committed;
-        result.context("Could not persist the tool replacement commit")?;
+        if let Err(error) = result {
+            return Err(error.context(if self.finished {
+                "Tool is installed but its replacement commit could not be synchronized"
+            } else {
+                "Could not persist the tool replacement commit"
+            }));
+        }
         if let Err(error) = cleanup_record(&self.record) {
             warn_user!(
                 "Tool `{}` is installed; replacement cleanup is pending: {error:#}",
@@ -589,7 +639,7 @@ fn rename_directory(source: &Path, target: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn exchange(left: &Path, right: &Path) -> anyhow::Result<()> {
+fn exchange(left: &Path, right: &Path) -> io::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         uv_fs::exchange_paths(left, right)?;
@@ -598,7 +648,10 @@ fn exchange(left: &Path, right: &Path) -> anyhow::Result<()> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (left, right);
-        bail!("Tool replacement journal uses an unsupported directory exchange");
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Tool replacement journal uses an unsupported directory exchange",
+        ))
     }
 }
 
@@ -666,45 +719,75 @@ fn restore_environment(journal: &EnvironmentJournal) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn recover_record(record: &mut OwnedJournal<EnvironmentJournal>) -> anyhow::Result<()> {
+fn restore_record(record: &mut OwnedJournal<EnvironmentJournal>) -> anyhow::Result<()> {
     record.check_current()?;
     let journal = &record.journal;
     if journal.phase == Phase::Prepared {
-        // Restore global names before the environment they reference. Any foreign replacement
-        // leaves the journal and both generations available instead of discarding the backup.
+        // Restore every owned path even when a separate foreign replacement blocks cleanup.
+        // Keep both generations and the journal until every conflict has been resolved.
+        let mut errors = Vec::new();
         for directory in journal.exports.iter().rev() {
-            if fs_err::canonicalize(&directory.files.directory)? != directory.files.directory {
-                bail!("Executable recovery directory changed");
+            if let Err(error) = restore_exports(directory) {
+                errors.push(error);
             }
-            let staging = directory.files.staging_directory()?;
-            for (index, removal) in directory.removals.iter().enumerate().rev() {
-                let target = directory.files.directory.join(&removal.filename);
-                if removal.original.matches(&target)? {
-                    continue;
-                }
-                let removed = removal_anchor(&staging, "removed", index);
-                if ExportVersion::capture(&target)?.is_none()
-                    && removal.original.matches(&removed)?
-                {
-                    fs_err::hard_link(&removed, &target)?;
-                } else {
-                    bail!(
-                        "Removed executable `{}` changed outside this replacement",
-                        target.user_display()
-                    );
-                }
-            }
-            for index in (0..directory.files.exports.len()).rev() {
-                rollback_export(&directory.files, index)?;
-            }
-            sync_directory(&directory.files.directory)?;
         }
-        restore_environment(journal)?;
+        if let Err(error) = restore_environment(journal) {
+            errors.push(error);
+        }
+        if !errors.is_empty() {
+            return Err(RecoveryErrors(errors).into());
+        }
         let mut rolled_back = journal.clone();
         rolled_back.phase = Phase::RolledBack;
         record.replace(rolled_back)?;
     }
+    Ok(())
+}
+
+fn recover_record(record: &mut OwnedJournal<EnvironmentJournal>) -> anyhow::Result<()> {
+    restore_record(record)?;
     cleanup_record(record)
+}
+
+fn restore_exports(directory: &DirectoryChanges) -> anyhow::Result<()> {
+    if fs_err::canonicalize(&directory.files.directory)? != directory.files.directory {
+        bail!("Executable recovery directory changed");
+    }
+    let staging = directory.files.staging_directory()?;
+    let mut errors = Vec::new();
+    for (index, removal) in directory.removals.iter().enumerate().rev() {
+        let restore = || -> anyhow::Result<()> {
+            let target = directory.files.directory.join(&removal.filename);
+            if removal.original.matches(&target)? {
+                return Ok(());
+            }
+            let removed = removal_anchor(&staging, "removed", index);
+            if ExportVersion::capture(&target)?.is_none() && removal.original.matches(&removed)? {
+                fs_err::hard_link(&removed, &target)?;
+            } else {
+                bail!(
+                    "Removed executable `{}` changed outside this replacement",
+                    target.user_display()
+                );
+            }
+            Ok(())
+        };
+        if let Err(error) = restore() {
+            errors.push(error);
+        }
+    }
+    for index in (0..directory.files.exports.len()).rev() {
+        if let Err(error) = rollback_export(&directory.files, index) {
+            errors.push(error);
+        }
+    }
+    if let Err(error) = sync_directory(&directory.files.directory) {
+        errors.push(error.into());
+    }
+    if !errors.is_empty() {
+        return Err(RecoveryErrors(errors).into());
+    }
+    Ok(())
 }
 
 fn cleanup_record(record: &OwnedJournal<EnvironmentJournal>) -> anyhow::Result<()> {
@@ -805,6 +888,39 @@ pub(super) async fn recover_selected_environments(
     };
     for name in names {
         recover_tool_environment(installed_tools, &name).await?;
+    }
+    Ok(())
+}
+
+/// Removal may proceed after restoration or commit even if unrelated sidecar data blocks cleanup.
+pub(super) async fn recover_for_removal(
+    installed_tools: &InstalledTools,
+    names: &[PackageName],
+) -> anyhow::Result<()> {
+    let names = if names.is_empty() {
+        pending_environment_names(installed_tools)?
+    } else {
+        names.to_vec()
+    };
+    for name in names {
+        let Some(mut record) =
+            OwnedJournal::<EnvironmentJournal>::read_from(journal_path(installed_tools, &name))?
+        else {
+            continue;
+        };
+        record.journal.validate(installed_tools, &name)?;
+        let _entrypoint_locks = ToolEntrypointLocks::for_directories(
+            record
+                .journal
+                .exports
+                .iter()
+                .map(|directory| directory.files.directory.clone()),
+        )
+        .await?;
+        restore_record(&mut record)?;
+        if let Err(error) = cleanup_record(&record) {
+            warn_user!("Tool `{name}` has pending replacement cleanup: {error:#}");
+        }
     }
     Ok(())
 }
@@ -1078,6 +1194,42 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_exchange_persists_rename_recovery() -> anyhow::Result<()> {
+        let (fixture, mut transaction) = Fixture::new(Publication::Exchange, false)?;
+        transaction.publish_with_exchange(|_, _| Err(io::ErrorKind::Unsupported.into()))?;
+        transaction.finished = true;
+        drop(transaction);
+        fixture.replay()?;
+        fixture.assert_original()
+    }
+
+    #[test]
+    fn fallback_record_failure_does_not_move_directories() -> anyhow::Result<()> {
+        let (fixture, mut transaction) = Fixture::new(Publication::Exchange, false)?;
+        let path = fixture.record.clone();
+        assert!(
+            transaction
+                .publish_with_exchange(|_, _| {
+                    fs_err::write(&path, "external record")?;
+                    Err(io::ErrorKind::Unsupported.into())
+                })
+                .is_err()
+        );
+        drop(transaction);
+        assert_eq!(
+            fs_err::read_to_string(fixture.destination.join("generation"))?,
+            "old"
+        );
+        assert_eq!(
+            fs_err::read_to_string(fixture.container.join(REPLACEMENT).join("generation"))?,
+            "new"
+        );
+        assert_eq!(fs_err::read_to_string(&fixture.record)?, "external record");
+        assert!(!fixture.container.join(PREVIOUS).try_exists()?);
+        Ok(())
+    }
+
+    #[test]
     fn identical_metadata_does_not_commit_an_unfinished_generation() -> anyhow::Result<()> {
         let (fixture, mut transaction) = Fixture::new(Publication::Rename, true)?;
         transaction.publish()?;
@@ -1148,11 +1300,11 @@ mod tests {
         );
         assert_eq!(
             fs_err::read_to_string(fixture.destination.join("generation"))?,
-            "new"
+            "old"
         );
         assert_eq!(
-            fs_err::read_to_string(fixture.container.join(PREVIOUS).join("generation"))?,
-            "old"
+            fs_err::read_to_string(fixture.container.join(REPLACEMENT).join("generation"))?,
+            "new"
         );
         assert!(fixture.record.try_exists()?);
         assert!(fixture.replay().is_err());
