@@ -169,6 +169,11 @@ impl FromStr for ScriptTarget {
         })?;
         let module = module.trim();
         let function = function.trim();
+        if matches!(function, "__builtins__" | "__path__") {
+            return Err(format!(
+                "callable `{function}` would overwrite Python module state"
+            ));
+        }
         for component in module.split('.') {
             script_identifier(component)
                 .map_err(|error| format!("invalid module in script target `{value}`: {error}"))?;
@@ -577,6 +582,8 @@ extra_c = ["c"]
             "example:main:other",
             "example:class",
             "example:__debug__",
+            "example:__builtins__",
+            "example:__path__",
             "example.async:main",
             "example:méthode",
         ] {
