@@ -27,6 +27,7 @@ use uv_preview::Preview;
 use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
@@ -297,6 +298,7 @@ pub async fn remove(
         }
         EditTarget::Script(script) => {
             let interpreter = ScriptInterpreter::discover(
+                ScriptEnvironmentMode::Isolated,
                 script.into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,

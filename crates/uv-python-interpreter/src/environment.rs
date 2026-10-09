@@ -278,10 +278,10 @@ impl PythonEnvironment {
     /// Set a key-value pair in the `pyvenv.cfg` file.
     pub fn set_pyvenv_cfg(&self, key: &str, value: &str) -> Result<(), Error> {
         let content = fs_err::read_to_string(self.0.root.join("pyvenv.cfg"))?;
-        fs_err::write(
-            self.0.root.join("pyvenv.cfg"),
-            PyVenvConfiguration::set(&content, key, value),
-        )?;
+        let updated = PyVenvConfiguration::set(&content, key, value);
+        if updated != content {
+            uv_fs::write_atomic_sync(self.0.root.join("pyvenv.cfg"), updated)?;
+        }
         Ok(())
     }
 

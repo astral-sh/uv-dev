@@ -36,7 +36,7 @@ pub use project::{
 };
 pub use reporter::{PythonDownloadReporter, report_interpreter};
 pub use script::{
-    EnvironmentIncompatibilityError, EnvironmentKind, ScriptInterpreter,
+    EnvironmentIncompatibilityError, EnvironmentKind, ScriptEnvironmentMode, ScriptInterpreter,
     check_environment_compatibility, init_script_python_requirement,
 };
 pub use selection_error::PythonSelectionError;

@@ -50,6 +50,7 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::PythonVersionFile;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::VersionFileDiscoveryOptions;
 use uv_python_interpreter::{Interpreter, PyVenvConfiguration, PythonEnvironment};
@@ -212,6 +213,7 @@ pub async fn run(
 
             // Discover the interpreter for the script.
             let environment = ScriptEnvironment::get_or_init(
+                ScriptEnvironmentMode::Isolated,
                 (&script).into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
@@ -402,7 +404,17 @@ pub async fn run(
                 )
                 .await?
                 .into_inner();
+                let environment_mode = if preview
+                    .is_enabled(PreviewFeature::SharedScriptEnvironments)
+                    && active != ActiveEnvironment::Prefer
+                    && script_extra_build_requires.is_empty()
+                {
+                    ScriptEnvironmentMode::Shared
+                } else {
+                    ScriptEnvironmentMode::Isolated
+                };
                 let environment = ScriptEnvironment::get_or_init(
+                    environment_mode,
                     (&script).into(),
                     python.as_deref().map(PythonRequest::parse),
                     &client_builder,
@@ -428,10 +440,7 @@ pub async fn run(
                     })
                     .ok();
 
-                if preview.is_enabled(PreviewFeature::SharedScriptEnvironments)
-                    && active != ActiveEnvironment::Prefer
-                    && script_extra_build_requires.is_empty()
-                {
+                if environment_mode == ScriptEnvironmentMode::Shared {
                     let result = CachedEnvironment::from_spec(
                         spec.into(),
                         unlocked_build_constraints.clone(),
@@ -472,6 +481,10 @@ pub async fn run(
                                     "import site; site.addsitedir({})",
                                     parent_site_packages.escape_for_python()
                                 ),
+                            )?;
+                            sync_shared_entrypoints(
+                                &environment,
+                                shared_environment.interpreter(),
                             )?;
                             set_parent_environment(&environment, shared_environment.root())?;
                             Some(environment.into_interpreter())
@@ -525,6 +538,7 @@ pub async fn run(
             } else {
                 // Create a virtual environment.
                 let interpreter = ScriptInterpreter::discover(
+                    ScriptEnvironmentMode::Isolated,
                     (&script).into(),
                     python.as_deref().map(PythonRequest::parse),
                     &client_builder,
@@ -1124,46 +1138,7 @@ pub async fn run(
             // N.B. The order here matters — earlier interpreters take precedence over the
             // later ones.
             for interpreter in [requirements_env.interpreter(), &base_interpreter] {
-                // Copy each entrypoint from the base environments to the ephemeral environment,
-                // updating the Python executable target to ensure they run in the ephemeral
-                // environment.
-                let scripts = match fs_err::read_dir(interpreter.scripts()) {
-                    Ok(scripts) => scripts,
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-                    Err(err) => return Err(err.into()),
-                };
-                for entry in scripts {
-                    let entry = entry?;
-                    if !entry.file_type()?.is_file() {
-                        continue;
-                    }
-                    match copy_entrypoint(
-                        &entry.path(),
-                        &ephemeral_env.scripts().join(entry.file_name()),
-                        interpreter.sys_executable(),
-                        ephemeral_env.interpreter().sys_executable(),
-                    ) {
-                        Ok(()) => {}
-                        // If the entrypoint already exists, skip it.
-                        Err(CopyEntrypointError::Io(err))
-                            if err.kind() == std::io::ErrorKind::AlreadyExists =>
-                        {
-                            trace!(
-                                "Skipping copy of entrypoint `{}`: already exists",
-                                &entry.path().display()
-                            );
-                        }
-                        Err(CopyEntrypointError::Io(err))
-                            if err.kind() == std::io::ErrorKind::PermissionDenied =>
-                        {
-                            trace!(
-                                "Skipping copy of entrypoint `{}`: permission denied",
-                                &entry.path().display()
-                            );
-                        }
-                        Err(err) => return Err(err.into()),
-                    }
-                }
+                copy_environment_entrypoints(interpreter, ephemeral_env, false)?;
 
                 // Link data directories from the base environment to the ephemeral environment.
                 //
@@ -2082,10 +2057,104 @@ enum CopyEntrypointError {
     Trampoline(#[from] uv_trampoline_builder::Error),
 }
 
+/// Copy Python entrypoints into an overlay, rewriting them to use its interpreter.
+fn copy_environment_entrypoints(
+    source: &Interpreter,
+    target: &PythonEnvironment,
+    overwrite: bool,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let scripts = match fs_err::read_dir(source.scripts()) {
+        Ok(scripts) => scripts,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
+    let mut copied = Vec::new();
+    for entry in scripts {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        match copy_entrypoint(
+            &entry.path(),
+            &target.scripts().join(entry.file_name()),
+            source.sys_executable(),
+            target.interpreter().sys_executable(),
+            overwrite,
+        ) {
+            Ok(true) => copied.push(PathBuf::from(entry.file_name())),
+            Ok(false) => {}
+            Err(CopyEntrypointError::Io(err))
+                if !overwrite
+                    && matches!(
+                        err.kind(),
+                        io::ErrorKind::AlreadyExists | io::ErrorKind::PermissionDenied
+                    ) =>
+            {
+                trace!(
+                    "Skipping copy of entrypoint `{}`: {err}",
+                    entry.path().display()
+                );
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+    copied.sort();
+    Ok(copied)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SharedEntrypoints {
+    source: PathBuf,
+    names: Vec<PathBuf>,
+}
+
+/// Remove stale copied commands when a script's shared dependency environment changes.
+fn sync_shared_entrypoints(
+    environment: &PythonEnvironment,
+    shared: &Interpreter,
+) -> anyhow::Result<()> {
+    let manifest = environment.root().join(".uv-shared-entrypoints.json");
+    let previous: Option<SharedEntrypoints> = match fs_err::read(&manifest) {
+        Ok(bytes) => Some(serde_json::from_slice(&bytes)?),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err.into()),
+    };
+    let names = previous
+        .as_ref()
+        .map_or(&[][..], |previous| previous.names.as_slice());
+    for name in names {
+        if name.components().count() != 1 || name.file_name().is_none() {
+            bail!("Invalid shared entrypoint name: {}", name.display());
+        }
+    }
+    if previous
+        .as_ref()
+        .is_some_and(|previous| previous.source == shared.sys_prefix())
+        && names
+            .iter()
+            .all(|name| environment.scripts().join(name).is_file())
+    {
+        return Ok(());
+    }
+    for name in names {
+        match fs_err::remove_file(environment.scripts().join(name)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    let copied = SharedEntrypoints {
+        source: shared.sys_prefix().to_path_buf(),
+        names: copy_environment_entrypoints(shared, environment, true)?,
+    };
+    uv_fs::write_atomic_sync(manifest, serde_json::to_vec(&copied)?)?;
+    Ok(())
+}
+
 /// Create a copy of the entrypoint at `source` at `target`, if it has a Python shebang, replacing
 /// the previous Python executable with a new one.
 ///
-/// This is a no-op if the target already exists.
+/// Existing targets are retained unless replacement is requested.
 ///
 /// Note on Windows, the entrypoints do not use shebangs and require a rewrite of the trampoline.
 #[cfg(unix)]
@@ -2094,7 +2163,8 @@ fn copy_entrypoint(
     target: &Path,
     previous_executable: &Path,
     python_executable: &Path,
-) -> Result<(), CopyEntrypointError> {
+    overwrite: bool,
+) -> Result<bool, CopyEntrypointError> {
     use std::io::{Seek, Write};
     use std::os::unix::fs::PermissionsExt;
 
@@ -2108,7 +2178,7 @@ fn copy_entrypoint(
             "Skipping copy of entrypoint `{}`: file is too small to contain a shebang",
             source.user_display()
         );
-        return Ok(());
+        return Ok(false);
     }
 
     // Check if it starts with `#!` to avoid reading binary files and such into memory
@@ -2117,7 +2187,7 @@ fn copy_entrypoint(
             "Skipping copy of entrypoint `{}`: does not start with #!",
             source.user_display()
         );
-        return Ok(());
+        return Ok(false);
     }
 
     let mut contents = String::new();
@@ -2131,7 +2201,7 @@ fn copy_entrypoint(
                 "Skipping copy of entrypoint `{}`: is not valid UTF-8",
                 source.user_display()
             );
-            return Ok(());
+            return Ok(false);
         }
         Err(err) => return Err(err.into()),
     }
@@ -2159,11 +2229,18 @@ fn copy_entrypoint(
             "Skipping copy of entrypoint `{}`: does not start with expected shebang",
             source.user_display()
         );
-        return Ok(());
+        return Ok(false);
     };
 
     let contents = format!("#!{}\n{}", python_executable.display(), contents);
     let mode = fs_err::metadata(source)?.permissions().mode();
+    if overwrite {
+        match fs_err::remove_file(target) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
     let mut file = fs_err::OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -2173,7 +2250,7 @@ fn copy_entrypoint(
 
     trace!("Updated entrypoint at `{}`", target.user_display());
 
-    Ok(())
+    Ok(true)
 }
 
 /// Create a copy of the entrypoint at `source` at `target`, if it's a Python script launcher,
@@ -2184,11 +2261,12 @@ fn copy_entrypoint(
     target: &Path,
     _previous_executable: &Path,
     python_executable: &Path,
-) -> Result<(), CopyEntrypointError> {
+    overwrite: bool,
+) -> Result<bool, CopyEntrypointError> {
     use uv_trampoline_builder::Launcher;
 
     let Some(launcher) = Launcher::try_from_path(source)? else {
-        return Ok(());
+        return Ok(false);
     };
 
     let is_gui = launcher.python_path.ends_with("pythonw.exe");
@@ -2200,6 +2278,13 @@ fn copy_entrypoint(
     };
 
     let launcher = launcher.with_python_path(python_path);
+    if overwrite {
+        match fs_err::remove_file(target) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
     let mut file = fs_err::OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -2208,7 +2293,7 @@ fn copy_entrypoint(
 
     trace!("Updated entrypoint at `{}`", target.user_display());
 
-    Ok(())
+    Ok(true)
 }
 
 /// `uv run` was invoked recursively too many times.

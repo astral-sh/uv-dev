@@ -564,7 +564,7 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
         .arg("first.py"), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    [CACHE_DIR]/environments-v2/first-[HASH]
+    [CACHE_DIR]/environments-v2/shared-first-[HASH]
     [CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py
 
     ----- stderr -----
@@ -579,7 +579,7 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
         .arg("second.py"), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    [CACHE_DIR]/environments-v2/second-[HASH]
+    [CACHE_DIR]/environments-v2/shared-second-[HASH]
     [CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py
 
     ----- stderr -----
@@ -655,8 +655,8 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
         {
           "dependency_paths_are_identical": true,
           "environments_are_distinct": true,
-          "first_environment": "[CACHE_DIR]/environments-v2/first-[HASH]",
-          "second_environment": "[CACHE_DIR]/environments-v2/second-[HASH]",
+          "first_environment": "[CACHE_DIR]/environments-v2/shared-first-[HASH]",
+          "second_environment": "[CACHE_DIR]/environments-v2/shared-second-[HASH]",
           "shared_base": "[CACHE_DIR]/archive-v0/[HASH]",
           "shared_bases_are_identical": true,
           "shared_dependency": "[CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py"
@@ -8120,5 +8120,232 @@ fn run_centralized_environment_path_file() -> Result<()> {
     ----- stderr -----
     warning: Using incompatible environment (`project-cp3.12.[X]-[HASH]`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.11`)
     "#);
+    Ok(())
+}
+
+/// Enabling shared script environments cannot reuse packages installed in an ordinary script venv.
+#[test]
+fn run_pep723_shared_mode_replaces_normal_installations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "shared-script-transition"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        [packages.example.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["example==1.0.0"]
+        # ///
+        from importlib.metadata import version
+        import sys
+        print(version("example"))
+        print(sys.prefix)
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).arg("script.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    [CACHE_DIR]/environments-v2/script-[HASH]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    ");
+    script.write_str(
+        &fs_err::read_to_string(script.path())?.replace("example==1.0.0", "example==2.0.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).arg("script.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==2.0.0
+    ");
+    Ok(())
+}
+
+/// Shared dependency entrypoints run in the writable overlay and track changed dependencies.
+#[test]
+fn run_pep723_shared_entrypoints_follow_dependency_changes() -> Result<()> {
+    use std::collections::BTreeMap;
+    use uv_test::packse::generate_wheel_with_files;
+
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let cli = indoc! {r#"
+        def main():
+            from importlib.metadata import version
+            import overlay_value
+            import sys
+            print(version("shared-cli"), overlay_value.VALUE)
+            print(sys.prefix)
+    "#};
+    let (first_name, first) = generate_wheel_with_files(
+        &"shared-cli".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_cli/cli.py", cli),
+            (
+                "shared_cli-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nuv-shared-command = shared_cli.cli:main\nuv-shared-old = shared_cli.cli:main\n",
+            ),
+        ],
+    );
+    let (second_name, second) = generate_wheel_with_files(
+        &"shared-cli".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_cli/cli.py", cli),
+            (
+                "shared_cli-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nuv-shared-command = shared_cli.cli:main\n",
+            ),
+        ],
+    );
+    wheels.child(first_name).write_binary(&first)?;
+    wheels.child(second_name).write_binary(&second)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-cli==1.0.0"]
+        # ///
+        from pathlib import Path
+        import shutil
+        import subprocess
+        import sysconfig
+        Path(sysconfig.get_path("purelib"), "overlay_value.py").write_text("VALUE = 'overlay'\n")
+        subprocess.run(["uv-shared-command"], check=True)
+        print(shutil.which("uv-shared-old") is None)
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels"]).arg("script.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0 overlay
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+    False
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-cli==1.0.0
+    ");
+    script.write_str(
+        &fs_err::read_to_string(script.path())?.replace("shared-cli==1.0.0", "shared-cli==2.0.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels"]).arg("script.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0 overlay
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+    True
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-cli==2.0.0
+    ");
+    Ok(())
+}
+
+/// Immutable cache hits leave configuration untouched; legacy cache entries migrate atomically.
+#[test]
+fn run_cached_environment_configuration_is_stable() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_pyvenv_cfg_filters();
+    let scenario = toml::from_str(indoc! {r#"
+        name = "immutable-configuration"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        from pathlib import Path
+        import example
+        for parent in Path(example.__file__).parents:
+            configuration = parent / "pyvenv.cfg"
+            if configuration.is_file():
+                print(configuration)
+                break
+    "#})?;
+    let output = context
+        .run()
+        .args(["--with", "example==1.0.0"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("script.py")
+        .output()?
+        .assert()
+        .success();
+    let path = String::from_utf8(output.get_output().stdout.clone())?;
+    let path = Path::new(path.trim());
+    let contents = fs_err::read_to_string(path)?;
+    let original_time = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+    filetime::set_file_mtime(path, original_time)?;
+    context
+        .run()
+        .args(["--with", "example==1.0.0", "--offline"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("script.py")
+        .assert()
+        .success();
+    assert_eq!(
+        filetime::FileTime::from_last_modification_time(&fs_err::metadata(path)?),
+        original_time
+    );
+    assert_eq!(fs_err::read_to_string(path)?, contents);
+
+    fs_err::write(path, contents.replace("immutable = true\n", ""))?;
+    context
+        .run()
+        .args(["--with", "example==1.0.0", "--offline"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("script.py")
+        .assert()
+        .success();
+    assert_eq!(fs_err::read_to_string(path)?, contents);
     Ok(())
 }

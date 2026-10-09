@@ -37,6 +37,7 @@ use uv_lock_operations::{
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::{script_extra_build_requires, script_specification};
@@ -267,6 +268,7 @@ pub async fn sync(
         ),
         SyncTarget::Manifest(SyncManifest::Script(script)) => SyncEnvironment::Script(
             ScriptEnvironment::get_or_init(
+                ScriptEnvironmentMode::Isolated,
                 script.into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,

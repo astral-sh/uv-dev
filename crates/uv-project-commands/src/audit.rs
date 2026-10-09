@@ -20,6 +20,7 @@ use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonVersion};
 use uv_redacted::DisplaySafeUrl;
@@ -114,6 +115,7 @@ pub async fn audit(
     } else {
         Some(match target {
             LockTarget::Script(script) => ScriptInterpreter::discover(
+                ScriptEnvironmentMode::Isolated,
                 script.into(),
                 None,
                 &client_builder,
