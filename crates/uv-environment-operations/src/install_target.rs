@@ -850,15 +850,15 @@ impl<'lock> InstallTarget<'lock> {
                         if !self.includes_group(Some(root_package.name()), group_name, groups) {
                             continue;
                         }
+                        let requirements = root_package.dependency_requirements(
+                            None,
+                            Some(group_name),
+                            &modifiers,
+                        );
                         for dependency in dependencies {
                             if marker_env.is_some_and(|marker_env| {
-                                !root_package.dependency_applies_to_environment(
-                                    dependency,
-                                    marker_env,
-                                    None,
-                                    Some(group_name),
-                                    &modifiers,
-                                )
+                                let (marker, _) = dependency.activation(requirements.as_deref());
+                                !marker.evaluate(marker_env.markers(), &[])
                             }) {
                                 continue;
                             }
@@ -896,11 +896,11 @@ impl<'lock> InstallTarget<'lock> {
                         continue;
                     };
 
+                    let requirements = package.dependency_requirements(extra, None, &modifiers);
                     for dependency in dependencies {
                         if marker_env.is_some_and(|marker_env| {
-                            !package.dependency_applies_to_environment(
-                                dependency, marker_env, extra, None, &modifiers,
-                            )
+                            let (marker, _) = dependency.activation(requirements.as_deref());
+                            !marker.evaluate(marker_env.markers(), &[])
                         }) {
                             continue;
                         }

@@ -10044,6 +10044,69 @@ fn sync_ignores_inactive_extra_with_plain_dependency() -> Result<()> {
     Ok(())
 }
 
+/// Separate declarations can contribute the extras on one merged locked edge.
+#[test]
+fn sync_detects_conflict_through_merged_extra_declarations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[a]", "child[b]", "child[a,b]; sys_platform == '{inactive_platform}'"]
+
+        [tool.uv]
+        conflicts = [[{{ package = "project" }}, {{ package = "child" }}]]
+
+        [tool.uv.workspace]
+        members = ["child", "payload"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+        payload = {{ workspace = true }}
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["payload"]
+        b = ["payload"]
+    "#})?;
+    context
+        .temp_dir
+        .child("payload/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "payload"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    Ok(())
+}
+
 /// A platform-applicable dependency behind an activated extra must remain reachable.
 #[test]
 fn sync_detects_active_platform_conflict_behind_extra() -> Result<()> {

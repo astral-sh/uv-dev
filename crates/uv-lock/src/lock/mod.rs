@@ -7395,57 +7395,34 @@ impl Package {
         &self.dependency_groups
     }
 
-    /// Returns whether a resolved dependency applies using its effective declaration marker,
-    /// when metadata is available.
-    pub fn dependency_applies_to_environment(
+    /// Prepare effective declarations once for a dependency section, when metadata is available.
+    pub fn dependency_requirements(
         &self,
-        dependency: &Dependency,
-        marker_environment: &MarkerEnvironment,
         extra: Option<&ExtraName>,
         group: Option<&GroupName>,
         modifiers: &DependencyModifiers,
-    ) -> bool {
-        let requirements = group.map_or(Some(&self.metadata.requires_dist), |group| {
-            self.metadata.dependency_groups.get(group)
-        });
-        let Some(requirements) = requirements.filter(|requirements| !requirements.is_empty())
-        else {
-            return dependency
-                .complexified_marker
-                .pep508()
-                .evaluate(marker_environment, &[]);
-        };
-
+    ) -> Option<Vec<Requirement>> {
+        let requirements = group
+            .map_or(Some(&self.metadata.requires_dist), |group| {
+                self.metadata.dependency_groups.get(group)
+            })
+            .filter(|requirements| !requirements.is_empty())?;
         let context = match (group, extra) {
             (Some(group), _) => DependencyContext::Group(group),
             (None, Some(extra)) => DependencyContext::Extra(extra),
             (None, None) => DependencyContext::Production,
         };
-        let requirements = Lock::preprocess_requirements(
+        let mut requirements = Lock::preprocess_requirements(
             &self.id.name,
             self.id.version.as_ref(),
             &requirements.iter().cloned().collect::<Vec<_>>(),
             context,
             modifiers,
         );
-        let mut requirements = requirements.iter().filter(|requirement| {
-            requirement.name == *dependency.package_name()
-                && dependency
-                    .extra
-                    .iter()
-                    .all(|extra| requirement.extras.contains(extra))
-        });
-        let Some(requirement) = requirements.next() else {
-            return dependency
-                .complexified_marker
-                .pep508()
-                .evaluate(marker_environment, &[]);
-        };
-
-        let extras: &[ExtraName] = extra.map_or(&[], slice::from_ref);
-        requirement.marker.evaluate(marker_environment, extras)
-            || requirements
-                .any(|requirement| requirement.marker.evaluate(marker_environment, extras))
+        for requirement in &mut requirements {
+            requirement.marker = context.requirement_marker(requirement.marker);
+        }
+        Some(requirements)
     }
 
     /// Returns an [`InstallTarget`] view for filtering decisions.
@@ -9307,6 +9284,53 @@ impl Dependency {
     /// Returns the package name of this dependency.
     pub fn package_name(&self) -> &PackageName {
         &self.package_id.name
+    }
+
+    /// Return the conditions under which the effective declarations request this dependency.
+    pub fn activation(
+        &self,
+        requirements: Option<&[Requirement]>,
+    ) -> (MarkerTree, BTreeMap<ExtraName, MarkerTree>) {
+        let fallback = || {
+            let marker = self.complexified_marker.pep508();
+            (
+                marker,
+                self.extra
+                    .iter()
+                    .cloned()
+                    .map(|extra| (extra, marker))
+                    .collect(),
+            )
+        };
+        let Some(requirements) = requirements else {
+            return fallback();
+        };
+        let mut requirements = requirements
+            .iter()
+            .filter(|requirement| requirement.name == *self.package_name())
+            .peekable();
+        if requirements.peek().is_none() {
+            return fallback();
+        }
+        let mut marker = MarkerTree::FALSE;
+        let mut extras = BTreeMap::<ExtraName, MarkerTree>::new();
+        for requirement in requirements {
+            marker = marker.or(requirement.marker);
+            for extra in &requirement.extras {
+                extras
+                    .entry(extra.clone())
+                    .and_modify(|marker| *marker = marker.or(requirement.marker))
+                    .or_insert(requirement.marker);
+            }
+        }
+        // A merged edge may receive its extras from separate declarations.
+        for extra in &self.extra {
+            marker = marker.and(extras.get(extra).copied().unwrap_or(MarkerTree::FALSE));
+        }
+        for extra_marker in extras.values_mut() {
+            *extra_marker = extra_marker.and(marker);
+        }
+        (marker, extras)
     }
 
     /// Returns the extras specified on this dependency.
