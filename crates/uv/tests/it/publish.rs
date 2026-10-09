@@ -453,7 +453,11 @@ fn artifact_registry_no_credentials() {
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to https://us-central1-python.pkg.dev/project/repository/
-    error: Failed to retrieve Google Application Default Credentials
+    Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `https://us-central1-python.pkg.dev/project/repository/`
+      cause: Failed to send POST request
+      cause: Failed to retrieve Google Application Default Credentials
       cause: failed to read file
       cause: [OS ERROR 2]
     "#
@@ -463,7 +467,7 @@ fn artifact_registry_no_credentials() {
 /// Malformed explicit ADC reports its parse failure instead of falling through to missing credentials.
 #[test]
 fn artifact_registry_malformed_credentials() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
     context
         .temp_dir
         .child("credentials.json")
@@ -476,7 +480,11 @@ fn artifact_registry_malformed_credentials() -> anyhow::Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to https://us-central1-python.pkg.dev/project/repository/
-    error: Failed to retrieve Google Application Default Credentials
+    Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `https://us-central1-python.pkg.dev/project/repository/`
+      cause: Failed to send POST request
+      cause: Failed to retrieve Google Application Default Credentials
       cause: failed to parse credential file
       cause: key must be a string at line 1 column 2
     "#);

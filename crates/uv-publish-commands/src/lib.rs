@@ -9,9 +9,7 @@ use anyhow::{Context, Result, bail};
 use console::Term;
 use owo_colors::OwoColorize;
 use tracing::{debug, info, trace};
-use uv_auth::{
-    ArtifactRegistryProvider, Credentials, CredentialsPrompt, CredentialsPromptError,
-};
+use uv_auth::{ArtifactRegistryProvider, Credentials, CredentialsPrompt, CredentialsPromptError};
 use uv_cache::Cache;
 use uv_client::{
     AuthIntegration, BaseClient, BaseClientBuilder, RedirectPolicy, RegistryClientBuilder,

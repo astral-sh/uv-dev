@@ -310,35 +310,6 @@ impl AuthMiddleware {
     }
 
     /// Global authentication cache for a uv invocation to share credentials across uv clients.
-    /// Resolve credentials using the request authentication order and prepare them for reuse.
-    pub async fn cache_credentials_for(&self, url: &DisplaySafeUrl) -> Result<bool, Error> {
-        let policy = self.indexes.auth_policy_for(url);
-        if matches!(policy, AuthPolicy::Never) {
-            return Ok(false);
-        }
-        let cached = self
-            .cache()
-            .get_url(url, &Username::none())
-            .or_else(|| self.cache().get_realm(Realm::from(url), Username::none()));
-        if cached
-            .as_ref()
-            .is_some_and(|credentials| credentials.is_authenticated())
-        {
-            return Ok(true);
-        }
-        let Some(credentials) = self
-            .fetch_credentials(cached.as_deref(), url, self.indexes.index_for(url), policy)
-            .await?
-        else {
-            return Ok(false);
-        };
-        if !credentials.is_authenticated() {
-            return Ok(false);
-        }
-        self.cache().insert(url, credentials);
-        Ok(true)
-    }
-
     fn cache(&self) -> &CredentialsCache {
         &self.cache
     }
@@ -398,9 +369,11 @@ impl Middleware for AuthMiddleware {
         let auth_policy = self.indexes.auth_policy_for(request.url());
         trace!("Handling request for `{url}` with authentication policy {auth_policy}");
 
-        let credentials: Option<Arc<Authentication>> = if matches!(auth_policy, AuthPolicy::Never) {
-            None
-        } else {
+        if matches!(auth_policy, AuthPolicy::Never) {
+            return next.run(request, extensions).await;
+        }
+
+        let credentials: Option<Arc<Authentication>> = {
             if let Some(request_credentials) = request_credentials {
                 return self
                     .complete_request_with_request_credentials(
@@ -1832,123 +1805,6 @@ mod tests {
     }
 
     #[test(tokio::test)]
-    async fn test_artifact_registry_credentials_reuse_publish_probe() -> anyhow::Result<()> {
-        let url = Url::parse("https://us-central1-python.pkg.dev/project/repository/")?;
-        let provider = ArtifactRegistryProvider::with_signer(
-            reqsign::google::default_signer("artifactregistry.googleapis.com")
-                .with_credential_provider(reqsign::google::TokenCredentialProvider::new(
-                    "test-token",
-                )),
-        );
-        let middleware = AuthMiddleware::new()
-            .with_netrc(None)
-            .with_text_store(None)
-            .with_cache(CredentialsCache::new())
-            .with_artifact_registry_provider(provider.clone());
-        assert!(
-            middleware
-                .cache_credentials_for(DisplaySafeUrl::ref_cast(&url))
-                .await?
-        );
-        provider.cache_missing_credentials().await;
-        let authentication = middleware
-            .cache()
-            .get_realm(Realm::from(&url), Username::none())
-            .ok_or_else(|| anyhow!("expected prepared provider authentication"))?;
-        let request = authentication
-            .authenticate(Request::new(Method::GET, url.clone()))
-            .await?;
-        assert_eq!(
-            Credentials::from_request(&request)?,
-            Some(Credentials::basic(
-                Some("oauth2accesstoken".to_owned()),
-                Some("test-token".to_owned()),
-            ))
-        );
-        assert!(matches!(
-            authentication
-                .authenticate(Request::new(Method::GET, url))
-                .await,
-            Err(AuthenticationError::ArtifactRegistry)
-        ));
-        Ok(())
-    }
-
-    #[test(tokio::test)]
-    async fn test_artifact_registry_publish_probe_prefers_netrc() -> Result<(), Error> {
-        let url = Url::parse("https://us-central1-python.pkg.dev/project/index/simple")?;
-        let mut netrc_file = NamedTempFile::new()?;
-        writeln!(
-            netrc_file,
-            "machine us-central1-python.pkg.dev login user password netrc-token"
-        )?;
-        let middleware = AuthMiddleware::new()
-            .with_text_store(None)
-            .with_cache(CredentialsCache::new())
-            .with_netrc(Netrc::from_file(netrc_file.path()).ok())
-            .with_artifact_registry_provider(ArtifactRegistryProvider::with_signer(
-                reqsign::google::default_signer("artifactregistry.googleapis.com")
-                    .with_credential_provider(reqsign::google::TokenCredentialProvider::new(
-                        "google-token",
-                    )),
-            ));
-
-        assert!(
-            middleware
-                .cache_credentials_for(DisplaySafeUrl::ref_cast(&url))
-                .await?
-        );
-        let authentication = middleware
-            .cache()
-            .get_realm(Realm::from(&url), Username::none())
-            .ok_or_else(|| std::io::Error::other("expected prepared netrc credentials"))?;
-        let request = authentication
-            .authenticate(Request::new(Method::GET, url))
-            .await?;
-
-        assert_eq!(
-            Credentials::from_request(&request)?,
-            Some(Credentials::basic(
-                Some("user".to_string()),
-                Some("netrc-token".to_string()),
-            ))
-        );
-
-        Ok(())
-    }
-
-    #[test(tokio::test)]
-    async fn test_artifact_registry_publish_probe_prefers_text_store() -> anyhow::Result<()> {
-        let url = DisplaySafeUrl::parse("https://us-central1-python.pkg.dev/project/repository/")?;
-        let mut store = TextCredentialStore::default();
-        let credentials = Credentials::basic(
-            Some("stored-user".to_owned()),
-            Some("stored-password".to_owned()),
-        );
-        store.insert(crate::Service::try_from(url.clone())?, credentials.clone());
-        let middleware = AuthMiddleware::new()
-            .with_netrc(None)
-            .with_cache(CredentialsCache::new())
-            .with_text_store(Some(store))
-            .with_artifact_registry_provider(ArtifactRegistryProvider::with_signer(
-                reqsign::google::default_signer("artifactregistry.googleapis.com")
-                    .with_credential_provider(reqsign::google::TokenCredentialProvider::new(
-                        "google-token",
-                    )),
-            ));
-        assert!(middleware.cache_credentials_for(&url).await?);
-        let authentication = middleware
-            .cache()
-            .get_realm(Realm::from(&url), Username::none())
-            .ok_or_else(|| anyhow!("expected prepared stored credentials"))?;
-        let request = authentication
-            .authenticate(Request::new(Method::GET, Url::parse(url.as_str())?))
-            .await?;
-        assert_eq!(Credentials::from_request(&request)?, Some(credentials));
-        Ok(())
-    }
-
-    #[test(tokio::test)]
     async fn test_artifact_registry_credentials_retry_missing_credentials() -> Result<(), Error> {
         let url = Url::parse("https://us-central1-python.pkg.dev/project/index/simple")?;
         let provider = ArtifactRegistryProvider::with_signer(
@@ -3053,6 +2909,34 @@ mod tests {
             "Requests should succeed if unauthenticated requests can succeed"
         );
 
+        Ok(())
+    }
+
+    /// Upload clients skip credential discovery when their index explicitly disables authentication.
+    #[test(tokio::test)]
+    async fn test_auth_policy_never_for_authenticated_upload_client() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(|request: &wiremock::Request| !request.headers.contains_key("authorization"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let url = Url::parse(&server.uri())?;
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_only_authenticated(true)
+                    .with_indexes(indexes_for(&url, AuthPolicy::Never)),
+            )
+            .build();
+        assert_eq!(
+            client.post(url).body("distribution").send().await?.status(),
+            201
+        );
         Ok(())
     }
 

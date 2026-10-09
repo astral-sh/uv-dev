@@ -461,7 +461,7 @@ impl<'a> BaseClientBuilder<'a> {
     }
 
     /// Construct authentication middleware with this builder's shared cache and credential policy.
-    pub fn auth_middleware(&self) -> AuthMiddleware {
+    fn auth_middleware(&self) -> AuthMiddleware {
         AuthMiddleware::new()
             .with_cache_arc(self.credentials_cache.clone())
             .with_indexes(self.indexes.clone())
