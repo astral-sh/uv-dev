@@ -42852,6 +42852,13 @@ fn lock_exclude_newer_index_legacy_global_cutoff() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache")
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-03-26T00:00:00Z"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
     // A new per-index cutoff still rejects the untimestamped legacy artifacts.
     pyproject.write_str(&format!(
         r#"{}

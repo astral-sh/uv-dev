@@ -453,7 +453,7 @@ impl ValidatedLock {
             }
             SatisfiesResult::ExcludedNewerArtifact(name, version, timestamp) => {
                 debug!(
-                    "Resolving despite existing lockfile due to an excluded artifact: `{name}` `{version}` is newer than `{timestamp}`"
+                    "Resolving despite existing lockfile: no locked artifact for `{name}` `{version}` satisfies the effective cutoff `{timestamp}`"
                 );
                 Ok(Self::Preferable(lock))
             }
