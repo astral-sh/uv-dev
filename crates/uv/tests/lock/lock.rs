@@ -42758,14 +42758,14 @@ fn lock_trailing_slash_find_links() -> Result<()> {
 
     // Re-run with `--locked`
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-exit_code: 1 (failure)
------ stderr -----
-Ignoring existing lockfile due to change in index configuration
-Resolved 2 packages in [TIME]
-error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-hint: To update the lockfile, run `uv lock`.
-");
+    hint: To update the lockfile, run `uv lock`.
+    ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -47000,66 +47000,66 @@ fn lock_resolution_inputs_constraint_markers() -> Result<()> {
 
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
-version = 1
-revision = 5
-requires-python = ">=3.12"
-resolution-markers = [
-    "sys_platform == 'linux'",
-    "sys_platform != 'linux'",
-]
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "sys_platform == 'linux'",
+            "sys_platform != 'linux'",
+        ]
 
-[options]
-exclude-newer = "2024-03-25T00:00:00Z"
-indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }]
 
-[manifest]
-constraints = [
-    { name = "b", marker = "sys_platform != 'linux'", specifier = ">=2" },
-    { name = "b", marker = "sys_platform == 'linux'", specifier = "<2" },
-]
+        [manifest]
+        constraints = [
+            { name = "b", marker = "sys_platform != 'linux'", specifier = ">=2" },
+            { name = "b", marker = "sys_platform == 'linux'", specifier = "<2" },
+        ]
 
-[[package]]
-name = "a"
-version = "1.0.0"
-source = { registry = "http://[LOCALHOST]/simple/" }
-dependencies = [
-    { name = "b", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
-]
-wheels = [
-    { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:a-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
-]
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "b", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:a-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
 
-[[package]]
-name = "b"
-version = "1.0.0"
-source = { registry = "http://[LOCALHOST]/simple/" }
-resolution-markers = [
-    "sys_platform == 'linux'",
-]
-wheels = [
-    { url = "http://[LOCALHOST]/files/b-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:b-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
-]
+        [[package]]
+        name = "b"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform == 'linux'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/b-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:b-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
 
-[[package]]
-name = "b"
-version = "2.0.0"
-source = { registry = "http://[LOCALHOST]/simple/" }
-resolution-markers = [
-    "sys_platform != 'linux'",
-]
-wheels = [
-    { url = "http://[LOCALHOST]/files/b-2.0.0-py3-none-any.whl", hash = "sha256:[SHA256:b-2.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
-]
+        [[package]]
+        name = "b"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform != 'linux'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/b-2.0.0-py3-none-any.whl", hash = "sha256:[SHA256:b-2.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
 
-[[package]]
-name = "project"
-version = "1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "a", marker = "sys_platform == 'linux'" },
-    { name = "b", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform != 'linux'" },
-]
-"#);
+        [[package]]
+        name = "project"
+        version = "1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a", marker = "sys_platform == 'linux'" },
+            { name = "b", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform != 'linux'" },
+        ]
+        "#);
     });
 
     uv_snapshot!(context.filters(), context.lock()
