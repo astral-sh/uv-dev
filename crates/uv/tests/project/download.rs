@@ -1191,6 +1191,58 @@ async fn download_no_store() -> Result<()> {
     Ok(())
 }
 
+/// Revalidation cannot promise offline reuse after the server withdraws cacheability.
+#[tokio::test]
+async fn download_revalidation_no_store() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original")?;
+    let hash = digest(&bytes);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_locked_wheel(&context, &format!("url = \"{url}\""), &url, &hash)?;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=0")
+                .insert_header("etag", "\"original\"")
+                .set_body_bytes(bytes),
+        )
+        .with_priority(2)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(header("if-none-match", "\"original\""))
+        .respond_with(
+            ResponseTemplate::new(304)
+                .insert_header("cache-control", "no-store")
+                .insert_header("etag", "\"original\""),
+        )
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+      cause: Response for http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl does not permit caching
+    ");
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+    ");
+    server.verify().await;
+    Ok(())
+}
+
 /// Local archives use timestamped revision pointers, not HTTP policies.
 #[tokio::test]
 async fn download_local_revision() -> Result<()> {
