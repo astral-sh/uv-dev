@@ -536,12 +536,11 @@ async fn determine_requires_python(
                     u64::from(*minor),
                 ]));
 
-                let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
+                let python_pin = match pin_python {
+                    InitPythonPin::Pin => Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         *major, *minor, *variant,
-                    )))
-                } else {
-                    None
+                    ))),
+                    InitPythonPin::DoNotPin => None,
                 };
 
                 (requires_python, python_pin)
@@ -558,12 +557,11 @@ async fn determine_requires_python(
                     u64::from(*patch),
                 ]));
 
-                let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinorPatch(
-                        *major, *minor, *patch, *variant,
-                    )))
-                } else {
-                    None
+                let python_pin = match pin_python {
+                    InitPythonPin::Pin => Some(PythonRequest::Version(
+                        VersionRequest::MajorMinorPatch(*major, *minor, *patch, *variant),
+                    )),
+                    InitPythonPin::DoNotPin => None,
                 };
 
                 (requires_python, python_pin)
@@ -571,29 +569,30 @@ async fn determine_requires_python(
             python_request @ PythonRequest::Version(VersionRequest::Range(specifiers, variant)) => {
                 let requires_python = RequiresPython::from_specifiers(specifiers.clone());
 
-                let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
-                    let interpreter = PythonInstallation::find_or_download(
-                        Some(python_request),
-                        EnvironmentPreference::OnlySystem,
-                        python_preference,
-                        python_arch,
-                        python_downloads,
-                        client_builder,
-                        cache,
-                        Some(reporter),
-                        install_mirrors.mirrors(),
-                        install_mirrors.python_downloads_json_url.as_deref(),
-                    )
-                    .await?
-                    .into_interpreter();
+                let python_pin = match pin_python {
+                    InitPythonPin::Pin => {
+                        let interpreter = PythonInstallation::find_or_download(
+                            Some(python_request),
+                            EnvironmentPreference::OnlySystem,
+                            python_preference,
+                            python_arch,
+                            python_downloads,
+                            client_builder,
+                            cache,
+                            Some(reporter),
+                            install_mirrors.mirrors(),
+                            install_mirrors.python_downloads_json_url.as_deref(),
+                        )
+                        .await?
+                        .into_interpreter();
 
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                        interpreter.python_major(),
-                        interpreter.python_minor(),
-                        *variant,
-                    )))
-                } else {
-                    None
+                        Some(PythonRequest::Version(VersionRequest::MajorMinor(
+                            interpreter.python_major(),
+                            interpreter.python_minor(),
+                            *variant,
+                        )))
+                    }
+                    InitPythonPin::DoNotPin => None,
                 };
 
                 (requires_python, python_pin)
@@ -617,14 +616,13 @@ async fn determine_requires_python(
                 let requires_python =
                     RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
-                let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
+                let python_pin = match pin_python {
+                    InitPythonPin::Pin => Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         interpreter.python_major(),
                         interpreter.python_minor(),
                         PythonVariant::Default,
-                    )))
-                } else {
-                    None
+                    ))),
+                    InitPythonPin::DoNotPin => None,
                 };
 
                 (requires_python, python_pin)
@@ -642,14 +640,13 @@ async fn determine_requires_python(
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
         // Pin to the minor version.
-        let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
+        let python_pin = match pin_python {
+            InitPythonPin::Pin => Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
                 interpreter.python_minor(),
                 PythonVariant::Default,
-            )))
-        } else {
-            None
+            ))),
+            InitPythonPin::DoNotPin => None,
         };
 
         debug!(
@@ -668,29 +665,30 @@ async fn determine_requires_python(
             .unwrap_or(PythonRequest::Default);
 
         // Pin to the minor version.
-        let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
-            let interpreter = PythonInstallation::find_or_download(
-                Some(&python_request),
-                EnvironmentPreference::OnlySystem,
-                python_preference,
-                python_arch,
-                python_downloads,
-                client_builder,
-                cache,
-                Some(reporter),
-                install_mirrors.mirrors(),
-                install_mirrors.python_downloads_json_url.as_deref(),
-            )
-            .await?
-            .into_interpreter();
+        let python_pin = match pin_python {
+            InitPythonPin::Pin => {
+                let interpreter = PythonInstallation::find_or_download(
+                    Some(&python_request),
+                    EnvironmentPreference::OnlySystem,
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    client_builder,
+                    cache,
+                    Some(reporter),
+                    install_mirrors.mirrors(),
+                    install_mirrors.python_downloads_json_url.as_deref(),
+                )
+                .await?
+                .into_interpreter();
 
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                interpreter.python_major(),
-                interpreter.python_minor(),
-                PythonVariant::Default,
-            )))
-        } else {
-            None
+                Some(PythonRequest::Version(VersionRequest::MajorMinor(
+                    interpreter.python_major(),
+                    interpreter.python_minor(),
+                    PythonVariant::Default,
+                )))
+            }
+            InitPythonPin::DoNotPin => None,
         };
 
         debug!("Using Python version `{requires_python}` from project workspace");
@@ -717,14 +715,13 @@ async fn determine_requires_python(
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
         // Pin to the minor version.
-        let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
+        let python_pin = match pin_python {
+            InitPythonPin::Pin => Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
                 interpreter.python_minor(),
                 PythonVariant::Default,
-            )))
-        } else {
-            None
+            ))),
+            InitPythonPin::DoNotPin => None,
         };
 
         debug!("Using Python version `{requires_python}` from default interpreter");
