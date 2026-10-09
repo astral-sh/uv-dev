@@ -1061,6 +1061,16 @@ fn explicit_roots_rejects_unresolved_member_extras() -> Result<()> {
         .assert()
         .success();
     uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--package", "shared", "--only-dev", "--extra", "feature",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--only-dev", "--extra", "feature", "--no-header",
+    ]), @"exit_code: 0 (success)");
+    uv_snapshot!(context.filters(), context.sync().args([
         "--frozen", "--package", "shared", "--extra", "feature",
     ]), @"
     exit_code: 2 (failure)
@@ -1089,6 +1099,16 @@ fn explicit_roots_rejects_unresolved_member_extras() -> Result<()> {
         ])
         .assert()
         .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--package", "shared", "--only-dev", "--all-extras",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--only-dev", "--all-extras", "--no-header",
+    ]), @"exit_code: 0 (success)");
     uv_snapshot!(context.filters(), context.sync().args([
         "--frozen", "--package", "shared", "--all-extras",
     ]), @"
@@ -3286,5 +3306,74 @@ fn explicit_roots_project_conflicts_follow_conditional_extras() -> Result<()> {
     Would use project environment at: .venv
     error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
     ");
+    Ok(())
+}
+
+#[test]
+fn explicit_roots_excluded_by_supported_environments() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "explicit-root-supported-environments"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.leaf.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        environments = ["python_version >= '3.13'"]
+        [tool.uv.workspace]
+        members = ["root-a", "root-b"]
+        roots = ["root-a", "root-b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = "==3.13.*"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--package", "root-b"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf==1.0.0
+    ");
+    fs_err::remove_dir_all(context.cache_dir.path())?;
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
     Ok(())
 }

@@ -17,7 +17,7 @@ use uv_distribution_types::{
     Index, IndexLocations, MinimumLibcVersion, NameRequirementSpecification, Requirement,
     RequiresPython,
 };
-use uv_lock::Lock;
+use uv_lock::{Lock, implicit_constraints_marker};
 use uv_normalize::{GroupName, PackageName};
 use uv_pep508::{MarkerTree, RequirementOrigin};
 use uv_pypi_types::{Conflicts, SupportedEnvironments, VerbatimParsedUrl};
@@ -394,11 +394,23 @@ impl<'lock> LockTarget<'lock> {
 
         // Check if the discovered workspace members match the locked workspace members.
         if let Self::Workspace(workspace) = self {
+            let root_markers = self.resolution_root_markers();
+            let environment = implicit_constraints_marker(
+                existing.requires_python().to_marker_tree(),
+                existing.supported_environments(),
+            );
             for package_name in workspace.packages().keys().filter(|name| {
                 workspace
                     .resolution_roots()
                     .is_none_or(|roots| roots.contains(*name))
             }) {
+                if root_markers
+                    .as_ref()
+                    .and_then(|markers| markers.get(package_name))
+                    .is_some_and(|marker| marker.is_disjoint(environment))
+                {
+                    continue;
+                }
                 existing
                     .find_by_name(package_name)
                     .map_err(|_| LockError::LockWorkspaceMismatch(package_name.clone(), source))?
