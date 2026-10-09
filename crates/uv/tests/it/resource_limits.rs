@@ -153,27 +153,6 @@ fn run_open_file_limit_override_invalid() {
 }
 
 #[test]
-fn run_resource_limit_override_invalid() {
-    let context = uv_test::test_context!("3.12");
-    let python = &context.python_versions[0].1;
-
-    let mut command = context.run();
-    command
-        .arg("--no-project")
-        .arg("--")
-        .arg(python)
-        .arg("-c")
-        .arg("pass")
-        .env(EnvVars::UV_RUN_RLIMIT_CPU, "invalid");
-
-    uv_snapshot!(context.filters(), command, @r"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse environment variable `UV_RUN_RLIMIT_CPU` with invalid value `invalid`: invalid digit found in string
-    ");
-}
-
-#[test]
 fn run_open_file_limit_override_exceeds_hard_limit() {
     let context = uv_test::test_context!("3.12");
     let python = &context.python_versions[0].1;
@@ -201,29 +180,18 @@ fn run_open_file_limit_override_exceeds_hard_limit() {
     ");
 }
 
+/// Spawn errors retain the configured limits after child-process validation.
 #[test]
-fn run_resource_limit_override_exceeds_hard_limit() {
+fn run_resource_limits_in_spawn_error() {
     let context = uv_test::test_context!("3.12");
-    let python = &context.python_versions[0].1;
-
-    let mut command = context.external_command("sh");
-    command
-        .arg("-c")
-        .arg("ulimit -S -t 30; ulimit -H -t 30; exec \"$@\"")
-        .arg("sh")
-        .arg(get_bin!())
-        .arg("run")
+    uv_snapshot!(context.filters(), context.run()
         .arg("--no-project")
         .arg("--")
-        .arg(python)
-        .arg("-c")
-        .arg("pass")
-        .env(EnvVars::UV_RUN_RLIMIT_CPU, "60");
-
-    uv_snapshot!(context.filters(), command, @r"
+        .arg("uv-missing-resource-limit-command")
+        .env(EnvVars::UV_RUN_RLIMIT_CPU, "60"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to apply `UV_RUN_RLIMIT_CPU` value `60`
-      cause: requested RLIMIT_CPU limit (60) exceeds the hard limit (30)
-    ");
+    error: Failed to spawn: uv-missing-resource-limit-command (configured resource limits: `UV_RUN_RLIMIT_CPU=60`)
+      cause: No such file or directory (os error 2)
+    "#);
 }

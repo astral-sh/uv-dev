@@ -1264,7 +1264,7 @@ pub async fn run(
     #[cfg(unix)]
     if !run_resource_limits.is_empty() {
         let resource_limits = run_resource_limits
-            .into_iter()
+            .iter()
             .map(|limit| {
                 limit.prepare().with_context(|| {
                     format!(
@@ -1291,9 +1291,20 @@ pub async fn run(
     // Spawn and wait for completion
     // Standard input, output, and error streams are all inherited
     // TODO(zanieb): Throw a nicer error message if the command is not found
-    let handle = process
-        .spawn()
-        .with_context(|| format!("Failed to spawn: {}", command.display_executable()))?;
+    let handle = process.spawn().with_context(|| {
+        #[cfg(unix)]
+        if !run_resource_limits.is_empty() {
+            let limits = run_resource_limits
+                .iter()
+                .map(|limit| format!("`{}={}`", limit.environment_variable(), limit.value()))
+                .join(", ");
+            return format!(
+                "Failed to spawn: {} (configured resource limits: {limits})",
+                command.display_executable()
+            );
+        }
+        format!("Failed to spawn: {}", command.display_executable())
+    })?;
 
     run_to_completion(handle).await
 }
