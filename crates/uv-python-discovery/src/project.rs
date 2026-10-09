@@ -293,9 +293,9 @@ fn warn_tilde_requires_python(requires_python: &RequiresPythonSources) {
             if specifier.has_patch() || !warned.insert((source.clone(), specifier.to_string())) {
                 return None;
             }
-            Some((source.clone(), specifiers.clone()))
+            Some((source, specifier))
         })
-        .collect();
+        .collect::<Vec<_>>();
     drop(warned);
     if let Some(warning) = format_tilde_requires_python_warning(&unreported) {
         warn_user_once!("{warning}");
@@ -303,20 +303,10 @@ fn warn_tilde_requires_python(requires_python: &RequiresPythonSources) {
 }
 
 /// Consolidate ambiguous tilde specifiers without changing the single-source warning.
-fn format_tilde_requires_python_warning(requires_python: &RequiresPythonSources) -> Option<String> {
-    let mut sources = Vec::new();
-    for (source, specifiers) in requires_python {
-        if let [spec] = &specifiers[..] {
-            if let Some(spec) = TildeVersionSpecifier::from_specifier_ref(spec) {
-                if spec.has_patch() {
-                    continue;
-                }
-                sources.push((source.to_string(), spec));
-            }
-        }
-    }
-
-    match sources.as_slice() {
+fn format_tilde_requires_python_warning(
+    sources: &[(&RequiresPythonDeclaration, TildeVersionSpecifier<'_>)],
+) -> Option<String> {
+    match sources {
         [] => None,
         [(source, spec)] => {
             let (lower, upper) = spec.bounding_specifiers();
