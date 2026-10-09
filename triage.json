@@ -7,7 +7,15 @@
         "title": "\"uv run\" runs resolve too much",
         "url": "https://github.com/astral-sh/uv/issues/7538",
         "state": "closed",
-        "reason": "Closest historical symptom: a shebang-driven script repeatedly displayed the same resolver message. Maintainer logs demonstrated resolution from cached responses, and comments explained HTTP cache expiry. That report concerns slow execution in uv 0.4/0.5; this report asks whether the message proves network access."
+        "reason": "Reports the same shebang-script progress message and slower runs after a pause. Maintainers explained cached resolution and PyPI's metadata expiration. This describes older script behavior; persistent local script environments subsequently changed the execution path."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11347,
+        "title": "Use a stable directory for (local) script virtual environments",
+        "url": "https://github.com/astral-sh/uv/pull/11347",
+        "state": "merged",
+        "reason": "Merged February 12, 2025; replaced resolution-keyed environments for local scripts with persistent environments and update_environment. The reported 0.12.21 source includes the resulting shortcut when installed requirements are satisfied, so historical always-resolve explanations cannot be applied unchanged."
       },
       {
         "kind": "issue",
@@ -15,7 +23,15 @@
         "title": "Feat: Create a cached lock file for `uv run` with scripts",
         "url": "https://github.com/astral-sh/uv/issues/9688",
         "state": "closed",
-        "reason": "Follow-up to astral-sh/uv#7538 requesting avoidance of repeated resolution and network dependence. Comments discuss --offline and script locking. It was closed by astral-sh/uv#10136; the new report does not establish that locked dependency reuse failed."
+        "reason": "Follow-up to astral-sh/uv#7538 explicitly requested avoiding repeated resolution and network dependence. Closed by script-lockfile support in astral-sh/uv#10136. The new report asks for clarification and does not establish failure of that implemented capability."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10135,
+        "title": "Add support for locking PEP 723 scripts",
+        "url": "https://github.com/astral-sh/uv/pull/10135",
+        "state": "merged",
+        "reason": "Merged January 8, 2025; implemented uv lock --script and closed astral-sh/uv#6318. Establishes the available option for recording script dependency versions; locking alone is not an offline guarantee."
       },
       {
         "kind": "pull_request",
@@ -23,21 +39,21 @@
         "title": "Respect PEP 723 script lockfiles in uv run",
         "url": "https://github.com/astral-sh/uv/pull/10136",
         "state": "merged",
-        "reason": "Merged on 2025-01-08, this makes uv run reuse existing script lockfiles and closes astral-sh/uv#9688. It supports recommending explicit script locking and predates uv 0.12.21. No lockfile or regression is reported here."
+        "reason": "Merged January 8, 2025; made uv run reuse an existing script lockfile and closed astral-sh/uv#9688. Supports the proposed script-locking guidance and predates the reported version."
       },
       {
-        "kind": "issue",
-        "number": 13863,
-        "title": "Cached venv in script mode",
-        "url": "https://github.com/astral-sh/uv/issues/13863",
-        "state": "closed",
-        "reason": "Related support discussion about executable scripts appearing to recreate environments. A maintainer confirms environment caching and recommends verbose output to observe reuse. Environment reuse differs from HTTP metadata caching, so this does not establish whether the reporter's invocation makes network requests."
+        "kind": "pull_request",
+        "number": 6091,
+        "title": "Validate lockfile (rather than re-resolve) in `uv lock`",
+        "url": "https://github.com/astral-sh/uv/pull/6091",
+        "state": "merged",
+        "reason": "Project-side background: replaced a second resolution with validation of an existing lockfile. Explains why project lock checks need not resolve dependencies afresh. Its original lockfile-instability bug, astral-sh/uv#6063, is not reported here."
       }
     ],
-    "search_scope": "Separated the recurring progress message from the question about Internet access, with uv run --script, the shebang, and uv 0.12.21 as context. Used authenticated gh searches across open and closed issues for the exact message, script/internet/network/every, and uv run/offline; then searched conceptually for repeated resolution, cached environments, HTTP caching, and PEP 723 locking without platform or version restrictions. Searched historical fixes and open, closed, and merged PRs. PR keyword searches returned no matches and PR-filtered API searches returned issue-only results, limiting coverage; supplemented these with issue timelines, direct PR inspection, and screening 100 recently updated PRs across all states. Followed astral-sh/uv#7538 through astral-sh/uv#9688 and astral-sh/uv#6318, inspecting astral-sh/uv#10123, astral-sh/uv#10135, and astral-sh/uv#10136. Ruled out astral-sh/uv#12234 because it reports confirmed Git traffic despite --offline; neither condition appears here. astral-sh/uv#15454 and astral-sh/uv#10380 request cache-first/offline-fallback capabilities, while astral-sh/uv#21066 and astral-sh/uv#22360 concern interpreter selection or caching. Also checked source at the reported release commit and current documentation."
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs. Separately searched the script message/shebang and project.scripts questions using Resolving dependencies, script/internet/network, uv run/every time, project.scripts/offline/network, then cache, re-resolve, lockfile, offline fallback, area:cache, area:scripts, and version 0.12.21. Supplemented empty PR search responses with an all-state PR listing (limit 20,000), filtering script environments, caching, resolution, locking, offline, and no-sync titles. Inspected candidate bodies, comments, review comments, and linked issue/PR chains; checked source at 0.12.21. Ruled out astral-sh/uv#12903 (pinned uv tool run), astral-sh/uv#15454 and astral-sh/uv#10380 (requests for cache-first/offline fallback), and astral-sh/uv#15156 (case-sensitive imports on a case-insensitive filesystem). astral-sh/uv#10123 was an unmerged draft superseded by the listed locking PRs."
   },
   "type": "question",
-  "type_reason": "The reporter asks what a progress message means, without reporting observed network requests, failure, or a requested behavior change. Source at uv 0.12.21 confirms that the message identifies resolver activity and that satisfied script environments can be reused. Resolution can also use cached metadata. No incorrect behavior or regression is established. The historical discussions address performance and locking capabilities rather than the same demonstrated defect or request.",
-  "summary": "astral-sh/uv#7538 and astral-sh/uv#9688 discuss repeated resolution and caching; astral-sh/uv#10136 implements script lockfile reuse; astral-sh/uv#13863 confirms environment caching. The progress message alone does not establish network access. The requested handoff README could not be updated because /home/runner/work/_temp/issue-context/README.md is on a read-only filesystem. No checkout or GitHub changes were made.",
-  "draft_response": "Not necessarily. `Resolving dependencies` is a resolver progress message; it does not mean a network request occurred. uv can use cached metadata and reuse an existing script environment. When needed metadata is missing or its HTTP cache entry has expired, uv may contact the package index.\n\nTo disable uv's network access, use `uv run --offline --script example.py`, or add `--offline` to your shebang. Python and the required dependencies/data must already be available locally. This does not restrict network access by the script itself.\n\nFor reproducible dependencies, run `uv lock --script example.py`; subsequent runs reuse `example.py.lock`. You can inspect cache use and requests with `uv run -v --script example.py`. To investigate why your script resolves on every run, we'd need its dependency metadata, relevant uv settings, and whether it has a lockfile."
+  "type_reason": "The report asks whether a progress message implies Internet access; it establishes neither actual network requests nor incorrect dependency behavior. Source at 0.12.21 shows cached script-environment reuse and an early return when requirements are satisfied. The closest historical reports concern an older execution path or already implemented script locking, so they do not establish a duplicate or a regression. The reason for this particular script's repeated message remains unknown.",
+  "summary": "astral-sh/uv#7538 and astral-sh/uv#9688 provide historical context. Merged changes establish persistent script environments, optional script locks, and project lockfile validation. No matching confirmed regression was found.",
+  "draft_response": "Not necessarily. `Resolving dependencies` is a progress message, not an indication that a network request occurred. In uv 0.12.21, a local script with inline metadata can reuse its cached environment and skip resolution when its installed dependencies satisfy the requirements. When resolution is needed, uv can use cached metadata; missing or expired metadata can require network requests.\n\nTo disable uv's network access, use `uv run --offline --script example.py`. The interpreter and required dependencies must be available locally. For reproducible script dependencies, `uv lock --script example.py` creates `example.py.lock`, which subsequent runs reuse; a lockfile alone does not disable networking.\n\nFor `[project.scripts]`, `uv run command` checks the project's lockfile and environment before launching the entry point, but does not necessarily access the network. Once the environment is prepared, `uv run --no-sync command` skips those updates. Running `.venv/bin/command` directly does not invoke uv. These options do not restrict network access by your Python code.\n\nTo explain why you see the message every time, please share a minimal script including its inline metadata, whether it has a lockfile, and verbose output from two consecutive `uv run -v --script example.py` invocations, with any secrets removed."
 }
