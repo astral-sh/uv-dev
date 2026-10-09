@@ -201,6 +201,70 @@ fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
     Ok(())
 }
 
+/// Linux can execute a venv with 40 executable symlinks, including its own `bin/python`.
+/// CPython falls back to the executable in `pyvenv.cfg`'s home at its resolution limit.
+#[test]
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+fn create_venv_caches_interpreter_at_symlink_limit() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.12.9").assert().success();
+    let output = context.python_find().arg("3.12.9").assert().success();
+    let python = Path::new(std::str::from_utf8(&output.get_output().stdout)?.trim());
+
+    // Move the installation out of the managed directory to avoid transparent patch upgrades.
+    let installation = python
+        .parent()
+        .and_then(Path::parent)
+        .context("Python executable has no installation directory")?;
+    let relocated = context.temp_dir.child("python");
+    fs_err::rename(installation, relocated.path())?;
+    let python_directory = relocated.child("bin");
+    let context = context.with_filtered_path(python_directory.path(), "PYTHON_BIN");
+
+    let mut target = python_directory.child("python3.12").to_path_buf();
+    for index in (0..39).rev() {
+        let link = python_directory.child(format!("chain-{index}"));
+        symlink(&target, link.path())?;
+        target = link.to_path_buf();
+    }
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg(&target), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: python/bin/chain-0
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+    let cached_base = cached.interpreter().to_base_python()?;
+    let queried_base = queried.interpreter().to_base_python()?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/python");
+        insta::assert_snapshot!(queried_base.display(), @"[PYTHON_BIN]/python");
+    });
+
+    uv_snapshot!(context.filters(), context.external_command(context.venv.child("bin/python").path())
+        .arg("-I")
+        .arg("-c")
+        .arg("print('ok')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+    ");
+
+    Ok(())
+}
+
 /// Cached metadata matches Python after recreating an upgradeable venv.
 #[test]
 #[cfg(feature = "test-python-managed")]
