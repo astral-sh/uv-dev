@@ -711,15 +711,15 @@ fn validate_replacement_records<'a>(
         if matches!(
             &dist_info.kind,
             InstalledDistKind::Registry(_) | InstalledDistKind::Url(_)
-        ) && replaces_dist_info(dist_info)?
-        {
+        ) {
             let record_path = dist_info.install_path().join("RECORD");
             if !record_path.try_exists().with_context(|| {
                 format!(
                     "Failed to inspect uninstall record at `{}`",
                     record_path.user_display()
                 )
-            })? {
+            })? && replaces_dist_info(dist_info)?
+            {
                 return Err(uv_installer::UninstallError::Uninstall(
                     uv_install_wheel::Error::MissingRecord(record_path),
                 )
