@@ -40,16 +40,6 @@ mod generated_mappings;
 mod parser;
 mod replacements;
 
-/// Update the `sysconfig` data in a Python installation.
-pub(crate) async fn update_sysconfig(
-    install_root: &Path,
-    major: u8,
-    minor: u8,
-    suffix: &str,
-) -> Result<(), Error> {
-    update_sysconfig_at(install_root, install_root, major, minor, suffix).await
-}
-
 /// Update the `sysconfig` data in a Python installation, using separate roots
 /// for file discovery and path replacement.
 ///
