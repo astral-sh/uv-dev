@@ -183,7 +183,7 @@ impl<'lock> LockTarget<'lock> {
     /// Returns the set of all members within the target.
     pub(crate) fn members_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
         match self {
-            Self::Workspace(workspace) => Either::Left(workspace.members_requirements()),
+            Self::Workspace(workspace) => Either::Left(workspace.root_requirements()),
             Self::Script(_) => Either::Right(std::iter::empty()),
         }
     }
@@ -201,7 +201,7 @@ impl<'lock> LockTarget<'lock> {
         match self {
             Self::Workspace(workspace) => {
                 let mut members = workspace
-                    .members_requirements()
+                    .root_requirements()
                     .map(|requirement| requirement.name)
                     .collect::<Vec<_>>();
                 members.sort();
@@ -380,21 +380,6 @@ impl<'lock> LockTarget<'lock> {
             if !existing.workspace_groups().is_empty() {
                 // Named groups define the locked roots. Other discovered members are only
                 // present when reachable from one of those roots.
-                for group in existing.workspace_groups() {
-                    let selected = existing.select_workspace_group(&group.definition.name)?;
-                    for package_name in &group.definition.members {
-                        if !selected.as_ref().is_some_and(|lock| {
-                            lock.packages()
-                                .iter()
-                                .any(|package| package.name() == package_name)
-                        }) {
-                            return Err(LockError::LockWorkspaceMismatch(
-                                package_name.clone(),
-                                source,
-                            ));
-                        }
-                    }
-                }
                 return Ok(existing);
             }
             for package_name in workspace.packages().keys() {

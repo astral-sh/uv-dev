@@ -489,6 +489,7 @@ pub async fn export(
             let groups = match &source {
                 ExportSource::Manifest(ExportTarget::Project(project)) => {
                     let defaults = if frozen.is_some() {
+                        selected_lock.validate_workspace_members(&entry_packages)?;
                         match entry_packages.as_slice() {
                             [name] => selected_lock.member_default_groups(name),
                             _ => None,

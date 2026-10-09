@@ -677,13 +677,12 @@ impl Workspace {
     /// Returns the set of all workspace members.
     pub fn members_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
         self.packages.iter().filter_map(|(name, member)| {
-            let marker = self.root_marker(name)?;
             let url = VerbatimUrl::from_absolute_path(&member.root).expect("path is valid URL");
             Some(Requirement {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
                 extras: Box::new([]),
                 groups: Box::new([]),
-                marker,
+                marker: MarkerTree::TRUE,
                 source: if member
                     .pyproject_toml()
                     .is_package(!self.is_required_member(name))
@@ -711,6 +710,14 @@ impl Workspace {
                 scope: RequirementScope::Global,
                 origin: None,
             })
+        })
+    }
+
+    /// Return workspace members selected as resolution roots, with their activation markers.
+    pub fn root_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
+        self.members_requirements().filter_map(|mut requirement| {
+            requirement.marker = self.root_marker(&requirement.name)?;
+            Some(requirement)
         })
     }
 

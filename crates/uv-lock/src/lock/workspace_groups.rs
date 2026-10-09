@@ -7,7 +7,7 @@ use uv_resolver_types::{ConflictMarker, UniversalMarker};
 use uv_workspace::{ResolvedWorkspaceGroup, WorkspaceGroup};
 
 use super::{
-    Dependency, Lock, LockError, Package, PackageId, ResolverManifest, VERSION,
+    Dependency, Lock, LockError, LockErrorKind, Package, PackageId, ResolverManifest, VERSION,
     WORKSPACE_GROUPS_VERSION,
 };
 
@@ -136,6 +136,30 @@ impl Lock {
         &self.workspace_groups
     }
 
+    /// Attach group definitions only when each root exists in its projected package graph.
+    pub(super) fn with_workspace_groups(
+        mut self,
+        groups: Vec<LockedWorkspaceGroup>,
+    ) -> Result<Self, LockError> {
+        self.workspace_groups = groups;
+        for group in &self.workspace_groups {
+            let selected = self.select_workspace_group(&group.definition.name)?;
+            for name in &group.definition.members {
+                if !selected
+                    .as_ref()
+                    .is_some_and(|lock| lock.packages.iter().any(|package| package.name() == name))
+                {
+                    return Err(LockErrorKind::MissingWorkspaceGroupRoot {
+                        group: group.definition.name.clone(),
+                        name: name.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(self)
+    }
+
     /// Combine successful workspace-group forks into one package graph.
     pub fn from_workspace_groups(
         groups: Vec<ResolvedWorkspaceGroup>,
@@ -230,7 +254,7 @@ impl Lock {
         let fork_markers =
             canonical_workspace_markers(&fork_markers.into_iter().collect::<Vec<_>>(), &groups);
         normalize_workspace_graph(&mut packages, &groups, &manifest, &requires_python);
-        let mut lock = Self::new(
+        Self::new(
             WORKSPACE_GROUPS_VERSION,
             revision,
             packages.into_values().collect(),
@@ -241,9 +265,9 @@ impl Lock {
             supported_environments,
             required_environments,
             fork_markers,
-        )?;
-        lock.workspace_groups = groups.into_iter().map(LockedWorkspaceGroup::from).collect();
-        Ok(Some(lock))
+        )?
+        .with_workspace_groups(groups.into_iter().map(LockedWorkspaceGroup::from).collect())
+        .map(Some)
     }
 
     /// Select a workspace context without resolving or consulting package metadata.
@@ -874,5 +898,39 @@ resolution-markers = ["extra == 'workspace-next'"]
             Some("2.0.0")
         );
         Ok(())
+    }
+
+    #[test]
+    fn workspace_group_lock_rejects_missing_root() {
+        let error = Lock::from_toml(
+            r#"
+version = 2
+revision = 5
+requires-python = ">=3.12"
+resolution-markers = ["extra == 'workspace-main'", "extra == 'workspace-next'"]
+
+[[workspace-group]]
+name = "main"
+members = ["app"]
+effective-requires-python = ">=3.12"
+default = true
+
+[[workspace-group]]
+name = "next"
+members = ["app"]
+effective-requires-python = ">=3.12"
+
+[manifest]
+members = ["app"]
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { virtual = "." }
+resolution-markers = ["extra == 'workspace-next'"]
+"#,
+        )
+        .expect_err("the main group's root is absent from its graph");
+        insta::assert_snapshot!(error.to_string(), @"Workspace group `main` contains member `app` with no locked package");
     }
 }

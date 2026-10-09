@@ -3277,6 +3277,19 @@ impl Lock {
         })
     }
 
+    /// Validate package selections against the local workspace members recorded in the lockfile.
+    pub fn validate_workspace_members(&self, names: &[PackageName]) -> Result<(), LockError> {
+        for name in names {
+            if !self
+                .workspace_member_paths()
+                .any(|(member, _)| member == name)
+            {
+                return Err(LockErrorKind::MissingWorkspaceMember(name.clone()).into());
+            }
+        }
+        Ok(())
+    }
+
     /// Returns `true` if the package is a workspace member.
     fn is_workspace_member(&self, package: &Package) -> bool {
         self.workspace_members
@@ -6641,7 +6654,7 @@ impl TryFrom<LockWire> for Lock {
             minimum_libc_version: options_wire.minimum_libc_version,
             exclude_newer: options_wire.exclude_newer.into(),
         };
-        let mut lock = Self::new(
+        Self::new(
             wire.version,
             wire.revision.unwrap_or(0),
             packages,
@@ -6652,11 +6665,8 @@ impl TryFrom<LockWire> for Lock {
             supported_environments,
             required_environments,
             fork_markers,
-        )?;
-
-        lock.workspace_groups = wire.workspace_groups;
-
-        Ok(lock)
+        )?
+        .with_workspace_groups(wire.workspace_groups)
     }
 }
 
@@ -9873,6 +9883,12 @@ impl std::fmt::Display for WheelTagHint {
 /// is with the caller somewhere in such cases.
 #[derive(Debug, thiserror::Error)]
 enum LockErrorKind {
+    /// A group root is absent from that group's projected graph.
+    #[error("Workspace group `{group}` contains member `{name}` with no locked package")]
+    MissingWorkspaceGroupRoot { group: GroupName, name: PackageName },
+    /// A selected package is not a local workspace member.
+    #[error("Package `{0}` not found in lockfile workspace")]
+    MissingWorkspaceMember(PackageName),
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),

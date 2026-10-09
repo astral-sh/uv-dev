@@ -5,6 +5,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
+use predicates::prelude::*;
 use std::collections::BTreeMap;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use std::path::Path;
@@ -11016,8 +11017,7 @@ fn export_batch_missing_package() -> Result<()> {
         .arg("--preview-features").arg("batch-export"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to export `[TEMP_DIR]/requirements.txt`
-      cause: Could not find root package `missing`
+    error: Package `missing` not found in lockfile workspace
     ");
 
     // Multiple selections must also validate every package name.
@@ -11033,10 +11033,76 @@ fn export_batch_missing_package() -> Result<()> {
         .arg("--preview-features").arg("batch-export"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to export `[TEMP_DIR]/requirements.txt`
-      cause: Could not find root package `missing`
+    error: Package `missing` not found in lockfile workspace
     ");
 
+    Ok(())
+}
+
+/// Registry dependencies cannot become workspace roots in a frozen batch export.
+#[test]
+fn export_batch_frozen_rejects_registry_package() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "idna"
+        version = "3.6"
+        source = { registry = "https://pypi.org/simple" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "idna" }]
+    "#})?;
+    context.temp_dir.child("batch.toml").write_str(indoc! {r#"
+        [[export]]
+        output-file = "requirements.txt"
+        package = ["idna"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--batch", "batch.toml", "--preview-features", "batch-export",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `idna` not found in lockfile workspace
+    ");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .assert(predicate::path::missing());
+
+    context.temp_dir.child("batch.toml").write_str(indoc! {r#"
+        [[export]]
+        output-file = "requirements.txt"
+        package = ["project", "idna"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--batch", "batch.toml", "--preview-features", "batch-export",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `idna` not found in lockfile workspace
+    ");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .assert(predicate::path::missing());
     Ok(())
 }
 

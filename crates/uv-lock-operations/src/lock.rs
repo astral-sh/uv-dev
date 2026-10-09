@@ -1196,6 +1196,7 @@ async fn do_lock(
                 // The root is always null in workspaces, it "depends on" the projects
                 None,
                 workspace_members,
+                Some(&first_party_packages),
                 &extras,
                 &groups,
                 preferences,

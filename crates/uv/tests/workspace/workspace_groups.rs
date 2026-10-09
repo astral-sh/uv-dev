@@ -2380,3 +2380,112 @@ fn workspace_groups_preserve_recursive_self_extra_marker() -> Result<()> {
     insta::assert_snapshot!(lock["workspace-group"][0]["effective-requires-python"].as_str().expect("group records its Python domain"), @">=3.12");
     Ok(())
 }
+
+/// A missing manifest must not bypass the lockfile's workspace-group consistency checks.
+#[test]
+fn workspace_groups_frozen_rejects_missing_root() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 2
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = ["extra == 'workspace-main'", "extra == 'workspace-next'"]
+
+        [[workspace-group]]
+        name = "main"
+        members = ["app"]
+        effective-requires-python = ">=3.12"
+        default = true
+
+        [[workspace-group]]
+        name = "next"
+        members = ["app"]
+        effective-requires-python = ">=3.12"
+
+        [manifest]
+        members = ["app"]
+
+        [[package]]
+        name = "app"
+        version = "0.1.0"
+        source = { virtual = "." }
+        resolution-markers = ["extra == 'workspace-next'"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--workspace-group", "next", "--preview-features", "frozen-lockfile",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse lockfile `[TEMP_DIR]/uv.lock`
+      cause: Workspace group `main` contains member `app` with no locked package
+    ");
+    Ok(())
+}
+
+/// Transitive workspace members may build metadata even when only their parent is a group root.
+#[test]
+fn workspace_groups_no_build_transitive_dynamic_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+
+        [tool.uv.sources]
+        child = { workspace = true, editable = false }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        requires-python = ">=3.12"
+        dynamic = ["version", "dependencies"]
+
+        [build-system]
+        requires = []
+        backend-path = ["."]
+        build-backend = "build_backend"
+    "#})?;
+    context
+        .temp_dir
+        .child("child/build_backend.py")
+        .write_str(indoc! {r#"
+        import pathlib
+        from textwrap import dedent
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            pathlib.Path("metadata-hook-called").write_text("called")
+            dist_info = pathlib.Path(metadata_directory, "child-0.1.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(dedent("""
+                Metadata-Version: 2.1
+                Name: child
+                Version: 0.1.0
+            """).lstrip())
+            return dist_info.name
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--no-build", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    insta::assert_snapshot!(context.read("child/metadata-hook-called"), @"called");
+    Ok(())
+}
