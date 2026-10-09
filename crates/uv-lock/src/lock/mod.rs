@@ -2829,15 +2829,9 @@ impl Lock {
 
     /// Whether immutable conflict participants record their declared extras, including empty sets.
     pub fn has_conflict_extra_metadata(&self) -> bool {
-        self.packages.iter().all(|package| {
-            !package.id.source.is_immutable()
-                || package.declared_extras.is_some()
-                || !self
-                    .conflicts
-                    .iter()
-                    .flat_map(ConflictSet::iter)
-                    .any(|item| item.package() == package.name() && item.extra().is_some())
-        })
+        self.packages
+            .iter()
+            .all(|package| package.has_conflict_extra_metadata(&self.conflicts))
     }
 
     /// Record the required platforms that were used to generate this lock.
@@ -7384,6 +7378,16 @@ impl Package {
     /// Returns `true` if the package contains the validation-only package metadata.
     fn has_metadata(&self) -> bool {
         self.metadata != PackageMetadata::default()
+    }
+
+    /// Whether the declarations needed to validate this package's conflicts are recorded.
+    fn has_conflict_extra_metadata(&self, conflicts: &Conflicts) -> bool {
+        !self.id.source.is_immutable()
+            || self.declared_extras.is_some()
+            || !conflicts
+                .iter()
+                .flat_map(ConflictSet::iter)
+                .any(|item| item.package() == self.name() && item.extra().is_some())
     }
 
     /// Whether recorded declarations establish that an extra does not exist.

@@ -217,11 +217,9 @@ impl<'lock> ConflictRequests<'lock> {
                     return None;
                 }
                 let package = lock.package(index);
-                if let Some(extra) = &extra
-                    && package.id.source.is_immutable()
-                    && package.declared_extras.is_none()
-                    && lock.conflicts().contains(package.name(), extra)
-                {
+                // Legacy serialization can erase an empty extra and its incoming request, so
+                // reachable production nodes also need declaration evidence.
+                if !package.has_conflict_extra_metadata(lock.conflicts()) {
                     return Some(Err(LockErrorKind::MissingExtraMetadata {
                         package: package.name().clone(),
                     }
