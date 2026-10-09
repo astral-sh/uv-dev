@@ -199,7 +199,12 @@ impl CandidateSelector {
             index.is_none_or(|index| entry.index().matches(index))
                 && (!entry.source().is_inherited()
                     || (range.contains(entry.pin().version())
-                        && env.included_by_marker(entry.marker().pep508())))
+                        && env.included_by_marker(entry.marker().pep508())
+                        && version_maps.iter().any(|version_map| {
+                            version_map
+                                .get(entry.pin().version())
+                                .is_some_and(|dist| Self::matches_inherited_index(entry, dist))
+                        })))
         };
 
         // If there are multiple preferences for the same package, we need to sort them by priority.
@@ -1009,6 +1014,45 @@ mod tests {
             PreferenceSource::Resolver,
         );
         let version_maps = [version_map(&index, &["1", "2"])];
+
+        assert_eq!(
+            selected_version(
+                &preferences,
+                &version_maps,
+                &Range::full(),
+                None,
+                &env,
+                PrereleaseMode::IfNecessary,
+            ),
+            version("2")
+        );
+    }
+
+    #[test]
+    fn unrelated_inherited_index_does_not_change_version_order() {
+        let unrelated = index("https://unrelated.example/simple");
+        let index = index("https://pypi.org/simple");
+        let env = ResolverEnvironment::universal(Vec::new());
+        let mut preferences = Preferences::from_iter(
+            [
+                inherited(&unrelated, "3"),
+                Preference::from_locked(
+                    package_name(),
+                    version("1"),
+                    Some(index.clone()),
+                    Vec::new(),
+                ),
+            ],
+            &env,
+        );
+        preferences.insert(
+            package_name(),
+            Some(index.clone()),
+            UniversalMarker::TRUE,
+            version("2"),
+            PreferenceSource::Resolver,
+        );
+        let version_maps = [version_map(&index, &["1", "2", "3"])];
 
         assert_eq!(
             selected_version(

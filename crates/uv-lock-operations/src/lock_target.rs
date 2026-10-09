@@ -402,7 +402,7 @@ impl<'lock> LockTarget<'lock> {
     /// Write the lockfile to disk.
     pub(crate) async fn commit(self, lock: &Lock) -> Result<(), LockError> {
         let encoded = lock.to_toml()?;
-        fs_err::tokio::write(self.lock_path(), encoded).await?;
+        uv_fs::write_atomic(self.lock_path(), encoded).await?;
         Ok(())
     }
 
