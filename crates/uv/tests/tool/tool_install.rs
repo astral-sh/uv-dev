@@ -6691,3 +6691,136 @@ fn tool_install_pep723_index_cutoff_receipt_upgrade() -> Result<()> {
     ");
     Ok(())
 }
+
+#[tokio::test]
+async fn tool_install_pep723_build_constraint_authentication() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = wiremock::MockServer::start().await;
+    let project = context.temp_dir.child("project");
+    project
+        .child("pyproject.toml")
+        .write_str(indoc::indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = ["setuptools>=40"]
+        build-backend = "setuptools.build_meta"
+    "#})?;
+    let input = context.temp_dir.child("constraints.stdin");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["setuptools>=40"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # setuptools = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path()).args(["--build-constraint", "-"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `project @ file://[TEMP_DIR]/project`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: No solution found when resolving: `setuptools>=40`
+      cause: Failed to fetch: http://[LOCALHOST]/simple/setuptools/
+      cause: Missing credentials for: http://[LOCALHOST]/simple/setuptools/
+    "#);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
+fn tool_install_pep723_receipt_preserves_legacy_index_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let first: Scenario = toml::from_str(indoc! {r#"
+        name = "original-default"
+        [root]
+        requires = ["dependency"]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let first = PackseServer::from_scenario(&first);
+    let second: Scenario = toml::from_str(indoc! {r#"
+        name = "updated-default"
+        [root]
+        requires = ["dependency"]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let second = PackseServer::from_scenario(&second);
+    let private = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = private.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args([
+            "--with",
+            "dependency",
+            "--with-requirements",
+            "deps.py",
+            "--index-url",
+        ])
+        .arg(first.index_url())
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt: toml::Value =
+        toml::from_str(&context.read("tools/simple-launcher/uv-receipt.toml"))?;
+    assert_eq!(
+        receipt["tool"]["options"]["index"]
+            .as_array()
+            .expect("script indexes")
+            .len(),
+        1
+    );
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .arg("--index-url").arg(second.index_url()).env(EnvVars::PATH, bin.path()), @r#"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Modified simple-launcher environment
+         - dependency==1.0.0
+         + dependency==2.0.0
+        "#);
+    uv_snapshot!(context.filters(), Command::new(uv_test::venv_bin_path(context.temp_dir.child("tools/simple-launcher")).join(format!("python{}", std::env::consts::EXE_SUFFIX)))
+        .args(["-c", "import importlib.metadata; print(importlib.metadata.version('dependency'))"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+    ");
+    Ok(())
+}

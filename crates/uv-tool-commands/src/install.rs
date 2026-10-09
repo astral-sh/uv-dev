@@ -167,7 +167,7 @@ pub async fn install(
     .await?
     .into_interpreter();
 
-    let receipt_build_constraints = operations::read_constraints(
+    let build_spec = operations::read_constraints(
         build_constraints,
         &client_builder,
         LoweringContext::new(
@@ -179,6 +179,13 @@ pub async fn install(
         ),
     )
     .await?;
+    let build_indexes = build_spec.indexes;
+    let receipt_build_constraints = build_spec.constraints;
+    let mut settings = settings;
+    settings.resolver.index_locations = settings
+        .resolver
+        .index_locations
+        .with_source_indexes(build_indexes.clone());
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
 
@@ -393,7 +400,7 @@ pub async fn install(
     };
 
     // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
+    let mut spec = RequirementsSpecification::from_sources(
         with,
         constraints,
         overrides,
@@ -410,6 +417,7 @@ pub async fn install(
     )
     .await?;
 
+    spec.extend_indexes(build_indexes)?;
     let mut settings = settings;
     settings.resolver.index_locations = settings
         .resolver
@@ -497,17 +505,16 @@ pub async fn install(
     // Resolve the excludes.
     let receipt_excludes = spec.excludes.clone();
 
-    // Persist selected script policies with the same precedence used for this installation.
+    // Keep legacy index flags separate so later upgrades can override them.
     let mut options = options;
     if !spec.indexes.is_empty() {
-        options.indexes.index = Some(
-            settings
-                .resolver
-                .index_locations
-                .defined_indexes()
-                .cloned()
-                .collect(),
-        );
+        let indexes = uv_distribution_types::IndexLocations::new(
+            options.indexes.index.take().unwrap_or_default(),
+            Vec::new(),
+            false,
+        )
+        .with_source_indexes(spec.indexes.clone());
+        options.indexes.index = Some(indexes.defined_indexes().cloned().collect());
     }
     let options = ToolOptions::from(options);
     let lock_manifest = ToolLock::manifest(

@@ -20174,3 +20174,51 @@ fn compile_pep723_overrides_ignore_constraint_sources() -> Result<()> {
         "#);
     Ok(())
 }
+
+#[tokio::test]
+async fn compile_pep723_build_constraint_authentication() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = wiremock::MockServer::start().await;
+    let project = context.temp_dir.child("project");
+    project
+        .child("pyproject.toml")
+        .write_str(indoc::indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = ["setuptools>=40"]
+        build-backend = "setuptools.build_meta"
+    "#})?;
+    let input = context.temp_dir.child("constraints.stdin");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["setuptools>=40"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # setuptools = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg(project.child("pyproject.toml").path()).args(["--build-constraint", "-"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to resolve requirements from `build-system.requires`
+      cause: No solution found when resolving: `setuptools>=40`
+      cause: Failed to fetch: http://[LOCALHOST]/simple/setuptools/
+      cause: Missing credentials for: http://[LOCALHOST]/simple/setuptools/
+    "#);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}

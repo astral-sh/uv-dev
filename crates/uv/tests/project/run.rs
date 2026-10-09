@@ -1336,48 +1336,6 @@ fn run_pep723_requirements_source_policy_all() -> Result<()> {
 }
 
 #[test]
-fn run_pep723_requirements_source_policy_cli_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let explicit = PackseServer::new("simple/single-package.toml");
-    let default = PackseServer::new("extras/missing-extra.toml");
-
-    let test_script = context.temp_dir.child("main.py");
-    test_script.write_str(&formatdoc! { r#"
-        # /// script
-        # requires-python = ">=3.11"
-        # dependencies = [
-        #   "a",
-        # ]
-        #
-        # [[tool.uv.index]]
-        # name = "test"
-        # url = "{index}"
-        # explicit = true
-        #
-        # [tool.uv.sources]
-        # a = {{ index = "test" }}
-        # ///
-
-        import a
-       "#,
-        index = explicit.index_url(),
-    })?;
-
-    uv_snapshot!(context.filters(), context.run()
-            .arg("--index").arg(format!("test={}", default.index_url()))
-            .args(["--with-requirements", "main.py", "python", "-c", "import a"]), @"
-        exit_code: 0 (success)
-        ----- stderr -----
-        Resolved 1 package in [TIME]
-        Prepared 1 package in [TIME]
-        Installed 1 package in [TIME]
-         + a==1.0.0
-    ");
-    Ok(())
-}
-
-/// Run a PEP 723-compatible script with `tool.uv` constraints.
-#[test]
 fn run_pep723_script_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 

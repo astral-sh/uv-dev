@@ -213,16 +213,20 @@ pub async fn pip_install(
         .chain(excludes_from_workspace)
         .collect();
 
-    // Read build constraints.
+    // Read build constraints and retain index policies selected by inline metadata.
+    let mut build_spec = uv_resolve_operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        lowering_context,
+    )
+    .await?;
+    build_spec.extend_indexes(indexes)?;
+    let indexes = build_spec.indexes;
     let build_constraints = Constraints::from_specifications(
-        uv_resolve_operations::read_constraints(
-            build_constraints,
-            &client_builder,
-            lowering_context,
-        )
-        .await?
-        .into_iter()
-        .chain(build_constraints_from_workspace.iter().cloned()),
+        build_spec
+            .constraints
+            .into_iter()
+            .chain(build_constraints_from_workspace.iter().cloned()),
     );
 
     // Detect the current Python interpreter.

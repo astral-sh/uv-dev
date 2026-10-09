@@ -142,7 +142,7 @@ pub struct RequirementsSpecification {
 
 impl RequirementsSpecification {
     /// Merge source indexes without losing policies to name-based client deduplication.
-    fn extend_indexes(&mut self, indexes: impl IntoIterator<Item = Index>) -> Result<()> {
+    pub fn extend_indexes(&mut self, indexes: impl IntoIterator<Item = Index>) -> Result<()> {
         for index in indexes {
             if let Some(name) = index.name.as_ref()
                 && let Some(existing) = self

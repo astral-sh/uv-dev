@@ -592,6 +592,10 @@ async fn build_package(
         ),
     )
     .await?;
+    let index_locations = &index_locations
+        .clone()
+        .with_source_indexes(command_line_constraints.indexes);
+    let command_line_constraints = command_line_constraints.constraints;
     let build_constraints = Constraints::from_specifications(
         command_line_constraints
             .iter()

@@ -169,15 +169,16 @@ pub async fn pip_sync(
         }
     }
 
-    // Read build constraints.
-    let build_constraints = Constraints::from_specifications(
-        uv_resolve_operations::read_constraints(
-            build_constraints,
-            &client_builder,
-            lowering_context,
-        )
-        .await?,
-    );
+    // Read build constraints and retain index policies selected by inline metadata.
+    let mut build_spec = uv_resolve_operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        lowering_context,
+    )
+    .await?;
+    build_spec.extend_indexes(indexes)?;
+    let indexes = build_spec.indexes;
+    let build_constraints = Constraints::from_specifications(build_spec.constraints);
 
     // Validate that the requirements are non-empty.
     if !allow_empty_requirements {
