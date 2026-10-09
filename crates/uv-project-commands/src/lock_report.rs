@@ -518,36 +518,53 @@ impl ErrorReport {
 
     fn resolver_hints(&mut self, error: &NoSolutionError) {
         for hint in error.resolution_hints() {
-            if let PubGrubHint::InvalidPackageNetwork { package, status }
-            | PubGrubHint::InvalidVersionNetwork {
-                package, status, ..
-            } = &hint
-            {
-                self.package = Some(package.clone());
-                self.network_status(Some(status.as_u16()));
-                break;
-            }
-            if let PubGrubHint::InvalidPackageMetadata { package, .. }
-            | PubGrubHint::InvalidPackageStructure { package, .. }
-            | PubGrubHint::InvalidVersionMetadata { package, .. }
-            | PubGrubHint::InconsistentVersionMetadata { package, .. }
-            | PubGrubHint::InvalidVersionStructure { package, .. } = &hint
-            {
-                self.code = ErrorCode::MetadataUnavailable;
-                self.package = Some(package.clone());
-            }
-            if let PubGrubHint::Offline = hint {
-                self.code = ErrorCode::OfflineCacheMiss;
-            }
-            if let PubGrubHint::UnauthorizedIndex { .. } = hint {
-                self.code = ErrorCode::Authentication;
-                self.http_status = Some(401);
-                break;
-            }
-            if let PubGrubHint::ForbiddenIndex { .. } = hint {
-                self.code = ErrorCode::AccessDenied;
-                self.http_status = Some(403);
-                break;
+            match hint {
+                PubGrubHint::InvalidPackageNetwork { package, status }
+                | PubGrubHint::InvalidVersionNetwork {
+                    package, status, ..
+                } => {
+                    self.package = Some(package.clone());
+                    self.network_status(Some(status.as_u16()));
+                    break;
+                }
+                PubGrubHint::InvalidPackageMetadata { package, .. }
+                | PubGrubHint::InvalidPackageStructure { package, .. }
+                | PubGrubHint::InvalidVersionMetadata { package, .. }
+                | PubGrubHint::InconsistentVersionMetadata { package, .. }
+                | PubGrubHint::InvalidVersionStructure { package, .. } => {
+                    self.code = ErrorCode::MetadataUnavailable;
+                    self.package = Some(package.clone());
+                }
+                PubGrubHint::Offline => self.code = ErrorCode::OfflineCacheMiss,
+                PubGrubHint::UnauthorizedIndex { .. } => {
+                    self.code = ErrorCode::Authentication;
+                    self.http_status = Some(401);
+                    break;
+                }
+                PubGrubHint::ForbiddenIndex { .. } => {
+                    self.code = ErrorCode::AccessDenied;
+                    self.http_status = Some(403);
+                    break;
+                }
+                // Resolution policy and compatibility hints do not classify metadata or transport errors.
+                PubGrubHint::PrereleaseAvailable { .. }
+                | PubGrubHint::BuildPrereleaseAvailable { .. }
+                | PubGrubHint::PrereleaseRequested { .. }
+                | PubGrubHint::BuildPrereleaseRequested { .. }
+                | PubGrubHint::NoIndex
+                | PubGrubHint::IncompatibleBuildRequirement { .. }
+                | PubGrubHint::RequiresPython { .. }
+                | PubGrubHint::DependsOnWorkspacePackage { .. }
+                | PubGrubHint::DependsOnItself { .. }
+                | PubGrubHint::UncheckedIndex { .. }
+                | PubGrubHint::NoBuild { .. }
+                | PubGrubHint::NoBinary { .. }
+                | PubGrubHint::LanguageTags { .. }
+                | PubGrubHint::AbiTags { .. }
+                | PubGrubHint::PlatformTags { .. }
+                | PubGrubHint::ExcludeNewer { .. }
+                | PubGrubHint::DisjointPythonVersion { .. }
+                | PubGrubHint::DisjointEnvironment => {}
             }
         }
     }
