@@ -809,6 +809,7 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
     Ok(())
 }
 
+#[cfg(feature = "test-python")]
 #[test]
 fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
     let context = uv_test::test_context!("3.12")
@@ -848,7 +849,8 @@ fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
           "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "script": {
         "path": "[TEMP_DIR]/script.py",
@@ -890,7 +892,8 @@ fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
           "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "script": {
         "path": "[TEMP_DIR]/script.py",
@@ -918,6 +921,7 @@ fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python")]
 #[test]
 fn workspace_metadata_script_does_not_create_environment_when_resolution_fails() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
@@ -1236,7 +1240,8 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
           "path": "[CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "workspace": {
         "path": "[TEMP_DIR]/",
@@ -1866,6 +1871,7 @@ fn workspace_metadata_lockfile_workspace_group_module_owners() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python")]
 #[test]
 fn workspace_metadata_project_reuses_environment_discovery() -> Result<()> {
     let context = uv_test::test_context!("3.12")
@@ -1897,7 +1903,8 @@ dependencies = []
           "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "workspace": {
         "path": "[TEMP_DIR]/",
@@ -1954,7 +1961,8 @@ dependencies = []
           "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "workspace": {
         "path": "[TEMP_DIR]/",
@@ -1998,6 +2006,7 @@ dependencies = []
     Ok(())
 }
 
+#[cfg(feature = "test-python")]
 #[test]
 fn workspace_metadata_project_does_not_create_environment_when_resolution_fails() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
@@ -3964,6 +3973,7 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
 }
 
 /// Synchronizing a reused environment honors the workspace root pin from a subdirectory.
+#[cfg(feature = "test-python")]
 #[test]
 fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
@@ -4008,7 +4018,8 @@ fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
           "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.11.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "workspace": {
         "path": "[TEMP_DIR]/",
@@ -4064,7 +4075,8 @@ fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
           "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "workspace": {
         "path": "[TEMP_DIR]/",
@@ -4125,7 +4137,8 @@ fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
           "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "workspace": {
         "path": "[TEMP_DIR]/",
@@ -4171,6 +4184,7 @@ fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
 }
 
 /// Read-only centralized metadata describes the linked environment, even with another Python request.
+#[cfg(feature = "test-python")]
 #[test]
 fn workspace_metadata_centralized_read_only_uses_linked_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
@@ -4224,7 +4238,8 @@ fn workspace_metadata_centralized_read_only_uses_linked_environment() -> Result<
           "path": "[CACHE_DIR]/environments-v2/project-cp3.11.[X]-[HASH]/[BIN]/[PYTHON]",
           "version": "3.11.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "workspace": {
         "path": "[TEMP_DIR]/",
@@ -4279,7 +4294,8 @@ fn workspace_metadata_centralized_read_only_uses_linked_environment() -> Result<
           "path": "[CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "workspace": {
         "path": "[TEMP_DIR]/",
@@ -4390,6 +4406,14 @@ async fn workspace_metadata_project_revalidates_replaced_environment() -> Result
           "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
+        },
+        "packages": {
+          "changing-python==0.1.0@direct+http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl": {
+            "name": "changing-python",
+            "version": "0.1.0",
+            "path": "[SITE_PACKAGES]/changing_python-0.1.0.dist-info",
+            "editable": false
+          }
         }
       },
       "workspace": {
