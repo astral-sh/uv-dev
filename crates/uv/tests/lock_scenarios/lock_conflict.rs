@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
@@ -104,6 +105,117 @@ fn extra_conflict_discovery_respects_parent_reachability() -> Result<()> {
     uv_snapshot!(context.filters(), context.export()
         .args(["--extra", "feature", "--frozen", "--no-header"]), @"exit_code: 0 (success)");
 
+    Ok(())
+}
+
+/// Unreachable legacy registry extras do not require declaration metadata.
+#[test]
+fn unreachable_legacy_registry_extra_does_not_require_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = ["x[foo]"]
+
+        [tool.uv]
+        conflicts = [[
+            { package = "x", extra = "foo" },
+            { package = "q", extra = "bar" },
+        ]]
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "q", extra = "bar" },
+            { package = "x", extra = "foo" },
+        ]]
+
+        [[package]]
+        name = "parent"
+        source = { virtual = "parent" }
+        dependencies = [{ name = "q", extra = ["bar"] }]
+
+        [[package]]
+        name = "project"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "parent", marker = "extra != 'extra-1-x-foo'" },
+        ]
+        [package.optional-dependencies]
+        feature = [{ name = "x", extra = ["foo"] }]
+        [package.metadata]
+        provides-extras = ["feature"]
+
+        [[package]]
+        name = "q"
+        version = "1.0.0"
+        source = { registry = "https://example.com/simple" }
+        [package.optional-dependencies]
+        bar = []
+
+        [[package]]
+        name = "x"
+        source = { virtual = "x" }
+        [package.optional-dependencies]
+        foo = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    context
+        .export()
+        .args(["--frozen", "--extra", "feature", "--no-header"])
+        .assert()
+        .success();
+    context
+        .export()
+        .args([
+            "--frozen",
+            "--extra",
+            "feature",
+            "--format",
+            "pylock.toml",
+            "--no-header",
+        ])
+        .assert()
+        .success();
+    // The legacy request needs a refresh when its parent is selected.
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--no-header",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `q`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&context.read("uv.lock").replace(
+            "extra != 'extra-1-x-foo'",
+            &format!("sys_platform == '{inactive_platform}'"),
+        ))?;
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
     Ok(())
 }
 

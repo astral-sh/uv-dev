@@ -2598,10 +2598,16 @@ impl Lock {
                     }
                     .into());
                 };
-                if metadata_free && matches!(package.id.source, Source::Registry(_)) {
-                    // A metadata-free lock must distinguish an extra that resolved to no
-                    // dependencies (including nonexistent extras) from one never requested.
-                    // Keeping the section also preserves its incoming, marker-bearing edge.
+                if (metadata_free && matches!(package.id.source, Source::Registry(_)))
+                    || (conflicts.contains(package.name(), extra)
+                        && package
+                            .declared_extras
+                            .as_deref()
+                            .unwrap_or(&package.metadata.provides_extra)
+                            .contains(extra))
+                {
+                    // Resolved empty conflict extras need their incoming request labels.
+                    // Metadata-free registry placeholders also record resolved missing extras.
                     package
                         .optional_dependencies
                         .entry(extra.clone())
