@@ -7,7 +7,6 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 #[cfg(feature = "test-pypi")]
 use indoc::indoc;
-#[cfg(feature = "test-pypi")]
 use uv_test::uv_snapshot;
 
 #[test]
@@ -84,15 +83,6 @@ fn uninstall() -> Result<()> {
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3")?;
-
-    let script = context.temp_dir.child("requirements.py");
-    script.write_str(indoc! {r#"
-        # /// script
-        # dependencies = ["MarkupSafe"]
-        # [tool.uv.sources]
-        # markupsafe = { workspace = "./missing-workspace" }
-        # ///
-    "#})?;
 
     context
         .pip_sync()
