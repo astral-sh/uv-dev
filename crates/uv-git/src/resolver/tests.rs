@@ -11,7 +11,7 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware, Middleware, Next};
 use tokio::sync::{Semaphore, mpsc};
 
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl};
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 
 use super::{GitResolver, RepositoryReference};
 
@@ -80,7 +80,7 @@ fn client(
 
 fn url(reference: &str) -> anyhow::Result<GitUrl> {
     Ok(GitUrl::from_fields(
-        DisplaySafeUrl::parse("https://github.com/uv-test/reference-claims")?,
+        SafeUrl::parse("https://github.com/uv-test/reference-claims")?,
         GitReference::Branch(reference.to_owned()),
         None,
         GitLfs::Disabled,

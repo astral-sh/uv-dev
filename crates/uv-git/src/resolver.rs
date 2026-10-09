@@ -242,13 +242,13 @@ impl GitResolver {
         let reference = RepositoryReference::from(url);
 
         // Resolution claims precede repository filesystem locks on every checkout path.
-        let _claim = self.claim(&reference).await;
+        let claim = self.claim(&reference).await;
 
         // Avoid races between different processes, too.
         let lock_dir = cache.join("locks");
         fs::create_dir_all(&lock_dir).await?;
         let repository_url = url.repository().clone();
-        let _lock = LockedFile::acquire(
+        let lock = LockedFile::acquire(
             lock_dir.join(cache_digest(&repository_url)),
             LockedFileMode::Exclusive,
             &repository_url,
@@ -264,36 +264,42 @@ impl GitResolver {
             url.clone()
         };
 
-        loop {
-            let source = if let Some(reporter) = reporter.clone() {
-                GitSource::new(selected.clone(), cache.clone(), http_settings.offline)
-                    .with_reporter(reporter)
-            } else {
-                GitSource::new(selected.clone(), cache.clone(), http_settings.offline)
-            };
-            let source = if http_settings.disable_ssl {
-                source.dangerous()
-            } else {
-                source
-            };
-            let fetch = tokio::task::spawn_blocking(move || source.fetch())
-                .await?
-                .map_err(GitResolverError::Git)?;
+        let resolver = self.clone();
+        let url = url.clone();
+        tokio::task::spawn_blocking(move || {
+            // Keep admission through Git work and publication even if the async waiter is cancelled.
+            let _claim = claim;
+            let _lock = lock;
+            loop {
+                let source = if let Some(reporter) = reporter.clone() {
+                    GitSource::new(selected.clone(), cache.clone(), http_settings.offline)
+                        .with_reporter(reporter)
+                } else {
+                    GitSource::new(selected.clone(), cache.clone(), http_settings.offline)
+                };
+                let source = if http_settings.disable_ssl {
+                    source.dangerous()
+                } else {
+                    source
+                };
+                let fetch = source.fetch().map_err(GitResolverError::Git)?;
 
-            if let Some(precise) = fetch.git().precise() {
-                let published = self.publish(reference.clone(), precise);
-                // A lockfile preference can be seeded while Git is running. A mutable request
-                // must return the checkout for that pin, not the discarded discovery result.
-                if url.precise().is_none() && published != precise {
-                    selected = url
-                        .clone()
-                        .with_precise(published)
-                        .map_err(|error| GitResolverError::Git(error.into()))?;
-                    continue;
+                if let Some(precise) = fetch.git().precise() {
+                    let published = resolver.publish(reference.clone(), precise);
+                    // A lockfile preference can be seeded while Git is running. A mutable request
+                    // must return the checkout for that pin, not the discarded discovery result.
+                    if url.precise().is_none() && published != precise {
+                        selected = url
+                            .clone()
+                            .with_precise(published)
+                            .map_err(|error| GitResolverError::Git(error.into()))?;
+                        continue;
+                    }
                 }
+                return Ok(fetch);
             }
-            return Ok(fetch);
-        }
+        })
+        .await?
     }
 
     /// Given a remote source distribution, return a precise variant, if possible.

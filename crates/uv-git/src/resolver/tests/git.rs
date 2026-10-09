@@ -3,6 +3,7 @@ use std::process::Command;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 use anyhow::Context;
 use http::StatusCode;
@@ -10,8 +11,9 @@ use tempfile::TempDir;
 use tokio::sync::Notify;
 
 use uv_cache_key::cache_digest;
+use uv_fs::{LockedFile, LockedFileMode};
 use uv_git_types::GitOid;
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 
 use crate::{GitHttpSettings, GitResolver, Reporter, RepositoryReference};
 
@@ -69,8 +71,8 @@ impl Repository {
         let database = cache.join("db").join(cache_digest(url.repository()));
         fs_err::create_dir_all(&database)?;
         git(&database, &["init", "--bare"])?;
-        let source_url = DisplaySafeUrl::from_file_path(source)
-            .map_err(|()| anyhow::anyhow!("invalid fixture URL"))?;
+        let source_url =
+            SafeUrl::from_file_path(source).map_err(|()| anyhow::anyhow!("invalid fixture URL"))?;
         git(
             &database,
             &[
@@ -95,7 +97,7 @@ struct GatedReporter {
 }
 
 impl Reporter for GatedReporter {
-    fn on_checkout_start(&self, _url: &DisplaySafeUrl, _revision: &str) -> usize {
+    fn on_checkout_start(&self, _url: &SafeUrl, _revision: &str) -> usize {
         if !self.claimed.swap(true, Ordering::SeqCst) {
             self.started.notify_one();
             // Dropping the test sender also releases a worker if an assertion fails.
@@ -106,7 +108,7 @@ impl Reporter for GatedReporter {
         0
     }
 
-    fn on_checkout_complete(&self, _url: &DisplaySafeUrl, _revision: &str, _index: usize) {}
+    fn on_checkout_complete(&self, _url: &SafeUrl, _revision: &str, _index: usize) {}
 }
 
 fn reporter() -> (Arc<GatedReporter>, Arc<Notify>, mpsc::Sender<()>) {
@@ -121,6 +123,83 @@ fn reporter() -> (Arc<GatedReporter>, Arc<Notify>, mpsc::Sender<()>) {
         started,
         release,
     )
+}
+
+/// Cancelling a waiter cannot release either guard while its Git worker is still running.
+#[tokio::test]
+async fn cancelled_checkout_retains_claim_and_repository_lock_until_publication()
+-> anyhow::Result<()> {
+    let repository = Repository::new()?;
+    let resolver = GitResolver::default();
+    let url = url("main")?;
+    let reference = RepositoryReference::from(&url);
+    let lock_path = repository
+        .cache
+        .join("locks")
+        .join(cache_digest(url.repository()));
+    let (reporter, started, release) = reporter();
+    let checkout = {
+        let resolver = resolver.clone();
+        let url = url.clone();
+        let cache = repository.cache.clone();
+        tokio::spawn(async move {
+            resolver
+                .fetch(
+                    &url,
+                    GitHttpSettings::default().with_offline(true),
+                    cache,
+                    Some(reporter),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(30), started.notified()).await?;
+    checkout.abort();
+    assert!(
+        checkout
+            .await
+            .err()
+            .context("checkout waiter must be cancelled")?
+            .is_cancelled()
+    );
+
+    let mut claim = Box::pin(resolver.claim(&reference));
+    let claim_held = poll_once(claim.as_mut()).is_pending();
+    drop(claim);
+    let repository_lock_held =
+        LockedFile::acquire_no_wait(&lock_path, LockedFileMode::Exclusive, "cancelled checkout")
+            .is_none();
+    assert!(
+        claim_held && repository_lock_held,
+        "running worker must retain both guards: reference claim={claim_held}, repository lock={repository_lock_held}"
+    );
+
+    release.send(())?;
+    {
+        let _claim =
+            tokio::time::timeout(Duration::from_secs(30), resolver.claim(&reference)).await?;
+        let _lock = LockedFile::acquire_no_wait(
+            &lock_path,
+            LockedFileMode::Exclusive,
+            "completed checkout",
+        )
+        .context("repository lock is released after publication")?;
+        assert_eq!(resolver.get_precise(&url), Some(repository.second));
+    }
+    let checkout = resolver
+        .fetch(
+            &url,
+            GitHttpSettings::default().with_offline(true),
+            repository.cache.clone(),
+            None,
+        )
+        .await?;
+    assert_eq!(checkout.git().precise(), Some(repository.second));
+    assert_eq!(
+        fs_err::read_to_string(checkout.path().join("value"))?,
+        "second"
+    );
+    Ok(())
 }
 
 #[tokio::test]

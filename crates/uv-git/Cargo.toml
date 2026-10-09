@@ -42,7 +42,7 @@ tracing = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
-indoc = { workspace = true }
 async-trait = { workspace = true }
 http = { workspace = true }
+indoc = { workspace = true }
 tempfile = { workspace = true }
