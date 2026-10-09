@@ -4,6 +4,7 @@ use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{debug, trace};
 
 use uv_cache::Cache;
@@ -12,7 +13,7 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, Constraints, DryRun, HashCheckingMode, TargetTriple};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
-use uv_fs::{CWD, Simplified};
+use uv_fs::{CWD, LockedFile, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
@@ -37,6 +38,7 @@ use crate::commands::project::{
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::tool::common::{ToolLock, repair_tool_entrypoints, tool_environment_spec};
+use crate::commands::tool::environment_transaction::{EnvironmentSnapshot, StagedToolEnvironment};
 use crate::commands::tool::recovery::ToolEntrypointSnapshot;
 use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
 use crate::printer::Printer;
@@ -61,7 +63,8 @@ pub(crate) async fn upgrade(
     preview: Preview,
 ) -> Result<ExitStatus> {
     let installed_tools = InstalledTools::from_settings()?.init()?;
-    let _lock = installed_tools.lock().await?;
+    let root_lock = Arc::new(installed_tools.lock().await?);
+    super::environment_transaction::recover_selected_environments(&installed_tools, &[]).await?;
 
     // Collect the tools to upgrade, along with any constraints.
     let names: BTreeMap<PackageName, Vec<Requirement>> = {
@@ -138,6 +141,7 @@ pub(crate) async fn upgrade(
             python_platform.as_ref(),
             printer,
             &installed_tools,
+            root_lock.clone(),
             &args,
             &client_builder,
             cache,
@@ -271,6 +275,7 @@ async fn upgrade_tool(
     python_platform: Option<&TargetTriple>,
     printer: Printer,
     installed_tools: &InstalledTools,
+    root_lock: Arc<LockedFile>,
     args: &ResolverInstallerOptions,
     client_builder: &BaseClientBuilder<'_>,
     cache: &Cache,
@@ -388,10 +393,14 @@ async fn upgrade_tool(
     // requested tool.
     let requested_interpreter =
         interpreter.filter(|interpreter| !environment.environment().uses(interpreter));
+    let original = requested_interpreter
+        .map(|_| EnvironmentSnapshot::capture(installed_tools, name))
+        .transpose()?;
     let tool_dir = installed_tools.tool_dir(name);
     entrypoint_snapshot.admit_mutation(name, false)?;
-    // TODO(zanieb): When updating an existing environment, build it in the cache directory then
-    // copy it into the tool directory.
+    let mut staged = None;
+    let mut staging_settings = crate::settings::InstallerSettingsRef::from(&settings);
+    staging_settings.compile_bytecode = false;
     let (environment, outcome, tool_lock) = if tool_locks {
         let target_interpreter =
             requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
@@ -429,15 +438,20 @@ async fn upgrade_tool(
         let hash_strategy = HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
 
         if requested_interpreter.is_some() {
-            let environment =
-                installed_tools.create_environment(name, target_interpreter.clone())?;
+            let (replacement, environment) = StagedToolEnvironment::create(
+                installed_tools,
+                original.clone().context("Missing prior tool environment")?,
+                target_interpreter.clone(),
+                root_lock.clone(),
+            )?;
+            staged = Some(replacement);
             let environment = sync_environment(
                 environment,
                 &resolution,
                 hash_strategy,
                 Modifications::Exact,
                 build_constraints,
-                (&settings).into(),
+                staging_settings,
                 client_builder,
                 &state,
                 Box::new(DefaultInstallLogger),
@@ -543,14 +557,20 @@ async fn upgrade_tool(
             preview,
         )
         .await?;
-        let environment = installed_tools.create_environment(name, interpreter.clone())?;
+        let (replacement, environment) = StagedToolEnvironment::create(
+            installed_tools,
+            original.context("Missing prior tool environment")?,
+            interpreter.clone(),
+            root_lock,
+        )?;
+        staged = Some(replacement);
         let environment = sync_environment(
             environment,
             &resolution.into(),
             HashStrategy::default(),
             Modifications::Exact,
             build_constraints,
-            (&settings).into(),
+            staging_settings,
             client_builder,
             &state,
             Box::new(DefaultInstallLogger),
@@ -608,26 +628,59 @@ async fn upgrade_tool(
             .filter_map(|entry| PackageName::from_str(entry.from.as_ref()?).ok())
             .collect();
 
-        // If we modified the target tool, reinstall the entrypoints.
-        finalize_tool_install(
-            &environment,
-            name,
-            &entrypoints,
-            installed_tools,
-            &ToolOptions::from(options),
-            Some(&entrypoint_snapshot),
-            false,
-            !matches!(outcome, UpgradeOutcome::UpgradeDependencies),
-            existing_tool_receipt.python().to_owned(),
-            existing_tool_receipt.requirements().to_vec(),
-            existing_tool_receipt.constraints().to_vec(),
-            existing_tool_receipt.overrides().to_vec(),
-            existing_tool_receipt.excludes().to_vec(),
-            existing_tool_receipt.build_constraints().to_vec(),
-            tool_lock.as_ref(),
-            printer,
-        )
-        .await?;
+        if let Some(staged) = staged {
+            if settings.compile_bytecode {
+                staged
+                    .compile_bytecode(&environment, concurrency, cache, printer)
+                    .await?;
+            }
+            staged.finalize(&environment)?;
+            let plan =
+                entrypoint_snapshot.prepare(&environment, name, &entrypoints, false, printer)?;
+            let tool = Tool::new(
+                existing_tool_receipt.requirements().to_vec(),
+                existing_tool_receipt.constraints().to_vec(),
+                existing_tool_receipt.overrides().to_vec(),
+                existing_tool_receipt.excludes().to_vec(),
+                existing_tool_receipt.build_constraints().to_vec(),
+                existing_tool_receipt.python().to_owned(),
+                plan.entrypoints(),
+                ToolOptions::from(options),
+            );
+            staged
+                .publish(
+                    environment,
+                    installed_tools,
+                    &entrypoint_snapshot,
+                    plan,
+                    tool,
+                    tool_lock.as_ref().map(ToolLock::serialize).transpose()?,
+                    cache,
+                    printer,
+                )
+                .await?;
+        } else {
+            // If we modified the target tool, reinstall the entrypoints.
+            finalize_tool_install(
+                &environment,
+                name,
+                &entrypoints,
+                installed_tools,
+                &ToolOptions::from(options),
+                Some(&entrypoint_snapshot),
+                false,
+                !matches!(outcome, UpgradeOutcome::UpgradeDependencies),
+                existing_tool_receipt.python().to_owned(),
+                existing_tool_receipt.requirements().to_vec(),
+                existing_tool_receipt.constraints().to_vec(),
+                existing_tool_receipt.overrides().to_vec(),
+                existing_tool_receipt.excludes().to_vec(),
+                existing_tool_receipt.build_constraints().to_vec(),
+                tool_lock.as_ref(),
+                printer,
+            )
+            .await?;
+        }
     } else {
         let _entrypoint_locks =
             ToolEntrypointLocks::for_repair(existing_tool_receipt.entrypoints()).await?;

@@ -43,13 +43,15 @@ pub(crate) async fn uninstall(name: Vec<PackageName>, printer: Printer) -> Resul
         Err(err) => return Err(err.into()),
     };
 
+    super::environment_transaction::recover_selected_environments(&installed_tools, &name).await?;
     super::export_transaction::recover_selected_exports(&installed_tools, &name).await?;
 
     // Perform the uninstallation.
     do_uninstall(&installed_tools, name, printer).await?;
 
     // Clean up any empty directories.
-    if !super::export_transaction::has_pending_exports(&installed_tools)?
+    if !super::environment_transaction::has_pending_environments(&installed_tools)?
+        && !super::export_transaction::has_pending_exports(&installed_tools)?
         && uv_fs::directories(installed_tools.root())?.all(|path| uv_fs::is_temporary(&path))
     {
         fs_err::tokio::remove_dir_all(&installed_tools.root())

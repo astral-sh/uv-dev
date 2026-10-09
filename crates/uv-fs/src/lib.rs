@@ -16,7 +16,9 @@ use std::io::Read;
 #[cfg(feature = "tokio")]
 use encoding_rs_io::DecodeReaderBytes;
 #[cfg(target_os = "linux")]
-use rustix::fs::{AtFlags, CWD as RUSTIX_CWD, StatxFlags, statx};
+use rustix::fs::{AtFlags, CWD as RUSTIX_CWD, RenameFlags, StatxFlags, renameat_with, statx};
+#[cfg(target_os = "macos")]
+use rustix::fs::{CWD as RUSTIX_CWD, RenameFlags, renameat_with};
 use tracing::{debug, warn};
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
@@ -39,6 +41,20 @@ mod path;
 mod read;
 mod space;
 pub mod which;
+
+/// Atomically exchange two filesystem entries.
+///
+/// Both entries must be on the same filesystem.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn exchange_paths(first: impl AsRef<Path>, second: impl AsRef<Path>) -> io::Result<()> {
+    Ok(renameat_with(
+        RUSTIX_CWD,
+        first.as_ref(),
+        RUSTIX_CWD,
+        second.as_ref(),
+        RenameFlags::EXCHANGE,
+    )?)
+}
 
 /// Return the number of hardlinks to a file.
 #[cfg(unix)]

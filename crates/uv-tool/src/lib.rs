@@ -29,6 +29,9 @@ mod entrypoint_lock;
 mod receipt;
 mod tool;
 
+/// Private sibling directories retained while a tool environment is being replaced.
+pub const TOOL_ENVIRONMENT_STAGING_PREFIX: &str = ".uv-tool-staging-";
+
 /// A wrapper around [`PythonEnvironment`] for tools that provides additional functionality.
 #[derive(Debug, Clone)]
 pub struct ToolEnvironment {
@@ -166,7 +169,9 @@ impl InstalledTools {
                 continue;
             };
             // The executable directory may be configured to share the tool-store root.
-            if name == entrypoint_lock::ENTRYPOINT_LOCK_DIRECTORY {
+            if name == entrypoint_lock::ENTRYPOINT_LOCK_DIRECTORY
+                || name.starts_with(TOOL_ENVIRONMENT_STAGING_PREFIX)
+            {
                 continue;
             }
             let Ok(name) = PackageName::from_str(name) else {

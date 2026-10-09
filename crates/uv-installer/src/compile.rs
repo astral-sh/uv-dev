@@ -16,6 +16,7 @@ use walkdir::WalkDir;
 
 use uv_configuration::Concurrency;
 use uv_fs::Simplified;
+use uv_python::PythonEnvironment;
 use uv_static::EnvVars;
 use uv_warnings::warn_user;
 
@@ -95,11 +96,11 @@ fn compile_timeout() -> Result<Option<Duration>, CompileError> {
 #[derive(Clone)]
 struct WorkerResources {
     script: Arc<TempDir>,
-    _environment: Option<Arc<TempDir>>,
+    _environment: Option<PythonEnvironment>,
 }
 
 impl WorkerResources {
-    fn new(cache: &Path, environment: Option<Arc<TempDir>>) -> Result<Self, CompileError> {
+    fn new(cache: &Path, environment: Option<PythonEnvironment>) -> Result<Self, CompileError> {
         let script = Arc::new(tempdir_in(cache).map_err(CompileError::TempFile)?);
         fs_err::write(script.path().join("pip_compileall.py"), COMPILEALL_SCRIPT)
             .map_err(CompileError::TempFile)?;
@@ -209,22 +210,22 @@ pub async fn compile_tree(
 /// until every actual worker has exited even when the awaiting caller is cancelled.
 ///
 /// `dir` must be inside `environment`; `destination` is its corresponding published directory.
+/// Attach the staging storage and admission using [`PythonEnvironment::with_lifetime_guard`].
 pub async fn compile_staged_tree(
     dir: &Path,
     destination: &Path,
-    python_executable: &Path,
+    environment: &PythonEnvironment,
     concurrency: &Concurrency,
     cache: &Path,
-    environment: Arc<TempDir>,
 ) -> Result<usize, CompileError> {
-    debug_assert!(dir.starts_with(environment.path()));
+    debug_assert!(dir.starts_with(environment.root()));
     compile_tree_inner(
         dir,
-        python_executable,
+        environment.python_executable(),
         concurrency,
         cache,
         Some(destination),
-        Some(environment),
+        Some(environment.clone()),
     )
     .await
 }
@@ -235,7 +236,7 @@ async fn compile_tree_inner(
     concurrency: &Concurrency,
     cache: &Path,
     destination: Option<&Path>,
-    environment: Option<Arc<TempDir>>,
+    environment: Option<PythonEnvironment>,
 ) -> Result<usize, CompileError> {
     debug_assert!(
         dir.is_absolute(),
@@ -647,7 +648,8 @@ mod tests {
                 .arg(directory.path())
                 .output()?;
             ensure!(output.status.success(), "{output:?}");
-            let environment = PythonEnvironment::from_root(directory.path(), &cache)?;
+            let environment = PythonEnvironment::from_root(directory.path(), &cache)?
+                .with_lifetime_guard(directory.clone());
             ensure!(
                 environment.root() == directory.path(),
                 "unexpected environment root: {:?}",
@@ -715,10 +717,9 @@ mod tests {
         compile_staged_tree(
             &source,
             &published,
-            staged.environment.python_executable(),
+            &staged.environment,
             &concurrency,
             staged.cache.root(),
-            Arc::clone(&staged.directory),
         )
         .await?;
         let output = Command::new(staged.environment.python_executable())
@@ -748,10 +749,9 @@ mod tests {
         let mut compiling = Box::pin(compile_staged_tree(
             &source,
             &published,
-            staged.environment.python_executable(),
+            &staged.environment,
             &concurrency,
             staged.cache.root(),
-            Arc::clone(&staged.directory),
         ));
         tokio::select! {
             result = &mut compiling => bail!("compiler exited before its barrier: {result:?}"),
@@ -772,6 +772,7 @@ mod tests {
         let environment_path = staged.directory.path().to_owned();
         drop(compiling);
         drop(staged.directory);
+        drop(staged.environment);
         let environment_retained = environment_path.exists();
         let script_retained = scripts[0].join("pip_compileall.py").exists();
         fs_err::write(control.path().join("release"), "release")?;
@@ -801,7 +802,7 @@ mod tests {
         let control = tempfile::tempdir()?;
         staged.block_startup(control.path())?;
         let resources =
-            WorkerResources::new(staged.cache.root(), Some(Arc::clone(&staged.directory)))?;
+            WorkerResources::new(staged.cache.root(), Some(staged.environment.clone()))?;
         let (sender, receiver) = async_channel::bounded(1);
         let workers = spawn_workers(
             &staged.site_packages()?,
