@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 use std::fmt::Write;
+#[cfg(windows)]
+use std::{io, path::Path};
 
 use anyhow::{Result, bail};
 use itertools::Itertools;
@@ -103,6 +105,8 @@ async fn do_uninstall(
     let mut removed_environment = false;
     let mut entrypoints = if names.is_empty() {
         let mut entrypoints = vec![];
+        let mut valid_tools = Vec::new();
+        // Remove dangling environments before inspecting the ownership claims of healthy tools.
         for (name, receipt) in installed_tools.tools()? {
             let Ok(receipt) = receipt else {
                 // If the tool is not installed properly, attempt to remove the environment anyway.
@@ -128,6 +132,9 @@ async fn do_uninstall(
                 }
             };
 
+            valid_tools.push((name, receipt));
+        }
+        for (name, receipt) in valid_tools {
             let removed_entrypoints = uninstall_tool(&name, &receipt, installed_tools).await?;
             if removed_entrypoints.is_empty() {
                 removed_environment = true;
@@ -208,12 +215,19 @@ async fn uninstall_tool(
 
         let other_receipt = other_receipt?;
         #[cfg(unix)]
+        let tool_directory = fs_err::canonicalize(tools.tool_dir(&tool_name))?;
+        #[cfg(windows)]
         let tool_directory = tools.tool_dir(&tool_name);
         for entrypoint in other_receipt.entrypoints() {
             #[cfg(unix)]
             if !fs_err::canonicalize(&entrypoint.install_path)
                 .is_ok_and(|target| target.starts_with(&tool_directory))
             {
+                continue;
+            }
+
+            #[cfg(windows)]
+            if !copied_entrypoint_matches(&tool_directory, entrypoint)? {
                 continue;
             }
 
@@ -268,4 +282,22 @@ async fn uninstall_tool(
     }
 
     Ok(removed_entrypoints)
+}
+
+/// Windows entrypoints are copied from the owning environment's Scripts directory.
+#[cfg(windows)]
+fn copied_entrypoint_matches(
+    tool_directory: &Path,
+    entrypoint: &ToolEntrypoint,
+) -> io::Result<bool> {
+    let Some(filename) = entrypoint.install_path.file_name() else {
+        return Ok(false);
+    };
+    let source = tool_directory.join("Scripts").join(filename);
+    if !source.try_exists()? || !entrypoint.install_path.try_exists()? {
+        return Ok(false);
+    }
+    // A Python launcher embeds its interpreter path, so a stale receipt from another
+    // environment cannot claim a launcher copied by a later forced installation.
+    Ok(fs_err::read(source)? == fs_err::read(&entrypoint.install_path)?)
 }
