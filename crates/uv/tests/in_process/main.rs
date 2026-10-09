@@ -16,7 +16,23 @@ use uv_test::apply_filters;
 
 #[tokio::test]
 async fn explicit_arguments_reach_requirement_headers() -> Result<()> {
-    // TestContext initializes preview test mode; this exercises normal command initialization.
+    const CHILD: &str = "UV_INTERNAL__TEST_IN_PROCESS_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let context = uv_test::test_context!("3.12");
+        context
+            .external_command(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "explicit_arguments_reach_requirement_headers",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .assert()
+            .success();
+        return Ok(());
+    }
+
+    // Embedded calls share normal preview initialization inside the sanitized child process.
     let root = assert_fs::TempDir::new()?;
     let cache = root.child("cache");
     let venv = root.child(".venv");
