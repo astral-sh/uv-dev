@@ -281,6 +281,8 @@ pub enum WorkspaceErrorKind {
     EmptyResolutionRoots,
     #[error("Workspace resolution root `{0}` is not a workspace member")]
     UnknownResolutionRoot(PackageName),
+    #[error("Changing workspace resolution roots requires rediscovering the workspace")]
+    ResolutionRootsChanged,
     // Workspace structure errors.
     #[error("No `pyproject.toml` found in current directory or any parent directory")]
     MissingPyprojectToml,
@@ -583,6 +585,13 @@ impl Workspace {
         package_name: &PackageName,
         pyproject_toml: PyProjectToml,
     ) -> Result<Option<Arc<Self>>, WorkspaceError> {
+        if self
+            .packages
+            .get(package_name)
+            .is_some_and(|member| member.root == self.install_path)
+        {
+            self.validate_root_update(&pyproject_toml)?;
+        }
         debug_assert_eq!(
             Arc::strong_count(&self),
             1,
@@ -655,7 +664,20 @@ impl Workspace {
 
     /// Returns the explicitly configured workspace resolution roots, if any.
     pub fn resolution_roots(&self) -> Option<&BTreeSet<PackageName>> {
-        self.pyproject_toml
+        Self::configured_resolution_roots(&self.pyproject_toml)
+    }
+
+    fn validate_root_update(&self, pyproject_toml: &PyProjectToml) -> Result<(), WorkspaceError> {
+        if self.resolution_roots() != Self::configured_resolution_roots(pyproject_toml) {
+            return Err(WorkspaceErrorKind::ResolutionRootsChanged.into());
+        }
+        Ok(())
+    }
+
+    fn configured_resolution_roots(
+        pyproject_toml: &PyProjectToml,
+    ) -> Option<&BTreeSet<PackageName>> {
+        pyproject_toml
             .tool
             .as_ref()
             .and_then(|tool| tool.uv.as_ref())
@@ -2337,6 +2359,7 @@ impl VirtualProject {
     /// workspaces.
     ///
     /// The [`WorkspaceCache`] is passed to ensure the caller doesn't forget to clear it.
+    /// Workspace resolution roots must remain unchanged; changing them requires rediscovery.
     pub fn update_member(
         self,
         pyproject_toml: PyProjectToml,
@@ -2352,6 +2375,7 @@ impl VirtualProject {
                 Some(Self::Project(project))
             }
             Self::NonProject(workspace) => {
+                workspace.validate_root_update(&pyproject_toml)?;
                 debug_assert_eq!(
                     Arc::strong_count(&workspace),
                     1,
@@ -2460,7 +2484,7 @@ mod tests {
 
     use crate::pyproject::PyProjectToml;
     use crate::workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, Workspace};
-    use crate::{WorkspaceCache, WorkspaceError};
+    use crate::{VirtualProject, WorkspaceCache, WorkspaceError};
 
     async fn workspace_test(folder: &str) -> (ProjectWorkspace, String) {
         let root_dir = env::current_dir()
@@ -2499,6 +2523,101 @@ mod tests {
         .map_err(|error| (error, root_escaped.clone()))?;
 
         Ok((project, root_escaped))
+    }
+
+    #[tokio::test]
+    async fn update_project_rejects_changed_resolution_roots() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        root.child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "root"
+            version = "1.0.0"
+            [tool.uv.workspace]
+            roots = ["root"]
+        "#,
+        )?;
+        let cache = Cache::from_path(root.join(".cache"));
+        let workspace_cache = WorkspaceCache::default();
+        let project = VirtualProject::discover(
+            root.path(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+        let unchanged = PyProjectToml::from_string(
+            r#"
+            [project]
+            name = "root"
+            version = "2.0.0"
+            [tool.uv.workspace]
+            roots = ["root"]
+        "#
+            .to_owned(),
+            root.join("pyproject.toml"),
+        )?;
+        let project = project
+            .update_member(unchanged, &workspace_cache)?
+            .expect("member exists");
+        let replacement = PyProjectToml::from_string(
+            r#"
+            [project]
+            name = "root"
+            version = "2.0.0"
+            [tool.uv.workspace]
+            roots = []
+        "#
+            .to_owned(),
+            root.join("pyproject.toml"),
+        )?;
+        let error = project
+            .update_member(replacement, &workspace_cache)
+            .expect_err("changed roots require rediscovery");
+        assert_snapshot!(error.to_string(), @"Changing workspace resolution roots requires rediscovering the workspace");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_non_project_rejects_changed_resolution_roots() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        root.child("pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            members = ["member"]
+            roots = ["member"]
+        "#,
+        )?;
+        root.child("member/pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "member"
+            version = "1.0.0"
+        "#,
+        )?;
+        let cache = Cache::from_path(root.join(".cache"));
+        let workspace_cache = WorkspaceCache::default();
+        let project = VirtualProject::discover(
+            root.path(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+        let replacement = PyProjectToml::from_string(
+            r#"
+            [tool.uv.workspace]
+            members = ["member"]
+            roots = ["missing"]
+        "#
+            .to_owned(),
+            root.join("pyproject.toml"),
+        )?;
+        let error = project
+            .update_member(replacement, &workspace_cache)
+            .expect_err("changed roots require rediscovery");
+        assert_snapshot!(error.to_string(), @"Changing workspace resolution roots requires rediscovering the workspace");
+        Ok(())
     }
 
     #[tokio::test]

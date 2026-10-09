@@ -1,6 +1,6 @@
-use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -208,7 +208,7 @@ pub trait Installable<'lock> {
         groups: &DependencyGroupsWithDefaults,
         requires_python: &RequiresPython,
         marker_env: Option<&ResolverMarkerEnvironment>,
-    ) -> Result<BTreeSet<&'lock PackageName>, LockError> {
+    ) -> Result<BTreeMap<&'lock PackageName, MarkerTree>, LockError> {
         let lock = self.lock();
         let modifiers = lock.dependency_modifiers()?;
         let roots = self.roots().collect::<FxHashSet<_>>();
@@ -446,9 +446,17 @@ pub trait Installable<'lock> {
                 {
                     return None;
                 }
-                Some(package.name())
+                Some((package.name(), marker))
             })
-            .collect();
+            .fold(BTreeMap::new(), |mut members, (name, marker)| {
+                members
+                    .entry(name)
+                    .and_modify(|existing: &mut MarkerTree| {
+                        *existing = existing.or(marker);
+                    })
+                    .or_insert(marker);
+                members
+            });
         Ok(members)
     }
 
