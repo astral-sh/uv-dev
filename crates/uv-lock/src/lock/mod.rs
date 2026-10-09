@@ -1651,7 +1651,7 @@ struct ExpectedPackageDependencies<'lock> {
 impl<'lock> ExpectedPackageDependencies<'lock> {
     fn new(
         lock: &'lock Lock,
-        declarations: &BTreeSet<Requirement>,
+        declarations: BTreeSet<Requirement>,
         provides_extra: &'lock [ExtraName],
         dependency_groups: &BTreeMap<GroupName, BTreeSet<Requirement>>,
         source_requirements: &'lock DependencySources<'lock>,
@@ -1661,25 +1661,12 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
         package: &'lock Package,
         activated_extras: BTreeMap<ExtraName, UniversalMarker>,
         workspace_root: &'lock Path,
-        declarations_preprocessed: bool,
     ) -> Self {
         let package_context = package_version.map(|version| (&package.id.name, version));
-        let package_scope = package_context
-            .map_or(DependencyModifierScope::Global, |(name, version)| {
-                DependencyModifierScope::Package(name, version)
-            });
         let dependency_group_scope = package_context
             .map_or(DependencyModifierScope::Global, |(name, version)| {
                 DependencyModifierScope::DependencyGroup(name, version)
             });
-        let declarations = if declarations_preprocessed {
-            declarations.clone()
-        } else {
-            modifiers
-                .apply(package_scope, declarations)
-                .map(Cow::into_owned)
-                .collect::<BTreeSet<_>>()
-        };
         let dependency_groups = dependency_groups
             .iter()
             .map(|(group, requirements)| {
@@ -3949,57 +3936,42 @@ impl Lock {
 
         let normalizer = RequirementNormalizer::new(root, &self.requires_python);
 
-        // Dynamic metadata may contain flattened recursive extras.
-        let flattened = if package.is_dynamic() || missing_metadata {
-            let requirements = if missing_metadata {
-                Self::preprocess_requirements(
-                    &package.id.name,
-                    package_version,
-                    &requires_dist,
-                    DependencyContext::Production,
-                    modifiers,
-                )
-            } else {
-                FlatRequiresDist::from_requirements(requires_dist.clone(), &package.id.name)
-                    .into_iter()
-                    .collect()
-            };
-            Some(normalizer.requirements(requirements)?)
-        } else {
-            None
-        };
-
-        let effective_requirements: Option<BTreeSet<Requirement>> = if missing_metadata {
-            None
-        } else {
-            Some(
-                normalizer
-                    .requirements(Self::preprocess_requirements(
-                        &package.id.name,
-                        package_version,
-                        &requires_dist,
-                        DependencyContext::Production,
-                        modifiers,
-                    ))?
-                    .into_iter()
-                    .collect(),
-            )
-        };
-
-        let expected_requirements = normalizer.requirements(requires_dist)?;
-        let actual = normalizer.requirements(package.metadata.requires_dist.iter().cloned())?;
-        if !missing_metadata
-            && expected_requirements != actual
-            && flattened
-                .as_ref()
-                .is_none_or(|expected| expected != &actual)
-        {
-            return Ok(SatisfiesResult::MismatchedPackageRequirements(
+        // Edge validation uses the effective declarations after modifiers and recursive extras.
+        let declarations = normalizer
+            .requirements(Self::preprocess_requirements(
                 &package.id.name,
-                package.id.version.as_ref(),
-                expected_requirements.into_iter().collect(),
-                actual.into_iter().collect(),
-            ));
+                package_version,
+                &requires_dist,
+                DependencyContext::Production,
+                modifiers,
+            ))?
+            .into_iter()
+            .collect();
+
+        if !missing_metadata {
+            // Dynamic metadata may contain flattened recursive extras.
+            let flattened = if package.is_dynamic() {
+                Some(normalizer.requirements(FlatRequiresDist::from_requirements(
+                    requires_dist.clone(),
+                    &package.id.name,
+                ))?)
+            } else {
+                None
+            };
+            let expected_requirements = normalizer.requirements(requires_dist)?;
+            let actual = normalizer.requirements(package.metadata.requires_dist.iter().cloned())?;
+            if expected_requirements != actual
+                && flattened
+                    .as_ref()
+                    .is_none_or(|expected| expected != &actual)
+            {
+                return Ok(SatisfiesResult::MismatchedPackageRequirements(
+                    &package.id.name,
+                    package.id.version.as_ref(),
+                    expected_requirements.into_iter().collect(),
+                    actual.into_iter().collect(),
+                ));
+            }
         }
 
         // Validate the `dependency-groups` metadata.
@@ -4034,17 +4006,10 @@ impl Lock {
                     .collect(),
             ));
         }
-        let expected_requirements: BTreeSet<Requirement> =
-            expected_requirements.into_iter().collect();
-        let flattened = flattened.map(|requirements| requirements.into_iter().collect());
         let expected_groups = expected_groups
             .into_iter()
             .map(|(group, requirements)| (group, requirements.into_iter().collect()))
             .collect();
-        let declarations = effective_requirements
-            .as_ref()
-            .or(flattened.as_ref())
-            .unwrap_or(&expected_requirements);
         let package_activated_extras = activated_extras
             .get(&package.id)
             .cloned()
@@ -4061,7 +4026,6 @@ impl Lock {
             package,
             package_activated_extras,
             root,
-            true,
         );
         if allow_missing_package_metadata {
             match self.satisfied_no_metadata(
@@ -5133,17 +5097,6 @@ impl Lock {
                     .unwrap_or_default(),
             );
             for dependency in package.all_dependencies() {
-                if !allow_missing_package_metadata {
-                    let activated = activated_extras
-                        .entry(dependency.package_id.clone())
-                        .or_default();
-                    for extra in &dependency.extra {
-                        activated
-                            .entry(extra.clone())
-                            .and_modify(|marker| marker.or(dependency.complexified_marker))
-                            .or_insert(dependency.complexified_marker);
-                    }
-                }
                 let needs_extra_validation = validated_extras
                     .get(&dependency.index)
                     .zip(activated_extras.get(&dependency.package_id))

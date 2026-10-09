@@ -49117,3 +49117,54 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
 
     Ok(())
 }
+
+/// Extra activation retains its parent environment when propagated through another extra.
+#[cfg(all(feature = "test-universal", feature = "test-pypi"))]
+#[test]
+fn lock_dependency_edges_context_extra_activation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf", "middle[outer]; sys_platform == 'win32'", "iniconfig==2.0.0"]
+        [tool.uv.sources]
+        leaf = { path = "leaf" }
+        middle = { path = "middle" }
+    "#})?;
+    context
+        .temp_dir
+        .child("middle/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "middle"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        outer = ["leaf[inner]"]
+        [tool.uv.sources]
+        leaf = { path = "../leaf" }
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        inner = ["iniconfig", "idna; sys_platform != 'win32'"]
+    "#})?;
+    context.lock().assert().success();
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    Ok(())
+}
