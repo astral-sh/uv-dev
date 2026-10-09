@@ -1195,7 +1195,7 @@ pub(crate) fn parse_scripts(
     Ok((console_scripts, gui_scripts))
 }
 
-/// Return the paths at which a wheel's console, GUI, and data scripts will be installed.
+/// Return the paths a wheel will write into the installation's scripts directory.
 pub fn script_paths(layout: &Layout, wheel: impl AsRef<Path>) -> Result<Vec<PathBuf>, Error> {
     let wheel = wheel.as_ref();
     let dist_info_prefix = find_dist_info(wheel)?;
@@ -1223,19 +1223,39 @@ pub fn script_paths(layout: &Layout, wheel: impl AsRef<Path>) -> Result<Vec<Path
         }
     }
 
-    // `.data/data` is moved to the environment root and can also write into the scripts
-    // directory when the latter is nested under the data scheme (as it is in a virtualenv).
-    if let Ok(scripts_relative) = layout.scheme.scripts.strip_prefix(&layout.scheme.data) {
-        let data_scripts = wheel
-            .join(format!("{dist_info_prefix}.data/data"))
-            .join(scripts_relative);
-        if data_scripts.is_dir() {
-            for entry in WalkDir::new(&data_scripts).min_depth(1) {
+    let wheel_text = fs::read_to_string(wheel.join(format!("{dist_info_prefix}.dist-info/WHEEL")))?;
+    let root_scheme = match WheelFile::parse(&wheel_text)?.lib_kind() {
+        LibKind::Pure => &layout.scheme.purelib,
+        LibKind::Plat => &layout.scheme.platlib,
+    };
+    // A target installation puts libraries and data beside its scripts directory. Include every
+    // scheme whose files can overlap that directory, including files at the wheel root.
+    for (source, destination) in [
+        (wheel.to_path_buf(), root_scheme),
+        (
+            wheel.join(format!("{dist_info_prefix}.data/purelib")),
+            &layout.scheme.purelib,
+        ),
+        (
+            wheel.join(format!("{dist_info_prefix}.data/platlib")),
+            &layout.scheme.platlib,
+        ),
+        (
+            wheel.join(format!("{dist_info_prefix}.data/data")),
+            &layout.scheme.data,
+        ),
+    ] {
+        let Ok(scripts_relative) = layout.scheme.scripts.strip_prefix(destination) else {
+            continue;
+        };
+        let source_scripts = source.join(scripts_relative);
+        if source_scripts.is_dir() {
+            for entry in WalkDir::new(&source_scripts).min_depth(1) {
                 let entry = entry?;
                 if entry.file_type().is_dir() {
                     continue;
                 }
-                let relative = relative_to(entry.path(), &data_scripts)?;
+                let relative = relative_to(entry.path(), &source_scripts)?;
                 paths.push(layout.scheme.scripts.join(relative));
             }
         }

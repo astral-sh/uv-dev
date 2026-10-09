@@ -506,6 +506,11 @@ impl BuildContext for BuildDispatch<'_> {
                 .await?
         };
 
+        let mut wheels = wheels.into_iter().chain(cached).collect::<Vec<_>>();
+        Installer::new(venv, self.preview)
+            .validate_script_conflicts(&wheels)
+            .map_err(BuildDispatchError::InstallBuildDependencies)?;
+
         // Remove any unnecessary packages.
         if !reinstalls.is_empty() {
             let layout = venv.interpreter().layout();
@@ -525,7 +530,6 @@ impl BuildContext for BuildDispatch<'_> {
         }
 
         // Install the resolved distributions.
-        let mut wheels = wheels.into_iter().chain(cached).collect::<Vec<_>>();
         if !wheels.is_empty() {
             debug!(
                 "Installing build requirement{}: {}",

@@ -729,6 +729,9 @@ async fn execute_plan(
         wheels
     };
 
+    let mut installs = wheels.into_iter().chain(cached).collect::<Vec<_>>();
+    uv_installer::Installer::new(venv, preview).validate_script_conflicts(&installs)?;
+
     // Remove any upgraded or extraneous installations.
     let uninstalls = extraneous.into_iter().chain(reinstalls).collect::<Vec<_>>();
     if !uninstalls.is_empty() {
@@ -771,7 +774,6 @@ async fn execute_plan(
     }
 
     // Install the resolved distributions.
-    let mut installs = wheels.into_iter().chain(cached).collect::<Vec<_>>();
     if !installs.is_empty() {
         let start = std::time::Instant::now();
         installs = uv_installer::Installer::new(venv, preview)

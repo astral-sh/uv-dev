@@ -357,6 +357,14 @@ fn reject_conflicting_wheel_scripts() -> Result<()> {
     };
     assert!(!venv_bin_path(&context.venv).join(script_name).exists());
 
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_data_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
     let third = context.temp_dir.join("third-1.0.0-py3-none-any.whl");
     let fourth = context.temp_dir.join("fourth-1.0.0-py3-none-any.whl");
     write_shared_script_wheel(&third, "third", None)?;
@@ -387,6 +395,14 @@ fn reject_conflicting_wheel_scripts() -> Result<()> {
             .exists()
     );
 
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_environment_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
     let fifth = context.temp_dir.join("fifth-1.0.0-py3-none-any.whl");
     let sixth = context.temp_dir.join("sixth-1.0.0-py3-none-any.whl");
     let scripts = venv_bin_path(&context.venv);
@@ -419,6 +435,207 @@ fn reject_conflicting_wheel_scripts() -> Result<()> {
             .join(format!("SHARED-TOOL{}", std::env::consts::EXE_SUFFIX))
             .exists()
     );
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_target_root_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_filter((r"target[\\/]bin", "target/[BIN]"));
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    let script = format!("bin/shared-tool{}", std::env::consts::EXE_SUFFIX);
+    let (second, bytes) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(&script, "print('target script')\n")],
+    );
+    fs::write(context.temp_dir.join(&second), bytes)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&first)
+        .arg(&second)
+        .arg("--target").arg("target"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `target/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    ");
+    assert!(
+        !context
+            .temp_dir
+            .join("target/first-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .temp_dir
+            .join("target/second-1.0.0.dist-info")
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_target_purelib_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_filter((r"target[\\/]bin", "target/[BIN]"));
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    let script = format!(
+        "second-1.0.0.data/purelib/bin/shared-tool{}",
+        std::env::consts::EXE_SUFFIX
+    );
+    let (second, bytes) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(&script, "print('target script')\n")],
+    );
+    fs::write(context.temp_dir.join(&second), bytes)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&first)
+        .arg(&second)
+        .arg("--target").arg("target"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `target/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    ");
+    assert!(
+        !context
+            .temp_dir
+            .join("target/first-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .temp_dir
+            .join("target/second-1.0.0.dist-info")
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_target_platlib_scripts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_filter((r"target[\\/]bin", "target/[BIN]"));
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    let script = format!(
+        "second-1.0.0.data/platlib/bin/shared-tool{}",
+        std::env::consts::EXE_SUFFIX
+    );
+    let (second, bytes) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(&script, "print('target script')\n")],
+    );
+    fs::write(context.temp_dir.join(&second), bytes)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&first)
+        .arg(&second)
+        .arg("--target").arg("target"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `target/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    ");
+    assert!(
+        !context
+            .temp_dir
+            .join("target/first-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .temp_dir
+            .join("target/second-1.0.0.dist-info")
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn reject_conflicting_wheel_scripts_before_uninstall() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    let (first, bytes) = generate_wheel_with_files(
+        &"first".parse()?,
+        &"0.9.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("first/cli.py", "VALUE = 1\n")],
+    );
+    fs::write(context.temp_dir.join(&first), bytes)?;
+    let (second, bytes) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"0.9.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("second/cli.py", "VALUE = 2\n")],
+    );
+    fs::write(context.temp_dir.join(&second), bytes)?;
+    context
+        .pip_install()
+        .arg(&first)
+        .arg(&second)
+        .assert()
+        .success();
+
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    let second = context.temp_dir.join("second-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    write_shared_script_wheel(&second, "second", None)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&first).arg(&second), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `[VENV]/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    ");
+    context.assert_installed("first", "0.9.0");
+    context.assert_installed("second", "0.9.0");
+    context
+        .assert_command("from first.cli import VALUE; assert VALUE == 1")
+        .success();
+    context
+        .assert_command("from second.cli import VALUE; assert VALUE == 2")
+        .success();
     Ok(())
 }
 
