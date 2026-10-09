@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Explicit Google credential-loading failures now surface instead of silently falling back to another identity. Both parent integration regressions assert visible parsing errors and zero metadata requests. Unset or empty configuration retains default credential discovery.",
+  "validation": [
+    "Both updated parent regressions passed after confirmed pre-fix failures.",
+    "Neighboring invalid-cloud-endpoint integration test passed.",
+    "Local end-to-end checks passed for valid file and URL credentials and unset/empty configuration.",
+    "uv-auth Clippy passed with warnings denied.",
+    "cargo fmt --all, formatting verification, and git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2585"
+}

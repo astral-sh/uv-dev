@@ -12,7 +12,7 @@ Reported environment: uv 0.12.23, Python 3.11, Linux x86_64 musl in a Debian tri
 
 astral-sh/uv#22389 proposes fixing silent identity fallback but remains open and excludes -v diagnostics. apache/reqsign#910 fixes the parsing trigger from apache/reqsign#909 upstream. astral-sh/uv#19611 and astral-sh/uv#19894 provide adjacent credential-selection context.
 
-The report contains three distinct concerns: accepting omitted external-account source formats, handling an explicitly configured credential file that cannot be loaded, and exposing credential-loading diagnostics under normal or verbose output.
+The report contains three distinct concerns: accepting omitted external-account source formats, handling an explicitly configured credential file that cannot be loaded, and exposing credential-loading diagnostics under normal or verbose output. The focused checkout fix now propagates explicit credential-loading errors, preventing metadata fallback and displaying the underlying error at both verbosity levels. The upstream format-default change and broader dependency logging remain separate.
 
 A local behavioral reproduction confirmed all three observations on the installed uv 0.12.13 (Linux x86_64 GNU, CPython 3.12.3): an omitted source format caused fallback to mocked VM metadata, ordinary output and `-v` hid the credential-loading error, and `RUST_LOG=reqsign_core=debug` exposed it. Adding the explicit text format avoided metadata entirely and let the fixture sync successfully. This establishes the behavior independently of source inspection; the reporter's exact uv 0.12.23 musl/GKE environment was not run.
 
@@ -26,11 +26,11 @@ Outcome: **reproducible**, using local mock metadata, token-exchange, and wheel 
 - Linux x86_64; `/usr/bin/python3`, CPython 3.12.3. The reported environment instead uses uv 0.12.23 musl and Python 3.11 in Debian trixie on GKE.
 - Each scenario used a separate temporary project, virtual environment, cache, configuration directory, and authentication directory. Subprocesses received a fresh environment without inherited credentials or proxy settings; keyring and Python downloads were disabled.
 - All runtime HTTP endpoints were `127.0.0.1` listeners. `GCE_METADATA_HOST` redirected metadata discovery to the mock server. No real credential files, metadata credentials, or cloud identities were accessed. The fixture used synthetic markers and recorded only request paths and whether an Authorization header existed, never its value.
-- No repository files or GitHub state were changed. Existing checkout changes were left intact. No build or repository test suite was run.
+- The original installed-binary reproduction changed no repository files or GitHub state and ran no builds or repository tests. The subsequent focused checkout fix and debug-profile validation are documented under Fix.
 
 ### Fixture and commands
 
-The retained standard-library Python harness is `reproduction/reproduce.py`, relative to this README. It resolves the installed uv from PATH, generates a minimal wheel and project, starts the local server, runs one scenario, and writes its output and request summary under a new temporary scenario directory. Run explicitly from the issue-context directory:
+The original standard-library Python harness was `reproduction/reproduce.py`. It resolved the installed uv from PATH, generated a minimal wheel and project, started the local server, and ran one scenario in an isolated temporary directory. That auxiliary harness was not included in the persisted context for the fix; the checked-in parent regressions below now provide executable reproduction coverage. The original invocations were:
 
 ```sh
 python3 reproduction/reproduce.py default
@@ -97,30 +97,29 @@ DEBUG Successfully loaded credential from provider: VmMetadataCredentialProvider
 
 The control performed the mock STS exchange, retried the wheel with an Authorization header, and installed it without contacting metadata. This confirms that the omitted format triggers the observed fallback in this fixture. It does not independently verify the reporter's live GKE service-account identity or Artifact Registry permissions, nor constitute a runtime check of uv 0.12.23.
 
-Saved evidence is in `reproduction/default-result.json`, `reproduction/verbose-result.json`, `reproduction/diagnostic-result.json`, and `reproduction/format-control-result.json`, with corresponding `*-output.txt` files. Original runtime directories are under `/tmp/uv-22273-repro.AnmZ2U/`.
+The original reproduction recorded per-scenario results and output under `reproduction/` and runtime directories under `/tmp/uv-22273-repro.AnmZ2U/`. Those auxiliary files are not present in the current persisted context; the reproduction outcome remains recorded in `reproduction.json`, and the checked-in regressions were independently validated during the fix.
 
 ### Existing test coverage
 
-Searched `crates/uv/tests/it/`, `crates/uv-client/tests/it/`, and `crates/uv-auth/` for GCS endpoints, `GOOGLE_APPLICATION_CREDENTIALS`, external-account parsing, reqsign, and metadata fallback. No existing uv test covering this credential-file failure, metadata fallback, or reqsign warning visibility was found.
+The original search of `crates/uv/tests/it/`, `crates/uv-client/tests/it/`, and `crates/uv-auth/` found no test covering the credential-file failure or hidden diagnostics. The parent regression pull request, astral-sh/uv-dev#2583, subsequently added `auth::gcs_external_account_missing_file_format` and `auth::gcs_external_account_missing_url_format` in `crates/uv/tests/it/auth.rs`. Both originally asserted the unwanted fallback; both are retained and updated by this fix.
 
 The setup and assertion in `crates/uv/tests/it/auth.rs::invalid_cloud_endpoint_urls` were inspected: it passes `not-a-url` as each cloud endpoint and snapshots `Invalid UV_[CLOUD]_ENDPOINT_URL` / `relative URL without a base`. That test checks endpoint URL validation, not credential parsing or fallback. The endpoint path-prefix unit tests in `crates/uv-auth/src/providers.rs` and the AWS/Azure signer tests in `crates/uv-auth/src/credentials.rs` likewise do not cover this behavior.
 
 ## Draft response
 
-I reproduced the credential fallback and diagnostic behavior with the installed uv 0.12.13 on Linux, using local mock endpoints and a non-secret external-account configuration. Omitting `credential_source.format` led to successful VM metadata fallback and a wheel request with an Authorization header. Default output and `-v` showed only the resulting 403; `RUST_LOG=reqsign_core=debug` exposed the parse error and provider selection. Adding the explicit text format used the external-account flow with no metadata request. The exact uv 0.12.23/GKE deployment was not tested.
+The credential fallback and hidden diagnostic are reproduced by the two checked-in integration tests. The focused fix makes a nonempty `GOOGLE_APPLICATION_CREDENTIALS` select the explicit provider directly, so parsing or loading errors are returned instead of trying another identity. Both normal output and `-v` now show the parsing failure, and neither regression contacts VM metadata.
 
-astral-sh/uv#22389 proposes failing when explicitly configured Google credentials cannot be loaded. It remains open and does not address warning visibility in `-v`. Separately, apache/reqsign#910 merged the missing-format parsing fix; uv 0.12.23 and the current checkout still pin reqsign-google 3.1.1.
-
-For plain-text credential sources, adding `"format": {"type": "text"}` is a verified workaround in the local fixture. The explicit-credential fallback policy and visibility of dependency warnings remain separate decisions.
+Default credential discovery remains available when the variable is unset or empty. Valid file-backed and URL-backed external-account configurations still exchange their tokens and install a wheel successfully. Adding `"format": {"type": "text"}` remains necessary for these sources with the pinned reqsign parser; integrating apache/reqsign#910 is separate from this fix. General reqsign logging filters are unchanged.
 
 ## Classification
 
-Retain the bug classification for the external-account parsing failure and missing credential-loading feedback. Runtime evidence confirms metadata fallback after the explicit file fails to parse and the absence of its diagnostic under default output and `-v`. Reproducibility alone does not decide whether uv should fail or warn when an explicit credential source cannot be loaded; that policy remains a maintainer decision. astral-sh/uv#22389 was created in response to this report, so it does not make the issue a duplicate. The upstream parsing fix postdates the report and is absent from the pinned dependency; there is no evidence of a regression from a previously shipped fix.
+Retain the bug classification for silent failure of explicitly selected credentials. Runtime evidence confirms that the default chain swallowed the parse error and selected metadata, while uv's normal and verbose filters hid the warning. The focused fix propagates the explicit provider's error through the existing signing-error path, preventing an unintended identity change without changing default discovery. This addresses the report's requested fail-or-warn behavior with an actionable failure. astral-sh/uv#22389 was created in response to this report, so it does not make the issue a duplicate. The upstream parsing fix postdates the report and is absent from the pinned dependency; there is no evidence of a regression from a previously shipped fix.
 
 The upstream issue is a direct relationship, but its closed parser fix covers only the omitted-format trigger. The broader uv fallback and diagnostic behavior remains relevant. The open native Artifact Registry provider proposal uses a separate authentication path and does not replace the GCS endpoint provider.
 
 ## Related
 
+- astral-sh/uv-dev#2583 (parent regression pull request) — Adds the two file-source and URL-source integration regressions in `crates/uv/tests/it/auth.rs`. Both tests are retained and updated to assert error propagation and zero metadata requests.
 - astral-sh/uv#22389 (pull request, open) — Fail when `GOOGLE_APPLICATION_CREDENTIALS` is set but cannot be loaded. Direct proposed fix for astral-sh/uv#22273, opened afterward and explicitly referencing it. Uses EnvCredentialProvider directly when the variable is nonempty so loading errors propagate instead of selecting another identity. It explicitly excludes reqsign warning visibility in -v.
 - apache/reqsign#909 (issue, closed) — reqsign-google: `external_account` configs without `credential_source.format` fail to parse (Google defaults it to `text`). Tracks the exact parsing trigger and resulting metadata fallback, confirmed in the pinned reqsign-google 3.1.1 source. Closed by apache/reqsign#910; that parser fix does not resolve uv's broader handling of unloadable explicit credentials or hidden diagnostics.
 - apache/reqsign#910 (pull request, merged) — fix(google): default external account credential format to text. Merged October 8, 2026, after this report. Defaults omitted formats to text for file and URL sources, with mocked default-provider coverage against metadata fallback. Does not change the general error-skipping credential chain or uv logging; uv 0.12.23 and this checkout still pin reqsign-google 3.1.1.
@@ -129,7 +128,7 @@ The upstream issue is a direct relationship, but its closed parser fix covers on
 
 ## Supporting evidence
 
-- `crates/uv-auth/src/providers.rs:147`: `GcsEndpointProvider::create_signer` calls `reqsign::google::default_signer("storage.googleapis.com")` without overriding credential selection.
+- Before the fix, `crates/uv-auth/src/providers.rs::GcsEndpointProvider::create_signer` always used `reqsign::google::default_signer("storage.googleapis.com")` without overriding credential selection. The fix overrides only the credential provider when `GOOGLE_APPLICATION_CREDENTIALS` is nonempty.
 - `Cargo.lock:4024` pins `reqsign-google` 3.1.1; `Cargo.lock:3988` pins `reqsign-core` 3.3.1. The lockfile at the uv 0.12.23 tag has the same versions.
 - Published `reqsign-google` 3.1.1 source, `src/credential.rs:128` and `:140`: `UrlSource` and `FileSource` require `format: Format` without a serde default. A missing format therefore rejects those variants of the untagged `Source` enum.
 - Published `reqsign-google` 3.1.1 source, `src/provide_credential/default.rs:98`: the environment provider reads and parses the configured file, propagating failures to its caller. The default chain tries environment credentials, the well-known ADC file, and VM metadata in that order.
@@ -140,7 +139,7 @@ The upstream issue is a direct relationship, but its closed parser fix covers on
 - The diff of astral-sh/uv#19611 introduces an Artifact Registry credential provider that propagates explicit ADC failures. The existing GCS endpoint signer still calls the default signer; the change there only renames its type alias.
 - In astral-sh/uv#19894, a maintainer favors at most a warning for a missing explicit NETRC file. The preceding astral-sh/uv#19865 was closed after discussion of compatibility concerns. This is provider-specific design context, not an established general rule for Google credentials.
 
-Source inspection supports the failure mechanism and diagnostic filtering, and the local runtime checks above independently demonstrate the parser failure, metadata fallback, and hidden diagnostics on installed uv 0.12.13. The reporter's live GKE identity selection and Artifact Registry permissions were not independently verified. Only generated non-secret fixture configurations and synthetic responses were used; no real credentials were accessed and no builds were run.
+Source inspection and the installed uv 0.12.13 reproduction independently establish the parser failure, metadata fallback, and hidden diagnostics. The unchanged parent regressions also passed on the checkout's debug build reporting uv 0.13.0. The reporter's live GKE identity selection and Artifact Registry permissions were not independently verified. All runtime authentication used generated non-secret configurations and synthetic responses; no real credentials were accessed.
 
 ## Search coverage and comparisons
 
@@ -157,10 +156,50 @@ Additional comparisons:
 
 Searches briefly hit GitHub's search rate limit; the affected searches were retried successfully. PR keyword search did not return known matching pull requests, so conclusions were supplemented with direct listings, timelines, and source history rather than treating empty results as proof of absence.
 
+## Fix
+
+Outcome: **fixed** in the checkout. Only `crates/uv-auth/src/providers.rs` and the original parent regression file, `crates/uv/tests/it/auth.rs`, are modified.
+
+### Implementation and scope
+
+`GcsEndpointProvider::create_signer` now uses reqsign's `EnvCredentialProvider` directly when `GOOGLE_APPLICATION_CREDENTIALS` is a nonempty string. This removes the error-swallowing default chain from the explicit-credential path. The existing `Authentication::GcsSigner` error handling then reports `Failed to sign request with GCS credentials`, `failed to parse credential file`, and the underlying untagged `Source` error. The default signer and credential chain remain unchanged for unset or empty configuration.
+
+Both parent regressions retain their omitted-format input and local mock endpoints. Their snapshots now require the signing and parsing errors instead of the misleading 403, and their mock expectations require zero metadata requests and zero wheel requests using the metadata identity. The file-source test exercises normal output; the URL-source test retains `-v`. Both retain their `test-python` feature gates and require no external service.
+
+The neighboring implementation and tests were inspected across `uv-auth` signing, middleware caching, GCS configuration, the auth integration module, and `uv-client` remote metadata tests. GCS callers share the same signer selection and signing implementation; no distinct producer/consumer implementation or additional contradictory GCS assertion was found. The remote metadata tests exercise separate HTTP authentication and redirect behavior, so they were not changed. No extra regression tests, dependency updates, logging redesign, or other provider changes were needed.
+
+The pinned dependency still rejects an omitted source format. This fix makes that failure explicit and prevents fallback; it does not duplicate the upstream parser change. General reqsign warnings from other credential chains are outside this change.
+
+### Focused validation
+
+On Linux x86_64 with Rust 1.99.0 and a debug-profile uv 0.13.0 build:
+
+- Both original parent tests passed while asserting metadata fallback and 403 responses.
+- After changing only their assertions, both failed because the actual output still contained the fallback 403 instead of the expected credential-loading error.
+- With the production fix, both updated tests passed, including their zero-request metadata expectations.
+- The neighboring `auth::invalid_cloud_endpoint_urls` integration test passed unchanged.
+- Local end-to-end controls using valid explicit file and URL sources each completed one token exchange, made zero metadata requests, and installed `ok==1.0.0`. The URL source was fetched once. Controls with the variable unset and empty each made one metadata request, no token-exchange request, and installed the same wheel. All four used temporary state and loopback servers; only synthetic markers and Authorization-header presence were used.
+- Focused `uv-auth` Clippy passed with warnings denied. Formatting and whitespace checks passed.
+
+Successful repository commands (test/build artifacts used `/tmp/uv-22273-fix-target`, four build jobs, and disabled debug symbols; no release profile was used):
+
+```sh
+cargo test --locked -p uv --test it --no-default-features --features test-python auth::gcs_external_account_missing -- --nocapture
+cargo test --locked -p uv --test it --no-default-features --features test-python auth::invalid_cloud_endpoint_urls -- --exact
+RUSTUP_TOOLCHAIN=stable cargo clippy --locked -p uv-auth --all-targets -- -D warnings
+RUSTUP_TOOLCHAIN=stable cargo fmt --all
+RUSTUP_TOOLCHAIN=stable cargo fmt --all -- --check
+git diff --check
+```
+
+The installed `stable` toolchain is also Rust 1.99.0, with the same compiler commit as the pinned toolchain; it supplies the formatter and Clippy components. The restricted `test-python` build emitted five unrelated unused-import/dead-code warnings in `upgrade.rs` and `network.rs`; identical warnings were verified in the unchanged baseline build. Those files were not modified.
+
+The four standalone controls were run explicitly with `python3 /tmp/uv-22273-controls.py explicit-file`, `explicit-url`, `unset`, and `empty`. Debug-build logs are in `/tmp/uv-22273-parent-tests.log`, `/tmp/uv-22273-red-tests.log`, `/tmp/uv-22273-green-tests.log`, `/tmp/uv-22273-endpoint-tests.log`, and `/tmp/uv-22273-clippy.log` in the current environment. No full test suite, real cloud endpoint, or real credential was used.
+
 ## Maintainer follow-up
 
-Review the explicit-credential failure behavior proposed in astral-sh/uv#22389, retaining separate consideration of the requested reqsign diagnostics in `-v`. Track integration of the upstream missing-format fix independently: a parser correction prevents this specific trigger but does not change fallback for other credential-loading errors.
+Review the focused explicit-credential error propagation alongside the related proposal in astral-sh/uv#22389. The current patch supplies integration coverage for both reported source forms and makes their errors visible at normal and verbose output. Track the upstream missing-format parser update independently; broader reqsign warning visibility is not changed here.
 
-The reporter's explicit text-format workaround succeeded for the plain-text fixture. No private configuration or credential material is needed to reproduce the behavior. A future regression test should cover the chosen explicit-credential policy and relevant verbosity behavior; integrating the upstream parser fix alone does not settle either policy.
+This handoff preserves the original reproduction and related-work investigation and records the validated local fix. No commits, pushes, Git configuration changes, or GitHub changes were made.
 
-This handoff records the earlier read-only repository and GitHub investigation plus isolated runtime reproduction as of October 9, 2026. No GitHub changes were made.
+Pull request: https://github.com/astral-sh/uv-dev/pull/2585
