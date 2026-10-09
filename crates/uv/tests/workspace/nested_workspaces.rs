@@ -269,13 +269,61 @@ fn nested_workspaces_preserve_child_locks() -> Result<()> {
     let parent = context.temp_dir.child("parent");
     let child = parent.child("services/child");
 
-    write_workspace(&parent, "parent", &["shared==1.0.0"], &["services/*"])?;
-    write_workspace(&child, "child", &["shared==2.0.0"], &[])?;
-    lock(&context, parent.path(), &server).assert().success();
-    lock(&context, child.path(), &server).assert().success();
+    parent.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared==1.0.0"]
+        [tool.uv.workspace]
+        members = []
+        workspaces = ["services/*"]
+    "#})?;
+    child.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared==2.0.0"]
+        [tool.uv.workspace]
+        members = []
+        workspaces = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(parent.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    "#);
 
-    write_workspace(&child, "child", &["shared>=1"], &[])?;
-    lock(&context, child.path(), &server).assert().success();
+    child.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared>=1"]
+        [tool.uv.workspace]
+        members = []
+        workspaces = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    "#);
     assert_json_snapshot!(registry_versions(child.path())?, @r#"
     {
       "shared": [
@@ -287,10 +335,16 @@ fn nested_workspaces_preserve_child_locks() -> Result<()> {
     // Moving a complete child outside the collection makes it an ordinary workspace.
     let standalone = context.temp_dir.child("standalone");
     copy_dir_ignore(child.path(), standalone.path())?;
-    lock(&context, standalone.path(), &server)
-        .arg("--upgrade")
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.lock().current_dir(standalone.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url())
+        .arg("--upgrade"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    Updated shared v2.0.0 -> v3.0.0
+    "#);
     assert_json_snapshot!(registry_versions(standalone.path())?, @r#"
     {
       "shared": [
@@ -299,35 +353,77 @@ fn nested_workspaces_preserve_child_locks() -> Result<()> {
     }
     "#);
 
-    write_workspace(&parent, "parent", &["shared==1.5.0"], &["services/*"])?;
-    lock(&context, parent.path(), &server).assert().success();
-    let parent_lock = fs_err::read_to_string(parent.join("uv.lock"))?;
-    let child_lock = fs_err::read(child.join("uv.lock"))?;
+    parent.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared==1.5.0"]
+        [tool.uv.workspace]
+        members = []
+        workspaces = ["services/*"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(parent.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    Updated shared v1.0.0 -> v1.5.0
+    "#);
+    let parent_lock = context.read("parent/uv.lock");
+    let child_lock = context.read("parent/services/child/uv.lock");
 
-    lock(&context, child.path(), &server)
-        .arg("--locked")
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url())
+        .arg("--locked"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    "#);
     parent.child("uv.lock").write_str("not a lockfile")?;
-    lock(&context, child.path(), &server)
-        .arg("--locked")
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url())
+        .arg("--locked"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    "#);
     fs_err::remove_file(parent.join("uv.lock"))?;
-    for flag in ["--locked", "--frozen"] {
-        lock(&context, child.path(), &server)
-            .arg(flag)
-            .assert()
-            .success();
-    }
-    assert_eq!(fs_err::read(child.join("uv.lock"))?, child_lock);
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url()).arg("--locked"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url()).arg("--frozen"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The lockfile at `uv.lock` was only checked for validity, not whether it is up-to-date, because `--frozen` was provided; use `--check` instead
+    "#);
+    assert_eq!(context.read("parent/services/child/uv.lock"), child_lock);
 
     // The ordinary upgrade flags drop child pins, not the parent's baseline.
     parent.child("uv.lock").write_str(&parent_lock)?;
-    lock(&context, child.path(), &server)
-        .arg("--upgrade")
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url())
+        .arg("--upgrade"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    Updated shared v2.0.0 -> v1.5.0
+    "#);
     assert_json_snapshot!(registry_versions(child.path())?, @r#"
     {
       "shared": [
@@ -335,13 +431,18 @@ fn nested_workspaces_preserve_child_locks() -> Result<()> {
       ]
     }
     "#);
-    let upgraded_lock = fs_err::read(child.join("uv.lock"))?;
-    lock(&context, child.path(), &server)
-        .args(["--upgrade-package", "shared"])
-        .assert()
-        .success();
-    assert_eq!(fs_err::read(child.join("uv.lock"))?, upgraded_lock);
-    assert_eq!(fs_err::read_to_string(parent.join("uv.lock"))?, parent_lock);
+    let upgraded_lock = context.read("parent/services/child/uv.lock");
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url())
+        .args(["--upgrade-package", "shared"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    "#);
+    assert_eq!(context.read("parent/services/child/uv.lock"), upgraded_lock);
+    assert_eq!(context.read("parent/uv.lock"), parent_lock);
     Ok(())
 }
 
@@ -505,14 +606,20 @@ fn nested_workspaces_keep_resolver_settings() -> Result<()> {
         default = true
     "#, child_index.index_url()})?;
 
-    for root in [parent.path(), child.path()] {
-        context
-            .lock()
-            .current_dir(root)
-            .args(["--preview-features", "nested-workspaces"])
-            .assert()
-            .success();
-    }
+    uv_snapshot!(context.filters(), context.lock().current_dir(parent.path())
+        .args(["--preview-features", "nested-workspaces"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 3 packages in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 3 packages in [TIME]
+    "#);
     assert_json_snapshot!(registry_versions(parent.path())?, @r#"
     {
       "shared": [
@@ -533,7 +640,7 @@ fn nested_workspaces_keep_resolver_settings() -> Result<()> {
       ]
     }
     "#);
-    let child_lock: toml::Value = toml::from_str(&fs_err::read_to_string(child.join("uv.lock"))?)?;
+    let child_lock: toml::Value = toml::from_str(&context.read("parent/services/child/uv.lock"))?;
     assert_eq!(child_lock["requires-python"].as_str(), Some(">=3.11"));
     Ok(())
 }
