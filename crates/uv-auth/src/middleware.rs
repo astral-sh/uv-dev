@@ -1299,12 +1299,7 @@ mod tests {
             client.get(server.uri()).send().await.expect_err(
                 "both accounts must remain ambiguous after the older response completes",
             );
-        insta::assert_snapshot!(format!("{error:?}").replace(&server.uri(), "[URL]"), @"
-        Middleware(Failed to fetch credentials from the native credential store
-
-        Caused by:
-            Multiple credentials found for URL '[URL]/', specify which username to use)
-        ");
+        insta::assert_snapshot!(format!("{error:#}").replace(&server.uri(), "[URL]"), @"Failed to fetch credentials from the native credential store: Multiple credentials found for URL '[URL]/', specify which username to use");
         Ok(())
     }
 
