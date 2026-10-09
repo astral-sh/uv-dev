@@ -83,12 +83,16 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
         }
     }
 
-    fn on_complete(&self) {
+    fn on_complete(&self, success: bool) {
         self.start();
         self.reporter.root.set_message("");
         self.reporter.emit_progress(&JsonlProgressEvent::new(
             ProgressPhase::Resolve,
-            ProgressStatus::Completed,
+            if success {
+                ProgressStatus::Completed
+            } else {
+                ProgressStatus::Failed
+            },
         ));
         self.reporter.root.finish_and_clear();
     }
