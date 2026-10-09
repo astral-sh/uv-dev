@@ -77,7 +77,7 @@ pub use crate::lock::export::{
     Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, PythonReport, cyclonedx_json,
 };
 use crate::lock::inputs::ManifestFilter;
-pub use crate::lock::installable::{Installable, InstallableRootKind};
+pub use crate::lock::installable::Installable;
 pub use crate::lock::map::PackageMap;
 pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
@@ -7373,7 +7373,7 @@ impl Package {
     }
 
     /// Returns the dependencies of the package.
-    pub fn dependencies(&self) -> &[Dependency] {
+    fn dependencies(&self) -> &[Dependency] {
         &self.dependencies
     }
 
@@ -7396,12 +7396,17 @@ impl Package {
     }
 
     /// Prepare effective declarations once for a dependency section, when metadata is available.
-    pub fn dependency_requirements(
+    fn dependency_requirements(
         &self,
         extra: Option<&ExtraName>,
         group: Option<&GroupName>,
         modifiers: &DependencyModifiers,
     ) -> Option<Vec<Requirement>> {
+        // Dynamic source trees omit their version from the lock. Resolved edges already reflect
+        // package-scoped modifiers, but the declarations cannot recover which version scope applied.
+        if self.id.version.is_none() && modifiers.has_scoped_package(&self.id.name) {
+            return None;
+        }
         let requirements = group
             .map_or(Some(&self.metadata.requires_dist), |group| {
                 self.metadata.dependency_groups.get(group)
@@ -9282,12 +9287,12 @@ impl Dependency {
     }
 
     /// Returns the package name of this dependency.
-    pub fn package_name(&self) -> &PackageName {
+    fn package_name(&self) -> &PackageName {
         &self.package_id.name
     }
 
     /// Return the conditions under which the effective declarations request this dependency.
-    pub fn activation_marker(&self, requirements: Option<&[Requirement]>) -> MarkerTree {
+    fn activation_marker(&self, requirements: Option<&[Requirement]>) -> MarkerTree {
         let fallback = self.complexified_marker.pep508();
         let Some(requirements) = requirements else {
             return fallback;
@@ -9314,11 +9319,11 @@ impl Dependency {
                 });
             marker = marker.and(extra_marker);
         }
-        marker
+        marker.and(fallback)
     }
 
     /// Returns the extras specified on this dependency.
-    pub fn extra(&self) -> &BTreeSet<ExtraName> {
+    fn extra(&self) -> &BTreeSet<ExtraName> {
         &self.extra
     }
 }

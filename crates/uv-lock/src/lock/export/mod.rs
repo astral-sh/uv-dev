@@ -25,8 +25,9 @@ pub(crate) use crate::lock::export::metadata::{
 };
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
+use crate::lock::installable::InstallableRootKind;
 use crate::lock::{LockErrorKind, PackageIndex};
-use crate::{Installable, InstallableRootKind, LockError, Package};
+use crate::{Installable, LockError, Package};
 
 pub mod cyclonedx_json;
 mod metadata;
