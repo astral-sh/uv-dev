@@ -49,7 +49,7 @@ impl GeneratedScripts {
         for (script, target) in scripts {
             validate_script_name(script).map_err(anyhow::Error::msg)?;
             ensure!(
-                target.module().split('.').next() == Some(normalized.as_ref()),
+                target.module().as_ref().split('.').next() == Some(normalized.as_ref()),
                 "console-script `{script}` for package `{name}` must target `{normalized}` or one of its submodules, got `{target}`"
             );
             ensure!(
@@ -59,18 +59,16 @@ impl GeneratedScripts {
                 "duplicate console-script name `{script}`"
             );
 
-            let mut module = String::new();
-            for component in target.module().split('.') {
-                if !module.is_empty() {
-                    module.push('.');
-                }
-                module.push_str(component);
-                modules.entry(module.clone()).or_default();
+            for module in target.module().prefixes() {
+                modules.entry(module.to_string()).or_default();
             }
-            modules.entry(module).or_default().insert(
-                target.function().to_string(),
-                format!("print(\"{name} {version}\")"),
-            );
+            modules
+                .entry(target.module().to_string())
+                .or_default()
+                .insert(
+                    target.function().to_string(),
+                    format!("print(\"{name} {version}\")"),
+                );
         }
 
         let files = modules
@@ -78,8 +76,11 @@ impl GeneratedScripts {
             .map(|(module, functions)| {
                 let mut contents = format!("__version__ = \"{version}\"\n");
                 for (function, statement) in functions {
-                    writeln!(contents, "\ndef {function}():\n    {statement}")
-                        .expect("writing generated Python into a string should succeed");
+                    writeln!(
+                        contents,
+                        "\ndef {function}():\n    from builtins import print\n    {statement}"
+                    )
+                    .expect("writing generated Python into a string should succeed");
                 }
                 (
                     format!("{}/__init__.py", module.replace('.', "/")),
@@ -157,7 +158,9 @@ mod tests {
         );
         assert_eq!(
             generated.source("my_package/commands/cli/__init__.py"),
-            Some("__version__ = \"1.2.3\"\n\ndef main():\n    print(\"my-package 1.2.3\")\n")
+            Some(
+                "__version__ = \"1.2.3\"\n\ndef main():\n    from builtins import print\n    print(\"my-package 1.2.3\")\n"
+            )
         );
         assert_eq!(
             generated.entry_points(),

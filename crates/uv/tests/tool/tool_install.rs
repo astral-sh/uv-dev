@@ -94,6 +94,52 @@ fn tool_install_packse_console_scripts() {
     }
 }
 
+/// A callable named print must not shadow output from itself or another generated callable.
+#[test]
+fn tool_install_packse_print_function() -> Result<()> {
+    let scenario = toml::from_str(indoc! {r#"
+        name = "console-script-print"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shadow-tool.versions."1.2.3"]
+        sdist = false
+        [packages.shadow-tool.versions."1.2.3".scripts]
+        shadow-print = "shadow_tool:print"
+        shadow-run = "shadow_tool:run"
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.tool_install().arg("shadow-tool")
+        .arg("--index-url").arg(server.index_url())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shadow-tool==1.2.3
+    Installed 2 executables: shadow-print, shadow-run
+    ");
+
+    let print = bin_dir.child(format!("shadow-print{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.external_command(print.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shadow-tool 1.2.3
+    ");
+    let run = bin_dir.child(format!("shadow-run{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.external_command(run.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shadow-tool 1.2.3
+    ");
+    Ok(())
+}
+
 #[test]
 fn tool_install() {
     let context = uv_test::test_context!("3.12")
