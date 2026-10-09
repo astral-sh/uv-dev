@@ -896,12 +896,83 @@ fn run_pep723_script_relative_index() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
+    Prepared 1 package in [TIME]
     Installed 2 packages in [TIME]
      + ok==1.0.0 (from file://[TEMP_DIR]/scripts/links/ok-1.0.0-py3-none-any.whl)
      + validation==1.0.0
     ");
 
+    Ok(())
+}
+
+/// Index authentication policies from requirements scripts apply to ephemeral environments.
+#[test]
+fn run_with_script_index_authentication() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        #
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{index}"
+        # explicit = true
+        # authenticate = "always"
+        #
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, index = server.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--with-requirements").arg("requirements.py")
+        .arg("python").arg("-c").arg("import a"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/a/
+      cause: Missing credentials for: http://[LOCALHOST]/simple/a/
+    ");
+    Ok(())
+}
+
+/// A command-line index replaces the corresponding script definition, including its policy.
+#[test]
+fn run_with_script_index_command_line_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        #
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "https://example.invalid/simple"
+        # explicit = true
+        # authenticate = "always"
+        #
+        # [tool.uv.sources]
+        # a = { index = "private" }
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--index").arg(format!("private={}", server.index_url()))
+        .arg("--with-requirements").arg("requirements.py")
+        .arg("python").arg("-c").arg("import a"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    ");
     Ok(())
 }
 

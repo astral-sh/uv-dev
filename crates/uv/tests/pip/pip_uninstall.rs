@@ -5,7 +5,9 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
+#[cfg(feature = "test-pypi")]
 use indoc::indoc;
+#[cfg(feature = "test-pypi")]
 use insta::allow_duplicates;
 
 use uv_test::uv_snapshot;

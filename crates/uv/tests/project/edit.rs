@@ -2918,6 +2918,58 @@ fn add_path_adjacent_directory() -> Result<()> {
     Ok(())
 }
 
+/// Absolute file URLs in requirements scripts remain absolute when added to a project.
+#[test]
+fn add_absolute_file_url_from_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let dependency = context.temp_dir.child("dependency");
+    dependency.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "1.0.0"
+    "#})?;
+    let url = Url::from_directory_path(dependency.path())
+        .map_err(|()| anyhow::anyhow!("dependency path cannot be represented as a file URL"))?;
+    context
+        .temp_dir
+        .child("requirements")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency @ {url}"]
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("-r").arg("requirements").arg("--frozen").arg("--no-workspace"), @"
+    exit_code: 0 (success)
+    ");
+    let pyproject = fs_err::read_to_string(context.temp_dir.child("pyproject.toml"))?;
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(pyproject, @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "dependency",
+        ]
+
+        [tool.uv.sources]
+        dependency = { path = "[TEMP_DIR]/dependency" }
+        "#);
+    });
+    Ok(())
+}
+
 /// Check relative and absolute path handling with `uv add`.
 ///
 /// When a user provides an absolute path or `file://` URL, it should be preserved as absolute

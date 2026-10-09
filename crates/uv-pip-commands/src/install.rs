@@ -164,6 +164,7 @@ pub async fn pip_install(
         pylock_groups,
         source_trees,
         groups,
+        indexes,
         index_url,
         extra_index_urls,
         no_index,
@@ -431,7 +432,7 @@ pub async fn pip_install(
     };
 
     // Incorporate any index locations from the provided sources.
-    let index_locations = index_locations.combine(
+    let index_locations = index_locations.with_source_indexes(indexes).combine(
         extra_index_urls
             .into_iter()
             .map(Index::from_extra_index_url)

@@ -410,6 +410,12 @@ pub async fn install(
     )
     .await?;
 
+    let mut settings = settings;
+    settings.resolver.index_locations = settings
+        .resolver
+        .index_locations
+        .with_source_indexes(spec.indexes.clone());
+
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
         let mut requirements = Vec::with_capacity(1 + with.len());

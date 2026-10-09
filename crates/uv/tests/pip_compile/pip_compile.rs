@@ -4276,6 +4276,56 @@ fn pep723_requirements_sources_and_indexes() -> Result<()> {
     Ok(())
 }
 
+/// Named indexes retain their release cutoff when lowering script requirements.
+#[test]
+#[cfg(feature = "test-universal")]
+fn pep723_requirements_index_exclude_newer() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "script-index-cutoff"
+        [root]
+        requires = ["a"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        wheel = { upload_time = "2023-01-01T00:00:00Z" }
+        [packages.a.versions."2.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00Z" }
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        #
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{index}"
+        # explicit = true
+        # exclude-newer = "2023-06-01T00:00:00Z"
+        #
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, index = server.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.py").arg("--no-header")
+        .arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
 /// Check that `tool.uv.constraint-dependencies` in `pyproject.toml` is respected.
 #[test]
 fn constraint_dependency_from_pyproject() -> Result<()> {

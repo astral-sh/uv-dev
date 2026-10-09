@@ -111,6 +111,8 @@ pub struct RequirementsSpecification {
     pub groups: BTreeMap<PathBuf, DependencyGroups>,
     /// The extras used to collect requirements.
     pub extras: FxHashSet<ExtraName>,
+    /// Full definitions of indexes selected by lowered script sources.
+    pub indexes: Vec<Index>,
     /// The index URL to use for fetching packages.
     pub index_url: Option<IndexUrl>,
     /// The extra index URLs to use for fetching packages.
@@ -174,7 +176,9 @@ impl RequirementsSpecification {
         // instead use the script's directory, so emit their resolved paths when compiling them.
         let absolute_path = |requirement: &mut Requirement| match &mut requirement.source {
             RequirementSource::Path { url, .. } | RequirementSource::Directory { url, .. } => {
-                *url = VerbatimUrl::from_url(url.to_url());
+                if url.prefers_relative() {
+                    *url = VerbatimUrl::from_url(url.to_url());
+                }
             }
             RequirementSource::Registry { .. }
             | RequirementSource::Url { .. }
@@ -635,6 +639,7 @@ impl RequirementsSpecification {
                 spec.index_url = Some(index_url);
             }
             spec.no_index |= source.no_index;
+            spec.indexes.extend(source.indexes);
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
@@ -677,6 +682,7 @@ impl RequirementsSpecification {
                 spec.index_url = Some(index_url);
             }
             spec.no_index |= source.no_index;
+            spec.indexes.extend(source.indexes);
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
@@ -707,6 +713,7 @@ impl RequirementsSpecification {
                 spec.index_url = Some(index_url);
             }
             spec.no_index |= source.no_index;
+            spec.indexes.extend(source.indexes);
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
