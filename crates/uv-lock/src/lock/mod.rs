@@ -3255,14 +3255,14 @@ impl Lock {
         )
     }
 
-    /// Return the environments in which incoming locked edges resolved workspace extras.
+    /// Return the environments in which locked edges resolved workspace production and extras.
     ///
     /// Retaining parent markers distinguishes resolved empty extras from metadata-free placeholders.
-    pub fn resolved_workspace_extras(
+    pub fn resolved_workspace_reachability(
         &self,
         root: &Path,
         activated: &[ConflictItem],
-    ) -> Result<BTreeMap<(&PackageName, &ExtraName), MarkerTree>, LockError> {
+    ) -> Result<BTreeMap<(&PackageName, Option<&ExtraName>), MarkerTree>, LockError> {
         let root_marker = implicit_constraints_marker(
             self.requires_python.to_marker_tree(),
             self.supported_environments(),
@@ -3354,7 +3354,7 @@ impl Lock {
             }
         }
         let mut seen = FxHashMap::<(&PackageId, DependencyContext<'_>), MarkerTree>::default();
-        let mut selected = BTreeMap::<(&PackageName, &ExtraName), MarkerTree>::new();
+        let mut selected = BTreeMap::<(&PackageName, Option<&ExtraName>), MarkerTree>::new();
         while let Some((package, context, mut marker)) = queue.pop_front() {
             if !package.fork_markers.is_empty() {
                 marker = marker.and(
@@ -3378,11 +3378,16 @@ impl Lock {
                 continue;
             }
             *previous = marker;
-            if let DependencyContext::Extra(extra) = context
+            let selection = match context {
+                DependencyContext::Production => Some((package.name(), None)),
+                DependencyContext::Extra(extra) => Some((package.name(), Some(extra))),
+                DependencyContext::Group(_) => None,
+            };
+            if let Some(selection) = selection
                 && self.is_workspace_member(package)
             {
                 selected
-                    .entry((package.name(), extra))
+                    .entry(selection)
                     .and_modify(|current| *current = current.or(marker))
                     .or_insert(marker);
             }

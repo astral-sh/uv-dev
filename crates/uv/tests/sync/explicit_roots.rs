@@ -1157,3 +1157,182 @@ fn explicit_roots_workspace_group_resolves_non_root_empty_extra() -> Result<()> 
     ");
     Ok(())
 }
+
+#[test]
+fn explicit_roots_non_root_production_preserves_platform_domain() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let active_platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let (inactive_platform, inactive_target) = if cfg!(windows) {
+        ("darwin", "x86_64-apple-darwin")
+    } else {
+        ("win32", "x86_64-pc-windows-msvc")
+    };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared; sys_platform == '{active_platform}'"]
+
+        [dependency-groups]
+        check = []
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        shared = {{ workspace = true }}
+        leaf = {{ workspace = true }}
+
+        [tool.uv.workspace]
+        members = ["shared", "leaf"]
+        roots = ["app"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf; sys_platform == '{inactive_platform}'"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/src/leaf/__init__.py")
+        .touch()?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "shared", "--offline", "--dry-run", "--python-platform",
+    ]).arg(inactive_target), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 2 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    error: Dependencies for workspace member `shared` were not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependencies.
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--offline", "--dry-run", "--python-platform",
+    ]).arg(inactive_target), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Dependencies for workspace member `shared` were not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependencies.
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "shared", "--offline", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Dependencies for workspace member `shared` were not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependencies.
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "shared", "--offline", "--format", "cyclonedx1.5",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Dependencies for workspace member `shared` were not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependencies.
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--offline", "--dry-run",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--only-group", "check", "--offline", "--dry-run", "--python-platform",
+    ]).arg(inactive_target), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
+    ");
+
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--upgrade",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--offline", "--dry-run", "--python-platform",
+    ]).arg(inactive_target), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Dependencies for workspace member `shared` were not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependencies.
+    ");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("roots = [\"app\"]", "roots = [\"app\", \"shared\"]"),
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--offline", "--dry-run", "--python-platform",
+    ]).arg(inactive_target), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + leaf @ file://[TEMP_DIR]/leaf
+    ");
+    Ok(())
+}
