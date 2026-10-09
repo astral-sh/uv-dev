@@ -286,6 +286,19 @@ impl Workspace {
                     DependencyModifierScope::Package(&name, version)
                 });
             for requirement in modifiers.apply(scope, &requirements) {
+                if requirement.name == name {
+                    let marker = active.and(requirement.marker);
+                    if !marker.is_false() {
+                        pending.extend(
+                            requirement
+                                .extras
+                                .iter()
+                                .cloned()
+                                .map(|extra| (name.clone(), Some(extra), marker)),
+                        );
+                    }
+                    continue;
+                }
                 let Some(target) = self.packages().get(&requirement.name) else {
                     continue;
                 };

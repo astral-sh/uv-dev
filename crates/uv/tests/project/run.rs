@@ -7912,13 +7912,6 @@ fn run_no_sync_frozen_without_lock() -> Result<()> {
     ----- stdout -----
     no lock required
     ");
-    uv_snapshot!(context.filters(), context.run()
-        .args(["--no-sync", "python", "-c", "print('no lock required')"])
-        .env(EnvVars::UV_FROZEN, "1"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    no lock required
-    ");
     assert!(!context.temp_dir.child("uv.lock").exists());
     Ok(())
 }

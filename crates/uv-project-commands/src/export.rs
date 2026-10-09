@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
@@ -469,10 +470,13 @@ pub async fn export(
                     }
                 }
             };
-            let selected_lock = resolved_lock.select_workspace_context(
-                selected_group.and_then(|group| group.name.as_ref()),
-                &members,
-            )?;
+            let group_name = selected_group.and_then(|group| group.name.as_ref());
+            let selected_lock =
+                if resolved_lock.workspace_groups().is_empty() && group_name.is_none() {
+                    Cow::Borrowed(&resolved_lock)
+                } else {
+                    Cow::Owned(resolved_lock.select_workspace_context(group_name, &members)?)
+                };
 
             let groups = DependencyGroups::from_args(
                 None,
