@@ -102,14 +102,19 @@ pub async fn pin(
         if let Some(file) = version_file? {
             let mut pins = file.versions().peekable();
             let download_list = if virtual_project.is_some() && pins.peek().is_some() {
-                Some(
-                    ManagedPythonDownloadList::new(
-                        &client_builder,
-                        cache,
-                        install_mirrors.python_downloads_json_url(),
-                    )
-                    .await?,
+                match ManagedPythonDownloadList::new(
+                    &client_builder,
+                    cache,
+                    install_mirrors.python_downloads_json_url(),
                 )
+                .await
+                {
+                    Ok(downloads) => Some(downloads),
+                    Err(error) => {
+                        debug!("Skipping Python pin compatibility warnings: {error}");
+                        None
+                    }
+                }
             } else {
                 None
             };

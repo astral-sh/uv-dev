@@ -7733,6 +7733,7 @@ dependencies = [
  "uv-warnings",
  "windows",
  "windows-registry",
+ "wiremock",
  "zstd 0.13.3",
 ]
 

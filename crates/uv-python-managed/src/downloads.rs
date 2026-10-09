@@ -33,8 +33,8 @@ use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::cache_digest;
 use uv_client::{
     BaseClient, BaseClientBuilder, CacheControl, CachedClient, CachedClientError, ClientBuildError,
-    Connectivity, RetriableError, RetryState, WrappedReqwestError, fetch_with_url_fallback,
-    retryable_on_request_failure,
+    Connectivity, ErrorKind as ClientErrorKind, RetriableError, RetryState, WrappedReqwestError,
+    fetch_with_url_fallback, retryable_on_request_failure,
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
@@ -149,6 +149,14 @@ impl RetriableError for Error {
         if let Self::NetworkErrorWithRetries { retries, .. } = self {
             return *retries;
         }
+        if let Self::RemotePythonDownloadsJSONClient(error) = self {
+            return error.retries();
+        }
+        if let Self::FetchingPythonDownloadsJSONError(_, error)
+        | Self::FetchingPythonDownloadsNdjsonError(_, error) = self
+        {
+            return error.retries();
+        }
         if let Self::NetworkMiddlewareError(_, anyhow_error) = self
             && let Some(RetryError::WithRetries { retries, .. }) =
                 anyhow_error.downcast_ref::<RetryError>()
@@ -175,6 +183,12 @@ impl RetriableError for Error {
             // `Io` uses `#[error(transparent)]`, so `source()` delegates to the inner error's
             // own source rather than returning the `io::Error` itself. We must unwrap it
             // explicitly so that `retryable_on_request_failure` can inspect the io error kind.
+            Self::FetchingPythonDownloadsJSONError(_, error)
+            | Self::FetchingPythonDownloadsNdjsonError(_, error) => error.should_try_next_url(),
+            Self::RemotePythonDownloadsJSONClient(error) => matches!(
+                error.kind(),
+                ClientErrorKind::WrappedReqwestError(..) | ClientErrorKind::Offline(_)
+            ),
             Self::Io(err) => retryable_on_request_failure(err).is_some(),
             _ => false,
         }
@@ -508,7 +522,7 @@ impl ManagedPythonDownloadList {
             Path(Cow<'a, Path>),
             Http(DisplaySafeUrl),
             Ndjson(DisplaySafeUrl),
-            Preview(DisplaySafeUrl),
+            Preview(Vec<DisplaySafeUrl>),
         }
 
         // Determine the source and format
@@ -535,10 +549,9 @@ impl ManagedPythonDownloadList {
             }
         } else if uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata) {
             let custom_astral_mirror = astral_mirror_url_from_env();
-            let mirror_base = astral_mirror_base_url(custom_astral_mirror.as_deref());
-            Source::Preview(DisplaySafeUrl::parse(&format!(
-                "{mirror_base}/github/versions/main/v1/python-build-standalone.ndjson",
-            ))?)
+            Source::Preview(python_download_metadata_urls(
+                custom_astral_mirror.as_deref(),
+            )?)
         } else {
             Source::BuiltIn
         };
@@ -572,7 +585,7 @@ impl ManagedPythonDownloadList {
                     })?;
                 parse_json_downloads(downloads)
             }
-            Source::Ndjson(ref url) | Source::Preview(ref url) => {
+            Source::Ndjson(ref url) => {
                 let client = CachedClient::new(
                     client_builder
                         .build()
@@ -583,6 +596,9 @@ impl ManagedPythonDownloadList {
                     .map_err(|err| {
                         Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err))
                     })?
+            }
+            Source::Preview(ref urls) => {
+                fetch_ndjson_with_fallback(client_builder, cache, urls).await?
             }
         };
 
@@ -599,6 +615,51 @@ impl ManagedPythonDownloadList {
         let result = parse_json_downloads(json_downloads);
         Ok(Self { downloads: result })
     }
+}
+
+/// Use the default mirror with upstream fallback, or an explicit mirror exclusively.
+fn python_download_metadata_urls(
+    astral_mirror_url: Option<&str>,
+) -> Result<Vec<DisplaySafeUrl>, Error> {
+    let custom = custom_astral_mirror_url(astral_mirror_url);
+    let mirror = astral_mirror_base_url(custom);
+    let mut urls = vec![DisplaySafeUrl::parse(&format!(
+        "{mirror}/github/versions/main/v1/python-build-standalone.ndjson",
+    ))?];
+    if custom.is_none() {
+        urls.push(DisplaySafeUrl::parse(
+            "https://raw.githubusercontent.com/astral-sh/versions/main/v1/python-build-standalone.ndjson",
+        )?);
+    }
+    Ok(urls)
+}
+
+/// Load a cached catalog with the same mirror fallback and retry policy as Python archives.
+async fn fetch_ndjson_with_fallback(
+    client_builder: &BaseClientBuilder<'_>,
+    cache: &Cache,
+    urls: &[DisplaySafeUrl],
+) -> Result<Vec<ManagedPythonDownload>, Error> {
+    let client = CachedClient::new(
+        client_builder
+            .clone()
+            .retries(0)
+            .build()
+            .map_err(|error| Error::ClientBuild(Box::new(error)))?,
+    );
+    fetch_with_url_fallback(
+        urls,
+        client_builder.retry_policy(),
+        "Python download metadata",
+        async |url| {
+            fetch_ndjson_from_url(&client, cache, &url)
+                .await
+                .map_err(|error| {
+                    Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(error))
+                })
+        },
+    )
+    .await
 }
 
 /// The preview endpoint supplies CPython only; other implementations keep their embedded catalog.
@@ -1542,6 +1603,7 @@ mod tests {
     use indoc::indoc;
     use uv_platform::{Arch, Libc, Os, Platform};
     use uv_python_types::{LenientImplementationName, PythonInstallationKey};
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     use super::*;
 
@@ -2251,6 +2313,90 @@ mod tests {
         )?;
         assert!(downloads.is_empty());
         assert!(parse_ndjson_line("test", b"not-json").is_err());
+        Ok(())
+    }
+    #[test]
+    fn test_python_download_metadata_mirror_urls() -> Result<(), Error> {
+        let urls = python_download_metadata_urls(None)?;
+        assert_eq!(
+            urls.iter().map(|url| url.as_str()).collect::<Vec<_>>(),
+            [
+                "https://releases.astral.sh/github/versions/main/v1/python-build-standalone.ndjson",
+                "https://raw.githubusercontent.com/astral-sh/versions/main/v1/python-build-standalone.ndjson",
+            ]
+        );
+        assert_eq!(python_download_metadata_urls(Some(""))?, urls);
+        assert_eq!(
+            python_download_metadata_urls(Some("https://mirror.example/"))?
+                .iter()
+                .map(|url| url.as_str())
+                .collect::<Vec<_>>(),
+            ["https://mirror.example/github/versions/main/v1/python-build-standalone.ndjson",]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_python_download_metadata_fallback_and_offline_reuse() -> Result<(), Error> {
+        let mirror = MockServer::start().await;
+        let upstream = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&mirror)
+            .await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(200)
+            .insert_header("cache-control", "max-age=3600")
+            .set_body_raw(r#"{"version":"3.13.9+20260101","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/python.tar.gz","sha256":null}]}"#, "application/x-ndjson"))
+            .expect(1).mount(&upstream).await;
+        let urls = [
+            DisplaySafeUrl::parse(&mirror.uri())?,
+            DisplaySafeUrl::parse(&upstream.uri())?,
+        ];
+        let cache = Cache::temp().expect("temporary cache");
+        let builder = BaseClientBuilder::default().retries(0);
+        let downloads = fetch_ndjson_with_fallback(&builder, &cache, &urls).await?;
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].key().version().into_version().to_string(),
+            "3.13.9"
+        );
+        let downloads =
+            fetch_ndjson_with_fallback(&builder.connectivity(Connectivity::Offline), &cache, &urls)
+                .await?;
+        assert_eq!(downloads.len(), 1);
+        mirror.verify().await;
+        upstream.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_python_download_metadata_invalid_catalog_does_not_fall_back() -> Result<(), Error>
+    {
+        let mirror = MockServer::start().await;
+        let upstream = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("invalid NDJSON"))
+            .expect(1)
+            .mount(&mirror)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .expect(0)
+            .mount(&upstream)
+            .await;
+        let urls = [
+            DisplaySafeUrl::parse(&mirror.uri())?,
+            DisplaySafeUrl::parse(&upstream.uri())?,
+        ];
+        let cache = Cache::temp().expect("temporary cache");
+        let error =
+            fetch_ndjson_with_fallback(&BaseClientBuilder::default().retries(0), &cache, &urls)
+                .await
+                .expect_err("invalid catalog");
+        assert!(!error.should_try_next_url());
+        mirror.verify().await;
+        upstream.verify().await;
         Ok(())
     }
 }
