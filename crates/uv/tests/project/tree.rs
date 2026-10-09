@@ -6166,3 +6166,61 @@ fn show_version_specifiers_local_source_from_subdirectory() -> Result<()> {
     ");
     Ok(())
 }
+
+/// A child override cannot activate an optional declaration outside its recursive parent marker.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_overridden_recursive_activation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-overridden-recursive-activation"
+        [root]
+        requires = ["parent"]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child>=1", "parent[feature]; sys_platform == 'win32'"]
+        sdist = false
+        [packages.parent.versions."1.0.0".extras]
+        feature = ["child<2"]
+        [packages.child.versions."3.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv]
+        override-dependencies = ["child>=3"]
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--python-platform", "linux", "--show-version-specifiers"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: *]
+        └── child v3.0.0 [declared: >=1] [overridden]
+    "#);
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--python-platform", "windows", "--show-version-specifiers"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: *]
+        └── child v3.0.0 [declared: <2; sys_platform == 'win32'] [overridden] [declared: >=1] [overridden]
+    "#);
+    Ok(())
+}

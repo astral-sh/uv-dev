@@ -696,19 +696,20 @@ impl<'env> TreeDisplay<'env> {
                 .map_or(DependencyModifierScope::Global, |version| {
                     DependencyModifierScope::Package(package.name(), version)
                 });
-            let requires_dist = FlatRequiresDist::from_requirements_with_modifiers(
-                requires_dist.into_boxed_slice(),
-                package.name(),
-                &self.modifiers,
-                scope,
-            )
-            .into_iter()
-            .collect();
+            let (requires_dist, activation_markers) =
+                FlatRequiresDist::from_requirements_with_modifiers(
+                    requires_dist.into_boxed_slice(),
+                    package.name(),
+                    &self.modifiers,
+                    scope,
+                );
+            let requires_dist = requires_dist.into_iter().collect();
             requirements.insert(
                 package,
                 TreeRequirements {
                     version,
                     requires_dist,
+                    activation_markers,
                     dependency_groups,
                 },
             );
@@ -757,6 +758,12 @@ impl<'env> TreeDisplay<'env> {
                         .get(*group)
                         .map_or(&[], |requirements| requirements.as_ref()),
                 }),
+        };
+        let activation_markers = match self.graph[parent] {
+            Node::Package(parent_index) if !edge.is_dev() => metadata
+                .get(&self.lock.package(parent_index).id)
+                .map(|metadata| &metadata.activation_markers),
+            Node::Root | Node::Package(_) => None,
         };
         let modifier_scope = match self.graph[parent] {
             Node::Package(parent_index) => {
@@ -821,7 +828,7 @@ impl<'env> TreeDisplay<'env> {
         };
 
         let mut annotations = BTreeSet::new();
-        for requirement in requirements {
+        for (index, requirement) in requirements.iter().enumerate() {
             if requirement.name != dependency_id.name {
                 continue;
             }
@@ -837,7 +844,9 @@ impl<'env> TreeDisplay<'env> {
                     DependencyModifierScope::Global
                     | DependencyModifierScope::DependencyGroup(..) => false,
                 };
-            let applicable = if overridden {
+            let applicable = if let Some(markers) = activation_markers {
+                is_applicable(requirement_marker(markers[index]))
+            } else if overridden {
                 // Use the effective request only to identify the displayed edge; never present
                 // an override's range as a declaration from the parent package.
                 self.modifiers
@@ -1303,6 +1312,7 @@ impl<'env> TreeDisplay<'env> {
 struct TreeRequirements {
     version: Option<Version>,
     requires_dist: Box<[Requirement]>,
+    activation_markers: Box<[MarkerTree]>,
     dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
 }
 

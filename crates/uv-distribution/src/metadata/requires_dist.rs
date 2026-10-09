@@ -362,16 +362,19 @@ pub struct FlatRequiresDist(Box<[Requirement]>);
 impl FlatRequiresDist {
     /// Flatten a set of requirements, resolving any self-references.
     pub fn from_requirements(requirements: Box<[Requirement]>, name: &PackageName) -> Self {
-        Self::flatten(requirements, name, None)
+        Self::flatten(requirements, name, None).0
     }
 
-    /// Flatten declarations using effective activation while retaining authored override annotations.
+    /// Flatten declarations while retaining their authored markers for override annotations.
+    ///
+    /// The parallel marker slice contains each declaration's effective activation, including the
+    /// conditions on recursive self-references that led to it.
     pub fn from_requirements_with_modifiers(
         requirements: Box<[Requirement]>,
         name: &PackageName,
         modifiers: &DependencyModifiers,
         scope: DependencyModifierScope<'_>,
-    ) -> Self {
+    ) -> (Self, Box<[MarkerTree]>) {
         Self::flatten(requirements, name, Some((modifiers, scope)))
     }
 
@@ -379,26 +382,13 @@ impl FlatRequiresDist {
         requirements: Box<[Requirement]>,
         name: &PackageName,
         modifiers: Option<(&DependencyModifiers, DependencyModifierScope<'_>)>,
-    ) -> Self {
+    ) -> (Self, Box<[MarkerTree]>) {
         let activation = modifiers.map(|(modifiers, scope)| {
             modifiers
                 .apply(scope, requirements.iter())
-                .map(std::borrow::Cow::into_owned)
+                .filter(|requirement| requirement.name == *name)
                 .collect::<Vec<_>>()
         });
-        // If there are no self-references, we can return early.
-        if requirements
-            .iter()
-            .all(|requirement| requirement.name != *name)
-            && activation.as_ref().is_none_or(|requirements| {
-                requirements
-                    .iter()
-                    .all(|requirement| requirement.name != *name)
-            })
-        {
-            return Self(requirements);
-        }
-        let activation = activation.as_deref().unwrap_or(&requirements);
         let effective_markers = modifiers.map(|(modifiers, scope)| {
             requirements
                 .iter()
@@ -412,13 +402,34 @@ impl FlatRequiresDist {
                 })
                 .collect::<Vec<_>>()
         });
-        let self_requirements = activation
+        // If there are no self-references, we can return early.
+        if requirements
             .iter()
-            .filter(|requirement| requirement.name == *name)
-            .collect::<Vec<_>>();
+            .all(|requirement| requirement.name != *name)
+            && activation.as_ref().is_none_or(Vec::is_empty)
+        {
+            return (
+                Self(requirements),
+                effective_markers.unwrap_or_default().into_boxed_slice(),
+            );
+        }
+        let self_requirements = if let Some(activation) = &activation {
+            activation.iter().map(AsRef::as_ref).collect::<Vec<_>>()
+        } else {
+            requirements
+                .iter()
+                .filter(|requirement| requirement.name == *name)
+                .collect()
+        };
 
         // Transitively process all extras that are recursively included.
         let mut flattened = requirements.to_vec();
+        let mut flattened_markers = effective_markers.clone().unwrap_or_else(|| {
+            requirements
+                .iter()
+                .map(|requirement| requirement.marker)
+                .collect()
+        });
         let mut seen = FxHashSet::<(ExtraName, MarkerTree)>::default();
         let mut queue: VecDeque<_> = self_requirements
             .iter()
@@ -446,17 +457,17 @@ impl FlatRequiresDist {
                         .map_or(requirement.marker, |markers| markers[index]),
                     &extra,
                 );
-                let marker = marker.and(effective_marker);
-                if marker.is_false() {
+                let activation_marker = marker.and(effective_marker);
+                if activation_marker.is_false() {
                     continue;
                 }
                 // Overrides can make an otherwise disjoint declaration reachable. Its annotation
                 // retains the activating extras and authored condition, while effective markers
                 // control expansion.
                 let marker = if effective_marker == declared_marker {
-                    marker
+                    activation_marker
                 } else {
-                    declared_marker.and(marker.only_extras())
+                    declared_marker.and(activation_marker.only_extras())
                 };
                 let requirement = Requirement {
                     name: requirement.name.clone(),
@@ -470,6 +481,7 @@ impl FlatRequiresDist {
 
                 // Retain the requirement, including any recursively reached self-constraint.
                 flattened.push(requirement);
+                flattened_markers.push(activation_marker);
             }
             for requirement in &self_requirements {
                 let marker = marker.and(extra_marker(requirement.marker, &extra));
@@ -489,25 +501,34 @@ impl FlatRequiresDist {
         // `project[bar]>1.0`, as a dependency, we need to propagate `project>1.0`, in addition to
         // transitively expanding `project[bar]`.
         let mut self_constraints = vec![];
-        for req in &flattened {
+        for (req, activation_marker) in flattened.iter().zip(&flattened_markers) {
             if req.name == *name && !req.source.is_empty() {
-                self_constraints.push(Requirement {
-                    name: req.name.clone(),
-                    extras: Box::new([]),
-                    groups: req.groups.clone(),
-                    source: req.source.clone(),
-                    scope: req.scope.clone(),
-                    origin: req.origin.clone(),
-                    marker: req.marker,
-                });
+                self_constraints.push((
+                    Requirement {
+                        name: req.name.clone(),
+                        extras: Box::new([]),
+                        groups: req.groups.clone(),
+                        source: req.source.clone(),
+                        scope: req.scope.clone(),
+                        origin: req.origin.clone(),
+                        marker: req.marker,
+                    },
+                    *activation_marker,
+                ));
             }
         }
 
         // Drop all the self-references now that we've flattened them out.
-        flattened.retain(|req| req.name != *name);
-        flattened.extend(self_constraints);
-
-        Self(flattened.into_boxed_slice())
+        let (flattened, activation): (Vec<_>, Vec<_>) = flattened
+            .into_iter()
+            .zip(flattened_markers)
+            .filter(|(requirement, _)| requirement.name != *name)
+            .chain(self_constraints)
+            .unzip();
+        (
+            Self(flattened.into_boxed_slice()),
+            activation.into_boxed_slice(),
+        )
     }
 }
 
