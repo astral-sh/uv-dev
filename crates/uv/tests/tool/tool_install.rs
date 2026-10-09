@@ -3517,6 +3517,8 @@ fn tool_install_preflight_relocates_retained_build_commands() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
+    let cache_dir = context.temp_dir.child("build cache");
+    let context = context.with_cache_dir(cache_dir.path());
     let scenario = toml::from_str::<Scenario>(indoc! {r#"
         name = "tool-shared-build-environment"
         [root]
@@ -3533,7 +3535,10 @@ fn tool_install_preflight_relocates_retained_build_commands() -> Result<()> {
     "#})?;
     let server = PackseServer::from_scenario(&scenario);
     let bin = context.temp_dir.child("bin");
-    let tool_dir = context.temp_dir.child("tool store");
+    // Exercise simple-to-shell relocation on Unix and quoted launcher paths on Windows.
+    let tool_dir = context
+        .temp_dir
+        .child(if cfg!(windows) { "tool store" } else { "tools" });
     let (filename, wheel) = generate_wheel_with_files(
         &"backend-cli".parse()?,
         &"1.0.0".parse()?,
@@ -3544,7 +3549,7 @@ fn tool_install_preflight_relocates_retained_build_commands() -> Result<()> {
         &[
             (
                 "backend_cli/cli.py",
-                "def main():\n    import backend_helper\n    assert backend_helper.__version__ == '2.0.0'\n",
+                "def main():\n    import sys\n    import backend_helper\n    if sys.flags.optimize != 1 or backend_helper.__version__ != '2.0.0':\n        raise RuntimeError('wrong interpreter flags or build dependency')\n",
             ),
             (
                 "backend_cli-1.0.0.dist-info/entry_points.txt",
@@ -3590,7 +3595,7 @@ fn tool_install_preflight_relocates_retained_build_commands() -> Result<()> {
                 maker = ScriptMaker(None, str(Path(sys.executable).parent))
                 maker.variants = {""}
                 maker.clobber = True
-                maker.make("backend-cli = backend_cli.cli:main")
+                maker.make("backend-cli = backend_cli.cli:main", options={"interpreter_args": ["-O"]})
             "#})
             .assert()
             .success();

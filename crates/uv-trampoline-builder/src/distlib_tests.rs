@@ -95,3 +95,19 @@ fn windows_path_separators_are_equivalent() -> Result<()> {
     assert_eq!(relocated, expected);
     Ok(())
 }
+
+#[test]
+fn windows_pip_line_endings_are_preserved() -> Result<()> {
+    let (launcher, payload) = launcher(b"#!C:\\old\\python.exe\n\r\n", "__main__.py")?;
+    let relocated = relocate_distlib_script(
+        &launcher,
+        Path::new(r"C:\old\python.exe"),
+        Path::new(r"C:\new\python.exe"),
+    )
+    .ok_or_else(|| anyhow::anyhow!("pip's LF followed by CRLF should be recognized"))?;
+    let mut expected = STUB.to_vec();
+    expected.extend_from_slice(b"#!C:\\new\\python.exe\n\r\n");
+    expected.extend_from_slice(&payload);
+    assert_eq!(relocated, expected);
+    Ok(())
+}

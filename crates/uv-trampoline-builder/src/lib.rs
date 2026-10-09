@@ -230,7 +230,13 @@ fn relocate_distlib_script_inner(
     {
         return None;
     }
-    let payload = appended.get(line_end + 1..)?;
+    let after_shebang = appended.get(line_end + 1..)?;
+    // pip can append CRLF to a shebang that already ends with LF on Windows.
+    let separator_length = after_shebang
+        .iter()
+        .take_while(|byte| matches!(byte, b'\r' | b'\n'))
+        .count();
+    let (line_endings, payload) = after_shebang.split_at(separator_length);
     if !payload.starts_with(b"PK\x03\x04") {
         return None;
     }
@@ -249,6 +255,7 @@ fn relocate_distlib_script_inner(
     relocated.extend_from_slice(executable.as_bytes());
     relocated.extend_from_slice(arguments);
     relocated.push(b'\n');
+    relocated.extend_from_slice(line_endings);
     relocated.extend_from_slice(payload);
     Some(relocated)
 }

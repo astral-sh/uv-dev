@@ -103,6 +103,8 @@ fn copy_and_hash(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<
     ))
 }
 
+const SHELL_WRAPPER_SUFFIX: &str = " \"$0\" \"$@\"\n' '''";
+
 /// Format the shebang for a given Python executable.
 ///
 /// Like pip, if a shebang is non-simple (too long or contains spaces), we use `/bin/sh` as the
@@ -133,7 +135,7 @@ fn format_shebang(executable: impl AsRef<Path>, os_name: &str, relocatable: bool
                 prefix,
                 escape_posix_for_single_quotes(&executable)
             );
-            return format!("#!/bin/sh\n'''exec' {executable} \"$0\" \"$@\"\n' '''");
+            return format!("#!/bin/sh\n'''exec' {executable}{SHELL_WRAPPER_SUFFIX}");
         }
     }
 
@@ -415,12 +417,16 @@ fn relocate_scripts(
             relocatable,
         )?;
         let current = format_shebang(current, &layout.os_name, relocatable);
-        prefixes.push((
-            format_shebang(&previous, &previous_layout.os_name, false),
-            current.clone(),
-        ));
+        let previous_shebang = format_shebang(&previous, &previous_layout.os_name, false);
+        let (previous_prefix, shell) = previous_shebang
+            .strip_suffix(SHELL_WRAPPER_SUFFIX)
+            .map_or_else(
+                || (previous_shebang.clone(), false),
+                |prefix| (prefix.to_owned(), true),
+            );
+        prefixes.push((previous_prefix, shell, current.clone()));
         let executable = previous.simplified_display().to_string();
-        prefixes.push((format!("#!{executable}"), current.clone()));
+        prefixes.push((format!("#!{executable}"), false, current.clone()));
         if previous_layout.os_name == "posix" {
             // pip uses a different shell quoting convention and platform-specific shebang limits.
             let executable = if executable.contains(' ') {
@@ -428,15 +434,12 @@ fn relocate_scripts(
             } else {
                 executable
             };
-            prefixes.push((
-                format!("#!/bin/sh\n'''exec' {executable} \"$0\" \"$@\"\n' '''"),
-                current,
-            ));
+            prefixes.push((format!("#!/bin/sh\n'''exec' {executable}"), true, current));
         }
     }
     let prefix_limit = prefixes
         .iter()
-        .map(|(prefix, _)| prefix.len() + 1)
+        .map(|(prefix, _, _)| prefix.len() + 1)
         .max()
         .unwrap_or_default();
     for path in paths {
@@ -452,18 +455,21 @@ fn relocate_scripts(
             .take(prefix_limit as u64)
             .read_to_end(&mut prefix)?;
         let permissions = reader.get_ref().metadata()?.permissions();
-        let contents = if let Some((previous, current)) = prefixes.iter().find(|(previous, _)| {
-            prefix
-                .strip_prefix(previous.as_bytes())
-                .is_some_and(|suffix| {
-                    suffix
-                        .first()
-                        .is_none_or(|byte| matches!(byte, b'\n' | b'\r' | b' '))
-                })
-        }) {
-            let mut contents = current.as_bytes().to_vec();
-            contents.extend_from_slice(&prefix[previous.len()..]);
-            reader.read_to_end(&mut contents)?;
+        let contents = if let Some((previous, shell, current)) =
+            prefixes.iter().find(|(previous, _, _)| {
+                prefix
+                    .strip_prefix(previous.as_bytes())
+                    .is_some_and(|suffix| {
+                        suffix
+                            .first()
+                            .is_none_or(|byte| matches!(byte, b'\n' | b'\r' | b' ' | b'\t'))
+                    })
+            }) {
+            let mut remaining = prefix[previous.len()..].to_vec();
+            reader.read_to_end(&mut remaining)?;
+            let Some(contents) = relocate_script_body(&remaining, *shell, current) else {
+                continue;
+            };
             contents
         } else {
             #[cfg(windows)]
@@ -491,6 +497,54 @@ fn relocate_scripts(
         fs::set_permissions(path, permissions)?;
     }
     Ok(())
+}
+
+/// Attach interpreter arguments to the command that executes Python, retaining the script body.
+fn relocate_script_body(remaining: &[u8], previous_shell: bool, current: &str) -> Option<Vec<u8>> {
+    let (arguments, body) = if previous_shell {
+        let end = remaining
+            .windows(SHELL_WRAPPER_SUFFIX.len())
+            .position(|part| part == SHELL_WRAPPER_SUFFIX.as_bytes())?;
+        let arguments = remaining.get(..end)?;
+        if arguments.contains(&b'\n') {
+            return None;
+        }
+        (
+            arguments,
+            remaining.get(end + SHELL_WRAPPER_SUFFIX.len()..)?,
+        )
+    } else {
+        let line_end = remaining
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .unwrap_or(remaining.len());
+        let line = remaining.get(..line_end)?;
+        let arguments = line.strip_suffix(b"\r").unwrap_or(line);
+        (arguments, remaining.get(arguments.len()..)?)
+    };
+    // Keep shell argument splitting when the installed script already used a shell wrapper.
+    let forced_shell = if previous_shell && !current.ends_with(SHELL_WRAPPER_SUFFIX) {
+        let executable = current.strip_prefix("#!")?;
+        Some(format!(
+            "#!/bin/sh\n'''exec' '{}'{}",
+            escape_posix_for_single_quotes(executable),
+            SHELL_WRAPPER_SUFFIX,
+        ))
+    } else {
+        None
+    };
+    let current = forced_shell.as_deref().unwrap_or(current);
+    let mut contents = Vec::new();
+    if let Some(command) = current.strip_suffix(SHELL_WRAPPER_SUFFIX) {
+        contents.extend_from_slice(command.as_bytes());
+        contents.extend_from_slice(arguments);
+        contents.extend_from_slice(SHELL_WRAPPER_SUFFIX.as_bytes());
+    } else {
+        contents.extend_from_slice(current.as_bytes());
+        contents.extend_from_slice(arguments);
+    }
+    contents.extend_from_slice(body);
+    Some(contents)
 }
 
 /// Retain the installed launcher payload so overlapping entrypoint declarations keep their provider.
@@ -1443,8 +1497,37 @@ mod test {
 
     use super::{
         Error, RecordEntry, Script, WheelFile, format_shebang, get_script_executable,
-        parse_email_message_file, parse_scripts, read_record, write_installer_metadata,
+        parse_email_message_file, parse_scripts, read_record, relocate_script_body,
+        write_installer_metadata,
     };
+
+    #[test]
+    fn relocated_simple_shebang_retains_interpreter_arguments() -> Result<()> {
+        let current = format_shebang("/new path/python", "posix", false);
+        let contents = relocate_script_body(b" -O\nprint('body')\n", false, &current)
+            .ok_or_else(|| anyhow::anyhow!("simple shebang should be relocated"))?;
+        assert_eq!(
+            contents.as_slice(),
+            b"#!/bin/sh\n'''exec' '/new path/python' -O \"$0\" \"$@\"\n' '''\nprint('body')\n",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn relocated_shell_shebang_retains_interpreter_arguments() -> Result<()> {
+        let current = format_shebang("/new/python", "posix", false);
+        let contents = relocate_script_body(
+            b" -O -B \"$0\" \"$@\"\n' '''\nprint('body')\n",
+            true,
+            &current,
+        )
+        .ok_or_else(|| anyhow::anyhow!("shell shebang should be relocated"))?;
+        assert_eq!(
+            contents.as_slice(),
+            b"#!/bin/sh\n'''exec' '/new/python' -O -B \"$0\" \"$@\"\n' '''\nprint('body')\n",
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_parse_email_message_file() {
