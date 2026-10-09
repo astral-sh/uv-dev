@@ -30,7 +30,7 @@ use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
 use uv_fs::replace_symlink;
 use uv_fs::{CWD, Simplified};
-use uv_git::GitResolver;
+use uv_git::{Fetch, GitResolver};
 use uv_installer::SitePackages;
 use uv_lock::{Installable, Lock, ResolverManifest};
 use uv_normalize::{DefaultExtras, GroupName, PackageName};
@@ -309,13 +309,13 @@ pub(crate) async fn locked_tool_project(
 ) -> Result<
     (
         VirtualProject,
-        Lock,
+        ValidatedProjectLock,
         ResolverInstallerOptions,
         ResolverInstallerSettings,
     ),
     ToolLockError,
 > {
-    let project = StaticMetadataDatabase::new(client_builder, state.git(), cache)
+    let (project, git) = StaticMetadataDatabase::new(client_builder, state.git(), cache)
         .source_tree_project(&requirement.source, workspace_cache)
         .await
         ?
@@ -378,7 +378,28 @@ pub(crate) async fn locked_tool_project(
     ))?;
     store_credentials_from_target(target, client_builder)?;
 
-    Ok((project, lock, options, project_settings))
+    Ok((
+        project,
+        ValidatedProjectLock { lock, git },
+        options,
+        project_settings,
+    ))
+}
+
+/// A source-project lock checked in locked mode, with any materialized Git origin.
+pub(crate) struct ValidatedProjectLock {
+    lock: Lock,
+    git: Option<Fetch>,
+}
+
+impl ValidatedProjectLock {
+    pub(crate) fn lock(&self) -> &Lock {
+        &self.lock
+    }
+
+    pub(crate) fn git(&self) -> Option<&Fetch> {
+        self.git.as_ref()
+    }
 }
 
 /// A universal lock for a tool environment.
@@ -395,15 +416,6 @@ pub(super) struct ValidatedToolLock {
 }
 
 impl ValidatedToolLock {
-    /// Wrap a project lock that has already been checked in locked mode.
-    pub(crate) fn from_locked(lock: ToolLock) -> Self {
-        Self {
-            lock,
-            satisfied: true,
-            usable: true,
-        }
-    }
-
     /// Return whether the existing lock satisfies the current resolution inputs.
     pub(super) fn is_satisfied(&self) -> bool {
         self.satisfied
@@ -469,22 +481,26 @@ impl ToolLock {
         root: &Path,
         project: &VirtualProject,
         project_name: &PackageName,
-        lock: Lock,
+        lock: ValidatedProjectLock,
         manifest: &ResolverManifest,
         editable: bool,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<ValidatedToolLock> {
         let workspace = project.workspace();
         let manifest = manifest.clone().relative_to(root)?;
-        let lock = lock.into_absolute_paths(
+        let lock = lock.lock.into_absolute_paths(
             workspace.install_path(),
             project_name,
             editable,
             workspace.required_members(),
             manifest,
         )?;
-        Ok(Self {
-            root: root.to_path_buf(),
-            lock,
+        Ok(ValidatedToolLock {
+            lock: Self {
+                root: root.to_path_buf(),
+                lock,
+            },
+            satisfied: true,
+            usable: true,
         })
     }
 
