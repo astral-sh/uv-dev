@@ -8345,3 +8345,122 @@ fn run_centralized_environment_path_file() -> Result<()> {
     "#);
     Ok(())
 }
+
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_index_policies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = wiremock::MockServer::start().await;
+    let second = wiremock::MockServer::start().await;
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = first.uri()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["b"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # b = {{ index = "private" }}
+        # ///
+    "#, url = second.uri()})?;
+    uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting definitions for index `private` in requirements sources
+    ");
+    assert!(
+        first
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        second
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+
+    // Conflicting authentication policies are also invalid when both names refer to one URL.
+    context.temp_dir.child("second.py").write_str(
+        &context
+            .read("second.py")
+            .replace(&second.uri(), &first.uri()),
+    )?;
+    uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting definitions for index `private` in requirements sources
+    ");
+    assert!(
+        first
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
+fn run_pep723_requirements_shared_index_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/dependency-groups.toml");
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # iniconfig = {{ index = "private" }}
+        # ///
+    "#, url = server.index_url()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["sniffio==1.3.1"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # sniffio = {{ index = "private" }}
+        # ///
+    "#, url = server.index_url()})?;
+    uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "import iniconfig, sniffio"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+    "#);
+    Ok(())
+}

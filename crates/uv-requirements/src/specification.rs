@@ -130,6 +130,27 @@ pub struct RequirementsSpecification {
 }
 
 impl RequirementsSpecification {
+    /// Merge source indexes without losing policies to name-based client deduplication.
+    fn extend_indexes(&mut self, indexes: impl IntoIterator<Item = Index>) -> Result<()> {
+        for index in indexes {
+            if let Some(name) = index.name.as_ref()
+                && let Some(existing) = self
+                    .indexes
+                    .iter()
+                    .find(|existing| existing.name.as_ref() == Some(name))
+            {
+                if existing != &index {
+                    return Err(anyhow::anyhow!(
+                        "Conflicting definitions for index `{name}` in requirements sources"
+                    ));
+                }
+                continue;
+            }
+            self.indexes.push(index);
+        }
+        Ok(())
+    }
+
     /// Read the requirements and constraints from a source.
     #[instrument(skip_all, level = tracing::Level::DEBUG, fields(source = % source))]
     pub async fn from_source(
@@ -641,7 +662,7 @@ impl RequirementsSpecification {
                 spec.index_url = Some(index_url);
             }
             spec.no_index |= source.no_index;
-            spec.indexes.extend(source.indexes);
+            spec.extend_indexes(source.indexes)?;
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
@@ -684,7 +705,7 @@ impl RequirementsSpecification {
                 spec.index_url = Some(index_url);
             }
             spec.no_index |= source.no_index;
-            spec.indexes.extend(source.indexes);
+            spec.extend_indexes(source.indexes)?;
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
@@ -715,7 +736,7 @@ impl RequirementsSpecification {
                 spec.index_url = Some(index_url);
             }
             spec.no_index |= source.no_index;
-            spec.indexes.extend(source.indexes);
+            spec.extend_indexes(source.indexes)?;
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
