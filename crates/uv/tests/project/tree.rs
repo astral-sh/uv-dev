@@ -6224,3 +6224,64 @@ fn show_version_specifiers_overridden_recursive_activation() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Static metadata ignored for a directory must not replace the declarations recorded in the lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_ignores_inapplicable_static_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-directory-static-metadata"
+        [root]
+        requires = ["child"]
+        [expected]
+        satisfiable = true
+        [packages.child.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("parent/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["child>=1"]
+    "#})?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv.sources]
+        parent = {{ path = "parent" }}
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "2.0.0"
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: file://[TEMP_DIR]/parent]
+        └── child v1.0.0 [required: >=1]
+    "#);
+    Ok(())
+}

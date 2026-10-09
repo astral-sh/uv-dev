@@ -362,19 +362,30 @@ pub struct FlatRequiresDist(Box<[Requirement]>);
 impl FlatRequiresDist {
     /// Flatten a set of requirements, resolving any self-references.
     pub fn from_requirements(requirements: Box<[Requirement]>, name: &PackageName) -> Self {
-        Self::flatten(requirements, name, None).0
+        if requirements
+            .iter()
+            .all(|requirement| requirement.name != *name)
+        {
+            return Self(requirements);
+        }
+        Self(
+            Self::flatten(requirements, name, None)
+                .into_iter()
+                .map(|(requirement, _)| requirement)
+                .collect(),
+        )
     }
 
     /// Flatten declarations while retaining their authored markers for override annotations.
     ///
-    /// The parallel marker slice contains each declaration's effective activation, including the
-    /// conditions on recursive self-references that led to it.
+    /// Each declaration is paired with its effective activation, including the conditions on
+    /// recursive self-references that led to it.
     pub fn from_requirements_with_modifiers(
         requirements: Box<[Requirement]>,
         name: &PackageName,
         modifiers: &DependencyModifiers,
         scope: DependencyModifierScope<'_>,
-    ) -> (Self, Box<[MarkerTree]>) {
+    ) -> Vec<(Requirement, MarkerTree)> {
         Self::flatten(requirements, name, Some((modifiers, scope)))
     }
 
@@ -382,36 +393,36 @@ impl FlatRequiresDist {
         requirements: Box<[Requirement]>,
         name: &PackageName,
         modifiers: Option<(&DependencyModifiers, DependencyModifierScope<'_>)>,
-    ) -> (Self, Box<[MarkerTree]>) {
+    ) -> Vec<(Requirement, MarkerTree)> {
         let activation = modifiers.map(|(modifiers, scope)| {
             modifiers
                 .apply(scope, requirements.iter())
                 .filter(|requirement| requirement.name == *name)
                 .collect::<Vec<_>>()
         });
-        let effective_markers = modifiers.map(|(modifiers, scope)| {
-            requirements
-                .iter()
-                .map(|requirement| {
-                    modifiers
-                        .apply(scope, [requirement])
-                        .filter(|candidate| candidate.name == requirement.name)
-                        .fold(MarkerTree::FALSE, |marker, candidate| {
-                            marker.or(candidate.marker)
-                        })
-                })
-                .collect::<Vec<_>>()
-        });
+        let effective_marker = |requirement: &Requirement| {
+            modifiers.map_or(requirement.marker, |(modifiers, scope)| {
+                modifiers
+                    .apply(scope, [requirement])
+                    .filter(|candidate| candidate.name == requirement.name)
+                    .fold(MarkerTree::FALSE, |marker, candidate| {
+                        marker.or(candidate.marker)
+                    })
+            })
+        };
         // If there are no self-references, we can return early.
         if requirements
             .iter()
             .all(|requirement| requirement.name != *name)
             && activation.as_ref().is_none_or(Vec::is_empty)
         {
-            return (
-                Self(requirements),
-                effective_markers.unwrap_or_default().into_boxed_slice(),
-            );
+            drop(activation);
+            return Box::into_iter(requirements)
+                .map(|requirement| {
+                    let marker = effective_marker(&requirement);
+                    (requirement, marker)
+                })
+                .collect();
         }
         let self_requirements = if let Some(activation) = &activation {
             activation.iter().map(AsRef::as_ref).collect::<Vec<_>>()
@@ -423,13 +434,14 @@ impl FlatRequiresDist {
         };
 
         // Transitively process all extras that are recursively included.
-        let mut flattened = requirements.to_vec();
-        let mut flattened_markers = effective_markers.clone().unwrap_or_else(|| {
-            requirements
-                .iter()
-                .map(|requirement| requirement.marker)
-                .collect()
-        });
+        let requirements = requirements
+            .iter()
+            .map(|requirement| (requirement, effective_marker(requirement)))
+            .collect::<Vec<_>>();
+        let mut flattened = requirements
+            .iter()
+            .map(|(requirement, marker)| ((*requirement).clone(), *marker))
+            .collect::<Vec<_>>();
         let mut seen = FxHashSet::<(ExtraName, MarkerTree)>::default();
         let mut queue: VecDeque<_> = self_requirements
             .iter()
@@ -449,14 +461,9 @@ impl FlatRequiresDist {
 
             // Find the optional portion of each requirement for this extra. A requirement can
             // also apply in production, as in `sys_platform == 'win32' or extra == 'base'`.
-            for (index, requirement) in requirements.iter().enumerate() {
+            for (requirement, effective_marker) in &requirements {
                 let declared_marker = extra_marker(requirement.marker, &extra);
-                let effective_marker = extra_marker(
-                    effective_markers
-                        .as_ref()
-                        .map_or(requirement.marker, |markers| markers[index]),
-                    &extra,
-                );
+                let effective_marker = extra_marker(*effective_marker, &extra);
                 let activation_marker = marker.and(effective_marker);
                 if activation_marker.is_false() {
                     continue;
@@ -480,8 +487,7 @@ impl FlatRequiresDist {
                 };
 
                 // Retain the requirement, including any recursively reached self-constraint.
-                flattened.push(requirement);
-                flattened_markers.push(activation_marker);
+                flattened.push((requirement, activation_marker));
             }
             for requirement in &self_requirements {
                 let marker = marker.and(extra_marker(requirement.marker, &extra));
@@ -501,7 +507,7 @@ impl FlatRequiresDist {
         // `project[bar]>1.0`, as a dependency, we need to propagate `project>1.0`, in addition to
         // transitively expanding `project[bar]`.
         let mut self_constraints = vec![];
-        for (req, activation_marker) in flattened.iter().zip(&flattened_markers) {
+        for (req, activation_marker) in &flattened {
             if req.name == *name && !req.source.is_empty() {
                 self_constraints.push((
                     Requirement {
@@ -519,16 +525,9 @@ impl FlatRequiresDist {
         }
 
         // Drop all the self-references now that we've flattened them out.
-        let (flattened, activation): (Vec<_>, Vec<_>) = flattened
-            .into_iter()
-            .zip(flattened_markers)
-            .filter(|(requirement, _)| requirement.name != *name)
-            .chain(self_constraints)
-            .unzip();
-        (
-            Self(flattened.into_boxed_slice()),
-            activation.into_boxed_slice(),
-        )
+        flattened.retain(|(requirement, _)| requirement.name != *name);
+        flattened.extend(self_constraints);
+        flattened
     }
 }
 

@@ -646,15 +646,6 @@ impl<'env> TreeDisplay<'env> {
                     metadata.requires_dist.clone(),
                     metadata.dependency_groups.clone(),
                 )
-            } else if let Some(metadata) = static_metadata.get(package.name(), package.version()) {
-                (
-                    metadata
-                        .requires_dist
-                        .into_iter()
-                        .map(Requirement::from)
-                        .collect(),
-                    BTreeMap::new(),
-                )
             } else if package.has_metadata() {
                 (
                     package.metadata.requires_dist.iter().cloned().collect(),
@@ -666,6 +657,15 @@ impl<'env> TreeDisplay<'env> {
                             (group.clone(), requirements.iter().cloned().collect())
                         })
                         .collect(),
+                )
+            } else if let Some(metadata) = static_metadata.get(package.name(), package.version()) {
+                (
+                    metadata
+                        .requires_dist
+                        .into_iter()
+                        .map(Requirement::from)
+                        .collect(),
+                    BTreeMap::new(),
                 )
             } else {
                 continue;
@@ -696,20 +696,18 @@ impl<'env> TreeDisplay<'env> {
                 .map_or(DependencyModifierScope::Global, |version| {
                     DependencyModifierScope::Package(package.name(), version)
                 });
-            let (requires_dist, activation_markers) =
-                FlatRequiresDist::from_requirements_with_modifiers(
-                    requires_dist.into_boxed_slice(),
-                    package.name(),
-                    &self.modifiers,
-                    scope,
-                );
+            let requires_dist = FlatRequiresDist::from_requirements_with_modifiers(
+                requires_dist.into_boxed_slice(),
+                package.name(),
+                &self.modifiers,
+                scope,
+            );
             let requires_dist = requires_dist.into_iter().collect();
             requirements.insert(
                 package,
                 TreeRequirements {
                     version,
                     requires_dist,
-                    activation_markers,
                     dependency_groups,
                 },
             );
@@ -739,31 +737,28 @@ impl<'env> TreeDisplay<'env> {
         };
         let dependency_id = &self.lock.package(dependency_index).id;
         let edge = &self.graph[edge_id];
-        let requirements: &[Requirement] = match self.graph[parent] {
-            Node::Root => match edge {
-                // The synthetic edge to a workspace member isn't a dependency declaration.
+        let requirements = match self.graph[parent] {
+            Node::Root => TreeDeclarations::Plain(match edge {
                 Edge::Prod(None, _) => return,
                 Edge::Prod(..) | Edge::Optional(..) => &self.root_requirements,
                 Edge::Dev(group, ..) => self
                     .root_dependency_groups
                     .get(*group)
                     .map_or(&[], |requirements| requirements.as_ref()),
-            },
+            }),
             Node::Package(parent_index) => metadata
                 .get(&self.lock.package(parent_index).id)
-                .map_or(&[], |metadata| match edge {
-                    Edge::Prod(..) | Edge::Optional(..) => &metadata.requires_dist,
-                    Edge::Dev(group, ..) => metadata
-                        .dependency_groups
-                        .get(*group)
-                        .map_or(&[], |requirements| requirements.as_ref()),
+                .map_or(TreeDeclarations::Plain(&[]), |metadata| match edge {
+                    Edge::Prod(..) | Edge::Optional(..) => {
+                        TreeDeclarations::Activated(&metadata.requires_dist)
+                    }
+                    Edge::Dev(group, ..) => TreeDeclarations::Plain(
+                        metadata
+                            .dependency_groups
+                            .get(*group)
+                            .map_or(&[], |requirements| requirements.as_ref()),
+                    ),
                 }),
-        };
-        let activation_markers = match self.graph[parent] {
-            Node::Package(parent_index) if !edge.is_dev() => metadata
-                .get(&self.lock.package(parent_index).id)
-                .map(|metadata| &metadata.activation_markers),
-            Node::Root | Node::Package(_) => None,
         };
         let modifier_scope = match self.graph[parent] {
             Node::Package(parent_index) => {
@@ -828,7 +823,7 @@ impl<'env> TreeDisplay<'env> {
         };
 
         let mut annotations = BTreeSet::new();
-        for (index, requirement) in requirements.iter().enumerate() {
+        for (requirement, activation_marker) in requirements.iter() {
             if requirement.name != dependency_id.name {
                 continue;
             }
@@ -844,8 +839,8 @@ impl<'env> TreeDisplay<'env> {
                     DependencyModifierScope::Global
                     | DependencyModifierScope::DependencyGroup(..) => false,
                 };
-            let applicable = if let Some(markers) = activation_markers {
-                is_applicable(requirement_marker(markers[index]))
+            let applicable = if let Some(marker) = activation_marker {
+                is_applicable(requirement_marker(marker))
             } else if overridden {
                 // Use the effective request only to identify the displayed edge; never present
                 // an override's range as a declaration from the parent package.
@@ -865,13 +860,16 @@ impl<'env> TreeDisplay<'env> {
 
         if !requirements
             .iter()
-            .any(|requirement| requirement.name == dependency_id.name)
+            .any(|(requirement, _)| requirement.name == dependency_id.name)
         {
             // Scoped overrides can add dependencies absent from the original metadata. Those
             // declarations are known, but belong to the override rather than the package.
             let additions = self
                 .modifiers
-                .apply(modifier_scope, requirements)
+                .apply(
+                    modifier_scope,
+                    requirements.iter().map(|(requirement, _)| requirement),
+                )
                 .filter(|requirement| {
                     requirement.name == dependency_id.name
                         && is_applicable(requirement_marker(requirement.marker))
@@ -1307,12 +1305,31 @@ impl<'env> TreeDisplay<'env> {
     }
 }
 
+enum TreeDeclarations<'a> {
+    Plain(&'a [Requirement]),
+    Activated(&'a [(Requirement, MarkerTree)]),
+}
+
+impl TreeDeclarations<'_> {
+    fn iter(&self) -> impl Iterator<Item = (&Requirement, Option<MarkerTree>)> {
+        match self {
+            Self::Plain(requirements) => {
+                Either::Left(requirements.iter().map(|requirement| (requirement, None)))
+            }
+            Self::Activated(requirements) => Either::Right(
+                requirements
+                    .iter()
+                    .map(|(requirement, marker)| (requirement, Some(*marker))),
+            ),
+        }
+    }
+}
+
 /// Requirement declarations kept separately from the resolved dependency graph.
 #[derive(Debug)]
 struct TreeRequirements {
     version: Option<Version>,
-    requires_dist: Box<[Requirement]>,
-    activation_markers: Box<[MarkerTree]>,
+    requires_dist: Box<[(Requirement, MarkerTree)]>,
     dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
 }
 
