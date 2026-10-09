@@ -1,9 +1,13 @@
+#[cfg(feature = "test-python")]
 use std::fmt::Write;
 
+#[cfg(feature = "test-python")]
 use anyhow::Result;
+#[cfg(feature = "test-python")]
 use assert_fs::prelude::*;
 
 use uv_static::EnvVars;
+#[cfg(feature = "test-python")]
 use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{get_bin, uv_snapshot};
 
@@ -108,6 +112,7 @@ fn run_open_file_limit_override_exceeds_hard_limit() {
 
 /// Wide metadata requests must wait before opening cache locks under a low hard descriptor limit.
 #[test]
+#[cfg(feature = "test-python")]
 fn metadata_downloads_respect_low_file_limit() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let mut fixture =

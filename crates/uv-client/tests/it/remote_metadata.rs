@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -11,7 +12,7 @@ use futures::poll;
 use reqwest::header::{
     ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, HeaderName, LOCATION, RANGE,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 use wiremock::matchers::{basic_auth, header_exists, header_regex, method, path};
 use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
@@ -718,5 +719,56 @@ async fn remote_metadata_waits_for_wheel_lock_before_download_permit() -> Result
     drop(wheel_lock);
     let metadata = tokio::time::timeout(Duration::from_secs(10), metadata).await??;
     assert_eq!(metadata.version.to_string(), "1.0.0");
+    Ok(())
+}
+
+/// Overlapping requests publish one cache entry before the waiter reads it.
+#[tokio::test]
+async fn concurrent_remote_metadata_reuses_cached_response() -> Result<()> {
+    let server = MockServer::start().await;
+    let started = Arc::new(Notify::new());
+    let request_started = started.clone();
+    let response = ResponseTemplate::new(200)
+        .insert_header("cache-control", "public, max-age=3600")
+        .set_body_raw(wheel()?, "application/octet-stream")
+        .set_delay(Duration::from_millis(250));
+    Mock::given(method("GET"))
+        .and(path("/ok-1.0.0-py3-none-any.whl"))
+        .respond_with(move |_: &Request| {
+            request_started.notify_one();
+            response.clone()
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let cache = Cache::temp()?.init().await?;
+    let url = VerbatimUrl::from_str(&format!("{}/ok-1.0.0-py3-none-any.whl", server.uri()))?;
+    let dist = BuiltDist::DirectUrl(DirectUrlBuiltDist {
+        filename: WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?,
+        location: Box::new(url.to_url()),
+        url,
+        size: None,
+    });
+    let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
+    let resolver = GitResolver::default();
+    let capabilities = IndexCapabilities::default();
+    let downloads = Semaphore::new(2);
+    let first = client.wheel_metadata(&dist, &resolver, &capabilities, &downloads, None);
+    tokio::pin!(first);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            result = &mut first => anyhow::bail!("metadata completed before overlap: {result:?}"),
+            () = started.notified() => Ok(()),
+        }
+    })
+    .await??;
+    let second = client.wheel_metadata(&dist, &resolver, &capabilities, &downloads, None);
+    tokio::pin!(second);
+    let (first, second) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(first, second)
+    })
+    .await?;
+    assert_eq!(first?.version.to_string(), "1.0.0");
+    assert_eq!(second?.version.to_string(), "1.0.0");
     Ok(())
 }
