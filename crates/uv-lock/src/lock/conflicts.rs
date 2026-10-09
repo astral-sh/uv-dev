@@ -42,7 +42,7 @@ pub fn activated_conflicts<'lock>(
         let index = lock.by_id[&package.id];
         if kind == InstallableRootKind::Production && groups.prod() {
             activated.insert(ConflictItem::from(name.clone()), root_marker);
-            requests.push(requests.root, index, None, root_marker);
+            requests.push(requests.root, index, None, root_marker)?;
             let conflict_extras = lock
                 .conflicts()
                 .iter()
@@ -66,7 +66,7 @@ pub fn activated_conflicts<'lock>(
                     ConflictItem::from((name.clone(), extra.clone())),
                     root_marker,
                 );
-                requests.push(requests.root, index, Some(extra.clone()), root_marker);
+                requests.push(requests.root, index, Some(extra.clone()), root_marker)?;
             }
         }
         for (group, dependencies) in &package.dependency_groups {
@@ -91,14 +91,14 @@ pub fn activated_conflicts<'lock>(
                     dependency.index,
                     None,
                     root_marker.and(marker),
-                );
+                )?;
                 for (extra, marker) in extras {
                     requests.push(
                         requests.root,
                         dependency.index,
                         Some(extra),
                         root_marker.and(marker),
-                    );
+                    )?;
                 }
             }
         }
@@ -123,14 +123,14 @@ pub fn activated_conflicts<'lock>(
                 continue;
             };
             let index = lock.by_id[&package.id];
-            requests.push(requests.root, index, None, root_marker.and(marker));
+            requests.push(requests.root, index, None, root_marker.and(marker))?;
             for extra in &requirement.extras {
                 requests.push(
                     requests.root,
                     index,
                     Some(extra.clone()),
                     root_marker.and(marker),
-                );
+                )?;
             }
         }
     }
@@ -148,9 +148,9 @@ pub fn activated_conflicts<'lock>(
         for dependency in context.dependencies(package) {
             let (marker, extras) =
                 dependency.activation(requirements.as_deref(), target.install_path())?;
-            requests.push(parent, dependency.index, None, marker);
+            requests.push(parent, dependency.index, None, marker)?;
             for (extra, marker) in extras {
-                requests.push(parent, dependency.index, Some(extra), marker);
+                requests.push(parent, dependency.index, Some(extra), marker)?;
             }
         }
     }

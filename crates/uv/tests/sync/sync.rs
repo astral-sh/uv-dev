@@ -20054,3 +20054,108 @@ fn sync_undefined_dependency_extra_conflict() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Registry declaration evidence distinguishes missing extras from declared empty extras.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_undefined_registry_extra_conflict() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "undefined-registry-conflict-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.child.versions."1"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[missing]"]
+
+        [project.optional-dependencies]
+        feature = []
+
+        [tool.uv]
+        conflicts = [[{ extra = "feature" }, { package = "child", extra = "missing" }]]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--extra", "feature", "--no-install-workspace",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    warning: The package `child==1` does not have an extra named `missing`
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + child==1
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    context
+        .lock()
+        .args(["--upgrade", "--preview-features", "lock-without-metadata"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    context
+        .lock()
+        .args([
+            "--check",
+            "--offline",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let lock = context.read("uv.lock");
+    assert!(lock.contains("declared-extras = []"));
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.replace("declared-extras = []\n", ""))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `child`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    Ok(())
+}

@@ -204,6 +204,13 @@ impl ValidatedLock {
             return Ok(Self::Versions(lock));
         }
 
+        if !lock.has_conflict_extra_metadata() {
+            debug!(
+                "Resolving despite existing lockfile due to missing declared extras for conflicts"
+            );
+            return Ok(Self::Versions(lock));
+        }
+
         // If the Requires-Python bound has changed, we have to perform a clean resolution, since
         // the set of `resolution-markers` may no longer cover the entire supported Python range.
         if lock.requires_python().range() != requires_python.range() {

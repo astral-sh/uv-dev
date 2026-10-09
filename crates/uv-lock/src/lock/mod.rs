@@ -2825,8 +2825,30 @@ impl Lock {
     /// Record the conflicting groups that were used to generate this lock.
     #[must_use]
     pub fn with_conflicts(mut self, conflicts: Conflicts) -> Self {
+        for package in &mut self.packages {
+            if !conflicts
+                .iter()
+                .flat_map(ConflictSet::iter)
+                .any(|item| item.package() == package.name() && item.extra().is_some())
+            {
+                package.declared_extras = None;
+            }
+        }
         self.conflicts = conflicts;
         self
+    }
+
+    /// Whether immutable conflict participants record their declared extras, including empty sets.
+    pub fn has_conflict_extra_metadata(&self) -> bool {
+        self.packages.iter().all(|package| {
+            !package.id.source.is_immutable()
+                || package.declared_extras.is_some()
+                || !self
+                    .conflicts
+                    .iter()
+                    .flat_map(ConflictSet::iter)
+                    .any(|item| item.package() == package.name() && item.extra().is_some())
+        })
     }
 
     /// Record the required platforms that were used to generate this lock.
@@ -3899,6 +3921,17 @@ impl Lock {
     /// Return the [`Package`] at an index in this lock's package ordering.
     fn package(&self, index: PackageIndex) -> &Package {
         &self.packages[index.0]
+    }
+
+    /// Filter resolved request placeholders using recorded immutable declaration evidence.
+    fn dependency_extras<'lock>(
+        &'lock self,
+        dependency: &'lock Dependency,
+    ) -> impl Iterator<Item = &'lock ExtraName> {
+        dependency
+            .extra
+            .iter()
+            .filter(|extra| !self.package(dependency.index).is_known_missing_extra(extra))
     }
 
     /// Return a [`SatisfiesResult`] if the given extras do not match the [`Package`] metadata.
@@ -6617,6 +6650,8 @@ pub struct Package {
     dependencies: Vec<Dependency>,
     /// The resolved optional dependencies of the package.
     optional_dependencies: BTreeMap<ExtraName, Vec<Dependency>>,
+    /// Declared extras for immutable conflict participants; `None` means legacy evidence is absent.
+    declared_extras: Option<Box<[ExtraName]>>,
     /// The resolved PEP 735 dependency groups of the package.
     dependency_groups: BTreeMap<GroupName, Vec<Dependency>>,
     /// Nonstandard default dependency groups configured by the package.
@@ -6652,6 +6687,14 @@ impl Package {
                 root,
             )?
         };
+        let declared_extras = if id.source.is_immutable() {
+            annotated_dist
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.provides_extra.clone())
+        } else {
+            None
+        };
         Ok(Self {
             id,
             sdist,
@@ -6659,6 +6702,7 @@ impl Package {
             fork_markers,
             dependencies: vec![],
             optional_dependencies: BTreeMap::default(),
+            declared_extras,
             dependency_groups: BTreeMap::default(),
             default_groups: None,
             group_requires_python: BTreeMap::new(),
@@ -7336,6 +7380,13 @@ impl Package {
         self.metadata != PackageMetadata::default()
     }
 
+    /// Whether recorded declarations establish that an extra does not exist.
+    fn is_known_missing_extra(&self, extra: &ExtraName) -> bool {
+        self.declared_extras
+            .as_ref()
+            .is_some_and(|declared| !declared.contains(extra))
+    }
+
     /// Returns the extras the package provides, if any.
     pub fn provides_extras(&self) -> &[ExtraName] {
         &self.metadata.provides_extra
@@ -7463,6 +7514,8 @@ struct PackageWire {
     #[serde(default)]
     optional_dependencies: BTreeMap<ExtraName, Vec<DependencyWire>>,
     #[serde(default)]
+    declared_extras: Option<Box<[ExtraName]>>,
+    #[serde(default)]
     default_groups: Option<DefaultGroups>,
     #[serde(default, rename = "dev-dependencies", alias = "dependency-groups")]
     dependency_groups: BTreeMap<GroupName, Vec<DependencyWire>>,
@@ -7582,6 +7635,7 @@ impl PackageWire {
         Ok(Package {
             id: self.id,
             metadata: self.metadata,
+            declared_extras: self.declared_extras,
             default_groups: self.default_groups,
             group_requires_python: self.group_requires_python,
             sdist: self.sdist,
@@ -9531,6 +9585,10 @@ impl uv_errors::Hinted for LockError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if let Some(hint) = &self.hint {
             uv_errors::Hints::from(hint.to_string())
+        } else if matches!(&*self.kind, LockErrorKind::MissingExtraMetadata { .. }) {
+            uv_errors::Hints::from(
+                "Run `uv lock` to refresh the lockfile before using `--frozen`.".to_string(),
+            )
         } else {
             uv_errors::Hints::none()
         }
@@ -10233,6 +10291,9 @@ enum LockErrorKind {
         /// The ID of the package.
         name: PackageName,
     },
+    /// An older lock cannot distinguish missing immutable extras from declared empty extras.
+    #[error("The lockfile does not record the extras declared by `{package}`", package = package.cyan())]
+    MissingExtraMetadata { package: PackageName },
     /// An error that occurs when a concrete root package does not belong to the lock.
     #[error("Could not find root package `{id}` in lock", id = id.cyan())]
     RootPackageMissingFromLock {
