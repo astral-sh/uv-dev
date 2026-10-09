@@ -266,6 +266,9 @@ pub trait Reporter: Send + Sync {
     /// Callback to invoke when a download is complete.
     fn on_download_complete(&self, name: &PackageName, index: usize);
 
+    /// Callback to invoke when a download attempt is abandoned or fails.
+    fn on_download_failed(&self, _name: &PackageName, _id: usize) {}
+
     /// Callback to invoke when a source distribution build is kicked off.
     fn on_build_start(&self, source: &BuildableSource) -> usize;
 
@@ -320,5 +323,9 @@ impl uv_distribution::Reporter for Facade {
 
     fn on_download_complete(&self, name: &PackageName, index: usize) {
         self.reporter.on_download_complete(name, index);
+    }
+
+    fn on_download_failed(&self, name: &PackageName, index: usize) {
+        self.reporter.on_download_failed(name, index);
     }
 }
