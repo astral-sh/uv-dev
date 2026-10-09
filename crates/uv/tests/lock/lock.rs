@@ -42794,6 +42794,80 @@ fn lock_exclude_newer_index_locked() -> Result<()> {
     Ok(())
 }
 
+/// Legacy locks have no upload timestamps to revalidate an unchanged saved global cutoff.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_legacy_global_cutoff() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna==3.6"]
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        default = true
+    "#})?;
+    context.lock().assert().success();
+    let mut lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
+    lock["revision"] = toml_edit::value(1);
+    for package in lock["package"]
+        .as_array_of_tables_mut()
+        .expect("packages")
+        .iter_mut()
+    {
+        if let Some(sdist) = package
+            .get_mut("sdist")
+            .and_then(toml_edit::Item::as_inline_table_mut)
+        {
+            sdist.remove("upload-time");
+        }
+        if let Some(wheels) = package
+            .get_mut("wheels")
+            .and_then(toml_edit::Item::as_array_mut)
+        {
+            for wheel in wheels.iter_mut() {
+                wheel
+                    .as_inline_table_mut()
+                    .expect("wheel")
+                    .remove("upload-time");
+            }
+        }
+    }
+    let lockfile = context.temp_dir.child("uv.lock");
+    lockfile.write_str(&lock.to_string())?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    lock.remove("revision");
+    lockfile.write_str(&lock.to_string())?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // A new per-index cutoff still rejects the untimestamped legacy artifacts.
+    pyproject.write_str(&format!(
+        r#"{}
+exclude-newer = "2022-01-01T00:00:00Z"
+"#,
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").args(["--preview-features", "index-exclude-newer"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because idna>3.3 was published after the exclude newer time and your project depends on idna==3.6, we can conclude that your project's requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
+
 /// Removing an index exemption restores the effective global cutoff for locked artifacts.
 #[cfg(feature = "test-universal")]
 #[test]

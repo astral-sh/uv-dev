@@ -131,6 +131,9 @@ pub enum LockParseError {
 /// - 5: Record default groups and dependency group metadata for workspace members and roots.
 const REVISION: u32 = 5;
 
+/// The first lockfile revision that records distribution upload times.
+const UPLOAD_TIME_REVISION: u32 = 2;
+
 /// The first lockfile revision that records default groups for workspace members and roots.
 const DEFAULT_GROUPS_REVISION: u32 = 5;
 
@@ -4662,6 +4665,11 @@ impl Lock {
                 && index.format == IndexFormat::Simple
                 && let Some(exclude_newer) = exclude_newer
                     .exclude_newer_package_for_index(&package.id.name, index.exclude_newer.as_ref())
+                // Older locks cannot corroborate an unchanged saved cutoff with upload times.
+                // Index-specific cutoffs were never saved, so they must still be checked.
+                && (self.revision >= UPLOAD_TIME_REVISION
+                    || index.exclude_newer.is_some()
+                    || self.options.exclude_newer.exclude_newer_package(&package.id.name) != Some(exclude_newer))
                 && package
                     .sdist
                     .iter()
