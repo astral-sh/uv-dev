@@ -144,8 +144,8 @@ fn create_managed_debug_venv() {
         import sys
         import sysconfig
 
-        print(f"Debug build: {bool(sysconfig.get_config_var('Py_DEBUG'))}")
-        print(f"Expected prefix: {Path(sys.prefix) == Path(sys.argv[1])}")
+        print(f"Debug build: {bool(sysconfig.get_config_var('Py_DEBUG')) or hasattr(sys, 'gettotalrefcount')}")
+        print(f"Expected prefix: {Path(sys.prefix).samefile(sys.argv[1])}")
         print(f"Virtual environment: {sys.prefix != sys.base_prefix}")
     "#};
     uv_snapshot!(context.filters(), context.external_command(context.venv.join("Scripts/python.exe"))
