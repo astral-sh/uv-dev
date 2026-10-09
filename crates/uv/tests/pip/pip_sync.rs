@@ -1465,7 +1465,11 @@ fn mismatched_version() -> Result<()> {
         .arg("--strict"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Wheel metadata version `2.0.1` for `tomli` does not match `3.7.2` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+    error: No solution found when resolving dependencies
+      cause: Because tomli has invalid metadata and you require tomli, we can conclude that your requirements are unsatisfiable.
+
+    hint: Metadata for `tomli` could not be parsed.
+      Caused by: Wheel metadata version `2.0.1` for `tomli` does not match `3.7.2` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
     "
     );
 
