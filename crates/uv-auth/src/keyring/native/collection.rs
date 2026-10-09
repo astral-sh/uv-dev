@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tracing::trace;
 use zeroize::Zeroizing;
 
@@ -76,7 +78,7 @@ pub(super) async fn load_persisted_credentials(
 
 /// Store one credential while holding its realm write lock.
 pub(super) async fn store_persisted_credential(
-    guard: &RealmWriteGuard,
+    guard: &Arc<RealmWriteGuard>,
     credential: &PersistentCredential,
 ) -> Result<(), Error> {
     ensure_service_realm(guard.realm(), &credential.service)?;
@@ -90,14 +92,14 @@ pub(super) async fn store_persisted_credential(
     let json = Zeroizing::new(
         serde_json::to_string(&credentials).map_err(Error::SerializeStoredCredentials)?,
     );
-    entry.set_password(&json).await?;
+    uv_keyring::with_operation_guard(Arc::clone(guard), entry.set_password(&json)).await?;
     trace!("Stored native credentials for realm {}", guard.realm);
     Ok(())
 }
 
 /// Remove one persisted credential while holding its realm write lock.
 pub(super) async fn remove_persisted_credential(
-    guard: &RealmWriteGuard,
+    guard: &Arc<RealmWriteGuard>,
     service: &Service,
     username: &Username,
 ) -> Result<bool, Error> {
@@ -113,12 +115,12 @@ pub(super) async fn remove_persisted_credential(
         return Ok(false);
     }
     if credentials.is_empty() {
-        entry.delete_credential().await?;
+        uv_keyring::with_operation_guard(Arc::clone(guard), entry.delete_credential()).await?;
     } else {
         let json = Zeroizing::new(
             serde_json::to_string(&credentials).map_err(Error::SerializeStoredCredentials)?,
         );
-        entry.set_password(&json).await?;
+        uv_keyring::with_operation_guard(Arc::clone(guard), entry.set_password(&json)).await?;
     }
     Ok(true)
 }

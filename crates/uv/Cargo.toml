@@ -114,6 +114,7 @@ embed-manifest = { workspace = true }
 
 [dev-dependencies]
 uv-python-managed = { workspace = true }
+uv-keyring = { workspace = true }
 uv-cache-key = { workspace = true }
 uv-extract = { workspace = true }
 uv-platform = { workspace = true }

@@ -300,16 +300,14 @@ impl AuthMiddleware {
         &self,
         url: &DisplaySafeUrl,
         username: &Username,
-    ) -> reqwest_middleware::Result<Option<Arc<Authentication>>> {
-        match self.cache().get_stored(url, username) {
-            Ok(credentials) => Ok(credentials),
-            Err(_) if self.preview.is_enabled(PreviewFeature::NativeAuth) => Err(
-                Self::native_store_error(crate::keyring::Error::AmbiguousUsername(url.clone())),
-            ),
-            Err(_) => {
-                debug!("Multiple plaintext credentials match URL `{url}`");
-                Ok(None)
-            }
+    ) -> Option<Arc<Authentication>> {
+        if let Ok(credentials) = self.cache().get_stored(url, username) {
+            credentials
+        } else {
+            // Automatic authentication first tries the request without credentials. Selection
+            // errors are reported only if a challenge or policy requires authentication.
+            debug!("Multiple stored credentials match URL `{url}`");
+            None
         }
     }
 
@@ -426,7 +424,7 @@ impl Middleware for AuthMiddleware {
                 None => self.cached_stored_credentials(
                     DisplaySafeUrl::ref_cast(request.url()),
                     &Username::none(),
-                )?,
+                ),
             };
             if let Some(credentials) = credentials.as_ref() {
                 request = credentials.authenticate(request).await?;
@@ -1091,6 +1089,7 @@ fn tracing_url(request: &Request, credentials: Option<&Authentication>) -> Displ
 mod tests {
     use std::assert_matches;
     use std::io::Write;
+    use std::str::FromStr;
 
     use http::Method;
     use reqwest::Client;
@@ -1158,6 +1157,73 @@ mod tests {
             401
         );
 
+        Ok(())
+    }
+
+    fn ambiguous_native_cache(url: &DisplaySafeUrl) -> CredentialsCache {
+        let cache = CredentialsCache::new();
+        let service = crate::Service::from_str(url.as_str()).unwrap();
+        let snapshot = StoredCredentials::from(vec![
+            crate::persistent::PersistentCredential {
+                service: service.clone(),
+                credentials: Credentials::basic(
+                    Some("first".to_string()),
+                    Some("first-password".to_string()),
+                ),
+            },
+            crate::persistent::PersistentCredential {
+                service,
+                credentials: Credentials::basic(
+                    Some("second".to_string()),
+                    Some("second-password".to_string()),
+                ),
+            },
+        ]);
+        cache
+            .native_realms
+            .done(Realm::from(url), Ok(Arc::clone(&snapshot)));
+        cache.insert_stored(url, snapshot);
+        cache
+    }
+
+    #[test(tokio::test)]
+    async fn cached_native_ambiguity_allows_public_requests() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let url = DisplaySafeUrl::parse(&server.uri())?;
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_preview(Preview::all())
+                    .with_cache(ambiguous_native_cache(&url)),
+            )
+            .build();
+        assert_eq!(client.get(server.uri()).send().await?.status(), 200);
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn cached_native_ambiguity_is_reported_after_challenge() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let url = DisplaySafeUrl::parse(&server.uri())?;
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_preview(Preview::all())
+                    .with_cache(ambiguous_native_cache(&url)),
+            )
+            .build();
+        let error = client.get(server.uri()).send().await.unwrap_err();
+        assert!(format!("{error:?}").contains("Multiple credentials found"));
         Ok(())
     }
 

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use sha2::{Digest, Sha256};
 use tracing::warn;
 use zeroize::Zeroizing;
@@ -111,7 +113,7 @@ pub(super) async fn load_persisted_credentials(
 
 /// Store one credential while holding its realm write lock.
 pub(super) async fn store_persisted_credential(
-    guard: &RealmWriteGuard,
+    guard: &Arc<RealmWriteGuard>,
     credential: &PersistentCredential,
 ) -> Result<(), Error> {
     let entry = entry(
@@ -121,17 +123,22 @@ pub(super) async fn store_persisted_credential(
     )?;
     let json =
         Zeroizing::new(serde_json::to_vec(credential).map_err(Error::SerializeStoredCredentials)?);
-    entry.set_secret(&json).await?;
+    uv_keyring::with_operation_guard(Arc::clone(guard), entry.set_secret(&json)).await?;
     Ok(())
 }
 
 /// Remove one persisted credential while holding its realm write lock.
 pub(super) async fn remove_persisted_credential(
-    guard: &RealmWriteGuard,
+    guard: &Arc<RealmWriteGuard>,
     service: &Service,
     username: &Username,
 ) -> Result<bool, Error> {
-    match entry(guard, service, username)?.delete_credential().await {
+    match uv_keyring::with_operation_guard(
+        Arc::clone(guard),
+        entry(guard, service, username)?.delete_credential(),
+    )
+    .await
+    {
         Ok(()) => Ok(true),
         Err(uv_keyring::Error::NoEntry) => Ok(false),
         Err(err) => Err(Error::Keyring(err)),

@@ -11,6 +11,7 @@ use tracing::{instrument, trace, warn};
 use uv_cache_key::cache_digest;
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_redacted::DisplaySafeUrl;
+#[cfg(windows)]
 use uv_state::{StateBucket, StateStore};
 
 use super::Error;
@@ -343,12 +344,21 @@ pub(super) fn ensure_service_realm(realm: &Realm, service: &Service) -> Result<(
     }
 }
 
-/// Return the shared user-state directory containing native credential lock files.
+/// Return a user-scoped native lock directory independent of configurable state directories.
 fn native_lock_directory() -> Result<PathBuf, Error> {
-    Ok(StateStore::from_settings(None)
-        .map_err(Error::NativeLockDirectory)?
-        .bucket(StateBucket::Credentials)
-        .join("native"))
+    #[cfg(windows)]
+    {
+        Ok(StateStore::from_settings(None)
+            .map_err(Error::NativeLockDirectory)?
+            .bucket(StateBucket::Credentials)
+            .join("native"))
+    }
+    #[cfg(not(windows))]
+    {
+        let home = etcetera::home_dir()
+            .map_err(|err| Error::NativeLockDirectory(std::io::Error::other(err)))?;
+        Ok(home.join(".local/share/uv/credentials/native"))
+    }
 }
 
 /// Return the lock path for a stable credential operation key.
@@ -400,7 +410,7 @@ async fn acquire_realm_read(realm: &Realm) -> Result<RealmReadGuard, Error> {
 }
 
 /// Acquire an exclusive lock for one realm.
-async fn acquire_realm_write(realm: &Realm) -> Result<RealmWriteGuard, Error> {
+async fn acquire_realm_write(realm: &Realm) -> Result<Arc<RealmWriteGuard>, Error> {
     let key = format!("realm:{realm}");
     let process = process_lock(&key).write_owned().await;
     let directory = create_native_lock_directory()?;
@@ -411,11 +421,11 @@ async fn acquire_realm_write(realm: &Realm) -> Result<RealmWriteGuard, Error> {
     )
     .await
     .map_err(Error::NativeLock)?;
-    Ok(RealmWriteGuard {
+    Ok(Arc::new(RealmWriteGuard {
         realm: realm.clone(),
         _process: process,
         _file: file,
-    })
+    }))
 }
 
 /// Acquire a shared lock for one exact legacy service name.
@@ -438,7 +448,7 @@ async fn acquire_legacy_read(service_name: &str) -> Result<LegacyReadGuard, Erro
 }
 
 /// Acquire an exclusive lock for one exact legacy service name.
-async fn acquire_legacy_write(service_name: &str) -> Result<LegacyWriteGuard, Error> {
+async fn acquire_legacy_write(service_name: &str) -> Result<Arc<LegacyWriteGuard>, Error> {
     let key = legacy_lock_key(service_name);
     let process = process_lock(&key).write_owned().await;
     let directory = create_native_lock_directory()?;
@@ -449,11 +459,11 @@ async fn acquire_legacy_write(service_name: &str) -> Result<LegacyWriteGuard, Er
     )
     .await
     .map_err(Error::NativeLock)?;
-    Ok(LegacyWriteGuard {
+    Ok(Arc::new(LegacyWriteGuard {
         service_name: service_name.to_string(),
         _process: process,
         _file: file,
-    })
+    }))
 }
 
 /// Return a bounded lock identity for a legacy service.
@@ -486,12 +496,12 @@ pub(super) async fn system_fetch_legacy(
 
 /// Remove a legacy password from the system keyring.
 pub(super) async fn system_remove_legacy(
-    guard: &LegacyWriteGuard,
+    guard: &Arc<LegacyWriteGuard>,
     username: &str,
 ) -> Result<bool, Error> {
     let entry =
         uv_keyring::Entry::new(&format!("{SERVICE_PREFIX}{}", guard.service_name), username)?;
-    match entry.delete_credential().await {
+    match uv_keyring::with_operation_guard(Arc::clone(guard), entry.delete_credential()).await {
         Ok(()) => Ok(true),
         Err(uv_keyring::Error::NoEntry) => Ok(false),
         Err(err) => Err(Error::Keyring(err)),
@@ -501,6 +511,54 @@ pub(super) async fn system_remove_legacy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_lock_directory_child() -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(output) = std::env::var_os("UV_TEST_NATIVE_LOCK_DIRECTORY_OUTPUT") {
+            fs_err::write(output, serde_json::to_vec(&native_lock_directory()?)?)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_lock_directory_is_shared_across_xdg_overrides()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let first = temporary.path().join("first.json");
+        let second = temporary.path().join("second.json");
+        let program = std::env::current_exe()?;
+        let first_status = std::process::Command::new(&program)
+            .args([
+                "--exact",
+                "keyring::native::tests::native_lock_directory_child",
+            ])
+            .env("XDG_DATA_HOME", temporary.path().join("first-state"))
+            .env(
+                "UV_CREDENTIALS_DIR",
+                temporary.path().join("first-credentials"),
+            )
+            .env("UV_TEST_NATIVE_LOCK_DIRECTORY_OUTPUT", &first)
+            .status()?;
+        let second_status = std::process::Command::new(&program)
+            .args([
+                "--exact",
+                "keyring::native::tests::native_lock_directory_child",
+            ])
+            .env("XDG_DATA_HOME", temporary.path().join("second-state"))
+            .env(
+                "UV_CREDENTIALS_DIR",
+                temporary.path().join("second-credentials"),
+            )
+            .env("UV_TEST_NATIVE_LOCK_DIRECTORY_OUTPUT", &second)
+            .status()?;
+        assert!(first_status.success());
+        assert!(second_status.success());
+        let first: PathBuf = serde_json::from_slice(&fs_err::read(first)?)?;
+        let second: PathBuf = serde_json::from_slice(&fs_err::read(second)?)?;
+        assert_eq!(first, second);
+        assert!(!first.starts_with(temporary.path()));
+        Ok(())
+    }
 
     #[test]
     fn lock_path_is_pure() {

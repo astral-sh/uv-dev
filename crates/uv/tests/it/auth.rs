@@ -1943,6 +1943,25 @@ fn native_auth_lock_directory_ignores_credentials_override() {
     assert!(!context.temp_dir.child("native").exists());
 }
 
+#[tokio::test]
+#[cfg(feature = "native-auth")]
+async fn native_auth_infers_legacy_token_account() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+    let service = "native-legacy-token-inference.example.com";
+    let _cleanup = NativeCredentialCleanup::new(&context, &[(service, "__token__")]);
+    uv_keyring::Entry::new(&format!("uv:{service}"), "__token__")?
+        .set_password("legacy-token")
+        .await?;
+    uv_snapshot!(context.auth_token()
+        .arg(service)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    legacy-token
+    ");
+    Ok(())
+}
+
 #[test]
 #[cfg(feature = "native-auth")]
 fn native_auth_prefix_match() {
@@ -1983,7 +2002,7 @@ fn native_auth_prefix_match() {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to fetch credentials for native-prefix-user@https://native-prefix.example.com/apiv1
+    error: Failed to fetch credentials for `native-prefix-user@https://native-prefix.example.com/apiv1`
     "
     );
 }
@@ -2130,7 +2149,7 @@ fn native_auth_multiple_users() {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to fetch credentials for user1@https://native-users.example.com/
+    error: Failed to fetch credentials for `user1@https://native-users.example.com/`
     "
     );
 
@@ -2253,7 +2272,7 @@ fn native_auth_logout_is_service_scoped() {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to fetch credentials for native-scoped-user@https://native-scoped.example.com/first
+    error: Failed to fetch credentials for `native-scoped-user@https://native-scoped.example.com/first`
     "
     );
 

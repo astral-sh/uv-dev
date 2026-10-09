@@ -119,11 +119,8 @@ pub use credential::Credential;
 use credential::CredentialBuilder;
 pub use error::{Error, Result};
 
-#[cfg(any(
-    all(target_os = "macos", feature = "apple-native"),
-    all(target_os = "windows", feature = "windows-native"),
-))]
 mod blocking;
+pub use blocking::with_operation_guard;
 #[cfg(test)]
 mod mock;
 

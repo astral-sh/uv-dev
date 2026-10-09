@@ -42,10 +42,16 @@ pub(crate) async fn token(
     };
 
     let credentials = match &backend {
-        AuthBackend::System(provider) => provider
-            .fetch(url, username.as_deref())
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for `{display_url}`"))?,
+        AuthBackend::System(provider) => {
+            let credentials = provider.fetch(url, username.as_deref()).await?;
+            let credentials = if credentials.is_none() && username.is_none() {
+                provider.fetch(url, Some("__token__")).await?
+            } else {
+                credentials
+            };
+            credentials
+                .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for `{display_url}`"))?
+        }
         AuthBackend::TextStore(store, _lock) => store
             .get_credentials(url, username.as_deref())?
             .cloned()
