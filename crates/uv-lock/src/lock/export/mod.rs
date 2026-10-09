@@ -61,6 +61,13 @@ impl<'lock> ExportableRequirements<'lock> {
         install_options: &'lock InstallOptions,
     ) -> Result<Self, LockError> {
         target.validate_workspace_resolution(extras, groups, None)?;
+        let root_requirements = match format {
+            ExportFormat::RequirementsTxt | ExportFormat::PylockToml => {
+                Some(target.selected_root_python_requirements(groups)?)
+            }
+            // An SBOM can describe groups with incompatible Python requirements.
+            ExportFormat::CycloneDX1_5 => None,
+        };
         let dependency_marker = |dependency: &Dependency| {
             let marker = dependency.simplified_marker.as_simplified_marker_tree();
             match format {
@@ -105,9 +112,14 @@ impl<'lock> ExportableRequirements<'lock> {
                 .ok_or_else(|| LockErrorKind::MissingRootPackage {
                     name: root_name.clone(),
                 })?;
-            let root_marker = target
-                .lock()
-                .simplify_environment(dist.environment_marker());
+            let mut root_marker = dist.environment_marker();
+            if let Some(requirement) = root_requirements
+                .as_ref()
+                .and_then(|requirements| requirements.get(root_name))
+            {
+                root_marker = root_marker.and(requirement.to_exact_marker_tree());
+            }
+            let root_marker = target.lock().simplify_environment(root_marker);
 
             if root_kind == InstallableRootKind::Production {
                 // Track the activated package in the list of known conflicts.
