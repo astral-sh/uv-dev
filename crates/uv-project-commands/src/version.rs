@@ -29,7 +29,6 @@ use uv_preview::Preview;
 use uv_project_edit::{DependencyTarget, Error, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
-use uv_python_discovery::project_python_roots;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_settings::{
@@ -529,8 +528,8 @@ async fn lock_and_sync(
     let groups = DependencyGroups::default().with_defaults(default_groups);
     let extras = ExtrasSpecification::default().with_defaults(default_extras);
     let install_options = InstallOptions::default();
-    let python_roots =
-        project_python_roots(project.workspace(), project.project_name(), false, &[]);
+    let python_roots = PackageSelection::from_args(false, &[], project.project_name())
+        .python_roots(project.workspace());
 
     // Discover the interpreter or environment used to lock and sync the project.
     let python_target = if no_sync {

@@ -37,7 +37,6 @@ use uv_lock_operations::{
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
-use uv_python_discovery::project_python_roots;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::{script_extra_build_requires, script_specification};
@@ -211,12 +210,10 @@ pub async fn sync(
     }
 
     let python_roots = match &target {
-        SyncTarget::Manifest(SyncManifest::Project(project)) => project_python_roots(
-            project.workspace(),
-            project.project_name(),
-            all_packages,
-            &package,
-        ),
+        SyncTarget::Manifest(SyncManifest::Project(project)) => {
+            PackageSelection::from_args(all_packages, &package, project.project_name())
+                .python_roots(project.workspace())
+        }
         SyncTarget::Manifest(SyncManifest::Script(_)) | SyncTarget::Lockfile { .. } => None,
     };
 

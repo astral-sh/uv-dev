@@ -13,6 +13,61 @@ use uv_static::EnvVars;
 use uv_test::TestContext;
 use uv_test::uv_snapshot;
 
+/// A frozen tree can inspect a root without requiring unrelated roots to share its interpreter.
+#[test]
+fn tree_lockfile_disjoint_root_python_domains() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["root-a", "root-b"]
+        roots = ["root-a", "root-b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = "==3.13.*"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index", "--python", "3.12"])
+        .assert()
+        .success();
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("root-a/pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("root-b/pyproject.toml"))?;
+
+    uv_snapshot!(context.filters(), context.tree().args([
+        "--frozen", "--preview-features", "frozen-lockfile", "--python", "3.12", "--package", "root-a",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    root-a v0.1.0
+    ");
+    Ok(())
+}
+
 /// Trees require a lockfile with revision 5 or later.
 #[test]
 fn tree_lockfile_requires_revision() -> Result<()> {

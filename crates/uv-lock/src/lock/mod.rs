@@ -7567,13 +7567,21 @@ impl Package {
         self.fork_markers.as_slice()
     }
 
+    /// Return the environment domain covered by this package's resolution forks.
+    ///
+    /// Packages without fork markers are unconstrained.
+    pub fn environment_marker(&self) -> MarkerTree {
+        self.fork_markers
+            .iter()
+            .copied()
+            .map(UniversalMarker::pep508)
+            .reduce(MarkerTree::or)
+            .unwrap_or(MarkerTree::TRUE)
+    }
+
     /// Returns whether this package is included by the given PEP 508 marker.
     pub fn is_included_by_marker(&self, marker: MarkerTree) -> bool {
-        self.fork_markers.is_empty()
-            || self
-                .fork_markers
-                .iter()
-                .any(|fork_marker| !fork_marker.pep508().is_disjoint(marker))
+        self.fork_markers.is_empty() || !self.environment_marker().is_disjoint(marker)
     }
 
     /// Returns the [`IndexUrl`] for the package, if it is a registry source.

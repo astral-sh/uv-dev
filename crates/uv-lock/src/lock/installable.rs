@@ -285,14 +285,7 @@ pub trait Installable<'lock> {
             // Keep selectors until dependency requests on sibling paths have been collected.
             let mut marker = resolve_activated_extras(marker, Some(parent.name()), selected);
             let target = lock.package(dependency.index);
-            if !target.fork_markers.is_empty() {
-                marker = marker.and(
-                    target
-                        .fork_markers
-                        .iter()
-                        .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508())),
-                );
-            }
+            marker = marker.and(target.environment_marker());
             if marker_env.is_some_and(|environment| {
                 !marker.without_extras().evaluate(environment.markers(), &[])
             }) {

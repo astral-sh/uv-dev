@@ -45,7 +45,6 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::init_script_python_requirement;
-use uv_python_discovery::project_python_roots;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::DisplaySafeUrl;
@@ -311,8 +310,8 @@ pub async fn add(
 
         // Enable the default groups of the project
         defaulted_groups = groups.with_defaults(project.default_groups()?);
-        let python_roots =
-            project_python_roots(project.workspace(), project.project_name(), false, &[]);
+        let python_roots = PackageSelection::from_args(false, &[], project.project_name())
+            .python_roots(project.workspace());
 
         if frozen.is_some() || no_sync {
             // Discover the interpreter.

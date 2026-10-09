@@ -29,7 +29,6 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::ScriptInterpreter;
-use uv_python_discovery::project_python_roots;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
@@ -295,12 +294,8 @@ pub async fn check(
     };
 
     let python_roots = project.as_ref().and_then(|project| {
-        project_python_roots(
-            project.workspace(),
-            project.project_name(),
-            all_packages,
-            &package,
-        )
+        PackageSelection::from_args(all_packages, &package, project.project_name())
+            .python_roots(project.workspace())
     });
 
     // Create an isolated environment, if requested.

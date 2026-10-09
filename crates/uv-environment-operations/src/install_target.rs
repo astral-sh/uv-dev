@@ -94,6 +94,15 @@ impl<'lock> PackageSelection<'lock> {
         }
     }
 
+    /// Derive Python roots from the selected packages of an explicit-roots workspace.
+    pub fn python_roots(self, workspace: &Workspace) -> Option<Vec<PackageName>> {
+        let roots = workspace.resolution_roots()?;
+        Some(match self {
+            Self::Projects(names) => names.to_vec(),
+            Self::Workspace | Self::NonProjectWorkspace => roots.iter().cloned().collect(),
+        })
+    }
+
     /// Identify workspace members excluded from installation before a lockfile is available.
     pub fn first_party_exclusions(
         self,
@@ -316,10 +325,7 @@ impl<'lock> InstallTarget<'lock> {
             if package.fork_markers().is_empty() {
                 continue;
             }
-            let marker = package
-                .fork_markers()
-                .iter()
-                .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508()));
+            let marker = package.environment_marker();
             let Some(requirement) = RequiresPython::from_marker_tree(marker) else {
                 return Err(EnvironmentError::DisjointLockedRequiresPython {
                     locked: lock.requires_python().clone(),

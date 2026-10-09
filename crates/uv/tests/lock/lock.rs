@@ -36846,6 +36846,7 @@ fn lock_no_build_workspace_member_dynamic_metadata() -> Result<()> {
         dependencies = ["child"]
 
         [tool.uv.workspace]
+        roots = ["project"]
         members = ["child"]
 
         [tool.uv.sources]
@@ -36965,6 +36966,7 @@ fn lock_no_build_workspace_member_dynamic_metadata() -> Result<()> {
         dependencies = ["child"]
 
         [tool.uv.workspace]
+        roots = ["project"]
         members = ["new-child"]
 
         [tool.uv.sources]
@@ -36972,11 +36974,15 @@ fn lock_no_build_workspace_member_dynamic_metadata() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-build").arg("--offline").arg("--no-cache"), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
-    error: Distribution `child @ directory+child` can't be installed because it is marked as `--no-build` but has no binary distribution
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     assert!(!wheel_marker.exists());
+    assert!(new_child.child("wheel-hook-called").exists());
 
     Ok(())
 }
