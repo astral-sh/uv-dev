@@ -3478,8 +3478,13 @@ fn workspace_metadata_script_active_without_base_executable() -> Result<()> {
         # dependencies = []
         # ///
     "#})?;
+    let unavailable = context.temp_dir.child("unavailable");
+    unavailable.create_dir_all()?;
+    fs_err::remove_dir_all(context.venv.path())?;
     uv_snapshot!(context.filters(), context.workspace_metadata()
         .args(["--script", "script.py", "--active", "--offline", "--no-cache", "--quiet", "--quiet"])
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, unavailable.path())
+        .env(EnvVars::UV_PYTHON_INSTALL_DIR, unavailable.path())
         .env(EnvVars::VIRTUAL_ENV, active.path()), @"
     exit_code: 0 (success)
     ");
