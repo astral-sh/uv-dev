@@ -17,7 +17,9 @@ use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
-use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Origin, Verbatim};
+use crate::{
+    ExcludeNewerOverride, Index, IndexMetadata, IndexStatusCodeStrategy, Origin, Verbatim,
+};
 
 /// Full index definitions selected by requirements sources, validated before composition.
 #[derive(Debug, Default, Clone)]
@@ -36,6 +38,8 @@ pub enum SourceIndexError {
     ConfiguredDefault,
     #[error("Conflicting policies for index URL `{0}` in requirements sources")]
     ConflictingUrl(IndexUrl),
+    #[error("Index URL `{0}` pinned by requirements no longer has its configured policy")]
+    MissingPinnedIndex(IndexUrl),
 }
 
 impl SourceIndexes {
@@ -380,6 +384,34 @@ impl IndexLocations {
             flat_index: self.flat_index.into_iter().chain(flat_index).collect(),
             no_index: self.no_index || no_index,
         }
+    }
+
+    /// Ensure persisted index pins retain the policies they selected before settings overrides.
+    pub fn validate_pinned_indexes<'index>(
+        &self,
+        original: &Self,
+        pins: impl IntoIterator<Item = &'index IndexMetadata>,
+    ) -> Result<(), SourceIndexError> {
+        let original_indexes = original.allowed_indexes();
+        let retained_indexes = self.allowed_indexes();
+        for pin in pins {
+            let Some(original) = original_indexes
+                .iter()
+                .rev()
+                .find(|index| is_same_index(&index.url, &pin.url))
+            else {
+                continue;
+            };
+            let Some(retained) = retained_indexes
+                .iter()
+                .rev()
+                .find(|index| is_same_index(&index.url, &pin.url))
+            else {
+                return Err(SourceIndexError::MissingPinnedIndex(pin.url.clone()));
+            };
+            validate_source_index_policy(original, retained)?;
+        }
+        Ok(())
     }
 
     /// Add index definitions from sources, retaining command-line precedence.

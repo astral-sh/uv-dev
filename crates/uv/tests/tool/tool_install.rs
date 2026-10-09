@@ -21,6 +21,8 @@ use sha2::{Digest, Sha256};
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::packse::{
     PackseServer, generate_wheel, generate_wheel_with_files, scenario::Scenario,
@@ -6822,5 +6824,93 @@ fn tool_install_pep723_receipt_preserves_legacy_index_override() -> Result<()> {
     ----- stdout -----
     2.0.0
     ");
+    Ok(())
+}
+
+/// Named upgrade overrides cannot discard authentication policy while retaining a receipt URL pin.
+#[tokio::test]
+async fn tool_install_pep723_receipt_rejects_shadowed_index_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let private = MockServer::start().await;
+    let replacement = MockServer::start().await;
+    let (filename, wheel) = generate_wheel(
+        &"dependency".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    Mock::given(method("GET"))
+        .and(path("/simple/dependency/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("<a href=\"../../{filename}\">{filename}</a>"),
+            "text/html",
+        ))
+        .mount(&private)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&private)
+        .await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # ///
+    "#, url = private.uri()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    private.reset().await;
+    uv_snapshot!(context.filters(), context.tool_upgrade().args(["simple-launcher", "--no-cache", "--index"])
+        .arg(format!("private={}/simple", replacement.uri()))
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade simple-launcher
+      cause: Index URL `http://[LOCALHOST]/simple` pinned by requirements no longer has its configured policy
+    ");
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert!(
+        private
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        replacement
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
     Ok(())
 }
