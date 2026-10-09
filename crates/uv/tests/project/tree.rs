@@ -5678,6 +5678,56 @@ fn show_version_specifiers_overridden_self_extra() -> Result<()> {
     Ok(())
 }
 
+/// An override can activate an optional child outside the marker on its original declaration.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_overridden_recursive_child_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-overridden-recursive-child-marker"
+        [root]
+        requires = ["parent"]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["parent[feature]; sys_platform == 'linux'"]
+        sdist = false
+        [packages.parent.versions."1.0.0".extras]
+        feature = ["child<2; sys_platform == 'win32'"]
+        [packages.child.versions."3.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv]
+        override-dependencies = ["child>=3"]
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: *]
+        └── child v3.0.0 [declared: <2; sys_platform == 'win32'] [overridden]
+    "#);
+    Ok(())
+}
+
 /// Scoped overrides use a resolved dynamic version even when declarations are already locked.
 #[cfg(feature = "test-universal")]
 #[test]

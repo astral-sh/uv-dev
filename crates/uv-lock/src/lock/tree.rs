@@ -696,22 +696,19 @@ impl<'env> TreeDisplay<'env> {
                 .map_or(DependencyModifierScope::Global, |version| {
                     DependencyModifierScope::Package(package.name(), version)
                 });
-            let activation = self
-                .modifiers
-                .apply(scope, requires_dist.iter())
-                .map(std::borrow::Cow::into_owned)
-                .collect::<Vec<_>>();
+            let requires_dist = FlatRequiresDist::from_requirements_with_modifiers(
+                requires_dist.into_boxed_slice(),
+                package.name(),
+                &self.modifiers,
+                scope,
+            )
+            .into_iter()
+            .collect();
             requirements.insert(
                 package,
                 TreeRequirements {
                     version,
-                    requires_dist: FlatRequiresDist::from_requirements_with_activation(
-                        requires_dist.into_boxed_slice(),
-                        package.name(),
-                        &activation,
-                    )
-                    .into_iter()
-                    .collect(),
+                    requires_dist,
                     dependency_groups,
                 },
             );
@@ -741,30 +738,24 @@ impl<'env> TreeDisplay<'env> {
         };
         let dependency_id = &self.lock.package(dependency_index).id;
         let edge = &self.graph[edge_id];
-        let requirements = match self.graph[parent] {
+        let requirements: &[Requirement] = match self.graph[parent] {
             Node::Root => match edge {
                 // The synthetic edge to a workspace member isn't a dependency declaration.
                 Edge::Prod(None, _) => return,
-                Edge::Prod(..) | Edge::Optional(..) => {
-                    self.root_requirements.iter().collect::<Vec<_>>()
-                }
+                Edge::Prod(..) | Edge::Optional(..) => &self.root_requirements,
                 Edge::Dev(group, ..) => self
                     .root_dependency_groups
                     .get(*group)
-                    .into_iter()
-                    .flatten()
-                    .collect(),
+                    .map_or(&[], |requirements| requirements.as_ref()),
             },
             Node::Package(parent_index) => metadata
                 .get(&self.lock.package(parent_index).id)
-                .map_or_else(Vec::new, |metadata| match edge {
-                    Edge::Prod(..) | Edge::Optional(..) => metadata.requires_dist.iter().collect(),
+                .map_or(&[], |metadata| match edge {
+                    Edge::Prod(..) | Edge::Optional(..) => &metadata.requires_dist,
                     Edge::Dev(group, ..) => metadata
                         .dependency_groups
                         .get(*group)
-                        .into_iter()
-                        .flatten()
-                        .collect(),
+                        .map_or(&[], |requirements| requirements.as_ref()),
                 }),
         };
         let modifier_scope = match self.graph[parent] {
@@ -830,7 +821,7 @@ impl<'env> TreeDisplay<'env> {
         };
 
         let mut annotations = BTreeSet::new();
-        for requirement in requirements.iter().copied() {
+        for requirement in requirements {
             if requirement.name != dependency_id.name {
                 continue;
             }
@@ -871,7 +862,7 @@ impl<'env> TreeDisplay<'env> {
             // declarations are known, but belong to the override rather than the package.
             let additions = self
                 .modifiers
-                .apply(modifier_scope, requirements.iter().copied())
+                .apply(modifier_scope, requirements)
                 .filter(|requirement| {
                     requirement.name == dependency_id.name
                         && is_applicable(requirement_marker(requirement.marker))

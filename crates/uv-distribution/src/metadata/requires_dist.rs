@@ -6,7 +6,7 @@ use rustc_hash::FxHashSet;
 
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
-use uv_configuration::NoSources;
+use uv_configuration::{DependencyModifierScope, DependencyModifiers, NoSources};
 use uv_distribution_types::{IndexLocations, Requirement};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
@@ -365,25 +365,32 @@ impl FlatRequiresDist {
         Self::flatten(requirements, name, None)
     }
 
-    /// Flatten declarations using effective requirements to determine recursive-extra activation.
-    pub fn from_requirements_with_activation(
+    /// Flatten declarations using effective activation while retaining authored override annotations.
+    pub fn from_requirements_with_modifiers(
         requirements: Box<[Requirement]>,
         name: &PackageName,
-        activation: &[Requirement],
+        modifiers: &DependencyModifiers,
+        scope: DependencyModifierScope<'_>,
     ) -> Self {
-        Self::flatten(requirements, name, Some(activation))
+        Self::flatten(requirements, name, Some((modifiers, scope)))
     }
 
     fn flatten(
         requirements: Box<[Requirement]>,
         name: &PackageName,
-        activation: Option<&[Requirement]>,
+        modifiers: Option<(&DependencyModifiers, DependencyModifierScope<'_>)>,
     ) -> Self {
+        let activation = modifiers.map(|(modifiers, scope)| {
+            modifiers
+                .apply(scope, requirements.iter())
+                .map(std::borrow::Cow::into_owned)
+                .collect::<Vec<_>>()
+        });
         // If there are no self-references, we can return early.
         if requirements
             .iter()
             .all(|requirement| requirement.name != *name)
-            && activation.is_none_or(|requirements| {
+            && activation.as_ref().is_none_or(|requirements| {
                 requirements
                     .iter()
                     .all(|requirement| requirement.name != *name)
@@ -391,7 +398,20 @@ impl FlatRequiresDist {
         {
             return Self(requirements);
         }
-        let activation = activation.unwrap_or(&requirements);
+        let activation = activation.as_deref().unwrap_or(&requirements);
+        let effective_markers = modifiers.map(|(modifiers, scope)| {
+            requirements
+                .iter()
+                .map(|requirement| {
+                    modifiers
+                        .apply(scope, [requirement])
+                        .filter(|candidate| candidate.name == requirement.name)
+                        .fold(MarkerTree::FALSE, |marker, candidate| {
+                            marker.or(candidate.marker)
+                        })
+                })
+                .collect::<Vec<_>>()
+        });
         let self_requirements = activation
             .iter()
             .filter(|requirement| requirement.name == *name)
@@ -404,10 +424,9 @@ impl FlatRequiresDist {
             .iter()
             .flat_map(|req| req.extras.iter().cloned().map(|extra| (extra, req.marker)))
             .collect();
-        let extra_marker = |requirement: &Requirement, extra: &ExtraName| {
-            let production_marker = requirement.marker.simplify_not_extras_with(|_| true);
-            requirement
-                .marker
+        let extra_marker = |marker: MarkerTree, extra: &ExtraName| {
+            let production_marker = marker.simplify_not_extras_with(|_| true);
+            marker
                 .simplify_extras(slice::from_ref(extra))
                 .simplify_not_extras_with(|candidate| candidate != extra)
                 .and(production_marker.negate())
@@ -419,11 +438,25 @@ impl FlatRequiresDist {
 
             // Find the optional portion of each requirement for this extra. A requirement can
             // also apply in production, as in `sys_platform == 'win32' or extra == 'base'`.
-            for requirement in &requirements {
-                let marker = marker.and(extra_marker(requirement, &extra));
+            for (index, requirement) in requirements.iter().enumerate() {
+                let declared_marker = extra_marker(requirement.marker, &extra);
+                let effective_marker = extra_marker(
+                    effective_markers
+                        .as_ref()
+                        .map_or(requirement.marker, |markers| markers[index]),
+                    &extra,
+                );
+                let marker = marker.and(effective_marker);
                 if marker.is_false() {
                     continue;
                 }
+                // Overrides can make an otherwise disjoint declaration reachable. Its annotation
+                // still describes the authored condition, while the effective marker controls expansion.
+                let marker = if effective_marker == declared_marker {
+                    marker
+                } else {
+                    declared_marker
+                };
                 let requirement = Requirement {
                     name: requirement.name.clone(),
                     extras: requirement.extras.clone(),
@@ -438,7 +471,7 @@ impl FlatRequiresDist {
                 flattened.push(requirement);
             }
             for requirement in &self_requirements {
-                let marker = marker.and(extra_marker(requirement, &extra));
+                let marker = marker.and(extra_marker(requirement.marker, &extra));
                 if !marker.is_false() {
                     queue.extend(
                         requirement
