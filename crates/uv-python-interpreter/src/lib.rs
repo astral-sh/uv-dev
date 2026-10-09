@@ -7,7 +7,7 @@ mod pointer_size;
 mod virtualenv;
 
 pub use environment::{
-    EnvironmentNotFound, Error as PythonEnvironmentError, InvalidEnvironment,
+    EnvironmentNotFound, EnvironmentOperation, Error as PythonEnvironmentError, InvalidEnvironment,
     InvalidEnvironmentKind, PythonEnvironment,
 };
 pub use environment_lock::{EnvironmentLock, EnvironmentLockError};

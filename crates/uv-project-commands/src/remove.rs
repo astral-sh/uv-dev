@@ -239,7 +239,6 @@ pub async fn remove(
     let extras = ExtrasSpecification::default().with_defaults(DefaultExtras::default());
 
     // Discover the interpreter or environment used to lock and sync the target.
-    let mut _destination_lock = None;
     let python_target = match &target {
         EditTarget::Project(project) => {
             if no_sync {
@@ -272,7 +271,7 @@ pub async fn remove(
                 PythonTarget::Interpreter(interpreter)
             } else {
                 // Discover or create the virtual environment.
-                let (environment, destination_lock) = ProjectEnvironment::get_or_init(
+                let environment = ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(project.workspace()),
                     None,
                     &groups,
@@ -291,8 +290,7 @@ pub async fn remove(
                     printer,
                 )
                 .await?
-                .into_parts()?;
-                _destination_lock = destination_lock;
+                .into_operation()?;
 
                 PythonTarget::Environment(environment)
             }
@@ -366,11 +364,12 @@ pub async fn remove(
         return Ok(ExitStatus::Success);
     };
 
-    let PythonTarget::Environment(venv) = &python_target else {
+    let PythonTarget::Environment(operation) = &python_target else {
         // If we're not syncing, exit early.
         edit.commit();
         return Ok(ExitStatus::Success);
     };
+    let venv = operation.environment();
 
     // Identify the installation target.
     let target = InstallTarget::from_project(

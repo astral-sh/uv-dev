@@ -10,7 +10,7 @@ use uv_fs::Simplified;
 use uv_python_discovery::{
     PythonDownloadReporter, PythonInstallation, find_environment, report_interpreter,
 };
-use uv_python_interpreter::{EnvironmentLock, PythonEnvironment};
+use uv_python_interpreter::{EnvironmentLock, EnvironmentOperation, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
     PythonRequest, Target,
@@ -32,7 +32,7 @@ pub(super) async fn prepare_environment(
     client_builder: &BaseClientBuilder<'_>,
     cache: &Cache,
     printer: Printer,
-) -> Result<(PythonEnvironment, Option<Arc<EnvironmentLock>>)> {
+) -> Result<EnvironmentOperation> {
     // Re-discover after destination admission: replacement may change the selected interpreter.
     let mut destination_lock: Option<Arc<EnvironmentLock>> = None;
     let mut admitted = false;
@@ -114,12 +114,9 @@ pub(super) async fn prepare_environment(
         environment
     };
 
-    let environment = if let Some(lock) = destination_lock.as_mut() {
+    if let Some(lock) = destination_lock.as_mut() {
         lock.finish_creation()?;
-        environment.with_destination_lock(lock)
-    } else {
-        environment
-    };
+    }
 
-    Ok((environment, destination_lock))
+    Ok(EnvironmentOperation::new(environment, destination_lock))
 }

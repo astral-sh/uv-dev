@@ -245,7 +245,7 @@ mod tests {
     use uv_preview::Preview;
     use uv_pypi_types::HashDigests;
     use uv_python_discovery::find_environment;
-    use uv_python_interpreter::{EnvironmentLock, PythonEnvironment};
+    use uv_python_interpreter::{EnvironmentLock, EnvironmentOperation, PythonEnvironment};
     use uv_python_types::{EnvironmentPreference, PythonPreference, PythonRequest, Target};
 
     use super::{Installer, Reporter};
@@ -333,7 +333,7 @@ mod tests {
             .context("destination admission")?;
         let environment = environment().with_target(Target::from(root.clone()))?;
         guard.finish_creation()?;
-        let environment = environment.with_destination_lock(&guard);
+        let operation = EnvironmentOperation::new(environment, Some(guard));
         let (started, ready) = oneshot::channel();
         let (release, receiver) = mpsc::channel();
         let reporter = Arc::new(InstallationGate {
@@ -348,7 +348,7 @@ mod tests {
             build_info: None,
         });
         let task = tokio::spawn(async move {
-            Installer::new(&environment, Preview::default())
+            Installer::new(operation.environment(), Preview::default())
                 .with_reporter(reporter)
                 .install(vec![distribution])
                 .await
@@ -357,7 +357,6 @@ mod tests {
         task.abort();
         assert!(task.await.expect_err("caller was cancelled").is_cancelled());
         drop(cache);
-        drop(guard);
 
         let waiter_cache = Cache::temp()?;
         let paths = [root.clone()];

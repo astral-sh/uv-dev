@@ -530,7 +530,6 @@ async fn lock_and_sync(
     let install_options = InstallOptions::default();
 
     // Discover the interpreter or environment used to lock and sync the project.
-    let mut _destination_lock = None;
     let python_target = if no_sync {
         // Discover the interpreter.
         let project_python = ProjectPythonRequest::from_request(
@@ -560,7 +559,7 @@ async fn lock_and_sync(
         PythonTarget::Interpreter(interpreter)
     } else {
         // Discover or create the virtual environment.
-        let (environment, destination_lock) = ProjectEnvironment::get_or_init(
+        let environment = ProjectEnvironment::get_or_init(
             ProjectEnvironmentTarget::from(project.workspace()),
             None,
             &groups,
@@ -579,8 +578,7 @@ async fn lock_and_sync(
             printer,
         )
         .await?
-        .into_parts()?;
-        _destination_lock = destination_lock;
+        .into_operation()?;
 
         PythonTarget::Environment(environment)
     };
@@ -618,10 +616,11 @@ async fn lock_and_sync(
         Err(err) => return Err(UvError::from(err).into()),
     };
 
-    let PythonTarget::Environment(venv) = &python_target else {
+    let PythonTarget::Environment(operation) = &python_target else {
         // If we're not syncing, exit early.
         return Ok(ExitStatus::Success);
     };
+    let venv = operation.environment();
 
     // Perform a full sync, because we don't know what exactly is affected by the version.
 

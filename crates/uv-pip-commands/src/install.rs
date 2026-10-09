@@ -203,7 +203,7 @@ pub async fn pip_install(
             .chain(build_constraints_from_workspace.iter().cloned()),
     );
 
-    let (environment, _destination_lock) = crate::environment::prepare_environment(
+    let operation = crate::environment::prepare_environment(
         python.as_deref(),
         system,
         target,
@@ -217,6 +217,7 @@ pub async fn pip_install(
         printer,
     )
     .await?;
+    let environment = operation.environment();
 
     // Lower the extra build dependencies, if any.
     let extra_build_requires =
@@ -281,7 +282,7 @@ pub async fn pip_install(
     let site_packages = if defer_site_packages {
         None
     } else {
-        Some(SitePackages::from_environment(&environment)?)
+        Some(SitePackages::from_environment(environment)?)
     };
 
     // Check if the current environment satisfies the requirements.
@@ -331,7 +332,7 @@ pub async fn pip_install(
                         recursive_requirements
                             .iter()
                             .map(|requirement| &requirement.name),
-                        &environment,
+                        environment,
                         &marker_env,
                         &tags,
                         &dependency_metadata,
@@ -422,9 +423,9 @@ pub async fn pip_install(
     // Determine whether to enable build isolation.
     let types_build_isolation = match build_isolation {
         BuildIsolation::Isolate => uv_types::BuildIsolation::Isolated,
-        BuildIsolation::Shared => uv_types::BuildIsolation::Shared(&environment),
+        BuildIsolation::Shared => uv_types::BuildIsolation::Shared(environment),
         BuildIsolation::SharedPackage(ref packages) => {
-            uv_types::BuildIsolation::SharedPackage(&environment, packages)
+            uv_types::BuildIsolation::SharedPackage(environment, packages)
         }
     };
 
@@ -566,7 +567,7 @@ pub async fn pip_install(
     let site_packages = match site_packages {
         // Only resolved packages can be modified when using sufficient installation semantics.
         None => SitePackages::from_environment_for_packages(
-            &environment,
+            environment,
             resolution.distributions().map(Name::name),
         )?,
         Some(site_packages) => site_packages,
@@ -619,7 +620,7 @@ pub async fn pip_install(
         &concurrency,
         &build_dispatch,
         &cache,
-        &environment,
+        environment,
         Box::new(DefaultInstallLogger),
         installer_metadata,
         dry_run,
@@ -645,7 +646,7 @@ pub async fn pip_install(
     if strict && !dry_run.enabled() {
         uv_install_operations::diagnose_environment(
             resolution.distributions().map(Name::name),
-            &environment,
+            environment,
             &marker_env,
             &tags,
             &dependency_metadata,

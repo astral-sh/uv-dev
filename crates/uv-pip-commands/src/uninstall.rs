@@ -15,7 +15,7 @@ use uv_fs::Simplified;
 use uv_pep508::UnnamedRequirement;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_discovery::find_environment;
-use uv_python_interpreter::EnvironmentLock;
+use uv_python_interpreter::{EnvironmentLock, EnvironmentOperation};
 use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonPreference, PythonRequest, Target,
 };
@@ -103,12 +103,11 @@ pub async fn pip_uninstall(
         environment
     };
 
-    let environment = if let Some(lock) = destination_lock.as_mut() {
+    if let Some(lock) = destination_lock.as_mut() {
         lock.finish_creation()?;
-        environment.with_destination_lock(lock)
-    } else {
-        environment
-    };
+    }
+    let operation = EnvironmentOperation::new(environment, destination_lock);
+    let environment = operation.environment();
 
     // If the environment is externally managed, abort.
     if let Some(externally_managed) = environment.interpreter().is_externally_managed() {
@@ -139,7 +138,7 @@ pub async fn pip_uninstall(
         .ok();
 
     // Index the current `site-packages` directory.
-    let site_packages = uv_installer::SitePackages::from_environment(&environment)?;
+    let site_packages = uv_installer::SitePackages::from_environment(environment)?;
 
     // Partition the requirements into named and unnamed requirements.
     let (named, unnamed): (Vec<Requirement>, Vec<UnnamedRequirement<VerbatimParsedUrl>>) = spec

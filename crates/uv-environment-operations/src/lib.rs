@@ -31,8 +31,8 @@ use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::{PythonInstallation, report_interpreter};
 use uv_python_interpreter::{
-    BrokenLink, EnvironmentLock, EnvironmentLockError, Interpreter, InvalidEnvironmentKind,
-    PythonEnvironment,
+    BrokenLink, EnvironmentLock, EnvironmentLockError, EnvironmentOperation, Interpreter,
+    InvalidEnvironmentKind, PythonEnvironment,
 };
 use uv_python_managed::{ManagedPythonInstallation, PythonMinorVersionLink};
 use uv_python_types::{
@@ -955,17 +955,6 @@ fn finish_environment_creation(
     Ok(())
 }
 
-fn with_destination_lock(
-    environment: PythonEnvironment,
-    lock: Option<&Arc<EnvironmentLock>>,
-) -> PythonEnvironment {
-    if let Some(lock) = lock {
-        environment.with_destination_lock(lock)
-    } else {
-        environment
-    }
-}
-
 enum SelectedEnvironment {
     Existing(PythonEnvironment),
     Create(Box<Interpreter>),
@@ -975,12 +964,12 @@ enum SelectedEnvironment {
 #[derive(Debug)]
 pub enum ProjectEnvironment {
     /// An existing [`PythonEnvironment`] was accepted by the compatibility policy.
-    Existing(PythonEnvironment, Option<Arc<EnvironmentLock>>),
+    Existing(EnvironmentOperation),
     /// An existing [`PythonEnvironment`] was discovered, but did not satisfy the project's
     /// requirements, and so was replaced.
-    Replaced(PythonEnvironment, Option<Arc<EnvironmentLock>>),
+    Replaced(EnvironmentOperation),
     /// A new [`PythonEnvironment`] was created.
-    Created(PythonEnvironment, Option<Arc<EnvironmentLock>>),
+    Created(EnvironmentOperation),
     /// An existing [`PythonEnvironment`] was discovered, but did not satisfy the project's
     /// requirements. A new environment would've been created, but `--dry-run` mode is enabled; as
     /// such, a temporary environment was created instead.
@@ -1086,7 +1075,7 @@ impl ProjectEnvironment {
                     || project_environment_reference_matches(&reference, environment.root()))
             {
                 report.report(printer)?;
-                return Ok(Self::Existing(environment, None));
+                return Ok(Self::Existing(EnvironmentOperation::new(environment, None)));
             }
             // Any creation or reference update requires admission and fresh discovery. Discard
             // this preliminary report so only the accepted selection is printed.
@@ -1155,10 +1144,10 @@ impl ProjectEnvironment {
                         update_project_environment_link(&environment, target, link_error_reporting);
                     }
                     finish_environment_creation(&mut destination_lock)?;
-                    Ok(Self::Existing(
-                        with_destination_lock(environment, destination_lock.as_ref()),
+                    Ok(Self::Existing(EnvironmentOperation::new(
+                        environment,
                         destination_lock,
-                    ))
+                    )))
                 }
 
                 // Otherwise, create a virtual environment with the discovered interpreter.
@@ -1306,32 +1295,30 @@ impl ProjectEnvironment {
 
                     finish_environment_creation(&mut destination_lock)?;
                     if replace_environment {
-                        Ok(Self::Replaced(
-                            with_destination_lock(environment, destination_lock.as_ref()),
+                        Ok(Self::Replaced(EnvironmentOperation::new(
+                            environment,
                             destination_lock,
-                        ))
+                        )))
                     } else {
-                        Ok(Self::Created(
-                            with_destination_lock(environment, destination_lock.as_ref()),
+                        Ok(Self::Created(EnvironmentOperation::new(
+                            environment,
                             destination_lock,
-                        ))
+                        )))
                     }
                 }
             };
         }
     }
 
-    /// Return the environment and admission that must remain owned through package mutation.
+    /// Return the operation that owns the environment and its admission through package mutation.
     ///
     /// Returns an error if the environment was created in `--dry-run` mode, as dropping the
     /// associated temporary directory could lead to errors downstream.
-    pub fn into_parts(
-        self,
-    ) -> Result<(PythonEnvironment, Option<Arc<EnvironmentLock>>), EnvironmentError> {
+    pub fn into_operation(self) -> Result<EnvironmentOperation, EnvironmentError> {
         match self {
-            Self::Existing(environment, lock) => Ok((environment, lock)),
-            Self::Replaced(environment, lock) => Ok((environment, lock)),
-            Self::Created(environment, lock) => Ok((environment, lock)),
+            Self::Existing(operation) => Ok(operation),
+            Self::Replaced(operation) => Ok(operation),
+            Self::Created(operation) => Ok(operation),
             Self::WouldReplace(..) => Err(EnvironmentError::DroppedEnvironment),
             Self::WouldCreate(..) => Err(EnvironmentError::DroppedEnvironment),
         }
@@ -1351,9 +1338,9 @@ impl std::ops::Deref for ProjectEnvironment {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Self::Existing(environment, _) => environment,
-            Self::Replaced(environment, _) => environment,
-            Self::Created(environment, _) => environment,
+            Self::Existing(operation) => operation.environment(),
+            Self::Replaced(operation) => operation.environment(),
+            Self::Created(operation) => operation.environment(),
             Self::WouldReplace(_, environment, _) => environment,
             Self::WouldCreate(_, environment, _) => environment,
         }
@@ -1364,12 +1351,12 @@ impl std::ops::Deref for ProjectEnvironment {
 #[derive(Debug)]
 pub enum ScriptEnvironment {
     /// An existing [`PythonEnvironment`] was discovered, which satisfies the script's requirements.
-    Existing(PythonEnvironment, Option<Arc<EnvironmentLock>>),
+    Existing(EnvironmentOperation),
     /// An existing [`PythonEnvironment`] was discovered, but did not satisfy the script's
     /// requirements, and so was replaced.
-    Replaced(PythonEnvironment, Option<Arc<EnvironmentLock>>),
+    Replaced(EnvironmentOperation),
     /// A new [`PythonEnvironment`] was created for the script.
-    Created(PythonEnvironment, Option<Arc<EnvironmentLock>>),
+    Created(EnvironmentOperation),
     /// An existing [`PythonEnvironment`] was discovered, but did not satisfy the script's
     /// requirements. A new environment would've been created, but `--dry-run` mode is enabled; as
     /// such, a temporary environment was created instead.
@@ -1462,10 +1449,10 @@ impl ScriptEnvironment {
                 // If we found an existing, compatible environment, use it.
                 SelectedEnvironment::Existing(environment) => {
                     finish_environment_creation(&mut destination_lock)?;
-                    Ok(Self::Existing(
-                        with_destination_lock(environment, destination_lock.as_ref()),
+                    Ok(Self::Existing(EnvironmentOperation::new(
+                        environment,
                         destination_lock,
-                    ))
+                    )))
                 }
 
                 // Otherwise, create a virtual environment with the discovered interpreter.
@@ -1540,32 +1527,24 @@ impl ScriptEnvironment {
 
                     finish_environment_creation(&mut destination_lock)?;
                     Ok(if replaced {
-                        Self::Replaced(
-                            with_destination_lock(environment, destination_lock.as_ref()),
-                            destination_lock,
-                        )
+                        Self::Replaced(EnvironmentOperation::new(environment, destination_lock))
                     } else {
-                        Self::Created(
-                            with_destination_lock(environment, destination_lock.as_ref()),
-                            destination_lock,
-                        )
+                        Self::Created(EnvironmentOperation::new(environment, destination_lock))
                     })
                 }
             };
         }
     }
 
-    /// Return the environment and admission that must remain owned through package mutation.
+    /// Return the operation that owns the environment and its admission through package mutation.
     ///
     /// Returns an error if the environment was created in `--dry-run` mode, as dropping the
     /// associated temporary directory could lead to errors downstream.
-    pub fn into_parts(
-        self,
-    ) -> Result<(PythonEnvironment, Option<Arc<EnvironmentLock>>), EnvironmentError> {
+    pub fn into_operation(self) -> Result<EnvironmentOperation, EnvironmentError> {
         match self {
-            Self::Existing(environment, lock) => Ok((environment, lock)),
-            Self::Replaced(environment, lock) => Ok((environment, lock)),
-            Self::Created(environment, lock) => Ok((environment, lock)),
+            Self::Existing(operation) => Ok(operation),
+            Self::Replaced(operation) => Ok(operation),
+            Self::Created(operation) => Ok(operation),
             Self::WouldReplace(..) => Err(EnvironmentError::DroppedEnvironment),
             Self::WouldCreate(..) => Err(EnvironmentError::DroppedEnvironment),
         }
@@ -1585,9 +1564,9 @@ impl std::ops::Deref for ScriptEnvironment {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Self::Existing(environment, _) => environment,
-            Self::Replaced(environment, _) => environment,
-            Self::Created(environment, _) => environment,
+            Self::Existing(operation) => operation.environment(),
+            Self::Replaced(operation) => operation.environment(),
+            Self::Created(operation) => operation.environment(),
             Self::WouldReplace(_, environment, _) => environment,
             Self::WouldCreate(_, environment, _) => environment,
         }

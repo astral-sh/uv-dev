@@ -26,6 +26,7 @@ use uv_normalize::DefaultGroups;
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
+use uv_python_interpreter::EnvironmentOperation;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -281,16 +282,15 @@ pub(crate) async fn venv(
         upgradeable,
     )
     .map_err(VenvError::Creation)?;
-    let venv = if let Some(lock) = destination_lock.as_mut() {
+    if let Some(lock) = destination_lock.as_mut() {
         // Centralized environments replace the project reference after seeding. Retain parent
         // admission until that publication finishes, including its unlink-and-recreate interval.
         if centralized_workspace.is_none() {
             lock.finish_creation()?;
         }
-        venv.with_destination_lock(lock)
-    } else {
-        venv
-    };
+    }
+    let operation = EnvironmentOperation::new(venv, destination_lock);
+    let venv = operation.environment();
     venv.cache_virtualenv(system_site_packages, cache)?;
 
     // Install seed packages.
@@ -378,7 +378,7 @@ pub(crate) async fn venv(
             .await
             .map_err(|err| VenvError::Seed(err.into()))?;
         let installed = build_dispatch
-            .install(&requirements, &venv, &build_stack)
+            .install(&requirements, venv, &build_stack)
             .await
             .map_err(|err| VenvError::Seed(err.into()))?;
 
@@ -389,7 +389,7 @@ pub(crate) async fn venv(
     // Determine the appropriate environment path.
     let scripts = if let Some(workspace) = centralized_workspace
         && update_project_environment_link(
-            &venv,
+            venv,
             ProjectEnvironmentTarget::from(workspace),
             LinkErrorReporting::User,
         )

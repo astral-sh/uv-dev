@@ -48,6 +48,50 @@ impl uv_errors::Hinted for Error {
 #[derive(Debug, Clone)]
 pub struct PythonEnvironment(Arc<PythonEnvironmentShared>, Weak<EnvironmentLock>);
 
+/// A Python environment and the admission retained while an operation can modify it.
+///
+/// Environment descriptions borrowed or copied from this handle do not retain admission. Publishing
+/// workers acquire their own leases through [`PythonEnvironment::destination_lock`].
+#[derive(Debug)]
+pub struct EnvironmentOperation {
+    environment: PythonEnvironment,
+    destination_lock: Option<Arc<EnvironmentLock>>,
+}
+
+impl EnvironmentOperation {
+    /// Associate an environment with its operation's admission.
+    pub fn new(
+        mut environment: PythonEnvironment,
+        destination_lock: Option<Arc<EnvironmentLock>>,
+    ) -> Self {
+        environment.1 = destination_lock
+            .as_ref()
+            .map_or_else(Weak::new, Arc::downgrade);
+        Self {
+            environment,
+            destination_lock,
+        }
+    }
+
+    /// Borrow the environment while retaining its admission in this operation.
+    pub fn environment(&self) -> &PythonEnvironment {
+        &self.environment
+    }
+
+    /// Release this operation's admission before using the environment without modifying it.
+    ///
+    /// Publishing workers that are still running retain their own admission until they finish.
+    pub fn into_unlocked(self) -> PythonEnvironment {
+        let Self {
+            mut environment,
+            destination_lock,
+        } = self;
+        environment.1 = Weak::new();
+        drop(destination_lock);
+        environment
+    }
+}
+
 impl PartialEq for PythonEnvironment {
     fn eq(&self, other: &Self) -> bool {
         // Environment identity compares interpreter configuration independently of operation state.
@@ -330,13 +374,6 @@ impl PythonEnvironment {
     /// Returns the path to the `bin` directory inside this environment.
     pub fn scripts(&self) -> &Path {
         self.0.interpreter.scripts()
-    }
-
-    /// Associate operation ownership without retaining it in copied environment descriptions.
-    #[must_use]
-    pub fn with_destination_lock(mut self, lock: &Arc<EnvironmentLock>) -> Self {
-        self.1 = Arc::downgrade(lock);
-        self
     }
 
     /// Give a publishing worker its own reference to the current operation's admission.

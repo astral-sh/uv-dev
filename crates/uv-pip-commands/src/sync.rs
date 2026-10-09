@@ -170,7 +170,7 @@ pub async fn pip_sync(
         }
     }
 
-    let (environment, _destination_lock) = crate::environment::prepare_environment(
+    let operation = crate::environment::prepare_environment(
         python.as_deref(),
         system,
         target,
@@ -184,6 +184,7 @@ pub async fn pip_sync(
         printer,
     )
     .await?;
+    let environment = operation.environment();
 
     // If the environment is externally managed, abort.
     if let Some(externally_managed) = environment.interpreter().is_externally_managed() {
@@ -300,9 +301,9 @@ pub async fn pip_sync(
     // Determine whether to enable build isolation.
     let types_build_isolation = match build_isolation {
         BuildIsolation::Isolate => uv_types::BuildIsolation::Isolated,
-        BuildIsolation::Shared => uv_types::BuildIsolation::Shared(&environment),
+        BuildIsolation::Shared => uv_types::BuildIsolation::Shared(environment),
         BuildIsolation::SharedPackage(ref packages) => {
-            uv_types::BuildIsolation::SharedPackage(&environment, packages)
+            uv_types::BuildIsolation::SharedPackage(environment, packages)
         }
     };
 
@@ -352,7 +353,7 @@ pub async fn pip_sync(
     );
 
     // Determine the set of installed packages.
-    let site_packages = SitePackages::from_environment(&environment)?;
+    let site_packages = SitePackages::from_environment(environment)?;
 
     let (resolution, hasher) = if let Some(pylock) = pylock {
         let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
@@ -492,7 +493,7 @@ pub async fn pip_sync(
         &concurrency,
         &build_dispatch,
         &cache,
-        &environment,
+        environment,
         Box::new(DefaultInstallLogger),
         installer_metadata,
         dry_run,
@@ -518,7 +519,7 @@ pub async fn pip_sync(
     if strict && !dry_run.enabled() {
         uv_install_operations::diagnose_environment(
             resolution.distributions().map(Name::name),
-            &environment,
+            environment,
             &marker_env,
             &tags,
             &dependency_metadata,
