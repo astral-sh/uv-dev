@@ -21,6 +21,7 @@ use uv_shell::escape_posix_for_single_quotes;
 use uv_trampoline_builder::windows_script_launcher;
 use uv_warnings::warn_user_once;
 
+use crate::install::wheel_destination;
 use crate::record::RecordEntry;
 use crate::script::{EntryPoints, Script};
 use crate::{Error, Layout};
@@ -1198,7 +1199,7 @@ pub(crate) fn parse_scripts(
 /// Return the paths a wheel will write into the installation's scripts directory.
 pub fn script_paths(layout: &Layout, wheel: impl AsRef<Path>) -> Result<Vec<PathBuf>, Error> {
     let wheel = wheel.as_ref();
-    let dist_info_prefix = find_dist_info(wheel)?;
+    let (dist_info_prefix, root_scheme) = wheel_destination(layout, wheel)?;
     let (console_scripts, gui_scripts) =
         parse_scripts(wheel, &dist_info_prefix, layout.python_version.1)?;
 
@@ -1223,11 +1224,6 @@ pub fn script_paths(layout: &Layout, wheel: impl AsRef<Path>) -> Result<Vec<Path
         }
     }
 
-    let wheel_text = fs::read_to_string(wheel.join(format!("{dist_info_prefix}.dist-info/WHEEL")))?;
-    let root_scheme = match WheelFile::parse(&wheel_text)?.lib_kind() {
-        LibKind::Pure => &layout.scheme.purelib,
-        LibKind::Plat => &layout.scheme.platlib,
-    };
     // A target installation puts libraries and data beside its scripts directory. Include every
     // scheme whose files can overlap that directory, including files at the wheel root.
     for (source, destination) in [

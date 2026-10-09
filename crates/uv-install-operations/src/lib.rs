@@ -462,6 +462,7 @@ impl InstallationPlan {
             let (isolated_installs, isolated_uninstalls) = execute_plan(
                 isolated_phase,
                 None,
+                &installs,
                 resolution,
                 build_options,
                 link_mode,
@@ -491,6 +492,7 @@ impl InstallationPlan {
                 } else {
                     None
                 },
+                &installs,
                 resolution,
                 build_options,
                 link_mode,
@@ -672,6 +674,7 @@ impl InstallPhase {
 async fn execute_plan(
     plan: Plan,
     phase: Option<InstallPhase>,
+    previous_installs: &[CachedDist],
     resolution: &Resolution,
     build_options: &BuildOptions,
     link_mode: LinkMode,
@@ -730,7 +733,8 @@ async fn execute_plan(
     };
 
     let mut installs = wheels.into_iter().chain(cached).collect::<Vec<_>>();
-    uv_installer::Installer::new(venv, preview).validate_script_conflicts(&installs)?;
+    uv_installer::Installer::new(venv, preview)
+        .validate_script_conflicts(previous_installs.iter().chain(&installs))?;
 
     // Remove any upgraded or extraneous installations.
     let uninstalls = extraneous.into_iter().chain(reinstalls).collect::<Vec<_>>();

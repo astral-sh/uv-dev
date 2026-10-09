@@ -111,7 +111,10 @@ impl<'a> Installer<'a> {
     }
 
     /// Reject overlapping script destinations before removing installed distributions.
-    pub fn validate_script_conflicts(&self, wheels: &[CachedDist]) -> Result<(), InstallError> {
+    pub fn validate_script_conflicts<'wheel>(
+        &self,
+        wheels: impl IntoIterator<Item = &'wheel CachedDist>,
+    ) -> Result<(), InstallError> {
         validate_script_conflicts(&self.venv.interpreter().layout(), wheels)
     }
 
@@ -248,7 +251,10 @@ pub trait Reporter: Send + Sync {
     fn on_install_complete(&self);
 }
 
-fn validate_script_conflicts(layout: &Layout, wheels: &[CachedDist]) -> Result<(), InstallError> {
+fn validate_script_conflicts<'wheel>(
+    layout: &Layout,
+    wheels: impl IntoIterator<Item = &'wheel CachedDist>,
+) -> Result<(), InstallError> {
     // Scripts are written directly into the shared scripts directory and are not protected by
     // the site-packages install locks. Reject conflicting destinations before any wheel is linked,
     // otherwise parallel installation is nondeterministic and uninstalling either owner can remove

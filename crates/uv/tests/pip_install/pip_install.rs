@@ -639,6 +639,66 @@ fn reject_conflicting_wheel_scripts_before_uninstall() -> Result<()> {
     Ok(())
 }
 
+/// Later shared-build phases must not overwrite scripts installed by an earlier phase.
+#[test]
+fn reject_conflicting_wheel_scripts_across_phases() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    let first = context.temp_dir.join("first-1.0.0-py3-none-any.whl");
+    let second = context.temp_dir.join("second-1.0.0-py3-none-any.whl");
+    write_shared_script_wheel(&first, "first", None)?;
+    write_shared_script_wheel(&second, "second", None)?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&first).arg(&second)
+        .arg("--no-build-isolation-package").arg("second"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+    Prepared 1 package without build isolation in [TIME]
+    error: Cannot install wheels with conflicting scripts: `[VENV]/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    "#);
+    context.assert_installed("first", "1.0.0");
+    assert!(
+        !context
+            .site_packages()
+            .join("second-1.0.0.dist-info")
+            .exists()
+    );
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv)
+        .join(format!("shared-tool{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+    ");
+
+    context.pip_uninstall().arg("first").assert().success();
+    // Warm caches must reject the same conflict before either package is installed.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&first).arg(&second)
+        .arg("--no-build-isolation-package").arg("second"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Cannot install wheels with conflicting scripts: `[VENV]/[BIN]/shared-tool` is provided by both `first-1.0.0-py3-none-any.whl` and `second-1.0.0-py3-none-any.whl`
+    "#);
+    assert!(
+        !context
+            .site_packages()
+            .join("first-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .site_packages()
+            .join("second-1.0.0.dist-info")
+            .exists()
+    );
+    Ok(())
+}
+
 #[test]
 fn whitespace_only_requirement() {
     let context = uv_test::test_context_with_versions!(&[])
@@ -16121,12 +16181,17 @@ fn reserved_script_name() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
     error: Failed to install: project-0.1.0-py3-none-any.whl (project==0.1.0 (from file://[TEMP_DIR]/))
       cause: Scripts must not use the reserved name `python`, got: `python`
     "
     );
 
+    context
+        .assert_command(
+            "from importlib.metadata import version; assert version('project') == '0.1.0'",
+        )
+        .success();
+    context.assert_command("import project").success();
     Ok(())
 }
 
