@@ -9,13 +9,12 @@ use std::path::Path;
 
 use console::Term;
 use fs_err::File;
-use itertools::Itertools;
 use owo_colors::OwoColorize;
 
 use tracing::{debug, trace};
 
 use crate::{Error, Prompt};
-use uv_fs::{CWD, PythonExt, Simplified, cachedir};
+use uv_fs::{CWD, Simplified, cachedir};
 use uv_platform_tags::Os;
 use uv_preview::PreviewFeature;
 use uv_pypi_types::Scheme;
@@ -23,25 +22,8 @@ use uv_python::managed::{
     ManagedPythonInstallation, PythonExecutable, PythonMinorVersionLink, replace_link_to_executable,
 };
 use uv_python::{Interpreter, VirtualEnvironment};
-use uv_shell::escape_posix_for_single_quotes;
 use uv_version::version;
 
-/// Activation scripts for the environment, with dependent paths templated out.
-const ACTIVATE_TEMPLATES: &[(&str, &str)] = &[
-    ("activate", include_str!("activator/activate")),
-    ("activate.csh", include_str!("activator/activate.csh")),
-    ("activate.fish", include_str!("activator/activate.fish")),
-    ("activate.nu", include_str!("activator/activate.nu")),
-    ("activate.xsh", include_str!("activator/activate.xsh")),
-    ("activate.ps1", include_str!("activator/activate.ps1")),
-    ("activate.bat", include_str!("activator/activate.bat")),
-    ("deactivate.bat", include_str!("activator/deactivate.bat")),
-    ("pydoc.bat", include_str!("activator/pydoc.bat")),
-    (
-        "activate_this.py",
-        include_str!("activator/activate_this.py"),
-    ),
-];
 const VIRTUALENV_PATCH: &str = include_str!("_virtualenv.py");
 
 /// Python 3.10 and later already ignore the distutils install config keys this hook guards
@@ -196,13 +178,6 @@ pub(crate) fn create(
     // Use the absolute path for all further operations.
     let location = absolute;
 
-    let bin_name = if cfg!(unix) {
-        "bin"
-    } else if cfg!(windows) {
-        "Scripts"
-    } else {
-        unimplemented!("Only Windows and Unix are supported")
-    };
     let scripts = location.join(&interpreter.virtualenv().scripts);
 
     // Add the CACHEDIR.TAG.
@@ -469,73 +444,12 @@ pub(crate) fn create(
         compile_error!("Only Windows and Unix are supported")
     }
 
-    // Add all the activate scripts for different shells
-    for (name, template) in ACTIVATE_TEMPLATES {
-        // csh has no way to determine its own script location, so a relocatable
-        // activate.csh is not possible. Skip it entirely instead of generating a
-        // non-functional script.
-        if relocatable && *name == "activate.csh" {
-            continue;
-        }
-
-        let path_sep = if cfg!(windows) { ";" } else { ":" };
-
-        let relative_site_packages = [
-            interpreter.virtualenv().purelib.as_path(),
-            interpreter.virtualenv().platlib.as_path(),
-        ]
-        .iter()
-        .dedup()
-        .map(|path| {
-            pathdiff::diff_paths(path, &interpreter.virtualenv().scripts)
-                .expect("Failed to calculate relative path to site-packages")
-        })
-        .map(|path| path.simplified().to_str().unwrap().replace('\\', "\\\\"))
-        .join(path_sep);
-
-        let location_string = location
-            .simplified()
-            .to_str()
-            .ok_or_else(|| Error::NonUtf8Path {
-                path: location.clone(),
-            })?;
-        let virtual_env_dir = match (relocatable, name.to_owned()) {
-            (true, "activate") => Cow::Borrowed(
-                r#"'"$(dirname -- "$(dirname -- "$(realpath -- "$SCRIPT_PATH")")")"'"#,
-            ),
-            (true, "activate.bat") => Cow::Borrowed(r"%~dp0.."),
-            (true, "activate.fish") => {
-                Cow::Borrowed(r"'(dirname -- (dirname -- (realpath -- (status -f))))'")
-            }
-            (true, "activate.nu") => Cow::Borrowed(r"(path self | path dirname | path dirname)"),
-            (false, "activate.nu") => Cow::Owned(format!(
-                "'{}'",
-                escape_posix_for_single_quotes(location_string)
-            )),
-            // Note: `activate.ps1` is already relocatable by default.
-            _ => escape_posix_for_single_quotes(location_string),
-        };
-
-        let virtual_prompt = prompt.as_deref().unwrap_or_default();
-        let virtual_prompt = match *name {
-            "activate.xsh" => Cow::Owned(format!(
-                r#"b"{}".decode("utf-8")"#,
-                virtual_prompt.as_bytes().escape_ascii(),
-            )),
-            _ => Cow::Borrowed(virtual_prompt),
-        };
-
-        let bin_name = match *name {
-            "activate.xsh" => Cow::Owned(bin_name.escape_for_python()),
-            _ => Cow::Borrowed(bin_name),
-        };
-
-        let activator = template
-            .replace("{{ VIRTUAL_ENV_DIR }}", &virtual_env_dir)
-            .replace("{{ BIN_NAME }}", &bin_name)
-            .replace("{{ VIRTUAL_PROMPT }}", &virtual_prompt)
-            .replace("{{ PATH_SEP }}", path_sep)
-            .replace("{{ RELATIVE_SITE_PACKAGES }}", &relative_site_packages);
+    for (name, activator) in crate::activator::render(
+        &location,
+        interpreter.virtualenv(),
+        prompt.as_deref(),
+        relocatable,
+    )? {
         fs_err::write(scripts.join(name), activator)?;
     }
 
