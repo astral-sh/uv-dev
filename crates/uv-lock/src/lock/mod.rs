@@ -2629,7 +2629,15 @@ impl Lock {
             fork_strategy: resolution.options.fork_strategy,
             minimum_libc_version: resolution.options.minimum_libc_version,
             exclude_newer: resolution.options.exclude_newer.clone(),
-            index_strategy: resolution.options.index_strategy,
+            // A single package index has no cross-index priority to preserve. Record the
+            // default strategy too whenever more than one candidate source can participate.
+            index_strategy: (resolution.options.index_strategy != IndexStrategy::FirstIndex
+                || index_locations
+                    .indexes()
+                    .chain(index_locations.flat_indexes())
+                    .nth(1)
+                    .is_some())
+            .then_some(resolution.options.index_strategy),
         };
         // Canonicalize the top-level fork markers to match what is persisted in
         // `uv.lock`. In particular, conflict-only fork markers can serialize to
@@ -3142,7 +3150,7 @@ impl Lock {
     }
 
     /// Returns the index strategy used to generate this lock.
-    pub fn index_strategy(&self) -> IndexStrategy {
+    pub fn index_strategy(&self) -> Option<IndexStrategy> {
         self.options.index_strategy
     }
 
@@ -6216,7 +6224,7 @@ struct ResolverOptions {
     /// The [`ExcludeNewer`] setting used to generate this lock.
     exclude_newer: ExcludeNewer,
     /// The [`IndexStrategy`] used to generate this lock.
-    index_strategy: IndexStrategy,
+    index_strategy: Option<IndexStrategy>,
 }
 
 /// The serialized resolver options in the lockfile.
@@ -6236,7 +6244,7 @@ struct ResolverOptionsWire {
     minimum_libc_version: Option<MinimumLibcVersion>,
     /// The [`IndexStrategy`] used to generate this lock.
     #[serde(default)]
-    index_strategy: IndexStrategy,
+    index_strategy: Option<IndexStrategy>,
     /// The [`ExcludeNewer`] setting used to generate this lock.
     #[serde(flatten)]
     exclude_newer: ExcludeNewerWire,

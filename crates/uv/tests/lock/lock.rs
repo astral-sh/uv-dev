@@ -13589,10 +13589,7 @@ fn lock_index_strategy() -> Result<()> {
         })?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--index-strategy").arg("unsafe-best-match"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
@@ -13601,7 +13598,7 @@ fn lock_index_strategy() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock.lines().take(7).collect::<Vec<_>>().join("\n"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -13612,17 +13609,40 @@ fn lock_index_strategy() -> Result<()> {
 
     // `first-index` must not reuse the package selected from the lower-priority index.
     uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
-    success: false
-    exit_code: 1
-    ----- stdout -----
-
+    exit_code: 1 (failure)
     ----- stderr -----
     Ignoring existing lockfile due to change in index strategy: `unsafe-best-match` vs. `first-index`
-    WARN Range requests not supported for a-1.0.0-py3-none-any.whl; streaming wheel
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
     hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // Legacy locks can have been created with an unsafe strategy even when the field is absent.
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.replace("index-strategy = \"unsafe-best-match\"\n", ""))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Ignoring existing lockfile because its index strategy is unknown
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Ignoring existing lockfile because its index strategy is unknown
+    Resolved 2 packages in [TIME]
+    Updated a v2.0.0 -> v1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
     ");
 
     Ok(())

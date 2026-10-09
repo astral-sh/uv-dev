@@ -6,7 +6,7 @@ use owo_colors::OwoColorize;
 use tracing::debug;
 use uv_cache::Refresh;
 use uv_command_support::Printer;
-use uv_configuration::{Constraints, ExcludeDependency, Override, Upgrade};
+use uv_configuration::{Constraints, ExcludeDependency, IndexStrategy, Override, Upgrade};
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{DependencyMetadata, IndexLocations, Requirement, RequiresPython};
@@ -91,13 +91,33 @@ impl ValidatedLock {
             );
             return Ok(Self::Unusable(lock));
         }
-        if lock.index_strategy() != options.index_strategy {
-            let _ = writeln!(
-                printer.stderr(),
-                "Ignoring existing lockfile due to change in index strategy: `{}` vs. `{}`",
-                lock.index_strategy().cyan(),
-                options.index_strategy.cyan()
-            );
+        let index_strategy_matches = match lock.index_strategy() {
+            Some(strategy) => strategy == options.index_strategy,
+            // Older locks do not record the strategy. Without competing package indexes,
+            // all strategies select from the same versions and default-policy reuse is safe.
+            None => {
+                options.index_strategy == IndexStrategy::FirstIndex
+                    && index_locations
+                        .indexes()
+                        .chain(index_locations.flat_indexes())
+                        .nth(1)
+                        .is_none()
+            }
+        };
+        if !index_strategy_matches {
+            if let Some(strategy) = lock.index_strategy() {
+                let _ = writeln!(
+                    printer.stderr(),
+                    "Ignoring existing lockfile due to change in index strategy: `{}` vs. `{}`",
+                    strategy.cyan(),
+                    options.index_strategy.cyan()
+                );
+            } else {
+                let _ = writeln!(
+                    printer.stderr(),
+                    "Ignoring existing lockfile because its index strategy is unknown"
+                );
+            }
             return Ok(Self::Unusable(lock));
         }
         // Stored cutoffs can belong to packages considered during backtracking. New cutoffs for
