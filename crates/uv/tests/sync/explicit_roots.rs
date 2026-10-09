@@ -1925,3 +1925,325 @@ fn explicit_roots_transitive_registry_workspace_source() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Selecting a root extra does not request the same extra on a bare transitive member.
+#[test]
+fn explicit_roots_conflicting_extras_follow_selected_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "shared", "feature-leaf"]
+        roots = ["app"]
+        [tool.uv.sources]
+        shared = { workspace = true }
+        feature-leaf = { workspace = true }
+        [tool.uv]
+        conflicts = [[{ package = "app", extra = "feature" }, { package = "shared", extra = "feature" }]]
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+        [project.optional-dependencies]
+        feature = ["feature-leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = []
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("feature-leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "feature-leaf"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("feature-leaf/src/feature_leaf/__init__.py")
+        .touch()?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--extra", "feature",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + feature-leaf @ file://[TEMP_DIR]/feature-leaf
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--extra", "feature", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./feature-leaf
+    ");
+    // Resolve both members as roots before requesting their conflicting selections together.
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(r#"roots = ["app"]"#, r#"roots = ["app", "shared"]"#),
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--extra", "feature", "--package", "app", "--package", "shared",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Extras `feature` and `feature` are incompatible with the declared conflicts: {`app[feature]`, `shared[feature]`}
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--extra", "feature", "--package", "app", "--package", "shared",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extras `feature` and `feature` are incompatible with the declared conflicts: {`app[feature]`, `shared[feature]`}
+    ");
+    Ok(())
+}
+
+/// Group selections apply to installation roots rather than their transitive workspace members.
+#[test]
+fn explicit_roots_conflicting_groups_follow_selected_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "shared", "group-leaf"]
+        roots = ["app"]
+        [tool.uv.sources]
+        shared = { workspace = true }
+        group-leaf = { workspace = true }
+        [tool.uv]
+        conflicts = [[{ package = "app", group = "check" }, { package = "shared", group = "check" }]]
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+        [dependency-groups]
+        check = ["group-leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        check = []
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("group-leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "group-leaf"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("group-leaf/src/group_leaf/__init__.py")
+        .touch()?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--only-group", "check",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + group-leaf @ file://[TEMP_DIR]/group-leaf
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--only-group", "check", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./group-leaf
+    ");
+    // Resolve both members as roots before requesting their conflicting selections together.
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(r#"roots = ["app"]"#, r#"roots = ["app", "shared"]"#),
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--only-group", "check", "--package", "app", "--package", "shared",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Groups `check` and `check` are incompatible with the conflicts: {`app:check`, `shared:check`}
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--only-group", "check", "--package", "app", "--package", "shared",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Groups `check` and `check` are incompatible with the conflicts: {`app:check`, `shared:check`}
+    ");
+    Ok(())
+}
+
+/// A selected member inherits explicitly requested workspace-root groups for conflict checks.
+#[test]
+fn explicit_roots_conflicting_groups_include_inherited_root() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+        [dependency-groups]
+        check = ["group-leaf"]
+        [tool.uv.workspace]
+        members = ["shared", "group-leaf"]
+        roots = ["app"]
+        [tool.uv.sources]
+        shared = { workspace = true }
+        group-leaf = { workspace = true }
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "app", group = "check" }, { package = "shared", group = "member-check" }]]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        member-check = []
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("group-leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "group-leaf"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("group-leaf/src/group_leaf/__init__.py")
+        .touch()?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--package", "shared", "--only-group", "check",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + group-leaf @ file://[TEMP_DIR]/group-leaf
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--only-group", "check",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./group-leaf
+    ");
+    // Resolve both members as roots before requesting their conflicting selections together.
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(r#"roots = ["app"]"#, r#"roots = ["app", "shared"]"#),
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--package", "shared", "--only-group", "check", "--only-group", "member-check",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Groups `check` and `member-check` are incompatible with the conflicts: {`app:check`, `shared:member-check`}
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--only-group", "check", "--only-group", "member-check",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Groups `check` and `member-check` are incompatible with the conflicts: {`app:check`, `shared:member-check`}
+    ");
+    Ok(())
+}
