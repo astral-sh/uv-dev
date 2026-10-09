@@ -36,7 +36,7 @@ pub(crate) struct PackedArchive {
 /// A packed pointer can identify an older archive even when its HTTP policy requires refresh.
 pub(crate) enum PackedArchiveRead {
     Missing,
-    Stale(HashDigest),
+    Stale(Vec<u8>),
     Fresh(PackedArchive, Box<CachePolicy>),
 }
 
@@ -524,11 +524,11 @@ impl PackedArchiveEntry {
             }
         };
         if must_revalidate {
-            return Ok(PackedArchiveRead::Stale(metadata.hash));
+            return Ok(PackedArchiveRead::Stale(bytes));
         }
         if allow_stale {
             if !cached.cache_policy().matches_stale_request(request) {
-                return Ok(PackedArchiveRead::Stale(metadata.hash));
+                return Ok(PackedArchiveRead::Stale(bytes));
             }
         } else {
             let mut request = request
@@ -538,11 +538,11 @@ impl PackedArchiveEntry {
                 cached.cache_policy().before_request(&mut request),
                 BeforeRequest::Fresh
             ) {
-                return Ok(PackedArchiveRead::Stale(metadata.hash));
+                return Ok(PackedArchiveRead::Stale(bytes));
             }
         }
         let Some(archive) = self.read(&metadata, None, None).await? else {
-            return Ok(PackedArchiveRead::Stale(metadata.hash));
+            return Ok(PackedArchiveRead::Stale(bytes));
         };
         let policy = rkyv::deserialize::<CachePolicy, rkyv::rancor::Error>(cached.cache_policy())
             .context("Could not deserialize packed archive cache policy")?;
@@ -550,8 +550,8 @@ impl PackedArchiveEntry {
     }
 
     /// Drop an older archive pointer after its metadata is refreshed elsewhere.
-    /// A concurrently published archive with different bytes retains its pointer.
-    pub(crate) async fn invalidate(&self, hash: &HashDigest) -> Result<(), crate::Error> {
+    /// A concurrently refreshed policy or archive retains its pointer.
+    pub(crate) async fn invalidate(&self, revision: &[u8]) -> Result<(), crate::Error> {
         let lock_entry = CacheEntry::from_path(self.entry.path().with_extension("lock"));
         let _lock = lock_entry.lock().await.map_err(ErrorKind::CacheLock)?;
         let bytes = match fs_err::tokio::read(self.entry.path()).await {
@@ -559,10 +559,7 @@ impl PackedArchiveEntry {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(err) => return Err(ErrorKind::Io(err).into()),
         };
-        if let Ok(cached) = DataWithCachePolicy::from_reader(bytes.as_slice())
-            && let Ok(metadata) = rmp_serde::from_slice::<Metadata>(cached.data())
-            && &metadata.hash == hash
-        {
+        if bytes == revision {
             match fs_err::tokio::remove_file(self.entry.path()).await {
                 Ok(()) => {}
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -678,5 +675,96 @@ pub(crate) fn packed_error(error: anyhow::Error) -> crate::Error {
     match error.downcast::<crate::Error>() {
         Ok(error) => error,
         Err(error) => ErrorKind::Io(std::io::Error::other(error)).into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{Result, bail};
+    use tokio::io::AsyncReadExt;
+    use wiremock::matchers::{header, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use uv_cache::{Cache, Refresh};
+    use uv_cache_info::Timestamp;
+    use uv_distribution_filename::WheelFilename;
+    use uv_redacted::DisplaySafeUrl;
+
+    use crate::{BaseClientBuilder, CacheControl, RegistryClientBuilder};
+
+    use super::{PackedArchiveEntry, PackedArchiveRead};
+
+    /// A 304 can republish the same payload with a new policy while metadata refresh is in flight.
+    #[tokio::test]
+    async fn invalidation_retains_revalidated_pointer_with_same_payload() -> Result<()> {
+        let server = MockServer::start().await;
+        let cache = Cache::temp()?;
+        let client =
+            RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone()).build()?;
+        let filename: WheelFilename = "example-1.0.0-py3-none-any.whl".parse()?;
+        let url = DisplaySafeUrl::parse(&format!(
+            "{server_url}/{filename}",
+            server_url = server.uri()
+        ))?;
+        let entry = PackedArchiveEntry::wheel(&cache, None, &url, &filename);
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("etag", "\"original\"")
+                    .insert_header("cache-control", "public, max-age=3600")
+                    .set_body_bytes(b"original archive"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(entry.download(&client, None, None).await?);
+        server.verify().await;
+        server.reset().await;
+
+        let request = client
+            .uncached_client(&url)
+            .get(url.as_str())
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .build()?;
+        let revision = match entry
+            .read_http(&request, &CacheControl::MustRevalidate)
+            .await?
+        {
+            PackedArchiveRead::Stale(revision) => revision,
+            PackedArchiveRead::Missing | PackedArchiveRead::Fresh(..) => {
+                bail!("expected a retained pointer requiring revalidation")
+            }
+        };
+        let refreshed = PackedArchiveEntry::wheel(
+            &cache.with_refresh(Refresh::All(Timestamp::now())),
+            None,
+            &url,
+            &filename,
+        );
+        Mock::given(method("GET"))
+            .and(header("if-none-match", "\"original\""))
+            .respond_with(
+                ResponseTemplate::new(304)
+                    .insert_header("etag", "\"original\"")
+                    .insert_header("cache-control", "public, max-age=7200"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(!refreshed.download(&client, None, None).await?);
+        assert_ne!(revision, fs_err::tokio::read(entry.entry.path()).await?);
+
+        entry.invalidate(&revision).await?;
+        let archive = match entry.read_http(&request, &CacheControl::AllowStale).await? {
+            PackedArchiveRead::Fresh(archive, _) => archive,
+            PackedArchiveRead::Missing | PackedArchiveRead::Stale(_) => {
+                bail!("revalidated archive must remain available offline")
+            }
+        };
+        let mut bytes = Vec::new();
+        archive.into_file().read_to_end(&mut bytes).await?;
+        assert_eq!(bytes, b"original archive");
+        server.verify().await;
+        Ok(())
     }
 }
