@@ -214,6 +214,26 @@ pub enum BytecodeCompilation {
     Installed,
 }
 
+/// Changes permitted while making an environment satisfy a resolution.
+#[derive(Debug)]
+pub enum InstallationModifications {
+    /// Install required packages without removing unrelated packages.
+    Sufficient,
+    /// Remove every package outside the resolution.
+    Exact,
+    /// Remove only packages no longer owned by the edited dependency graph.
+    Prune(PrunePolicy),
+}
+
+impl From<Modifications> for InstallationModifications {
+    fn from(modifications: Modifications) -> Self {
+        match modifications {
+            Modifications::Sufficient => Self::Sufficient,
+            Modifications::Exact => Self::Exact,
+        }
+    }
+}
+
 /// Removal policy for packages that disappeared from the managed dependency graph.
 ///
 /// Packages that are still required by an unmanaged installed package are retained.
@@ -233,6 +253,7 @@ impl PrunePolicy {
         self,
         resolution: &Resolution,
         site_packages: &SitePackages,
+        reinstalls: &[InstalledDist],
         venv: &PythonEnvironment,
     ) -> BTreeSet<PackageName> {
         let Self {
@@ -245,6 +266,7 @@ impl PrunePolicy {
         let removed_reachability = site_packages.reachable_packages(
             roots.iter().map(|root| (&root.name, root.extras.as_ref())),
             &markers,
+            |_, _| true,
         );
         candidates.extend(removed_reachability.packages().iter().cloned());
         if !removed_reachability.incomplete().is_empty() {
@@ -261,12 +283,16 @@ impl PrunePolicy {
             .map(Name::name)
             .chain(candidates.difference(&retained))
             .collect::<BTreeSet<_>>();
+        let replaced = reinstalls.iter().map(Name::name).collect::<BTreeSet<_>>();
+        // Replacement base dependencies are already covered by `retained`. Installed extra
+        // edges remain conservative evidence for extras requested only by unmanaged packages.
         let external_reachability = site_packages.reachable_packages(
             site_packages
                 .iter()
                 .filter(|distribution| !managed.contains(distribution.name()))
                 .map(|distribution| (distribution.name(), &[] as &[ExtraName])),
             &markers,
+            |name, extra| extra.is_some() || !replaced.contains(name),
         );
 
         if !external_reachability.incomplete().is_empty() {
@@ -304,8 +330,7 @@ impl InstallationPlan {
         resolution: &Resolution,
         site_packages: SitePackages,
         installation: InstallationStrategy,
-        modifications: Modifications,
-        prune: Option<PrunePolicy>,
+        modifications: InstallationModifications,
         reinstall: &Reinstall,
         build_options: &BuildOptions,
         hasher: &HashStrategy,
@@ -319,31 +344,37 @@ impl InstallationPlan {
         tags: &Tags,
     ) -> Result<Self, Error> {
         let start = Instant::now();
-        let removable_packages = if let Some(prune) = prune {
-            Some(prune.removable_packages(resolution, &site_packages, venv))
-        } else {
-            match modifications {
-                Modifications::Sufficient => Some(BTreeSet::new()),
-                Modifications::Exact => None,
+        let build_plan = |site_packages| {
+            Planner::new(resolution)
+                .build(
+                    site_packages,
+                    installation,
+                    reinstall,
+                    build_options,
+                    hasher,
+                    index_locations,
+                    config_settings,
+                    config_settings_package,
+                    extra_build_requires,
+                    extra_build_variables,
+                    cache,
+                    venv,
+                    tags,
+                )
+                .map_err(Error::Plan)
+        };
+        let (mut plan, removable_packages) = match modifications {
+            InstallationModifications::Sufficient => {
+                (build_plan(site_packages)?, Some(BTreeSet::new()))
+            }
+            InstallationModifications::Exact => (build_plan(site_packages)?, None),
+            InstallationModifications::Prune(prune) => {
+                let plan = build_plan(site_packages.clone())?;
+                let removable_packages =
+                    prune.removable_packages(resolution, &site_packages, &plan.reinstalls, venv);
+                (plan, Some(removable_packages))
             }
         };
-        let mut plan = Planner::new(resolution)
-            .build(
-                site_packages,
-                installation,
-                reinstall,
-                build_options,
-                hasher,
-                index_locations,
-                config_settings,
-                config_settings_package,
-                extra_build_requires,
-                extra_build_variables,
-                cache,
-                venv,
-                tags,
-            )
-            .map_err(Error::Plan)?;
 
         if let Some(removable_packages) = removable_packages {
             plan.extraneous
@@ -418,8 +449,7 @@ pub async fn install(
         resolution,
         site_packages,
         installation,
-        modifications,
-        None,
+        modifications.into(),
         reinstall,
         build_options,
         hasher,

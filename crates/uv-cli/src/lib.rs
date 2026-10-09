@@ -937,7 +937,7 @@ pub enum ProjectCommand {
     /// error.
     ///
     /// Transitive dependencies of the requested packages will be removed from the environment
-    /// unless they are required by another dependency in the project.
+    /// unless they are required by a remaining project declaration or another installed package.
     ///
     /// uv will search for a project in the current directory or any parent directory. If a project
     /// cannot be found, uv will exit with an error.
