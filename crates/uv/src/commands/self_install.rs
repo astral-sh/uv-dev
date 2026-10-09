@@ -154,13 +154,13 @@ impl InstallReceipt {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 const BACKUP_PREFIX: &str = ".uv-install-backup-";
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 const BACKUP_OWNER: &str = "uv-self-install-v1\n";
 
 /// Remove owned backups once their executable mappings have been released.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn cleanup_previous_installations(destination: &Path) {
     let Ok(entries) = fs_err::read_dir(destination) else {
         return;
@@ -222,7 +222,6 @@ fn replace_windows_binary(source: &Path, target: &Path) -> Result<()> {
                 .parent()
                 .context("Executable has no parent directory")?,
         )?;
-        fs_err::write(backup.path().join("owner"), BACKUP_OWNER)?;
         let previous = backup
             .path()
             .join(target.file_name().context("Executable has no filename")?);
@@ -230,11 +229,37 @@ fn replace_windows_binary(source: &Path, target: &Path) -> Result<()> {
         // Keep the old executable in an owned directory for cleanup on a later installation.
         fs_err::rename(target, &previous)?;
         if let Err(error) = fs_err::rename(source, target) {
-            fs_err::rename(&previous, target)
-                .context("Failed to restore the previous executable")?;
+            restore_previous_executable(backup, &previous, target)?;
             return Err(error.into());
         }
+        let backup = backup.keep();
+        // Only successfully replaced executables are eligible for automatic cleanup. A backup
+        // retained after a failed restoration must remain available for manual recovery.
+        if let Err(error) = fs_err::write(backup.join("owner"), BACKUP_OWNER) {
+            tracing::debug!(
+                "Unable to mark executable backup at `{}` for cleanup: {error}",
+                backup.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Restore the previous executable after publishing its replacement fails.
+#[cfg(any(windows, test))]
+fn restore_previous_executable(
+    backup: tempfile::TempDir,
+    previous: &Path,
+    target: &Path,
+) -> Result<()> {
+    if let Err(error) = fs_err::rename(previous, target) {
         let _ = backup.keep();
+        return Err(error).with_context(|| {
+            format!(
+                "Failed to restore the previous executable; recovery backup retained at `{}`",
+                previous.display()
+            )
+        });
     }
     Ok(())
 }
@@ -371,7 +396,71 @@ mod tests {
     use anyhow::Result;
     use same_file::Handle;
 
-    use super::{commit_binaries, executable_names};
+    use super::{
+        BACKUP_OWNER, BACKUP_PREFIX, cleanup_previous_installations, commit_binaries,
+        executable_names, restore_previous_executable,
+    };
+
+    #[test]
+    fn failed_executable_restore_retains_recovery_backup() -> Result<()> {
+        let destination = tempfile::tempdir()?;
+        let backup = tempfile::tempdir_in(destination.path())?;
+        let previous = backup.path().join("uv.exe");
+        fs_err::write(&previous, "previous executable")?;
+        let target = destination.path().join("uv.exe");
+        // A directory occupying the destination makes restoration fail on every platform.
+        fs_err::create_dir(&target)?;
+
+        let error = restore_previous_executable(backup, &previous, &target)
+            .expect_err("an occupied destination prevents restoration");
+        assert_eq!(fs_err::read_to_string(&previous)?, "previous executable");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Failed to restore the previous executable; recovery backup retained at `{}`",
+                previous.display()
+            )
+        );
+        assert!(target.is_dir());
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_retains_recovery_backups() -> Result<()> {
+        let destination = tempfile::tempdir()?;
+        let recovery = tempfile::Builder::new()
+            .prefix(BACKUP_PREFIX)
+            .tempdir_in(destination.path())?
+            .keep();
+        let previous = recovery.join(executable_names()[0]);
+        fs_err::write(&previous, "previous executable")?;
+        let replaced = tempfile::Builder::new()
+            .prefix(BACKUP_PREFIX)
+            .tempdir_in(destination.path())?
+            .keep();
+        fs_err::write(replaced.join(executable_names()[0]), "replaced executable")?;
+        fs_err::write(replaced.join("owner"), BACKUP_OWNER)?;
+
+        cleanup_previous_installations(destination.path());
+        assert_eq!(fs_err::read_to_string(&previous)?, "previous executable");
+        assert!(!replaced.try_exists()?);
+        Ok(())
+    }
+
+    #[test]
+    fn successful_executable_restore_cleans_backup_directory() -> Result<()> {
+        let destination = tempfile::tempdir()?;
+        let backup = tempfile::tempdir_in(destination.path())?;
+        let backup_path = backup.path().to_path_buf();
+        let previous = backup.path().join("uv.exe");
+        fs_err::write(&previous, "previous executable")?;
+        let target = destination.path().join("uv.exe");
+
+        restore_previous_executable(backup, &previous, &target)?;
+        assert_eq!(fs_err::read_to_string(&target)?, "previous executable");
+        assert!(!backup_path.try_exists()?);
+        Ok(())
+    }
 
     #[test]
     fn changed_source_is_rejected_before_staged_files_are_committed() -> Result<()> {
