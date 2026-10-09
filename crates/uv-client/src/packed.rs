@@ -193,9 +193,6 @@ impl PackedArchiveEntry {
             return Ok(CacheControl::AllowStale);
         }
         let freshness = self.cache.freshness(&self.entry, Some(&self.name), None)?;
-        if freshness == Freshness::Stale {
-            return Ok(CacheControl::MustRevalidate);
-        }
         Ok(self
             .index
             .as_ref()
@@ -217,12 +214,21 @@ impl PackedArchiveEntry {
             return self.download_local(expected_hash, expected_size).await;
         }
 
-        let request = client
+        let mut request = client
             .uncached_client(&self.url)
             .get(self.url.as_str())
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
             .build()?;
         let cache_control = self.cache_control(client)?;
+        let force_revalidation = client.connectivity() == Connectivity::Online
+            && self.cache.freshness(&self.entry, Some(&self.name), None)? == Freshness::Stale;
+        if force_revalidation {
+            // Request revalidation independently of any configured response-policy override.
+            request.headers_mut().insert(
+                reqwest::header::CACHE_CONTROL,
+                reqwest::header::HeaderValue::from_static("no-cache"),
+            );
+        }
         let downloaded = AtomicBool::new(false);
         let download = async |response: Response, _: &mut RetryState| {
             // A prefetch must not report success if the response cannot be retained for reuse.
@@ -263,7 +269,7 @@ impl PackedArchiveEntry {
         }
         let missing = match self.read(&metadata, expected_hash, expected_size).await {
             Ok(archive) => archive.is_none(),
-            Err(_) if matches!(cache_control, CacheControl::MustRevalidate) => true,
+            Err(_) if force_revalidation => true,
             Err(err) => return Err(err),
         };
         if missing {
@@ -445,11 +451,11 @@ impl PackedArchiveEntry {
                 .into());
             }
         }
-        if size != metadata.size || expected_size.is_some_and(|expected| size != expected) {
-            bail!(
-                "Size mismatch for packed archive {url}: expected {}, got {size}",
-                expected_size.unwrap_or(metadata.size)
-            );
+        if let Some(expected) = std::iter::once(metadata.size)
+            .chain(expected_size)
+            .find(|expected| *expected != size)
+        {
+            bail!("Size mismatch for packed archive {url}: expected {expected}, got {size}");
         }
         file.seek(SeekFrom::Start(0)).await?;
         debug!("Using packed distribution: {url}");

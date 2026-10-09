@@ -1670,3 +1670,49 @@ fn download_prunes_unreferenced_local_payloads() -> Result<()> {
     assert!(shard.join(new_hash).is_file());
     Ok(())
 }
+
+/// Refresh retains an index response policy override while forcing a new request.
+#[tokio::test]
+async fn download_refresh_retains_file_cache_override() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original")?;
+    let hash = digest(&bytes);
+    let index = format!("{}/simple", server.uri());
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_locked_wheel(&context, &format!("registry = \"{index}\""), &url, &hash)?;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        [[index]]
+        url = "{index}"
+        cache-control = {{ files = "max-age=3600" }}
+    "#})?;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "no-store")
+                .set_body_bytes(bytes),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    uv_snapshot!(context.filters(), download(&context).arg("--refresh"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 0 distributions (1 total)
+    ");
+    server.verify().await;
+    Ok(())
+}
