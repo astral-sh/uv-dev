@@ -627,10 +627,10 @@ required-environments = [
 ]
 ```
 
-For packages that publish a source distribution, `required-environments` also prefers versions
-with wheels for the required environment, falling back to source distributions when needed.
-Packages without source distributions (like PyTorch) can _only_ be installed on environments
-covered by the published wheels.
+For packages that publish a source distribution, `required-environments` also prefers versions with
+wheels for the required environment, falling back to source distributions when needed. Packages
+without source distributions (like PyTorch) can _only_ be installed on environments covered by the
+published wheels.
 
 See the [resolution documentation](../resolution.md#required-environments) for more.
 
