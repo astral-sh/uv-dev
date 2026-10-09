@@ -25,6 +25,7 @@ use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_normalize::PackageName;
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{
     ConflictItem, ConflictKind, ConflictSet, Conflicts, ResolverMarkerEnvironment,
@@ -2040,26 +2041,58 @@ pub fn detect_conflicts(
     // group `g` are declared as conflicting, then enabling both of
     // those should result in an error.
     let lock = target.lock();
-    let (packages, activated_extras) = target.packages(extras, groups, marker_env);
     let conflicts = lock.conflicts();
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    let activations = target.conflict_activations(extras, groups, marker_env)?;
     for set in conflicts.iter() {
-        let mut conflicts: Vec<ConflictItem> = vec![];
+        let mut active = vec![];
         for item in set.iter() {
-            if !packages.contains(item.package()) {
-                // Ignore items that are not in the install targets
+            let Some(package_marker) = activations.packages.get(item.package()) else {
                 continue;
-            }
-            let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
-                ConflictKind::Extra(extra) => {
-                    extras.contains(extra) || activated_extras.contains(&(item.package(), extra))
-                }
-                ConflictKind::Group(group1) => groups.contains(group1),
             };
-            if is_conflicting {
-                conflicts.push(item.clone());
+            let marker = match item.kind() {
+                ConflictKind::Project => {
+                    if groups.prod() {
+                        *package_marker
+                    } else {
+                        MarkerTree::FALSE
+                    }
+                }
+                ConflictKind::Extra(extra) => {
+                    if extras.contains(extra) {
+                        *package_marker
+                    } else {
+                        activations
+                            .extras
+                            .get(&(item.package(), extra.clone()))
+                            .copied()
+                            .unwrap_or(MarkerTree::FALSE)
+                    }
+                }
+                ConflictKind::Group(group) => {
+                    if groups.contains(group) {
+                        *package_marker
+                    } else {
+                        MarkerTree::FALSE
+                    }
+                }
+            };
+            if !marker.is_false() {
+                active.push((item, marker));
             }
         }
+        let conflicts = active
+            .iter()
+            .enumerate()
+            .filter(|(index, (_, marker))| {
+                active.iter().enumerate().any(|(other, (_, other_marker))| {
+                    *index != other && !marker.is_disjoint(*other_marker)
+                })
+            })
+            .map(|(_, (item, _))| (*item).clone())
+            .collect::<Vec<ConflictItem>>();
         if conflicts.len() >= 2 {
             return Err(EnvironmentError::Conflict(ConflictError {
                 set: set.clone(),

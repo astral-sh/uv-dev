@@ -3145,6 +3145,15 @@ impl Lock {
         &self.conflicts
     }
 
+    /// Return the dependency overrides and exclusions recorded in the lockfile.
+    pub fn dependency_modifiers(&self) -> Result<DependencyModifiers, LockError> {
+        Ok(DependencyModifiers::new(
+            Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(self.manifest.excludes.iter().cloned()),
+        ))
+    }
+
     /// Returns the supported environments that were used to generate this lock.
     pub fn supported_environments(&self) -> &[MarkerTree] {
         &self.supported_environments
@@ -7386,76 +7395,71 @@ impl Package {
         &self.dependency_groups
     }
 
-    /// Returns whether a resolved dependency applies to an environment using the original
-    /// requirement marker, when available.
-    pub fn dependency_applies_to_environment(
+    /// Return the conditions under which an effective dependency and its extras are requested.
+    pub fn dependency_activation(
         &self,
         dependency: &Dependency,
-        marker_environment: &MarkerEnvironment,
         extra: Option<&ExtraName>,
         group: Option<&GroupName>,
-    ) -> bool {
+        modifiers: &DependencyModifiers,
+    ) -> (MarkerTree, BTreeMap<ExtraName, MarkerTree>) {
         let requirements = group.map_or(Some(&self.metadata.requires_dist), |group| {
             self.metadata.dependency_groups.get(group)
         });
+        let fallback = || {
+            let marker = dependency.complexified_marker.pep508();
+            (
+                marker,
+                dependency
+                    .extra
+                    .iter()
+                    .cloned()
+                    .map(|extra| (extra, marker))
+                    .collect(),
+            )
+        };
         let Some(requirements) = requirements.filter(|requirements| !requirements.is_empty())
         else {
-            return dependency
-                .complexified_marker
-                .pep508()
-                .evaluate(marker_environment, &[]);
+            return fallback();
         };
-
+        let context = match (group, extra) {
+            (Some(group), _) => DependencyContext::Group(group),
+            (None, Some(extra)) => DependencyContext::Extra(extra),
+            (None, None) => DependencyContext::Production,
+        };
+        let requirements = Lock::preprocess_requirements(
+            &self.id.name,
+            self.id.version.as_ref(),
+            &requirements.iter().cloned().collect::<Vec<_>>(),
+            context,
+            modifiers,
+        );
         let mut requirements = requirements
             .iter()
-            .filter(|requirement| requirement.name == *dependency.package_name());
-        let Some(requirement) = requirements.next() else {
-            return dependency
-                .complexified_marker
-                .pep508()
-                .evaluate(marker_environment, &[]);
-        };
-
-        let extras: &[ExtraName] = extra.map_or(&[], slice::from_ref);
-        requirement.marker.evaluate(marker_environment, extras)
-            || requirements
-                .any(|requirement| requirement.marker.evaluate(marker_environment, extras))
-    }
-
-    /// Returns the extras activated by a resolved dependency using the original requirement,
-    /// when available.
-    pub fn dependency_extras<'a>(
-        &'a self,
-        dependency: &'a Dependency,
-        marker_environment: Option<&MarkerEnvironment>,
-        extra: Option<&ExtraName>,
-        group: Option<&GroupName>,
-    ) -> BTreeSet<&'a ExtraName> {
-        let requirements = group.map_or(Some(&self.metadata.requires_dist), |group| {
-            self.metadata.dependency_groups.get(group)
-        });
-        let Some(requirements) = requirements.filter(|requirements| !requirements.is_empty())
-        else {
-            return dependency.extra.iter().collect();
-        };
-
-        let mut requirements = requirements
-            .iter()
-            .filter(|requirement| requirement.name == *dependency.package_name());
-        let Some(requirement) = requirements.next() else {
-            return dependency.extra.iter().collect();
-        };
-
-        let selected_extras: &[ExtraName] = extra.map_or(&[], slice::from_ref);
-        std::iter::once(requirement)
-            .chain(requirements)
             .filter(|requirement| {
-                requirement
-                    .marker
-                    .evaluate_optional_environment(marker_environment, selected_extras)
+                requirement.name == *dependency.package_name()
+                    && dependency
+                        .extra
+                        .iter()
+                        .all(|extra| requirement.extras.contains(extra))
             })
-            .flat_map(|requirement| requirement.extras.iter())
-            .collect()
+            .peekable();
+        if requirements.peek().is_none() {
+            return fallback();
+        }
+        let mut marker = MarkerTree::FALSE;
+        let mut extras = BTreeMap::<ExtraName, MarkerTree>::new();
+        for requirement in requirements {
+            let requirement_marker = context.requirement_marker(requirement.marker);
+            marker = marker.or(requirement_marker);
+            for extra in &requirement.extras {
+                extras
+                    .entry(extra.clone())
+                    .and_modify(|marker| *marker = marker.or(requirement_marker))
+                    .or_insert(requirement_marker);
+            }
+        }
+        (marker, extras)
     }
 
     /// Returns an [`InstallTarget`] view for filtering decisions.

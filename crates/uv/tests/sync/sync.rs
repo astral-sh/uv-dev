@@ -9959,12 +9959,43 @@ fn sync_transitive_extra_conflict_platform() -> Result<()> {
     Checked in [TIME]
     ");
 
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--group").arg("dev").arg("--no-install-workspace")
+        .arg("--preview-features").arg("frozen-lockfile"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+
     write_pyproject(active_platform)?;
     uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--no-install-workspace"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+
+    // Overrides can remove the extra requested by the original dependency.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&context.read("pyproject.toml").replace(
+            "[tool.uv]",
+            "[tool.uv]\noverride-dependencies = [\"child\"]",
+        ))?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--group").arg("dev").arg("--no-install-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--group").arg("dev").arg("--no-install-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
     ");
 
     Ok(())

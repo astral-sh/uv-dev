@@ -13,6 +13,7 @@ use uv_configuration::{
 use uv_distribution_types::{Index, RequiresPython, Resolution};
 use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
+use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
 use uv_pypi_types::{
     DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,
@@ -785,18 +786,14 @@ impl<'lock> InstallTarget<'lock> {
         Ok(())
     }
 
-    /// Returns the names of all packages in the workspace that will be installed.
-    ///
-    /// Note this only includes workspace members.
-    pub(super) fn packages(
+    /// Return the conditions under which workspace packages and their extras are selected.
+    pub(super) fn conflict_activations(
         &self,
         extras: &ExtrasSpecification,
         groups: &DependencyGroupsWithDefaults,
         marker_env: Option<&ResolverMarkerEnvironment>,
-    ) -> (
-        BTreeSet<&PackageName>,
-        FxHashSet<(&PackageName, &ExtraName)>,
-    ) {
+    ) -> Result<ConflictActivations<'_>, LockError> {
+        let mut activations = ConflictActivations::default();
         match self.package_selection() {
             Some(
                 PackageSelection::Projects(_)
@@ -804,26 +801,23 @@ impl<'lock> InstallTarget<'lock> {
                 | PackageSelection::NonProjectWorkspace,
             ) => {
                 let lock = self.lock();
+                let modifiers = lock.dependency_modifiers()?;
                 let roots = self.roots().collect::<FxHashSet<_>>();
-
-                // Collect the packages by name for efficient lookup.
+                let root_marker = lock.requires_python().to_marker_tree();
                 let packages = lock
                     .packages()
                     .iter()
                     .map(|package| (package.name(), package))
                     .collect::<BTreeMap<_, _>>();
-
-                // We'll include all specified projects
-                let mut required_members = BTreeSet::new();
                 for name in &roots {
-                    required_members.insert(*name);
+                    activations.packages.insert(*name, root_marker);
                 }
 
-                // Find all workspace member dependencies recursively for all specified packages
-                let mut queue: VecDeque<(&PackageName, Option<&ExtraName>)> = VecDeque::new();
-                let mut seen: FxHashSet<(&PackageName, Option<&ExtraName>)> = FxHashSet::default();
-                let mut activated_extras = FxHashSet::default();
-
+                let mut traversal = ConflictTraversal {
+                    queue: VecDeque::new(),
+                    markers: BTreeMap::new(),
+                    marker_environment: marker_env,
+                };
                 for (name, root_kind) in roots
                     .iter()
                     .copied()
@@ -836,110 +830,114 @@ impl<'lock> InstallTarget<'lock> {
                     let Some(root_package) = packages.get(name) else {
                         continue;
                     };
-
                     if root_kind == InstallableRootKind::Production && groups.prod() {
-                        // Add the root package
-                        if seen.insert((name, None)) {
-                            queue.push_back((name, None));
-                        }
-
-                        // Add explicitly activated extras for the root package
+                        traversal.push(name, None, root_marker);
                         for extra in extras.extra_names(root_package.optional_dependencies().keys())
                         {
-                            if seen.insert((name, Some(extra))) {
-                                queue.push_back((name, Some(extra)));
-                            }
+                            traversal.push(name, Some(extra.clone()), root_marker);
                         }
                     }
-
-                    // Add activated dependency groups for the root package
                     for (group_name, dependencies) in root_package.resolved_dependency_groups() {
                         if !self.includes_group(Some(root_package.name()), group_name, groups) {
                             continue;
                         }
                         for dependency in dependencies {
-                            if marker_env.is_some_and(|marker_env| {
-                                !root_package.dependency_applies_to_environment(
-                                    dependency,
-                                    marker_env,
-                                    None,
-                                    Some(group_name),
-                                )
-                            }) {
-                                continue;
-                            }
-                            let dep_name = dependency.package_name();
-                            if seen.insert((dep_name, None)) {
-                                queue.push_back((dep_name, None));
-                            }
-                            for extra in root_package.dependency_extras(
+                            let (marker, extras) = root_package.dependency_activation(
                                 dependency,
-                                marker_env.map(ResolverMarkerEnvironment::markers),
                                 None,
                                 Some(group_name),
-                            ) {
-                                activated_extras.insert((dep_name, extra));
-                                if seen.insert((dep_name, Some(extra))) {
-                                    queue.push_back((dep_name, Some(extra)));
-                                }
+                                &modifiers,
+                            );
+                            let name = dependency.package_name();
+                            traversal.push(name, None, root_marker.and(marker));
+                            for (extra, marker) in extras {
+                                traversal.push(name, Some(extra), root_marker.and(marker));
                             }
                         }
                     }
                 }
-
-                while let Some((package_name, extra)) = queue.pop_front() {
+                while let Some((package_name, extra, parent_marker)) = traversal.queue.pop_front() {
                     if lock.members().contains(package_name) {
-                        required_members.insert(package_name);
+                        activations
+                            .packages
+                            .entry(package_name)
+                            .and_modify(|marker| *marker = marker.or(parent_marker))
+                            .or_insert(parent_marker);
                     }
-
+                    if let Some(extra) = &extra {
+                        activations
+                            .extras
+                            .entry((package_name, extra.clone()))
+                            .and_modify(|marker| *marker = marker.or(parent_marker))
+                            .or_insert(parent_marker);
+                    }
                     let Some(package) = packages.get(package_name) else {
                         continue;
                     };
-
                     let Some(dependencies) = extra
-                        .map(|extra_name| {
+                        .as_ref()
+                        .map(|extra| {
                             package
                                 .optional_dependencies()
-                                .get(extra_name)
+                                .get(extra)
                                 .map(Vec::as_slice)
                         })
                         .unwrap_or(Some(package.dependencies()))
                     else {
                         continue;
                     };
-
                     for dependency in dependencies {
-                        if marker_env.is_some_and(|marker_env| {
-                            !package.dependency_applies_to_environment(
-                                dependency, marker_env, extra, None,
-                            )
-                        }) {
-                            continue;
-                        }
-                        let name = dependency.package_name();
-                        if seen.insert((name, None)) {
-                            queue.push_back((name, None));
-                        }
-                        for extra in package.dependency_extras(
+                        let (marker, extras) = package.dependency_activation(
                             dependency,
-                            marker_env.map(ResolverMarkerEnvironment::markers),
-                            extra,
+                            extra.as_ref(),
                             None,
-                        ) {
-                            activated_extras.insert((name, extra));
-                            if seen.insert((name, Some(extra))) {
-                                queue.push_back((name, Some(extra)));
-                            }
+                            &modifiers,
+                        );
+                        let name = dependency.package_name();
+                        traversal.push(name, None, parent_marker.and(marker));
+                        for (extra, marker) in extras {
+                            traversal.push(name, Some(extra), parent_marker.and(marker));
                         }
                     }
                 }
+            }
+            None => {}
+        }
+        Ok(activations)
+    }
+}
 
-                (required_members, activated_extras)
-            }
-            None => {
-                // Scripts don't have workspace members
-                (BTreeSet::new(), FxHashSet::default())
-            }
+/// Conditions under which selected workspace packages and extras can participate in conflicts.
+#[derive(Default)]
+pub(super) struct ConflictActivations<'lock> {
+    pub(super) packages: BTreeMap<&'lock PackageName, MarkerTree>,
+    pub(super) extras: BTreeMap<(&'lock PackageName, ExtraName), MarkerTree>,
+}
+
+/// Revisit dependencies whenever another path expands their activation conditions.
+struct ConflictTraversal<'lock, 'env> {
+    queue: VecDeque<(&'lock PackageName, Option<ExtraName>, MarkerTree)>,
+    markers: BTreeMap<(&'lock PackageName, Option<ExtraName>), MarkerTree>,
+    marker_environment: Option<&'env ResolverMarkerEnvironment>,
+}
+
+impl<'lock> ConflictTraversal<'lock, '_> {
+    fn push(&mut self, package: &'lock PackageName, extra: Option<ExtraName>, marker: MarkerTree) {
+        if marker.is_false()
+            || self
+                .marker_environment
+                .is_some_and(|environment| !marker.evaluate(environment.markers(), &[]))
+        {
+            return;
+        }
+        let combined = self
+            .markers
+            .entry((package, extra.clone()))
+            .or_insert(MarkerTree::FALSE);
+        let expanded = combined.or(marker);
+        if expanded != *combined {
+            *combined = expanded;
+            self.queue.push_back((package, extra, expanded));
         }
     }
 }
