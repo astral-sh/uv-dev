@@ -1219,6 +1219,26 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             return Ok(None);
         }
 
+        // Workspace projects are built locally; external sources must satisfy the wheel policy.
+        if matches!(&dist, Dist::Source(_))
+            && !self.workspace_members.contains(name)
+            && env.marker_environment().is_none()
+            && self.options.required_environments_mode
+                == Some(RequiredEnvironmentsMode::RequireWheels)
+        {
+            let applicable = find_environments(id, pubgrub);
+            for marker in self.options.required_environments.iter().copied() {
+                if env.included_by_marker(applicable.and(marker)) {
+                    return Ok(Some(ResolverVersion::Unavailable(
+                        version.clone(),
+                        UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
+                            IncompatibleWheel::MissingPlatform(marker),
+                        )),
+                    )));
+                }
+            }
+        }
+
         // If the URL points to a pre-built wheel, and the wheel's supported Python versions don't
         // match our `Requires-Python`, mark it as incompatible.
         if let Dist::Built(dist) = &dist {
@@ -1513,9 +1533,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             return Ok(None);
         }
 
-        let wheel_markers = dist.prioritized().map_or(MarkerTree::TRUE, |prioritized| {
-            prioritized.implied_wheel_markers(self.options.minimum_libc_version)
-        });
+        let mut wheel_markers = None;
 
         // If the caller marked an environment as requiring artifact coverage, ensure it has
         // coverage.
@@ -1530,7 +1548,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         .iter()
                         .any(|required| *required == marker)
                 {
-                    wheel_markers
+                    *wheel_markers.get_or_insert_with(|| {
+                        dist.prioritized().map_or(MarkerTree::TRUE, |prioritized| {
+                            prioritized.implied_wheel_markers(self.options.minimum_libc_version)
+                        })
+                    })
                 } else {
                     artifact_markers
                 };
