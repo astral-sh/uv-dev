@@ -28,7 +28,7 @@ use uv_distribution::DistributionDatabase;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, ExtraBuildRequires, ExtraBuildVariables,
-    Identifier, IndexCapabilities, IndexLocations, IsBuildBackendError, Name,
+    Identifier, IndexCapabilities, IndexLocations, IsBuildBackendError, MetadataHashPolicy, Name,
     PackageConfigSettings, Requirement, Resolution, SourceDist, VersionOrUrlRef,
 };
 use uv_git::GitResolver;
@@ -149,6 +149,13 @@ impl IsBuildBackendError for BuildDispatchError {
     }
 }
 
+/// Requirements discovered for a source and constraints that restrict their resolution.
+#[derive(Debug, Default)]
+pub struct DiscoveredBuildRequirements {
+    pub requirements: Vec<Requirement>,
+    pub constraints: Vec<Requirement>,
+}
+
 /// The main implementation of [`BuildContext`], used by the CLI, see [`BuildContext`]
 /// documentation.
 #[derive(Clone)]
@@ -180,7 +187,7 @@ pub struct BuildDispatch<'a> {
     concurrency: Concurrency,
     preview: Preview,
     tar_backend: TarBackend,
-    build_requirements: Option<Arc<Mutex<Vec<Requirement>>>>,
+    build_requirements: Option<Arc<Mutex<DiscoveredBuildRequirements>>>,
 }
 
 impl<'a> BuildDispatch<'a> {
@@ -244,22 +251,28 @@ impl<'a> BuildDispatch<'a> {
         }
     }
 
-    /// Capture declared and backend-discovered [`Requirement`]s and applicable build constraints
-    /// while resolving isolated build environments.
-    #[must_use]
-    pub fn with_build_requirement_capture(mut self, capture: bool) -> Self {
-        self.build_requirements = capture.then(|| Arc::new(Mutex::new(Vec::new())));
-        self
-    }
-
-    /// Drain captured [`Requirement`]s so builds for rejected resolver candidates can be discarded
-    /// before probing the selected distributions.
-    pub async fn take_build_requirements(&self) -> Vec<Requirement> {
-        if let Some(build_requirements) = &self.build_requirements {
-            std::mem::take(&mut *build_requirements.lock().await)
-        } else {
-            Vec::new()
-        }
+    /// Discover one source's build requirements in a private capture scope.
+    pub async fn discover_build_requirements(
+        &self,
+        source: &SourceDist,
+        hashes: MetadataHashPolicy<'_>,
+    ) -> Result<DiscoveredBuildRequirements, uv_distribution::Error> {
+        let requirements = Arc::new(Mutex::new(DiscoveredBuildRequirements::default()));
+        let dispatch = Self {
+            build_requirements: Some(requirements.clone()),
+            source_build_context: SourceBuildContext::new(
+                self.concurrency.builds_semaphore.clone(),
+            ),
+            ..self.clone()
+        };
+        DistributionDatabase::new(
+            self.client,
+            &dispatch,
+            self.concurrency.downloads_semaphore.clone(),
+        )
+        .resolve_build_requirements(source, hashes)
+        .await?;
+        Ok(std::mem::take(&mut *requirements.lock().await))
     }
 
     /// Fork the dispatch with a different hash strategy.
@@ -468,8 +481,10 @@ impl BuildContext for BuildDispatch<'_> {
         })?);
         if let Some(build_requirements) = &self.build_requirements {
             let mut build_requirements = build_requirements.lock().await;
-            build_requirements.extend(requirements.iter().cloned());
-            build_requirements.extend(
+            build_requirements
+                .requirements
+                .extend(requirements.iter().cloned());
+            build_requirements.constraints.extend(
                 resolution
                     .distributions()
                     .filter_map(|distribution| self.constraints.get(distribution.name()))
@@ -689,12 +704,24 @@ impl BuildContext for BuildDispatch<'_> {
         .boxed_local()
         .await?;
         if let Some(build_requirements) = &self.build_requirements {
-            // Backend discovery also runs when the default resolution is reused from its cache.
+            let mut requirements = builder.build_requirements().cloned().collect::<Vec<_>>();
+            // Shared environments skip the hook during setup; discovery still needs its inputs.
+            if builder.shared_environment().is_some() {
+                requirements.extend(
+                    builder
+                        .get_requires_for_build(
+                            self,
+                            install_path,
+                            sources.clone(),
+                            self.client.credentials_cache(),
+                        )
+                        .await?,
+                );
+            }
             let mut build_requirements = build_requirements.lock().await;
-            build_requirements.extend(builder.build_requirements().cloned());
-            build_requirements.extend(
-                builder
-                    .build_requirements()
+            build_requirements.constraints.extend(
+                requirements
+                    .iter()
                     .filter(|requirement| {
                         requirement.evaluate_markers(Some(self.interpreter.markers()), &[])
                     })
@@ -709,6 +736,7 @@ impl BuildContext for BuildDispatch<'_> {
                             })
                     }),
             );
+            build_requirements.requirements.extend(requirements);
         }
         Ok(builder)
     }
