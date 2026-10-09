@@ -2468,7 +2468,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         if self
             .build_context
             .cache()
-            .freshness(&metadata_entry, source.name(), source.source_tree())
+            .freshness(
+                &CachedMetadata::entry(&metadata_entry),
+                source.name(),
+                source.source_tree(),
+            )
             .map_err(Error::CacheRead)?
             .is_fresh()
         {
@@ -3722,12 +3726,17 @@ async fn read_pyproject_toml(
 struct CachedMetadata(ResolutionMetadata);
 
 impl CachedMetadata {
+    /// Select the versioned record whose contents and freshness are checked together.
+    fn entry(cache_entry: &CacheEntry) -> CacheEntry {
+        cache_entry.with_file(METADATA_WITH_SETTINGS)
+    }
+
     /// Read an existing cached [`ResolutionMetadata`], if it exists.
     async fn read(
         cache_entry: &CacheEntry,
         config_settings: &ConfigSettings,
     ) -> Result<Option<Self>, Error> {
-        let entry = cache_entry.with_file(METADATA_WITH_SETTINGS);
+        let entry = Self::entry(cache_entry);
         let (metadata, settings) = match fs::read(entry.path()).await {
             Ok(record) => rmp_serde::from_slice::<(ResolutionMetadata, ConfigSettings)>(&record)?,
             // Legacy metadata has no trustworthy settings provenance.
@@ -3748,7 +3757,7 @@ impl CachedMetadata {
         write_atomic(cache_entry.path(), rmp_serde::to_vec(metadata)?)
             .await
             .map_err(Error::CacheWrite)?;
-        let entry = cache_entry.with_file(METADATA_WITH_SETTINGS);
+        let entry = Self::entry(cache_entry);
         write_atomic(
             entry.path(),
             rmp_serde::to_vec(&(metadata, config_settings))?,
