@@ -20296,6 +20296,47 @@ fn sync_registry_parent_requests_empty_conflicting_extra() -> Result<()> {
         dev = []
         "#);
     });
+    // Legacy lockfiles omit empty optional dependency tables and their incoming extra labels.
+    let mut legacy = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
+    let Some(packages) = legacy["package"].as_array_of_tables_mut() else {
+        anyhow::bail!("lockfile did not contain a package array");
+    };
+    for package in packages.iter_mut() {
+        package.remove("declared-extras");
+        package.remove("optional-dependencies");
+        if let Some(dependencies) = package
+            .get_mut("dependencies")
+            .and_then(toml_edit::Item::as_array_mut)
+        {
+            for dependency in dependencies.iter_mut() {
+                if let Some(dependency) = dependency.as_inline_table_mut() {
+                    dependency.remove("extra");
+                }
+            }
+        }
+    }
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&legacy.to_string())?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--group", "dev", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `child`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `child`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
     context
         .lock()
         .args(["--upgrade", "--preview-features", "lock-without-metadata"])

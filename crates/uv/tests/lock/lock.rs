@@ -94,7 +94,6 @@ fn lock_validation_warning_chain() -> Result<()> {
 }
 
 /// Generate the preview lock without package metadata.
-#[cfg(feature = "test-universal")]
 fn lock_without_package_metadata(lock: &str) -> Result<toml_edit::DocumentMut> {
     let mut lock = lock.parse::<toml_edit::DocumentMut>()?;
     let Some(packages) = lock["package"].as_array_of_tables_mut() else {
