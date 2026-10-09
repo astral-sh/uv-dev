@@ -2561,6 +2561,7 @@ fn workspace_groups_no_sources_editing_and_tree() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     app v0.1.0
+    └── leaf v1.0.0
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -2649,6 +2650,158 @@ fn workspace_groups_selected_transitive_member_group_python() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Checked 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// Root-authored dependency overrides use root sources before replacing member dependencies.
+#[test]
+fn workspace_groups_overrides_use_workspace_root_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        override-dependencies = ["leaf"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        leaf = { workspace = true, marker = "python_version >= '3.13'" }
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    insta::assert_snapshot!(lock["workspace-group"][0]["effective-requires-python"].as_str().expect("group records its Python domain"), @">=3.13");
+    Ok(())
+}
+
+/// A tree observes conflicting workspace contexts while retaining concrete Python guards.
+#[test]
+fn workspace_groups_tree_includes_each_context() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context.temp_dir.child("wheels/leaf-1.0.0-py3-none-any.whl"),
+        "leaf",
+        "1.0.0",
+        "leaf-1.0.0",
+        "",
+        &[],
+    )?;
+    write_wheel_with_metadata(
+        &context.temp_dir.child("wheels/leaf-2.0.0-py3-none-any.whl"),
+        "leaf",
+        "2.0.0",
+        "leaf-2.0.0",
+        "",
+        &[],
+    )?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/future-1.0.0-py3-none-any.whl"),
+        "future",
+        "1.0.0",
+        "future-1.0.0",
+        "",
+        &[],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["a", "b"]
+        [[tool.uv.workspace.groups]]
+        name = "a"
+        members = ["a"]
+        default = true
+        [[tool.uv.workspace.groups]]
+        name = "b"
+        members = ["b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = [
+            "leaf==1.0.0; python_version < '3.13'",
+            "future==1.0.0; python_version >= '3.13'",
+        ]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["leaf==2.0.0"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.tree().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    b v0.1.0
+    └── leaf v2.0.0
+    a v0.1.0
+    └── leaf v1.0.0
+
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.tree().args(["--offline", "--frozen", "--universal"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    b v0.1.0
+    └── leaf v2.0.0
+    a v0.1.0
+    ├── future v1.0.0
+    └── leaf v1.0.0
     ");
     Ok(())
 }

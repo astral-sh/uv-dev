@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::str::FromStr;
 
 use uv_configuration::{
@@ -8,10 +9,10 @@ use uv_configuration::{
 use uv_distribution_types::{Requirement, RequirementSource, RequiresPython};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::{MarkerTree, Requirement as Pep508Requirement};
+use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl};
 use uv_pypi_types::{LenientRequirement, SupportedEnvironments, VerbatimParsedUrl};
 
-use crate::pyproject::{Source, WorkspaceReference};
+use crate::pyproject::{Source, ToolUvSources, WorkspaceReference};
 use crate::{Workspace, WorkspaceError, WorkspaceErrorKind};
 
 /// A named set of workspace resolution roots.
@@ -109,17 +110,35 @@ impl Workspace {
         let overrides = self
             .overrides()
             .into_iter()
-            .map(|entry| match entry {
-                Override::Requirement(requirement) => Override::Requirement(requirement.into()),
-                Override::Package(package) => Override::Package(PackageOverride {
+            .flat_map(|entry| match entry {
+                Override::Requirement(requirement) => self
+                    .lower_workspace_sources(
+                        requirement.into(),
+                        None,
+                        self.install_path(),
+                        None,
+                        no_sources,
+                    )
+                    .into_iter()
+                    .map(Override::Requirement)
+                    .collect::<Vec<_>>(),
+                Override::Package(package) => vec![Override::Package(PackageOverride {
                     package: package.package,
                     dependencies: package
                         .dependencies
                         .into_vec()
                         .into_iter()
-                        .map(Requirement::from)
+                        .flat_map(|requirement| {
+                            self.lower_workspace_sources(
+                                requirement.into(),
+                                None,
+                                self.install_path(),
+                                None,
+                                no_sources,
+                            )
+                        })
                         .collect(),
-                }),
+                })],
             })
             .collect();
         let modifiers = DependencyModifiers::new(
@@ -273,6 +292,18 @@ impl Workspace {
                         })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            let requirements = requirements
+                .into_iter()
+                .flat_map(|requirement| {
+                    self.lower_workspace_sources(
+                        requirement,
+                        member_sources,
+                        member.root(),
+                        extra.as_ref(),
+                        no_sources,
+                    )
+                })
+                .collect::<Vec<_>>();
             let scope = member
                 .project()
                 .version
@@ -297,53 +328,13 @@ impl Workspace {
                 let Some(target) = self.packages().get(&requirement.name) else {
                     continue;
                 };
-                let sources = if no_sources.for_package(&requirement.name) {
-                    None
-                } else {
-                    member_sources
-                        .and_then(|sources| sources.inner().get(&requirement.name))
-                        .map(|sources| (sources, member.root()))
-                        .or_else(|| {
-                            self.sources()
-                                .get(&requirement.name)
-                                .map(|sources| (sources, self.install_path()))
-                        })
+                let RequirementSource::Directory { install_path, .. } = &requirement.source else {
+                    continue;
                 };
-                let mut remaining = active.and(requirement.marker);
-                let mut local = MarkerTree::FALSE;
-                if let Some((sources, base)) = sources {
-                    for source in sources.iter() {
-                        if source.group().is_some()
-                            || source
-                                .extra()
-                                .is_some_and(|name| extra.as_ref() != Some(name))
-                        {
-                            continue;
-                        }
-                        remaining = remaining.and(source.marker().negate());
-                        let is_local = match source {
-                            Source::Workspace {
-                                workspace: WorkspaceReference::Bool(true),
-                                ..
-                            } => true,
-                            Source::Path { path, .. } => {
-                                uv_fs::normalize_path(base.join(path.as_ref())) == *target.root()
-                            }
-                            _ => false,
-                        };
-                        if is_local {
-                            local = local.or(active.and(requirement.marker).and(source.marker()));
-                        }
-                    }
+                if uv_fs::normalize_path(install_path.as_ref()) != *target.root() {
+                    continue;
                 }
-                // Source overrides replace even direct URL requirements. The original source
-                // applies only in marker domains that the configured overrides do not cover.
-                if !remaining.is_false()
-                    && let RequirementSource::Directory { install_path, .. } = &requirement.source
-                    && uv_fs::normalize_path(install_path.as_ref()) == *target.root()
-                {
-                    local = local.or(remaining);
-                }
+                let local = active.and(requirement.marker);
                 if !local.is_false() {
                     pending.push((requirement.name.clone(), None, local));
                     pending.extend(
@@ -357,6 +348,110 @@ impl Workspace {
             }
         }
         Ok(reached)
+    }
+
+    /// Resolve workspace identities in their declaring source context before applying overrides.
+    /// Other sources retain their requirement names so dependency modifiers can still replace them.
+    fn lower_workspace_sources(
+        &self,
+        requirement: Requirement,
+        member_sources: Option<&ToolUvSources>,
+        member_root: &Path,
+        extra: Option<&ExtraName>,
+        no_sources: &NoSources,
+    ) -> Vec<Requirement> {
+        if requirement.marker.is_false() {
+            return vec![requirement];
+        }
+        let Some(target) = self.packages().get(&requirement.name) else {
+            return vec![requirement];
+        };
+        let sources = if no_sources.for_package(&requirement.name) {
+            None
+        } else {
+            member_sources
+                .and_then(|sources| sources.inner().get(&requirement.name))
+                .map(|sources| (sources, member_root))
+                .or_else(|| {
+                    self.sources()
+                        .get(&requirement.name)
+                        .map(|sources| (sources, self.install_path().as_path()))
+                })
+        };
+        let mut remaining = requirement.marker;
+        let mut local = MarkerTree::FALSE;
+        if let Some((sources, base)) = sources {
+            for source in sources.iter() {
+                if source.group().is_some()
+                    || source.extra().is_some_and(|name| extra != Some(name))
+                {
+                    continue;
+                }
+                remaining = remaining.and(source.marker().negate());
+                let is_local = match source {
+                    Source::Workspace {
+                        workspace: WorkspaceReference::Bool(true),
+                        ..
+                    } => true,
+                    Source::Path { path, .. } => {
+                        uv_fs::normalize_path(base.join(path.as_ref())) == *target.root()
+                    }
+                    Source::Git { .. }
+                    | Source::Url { .. }
+                    | Source::Registry { .. }
+                    | Source::Workspace {
+                        workspace: WorkspaceReference::Bool(false) | WorkspaceReference::Path(_),
+                        ..
+                    } => false,
+                };
+                if is_local {
+                    local = local.or(requirement.marker.and(source.marker()));
+                }
+            }
+        }
+        let is_local_directory =
+            if let RequirementSource::Directory { install_path, .. } = &requirement.source {
+                uv_fs::normalize_path(install_path.as_ref()) == *target.root()
+            } else {
+                false
+            };
+        if is_local_directory {
+            local = local.or(remaining);
+        }
+
+        let mut lowered = Vec::new();
+        if !local.is_false() {
+            lowered.push(Requirement {
+                marker: local,
+                source: RequirementSource::Directory {
+                    install_path: target.root().clone().into_boxed_path(),
+                    editable: None,
+                    r#virtual: None,
+                    url: VerbatimUrl::from_absolute_path(target.root())
+                        .expect("workspace path is a valid URL"),
+                },
+                ..requirement.clone()
+            });
+        }
+        let non_local = requirement.marker.and(local.negate());
+        if !non_local.is_false() {
+            // A configured external source can replace a direct workspace path. This reachability
+            // pass needs its name for overrides, but must not follow the original directory.
+            lowered.push(Requirement {
+                marker: non_local,
+                source: if is_local_directory {
+                    RequirementSource::Registry {
+                        specifier: VersionSpecifiers::empty(),
+                        index: None,
+                        conflict: None,
+                    }
+                } else {
+                    requirement.source.clone()
+                },
+                ..requirement
+            });
+        }
+        lowered
     }
 
     /// Create a resolution view while retaining all members for source lookup.
