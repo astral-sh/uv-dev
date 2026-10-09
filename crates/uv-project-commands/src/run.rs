@@ -649,7 +649,7 @@ pub async fn run(
             let workspace_group = command_workspace_group(
                 project.workspace(),
                 workspace_group.as_ref(),
-                &selection_members,
+                Some(&selection_members),
                 frozen,
                 &settings.resolver.sources,
             )
@@ -692,7 +692,12 @@ pub async fn run(
                 );
             }
             // Determine the groups and extras to include.
-            let default_groups = project.default_groups()?;
+            let default_packages = if package.is_none() && !all_packages {
+                group_members.as_deref().unwrap_or(package.as_slice())
+            } else {
+                package.as_slice()
+            };
+            let default_groups = project.default_groups_for_packages(default_packages)?;
             let default_extras = DefaultExtras::default();
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);

@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use uv_cache::Cache;
@@ -16,8 +14,7 @@ use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
 use uv_installer::{InstallationStrategy, SitePackages};
-use uv_lock::{Installable, Lock, Package};
-use uv_normalize::PackageName;
+use uv_lock::Installable;
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
@@ -83,7 +80,7 @@ pub async fn sync_from_lock(
         } else {
             target.roots().cloned().collect()
         };
-        selected_lock = select_workspace_group_lock(target.lock(), &members)?;
+        selected_lock = target.lock().select_workspace_context(None, &members)?;
         target.with_lock(&selected_lock)
     };
 
@@ -396,61 +393,6 @@ pub async fn sync_from_lock(
         .await?;
 
     Ok(changelog)
-}
-
-fn select_workspace_group_lock(
-    lock: &Lock,
-    members: &BTreeSet<PackageName>,
-) -> Result<Lock, EnvironmentError> {
-    let members = if members.is_empty() {
-        lock.members()
-    } else {
-        members
-    };
-    if let Some(group) = lock
-        .workspace_groups()
-        .iter()
-        .find(|group| group.definition.default)
-    {
-        let selected = lock
-            .select_workspace_group(&group.definition.name)?
-            .ok_or_else(|| EnvironmentError::WorkspaceGroupTarget(group.definition.name.clone()))?;
-        if selected.select_workspace_members(members)?.is_none() {
-            return Err(EnvironmentError::WorkspaceGroupTarget(
-                group.definition.name.clone(),
-            ));
-        }
-        return Ok(selected);
-    }
-    let mut candidates = Vec::new();
-    let mut covered = BTreeSet::new();
-    for group in lock.workspace_groups() {
-        let Some(candidate) = lock.select_workspace_group(&group.definition.name)? else {
-            continue;
-        };
-        let available = candidate
-            .packages()
-            .iter()
-            .map(Package::name)
-            .collect::<BTreeSet<_>>();
-        let contained = members
-            .iter()
-            .filter(|name| available.contains(name))
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if contained.is_empty() {
-            continue;
-        }
-        let Some(candidate) = candidate.select_workspace_members(&contained)? else {
-            continue;
-        };
-        covered.extend(contained);
-        candidates.push(candidate);
-    }
-    if covered != *members {
-        return Err(EnvironmentError::WorkspaceGroupUncovered);
-    }
-    Lock::merge_workspace_resolutions(candidates)?.ok_or(EnvironmentError::WorkspaceGroupRequired)
 }
 
 /// Filter out any virtual workspace members.

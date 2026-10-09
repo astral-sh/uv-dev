@@ -291,7 +291,7 @@ pub async fn export(
         ExportSource::Manifest(ExportTarget::Project(project)) => command_workspace_group(
             project.workspace(),
             workspace_group.as_ref(),
-            &selection_members,
+            batch.is_none().then_some(&selection_members),
             frozen,
             &settings.sources,
         )
@@ -300,7 +300,7 @@ pub async fn export(
         ExportSource::Lockfile { workspace, .. } => command_workspace_group_from_lock(
             workspace.lock(),
             workspace_group.as_ref(),
-            &selection_members,
+            batch.is_none().then_some(&selection_members),
         )
         .map_err(UvError::from)?,
         ExportSource::Manifest(ExportTarget::Script(_)) => {
@@ -360,7 +360,7 @@ pub async fn export(
                         let interpreter_groups = if batch.is_some() {
                             DependencyGroupsWithDefaults::none()
                         } else {
-                            groups.with_defaults(project.default_groups()?)
+                            groups.with_defaults(project.default_groups_for_packages(&package)?)
                         };
                         let project_python = ProjectPythonRequest::from_request(
                             python.as_deref().map(PythonRequest::parse),
@@ -436,19 +436,43 @@ pub async fn export(
             }
         }
     };
-    let resolved_lock = select_workspace_group_lock(
-        resolved_lock,
-        workspace_group
-            .as_ref()
-            .filter(|group| explicit_workspace_group || group.definition.default)
-            .map(|group| &group.definition.name),
-        &selection_members,
-    )?;
-    let lock = &resolved_lock;
-
     if let Some(batch) = &batch {
         let mut writers = Vec::with_capacity(batch.export.len());
         for entry in &batch.export {
+            let entry_packages = if entry.package.is_empty() && !entry.all_packages {
+                workspace_group
+                    .as_ref()
+                    .filter(|group| explicit_workspace_group || group.definition.default)
+                    .map(|group| group.definition.members.iter().cloned().collect())
+                    .unwrap_or_default()
+            } else {
+                entry.package.clone()
+            };
+            let members = match &source {
+                ExportSource::Manifest(ExportTarget::Project(project)) => {
+                    workspace_selection_members(project, &entry_packages, entry.all_packages)
+                }
+                ExportSource::Lockfile {
+                    workspace,
+                    project_name,
+                } => lockfile_selection_members(
+                    workspace.lock(),
+                    project_name.as_ref(),
+                    &entry_packages,
+                    entry.all_packages,
+                ),
+                ExportSource::Manifest(ExportTarget::Script(_)) => {
+                    bail!("`--batch` does not support scripts")
+                }
+            };
+            let selected_lock = resolved_lock.select_workspace_context(
+                workspace_group
+                    .as_ref()
+                    .filter(|group| explicit_workspace_group || group.definition.default)
+                    .map(|group| &group.definition.name),
+                &members,
+            )?;
+
             let groups = DependencyGroups::from_args(
                 None,
                 entry.group.clone(),
@@ -459,18 +483,28 @@ pub async fn export(
             );
             let groups = match &source {
                 ExportSource::Manifest(ExportTarget::Project(project)) => {
-                    groups.with_defaults(project.default_groups_for_packages(&entry.package)?)
+                    let defaults = if frozen.is_some() {
+                        match entry_packages.as_slice() {
+                            [name] => selected_lock.member_default_groups(name),
+                            _ => None,
+                        }
+                        .map(Ok)
+                        .unwrap_or_else(|| project.default_groups())?
+                    } else {
+                        project.default_groups_for_packages(&entry_packages)?
+                    };
+                    groups.with_defaults(defaults)
                 }
                 ExportSource::Lockfile {
                     workspace,
                     project_name,
                 } => {
-                    workspace.validate_packages(&entry.package)?;
+                    workspace.validate_packages(&entry_packages)?;
                     resolve_lockfile_groups(
                         &groups,
                         workspace,
                         project_name.as_ref(),
-                        &entry.package,
+                        &entry_packages,
                     )
                     .with_context(|| {
                         format!(
@@ -494,10 +528,10 @@ pub async fn export(
             writers.push(
                 render_export(
                     &source,
-                    lock,
+                    &selected_lock,
                     format,
                     entry.all_packages,
-                    &entry.package,
+                    &entry_packages,
                     &prune,
                     hashes,
                     &install_options,
@@ -527,9 +561,29 @@ pub async fn export(
         return Ok(ExitStatus::Success);
     }
 
+    let resolved_lock = select_workspace_group_lock(
+        resolved_lock,
+        workspace_group
+            .as_ref()
+            .filter(|group| explicit_workspace_group || group.definition.default)
+            .map(|group| &group.definition.name),
+        &selection_members,
+    )?;
+    let lock = &resolved_lock;
+
     let groups = match &source {
         ExportSource::Manifest(ExportTarget::Project(project)) => {
-            groups.with_defaults(project.default_groups()?)
+            let defaults = if frozen.is_some() {
+                match package.as_slice() {
+                    [name] => lock.member_default_groups(name),
+                    _ => None,
+                }
+                .map(Ok)
+                .unwrap_or_else(|| project.default_groups())?
+            } else {
+                project.default_groups_for_packages(&package)?
+            };
+            groups.with_defaults(defaults)
         }
         ExportSource::Manifest(ExportTarget::Script(_)) => {
             groups.with_defaults(DefaultGroups::default())

@@ -17,7 +17,7 @@ use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
 use uv_git_types::GitOid;
-use uv_lock::{Lock, Package, implicit_constraints_marker};
+use uv_lock::{Lock, Package, WorkspaceGroupSelectionError, implicit_constraints_marker};
 use uv_lock_operations::{
     LockError, LockMode, LockOperation, LockResult, LockTarget, MissingLockfileSource,
 };
@@ -67,62 +67,10 @@ pub(crate) fn select_workspace_group_lock(
     name: Option<&GroupName>,
     members: &BTreeSet<PackageName>,
 ) -> Result<Lock, ProjectError> {
-    if lock.workspace_groups().is_empty() {
-        return if let Some(name) = name {
-            Err(ProjectError::MissingWorkspaceGroupLock(name.clone()))
-        } else {
-            Ok(lock)
-        };
+    if name.is_none() && lock.workspace_groups().is_empty() {
+        return Ok(lock);
     }
-    let members = if members.is_empty() {
-        lock.members()
-    } else {
-        members
-    };
-    let name = name.or_else(|| {
-        lock.workspace_groups()
-            .iter()
-            .find(|group| group.definition.default)
-            .map(|group| &group.definition.name)
-    });
-    if let Some(name) = name {
-        let selected = lock
-            .select_workspace_group(name)?
-            .ok_or_else(|| ProjectError::MissingWorkspaceGroupLock(name.clone()))?;
-        if selected.select_workspace_members(members)?.is_none() {
-            return Err(ProjectError::WorkspaceGroupTarget(name.clone()));
-        }
-        return Ok(selected);
-    }
-    let mut candidates = Vec::new();
-    let mut covered = BTreeSet::new();
-    for group in lock.workspace_groups() {
-        let Some(candidate) = lock.select_workspace_group(&group.definition.name)? else {
-            continue;
-        };
-        let available = candidate
-            .packages()
-            .iter()
-            .map(Package::name)
-            .collect::<BTreeSet<_>>();
-        let contained = members
-            .iter()
-            .filter(|name| available.contains(name))
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if contained.is_empty() {
-            continue;
-        }
-        let Some(candidate) = candidate.select_workspace_members(&contained)? else {
-            continue;
-        };
-        covered.extend(contained);
-        candidates.push(candidate);
-    }
-    if covered != *members {
-        return Err(ProjectError::WorkspaceGroupUncovered);
-    }
-    Lock::merge_workspace_resolutions(candidates)?.ok_or(ProjectError::WorkspaceGroupRequired)
+    Ok(lock.select_workspace_context(name, members)?)
 }
 
 /// The ordinary project target, before applying a named workspace-group default.
@@ -166,20 +114,15 @@ pub(crate) fn lockfile_selection_members(
 pub(crate) fn command_workspace_group_from_lock(
     lock: &Lock,
     name: Option<&GroupName>,
-    members: &BTreeSet<PackageName>,
+    members: Option<&BTreeSet<PackageName>>,
 ) -> Result<Option<ResolvedWorkspaceGroup>, ProjectError> {
     if lock.workspace_groups().is_empty() {
         return if let Some(name) = name {
-            Err(ProjectError::MissingWorkspaceGroupLock(name.clone()))
+            Err(WorkspaceGroupSelectionError::Missing(name.clone()).into())
         } else {
             Ok(None)
         };
     }
-    let members = if members.is_empty() {
-        lock.members()
-    } else {
-        members
-    };
     if let Some(group) = name
         .and_then(|name| {
             lock.workspace_groups()
@@ -203,8 +146,16 @@ pub(crate) fn command_workspace_group_from_lock(
         }));
     }
     if let Some(name) = name {
-        return Err(ProjectError::MissingWorkspaceGroupLock(name.clone()));
+        return Err(WorkspaceGroupSelectionError::Missing(name.clone()).into());
     }
+    let Some(members) = members else {
+        return Ok(None);
+    };
+    let members = if members.is_empty() {
+        lock.members()
+    } else {
+        members
+    };
     let selected = select_workspace_group_lock(lock.clone(), None, members)?;
     // This synthetic view is only used for interpreter discovery. Ordinary targeting
     // keeps the union of compatible contexts instead of choosing one by name.
@@ -236,7 +187,7 @@ pub(crate) fn command_workspace_group_from_lock(
 pub(crate) async fn command_workspace_group(
     workspace: &Workspace,
     name: Option<&GroupName>,
-    members: &BTreeSet<PackageName>,
+    members: Option<&BTreeSet<PackageName>>,
     frozen: Option<FrozenSource>,
     no_sources: &NoSources,
 ) -> Result<Option<ResolvedWorkspaceGroup>, ProjectError> {
@@ -262,6 +213,13 @@ pub(crate) async fn command_workspace_group(
     if let Some(group) = groups.iter().find(|group| group.definition.default) {
         return Ok(Some(group.clone()));
     }
+    let all_members;
+    let members = if let Some(members) = members {
+        members
+    } else {
+        all_members = workspace.packages().keys().cloned().collect();
+        &all_members
+    };
     let mut candidates = groups
         .iter()
         .filter(|group| members.is_subset(&group.definition.members))

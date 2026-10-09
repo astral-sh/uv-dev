@@ -174,7 +174,7 @@ pub async fn sync(
         SyncTarget::Manifest(SyncManifest::Project(project)) => command_workspace_group(
             project.workspace(),
             workspace_group.as_ref(),
-            &selection_members,
+            Some(&selection_members),
             frozen,
             &settings.resolver.sources,
         )
@@ -183,7 +183,7 @@ pub async fn sync(
         SyncTarget::Lockfile { workspace, .. } => command_workspace_group_from_lock(
             workspace.lock(),
             workspace_group.as_ref(),
-            &selection_members,
+            Some(&selection_members),
         )
         .map_err(UvError::from)?,
         SyncTarget::Manifest(SyncManifest::Script(_)) => {
@@ -261,7 +261,8 @@ pub async fn sync(
         SyncTarget::Manifest(SyncManifest::Project(project)) => {
             groups.with_defaults(match locked_default_groups {
                 Some(defaults) => defaults,
-                None => project.default_groups()?,
+                None if selected_frozen_lock.is_some() => project.default_groups()?,
+                None => project.default_groups_for_packages(&package)?,
             })
         }
         SyncTarget::Manifest(SyncManifest::Script(..)) => {

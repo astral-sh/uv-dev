@@ -504,9 +504,10 @@ fn workspace_groups_internal_conflict() -> Result<()> {
         package = false
     "#})?;
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to resolve workspace group `main`
+      cause: No solution found when resolving dependencies for split (markers: python_full_version == '3.12.*')
       cause: Because all versions of branch-two depend on shared-leaf>=2 and all versions of branch-one depend on shared-leaf<2, we can conclude that all versions of branch-one and all versions of branch-two are incompatible.
              And because legacy depends on branch-one and branch-two, we can conclude that legacy's requirements are unsatisfiable.
              And because only legacy==0.1.0 is available and your workspace requires legacy, we can conclude that your workspace's requirements are unsatisfiable.
@@ -1023,21 +1024,22 @@ fn workspace_groups_conflicting_sources() -> Result<()> {
         .args(["--offline", "--check"])
         .assert()
         .success();
-    for (name, version) in [("main", 1), ("next", 2)] {
-        let output = context
-            .export()
-            .args([
-                "--offline",
-                "--frozen",
-                "--workspace-group",
-                name,
-                "--no-header",
-                "--no-hashes",
-            ])
-            .output()?;
-        output.clone().assert().success();
-        assert!(String::from_utf8(output.stdout)?.contains(&format!("common_leaf-{version}.0.0")));
-    }
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--workspace-group", "main", "--no-header", "--no-hashes",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ./wheels/common_leaf-1.0.0-py3-none-any.whl
+        # via legacy
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--workspace-group", "next", "--no-header", "--no-hashes",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ./wheels/common_leaf-2.0.0-py3-none-any.whl
+        # via next
+    "#);
     Ok(())
 }
 
@@ -1103,21 +1105,22 @@ fn workspace_groups_conflicting_indexes() -> Result<()> {
         .args(["--offline", "--check"])
         .assert()
         .success();
-    for (name, version) in [("main", 1), ("next", 2)] {
-        let output = context
-            .export()
-            .args([
-                "--offline",
-                "--frozen",
-                "--workspace-group",
-                name,
-                "--no-header",
-                "--no-hashes",
-            ])
-            .output()?;
-        output.clone().assert().success();
-        assert!(String::from_utf8(output.stdout)?.contains(&format!("common-leaf=={version}.0.0")));
-    }
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--workspace-group", "main", "--no-header", "--no-hashes",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    common-leaf==1.0.0
+        # via legacy
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--workspace-group", "next", "--no-header", "--no-hashes",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    common-leaf==2.0.0
+        # via next
+    "#);
     Ok(())
 }
 
@@ -1209,5 +1212,329 @@ fn workspace_groups_conditional_member_python() -> Result<()> {
     ----- stderr -----
     error: Workspace group `conditional` has incompatible `requires-python` declarations
     ");
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_removed_regenerates_ordinary_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    let grouped: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(grouped["version"].as_integer(), Some(2));
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index", "--check"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    "#);
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    let ordinary: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(ordinary["version"].as_integer(), Some(1));
+    assert!(ordinary.get("workspace-groups").is_none());
+    context
+        .lock()
+        .args(["--offline", "--no-index", "--locked"])
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_lenient_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf>=1.9.*"]
+        [tool.uv]
+        package = false
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+    "#})?;
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        context
+            .temp_dir
+            .child("wheels/leaf-2.0.0-py3-none-any.whl")
+            .path(),
+        "leaf",
+        "2.0.0",
+        "leaf-2.0.0",
+        "",
+        &[],
+    )?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--no-header", "--no-hashes",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==2.0.0
+        # via app
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_effective_local_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.13,<3.14"
+        dependencies = ["excluded", "overridden"]
+        [tool.uv]
+        package = false
+        exclude-dependencies = ["excluded"]
+        override-dependencies = ["overridden; python_version < '3.13'"]
+        [tool.uv.sources]
+        excluded = { workspace = true }
+        overridden = { workspace = true }
+        [tool.uv.workspace]
+        members = ["excluded", "overridden"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("excluded/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "excluded"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("overridden/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "overridden"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--no-index", "--no-header", "--no-hashes",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_selected_member_default_groups() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["leaf"]
+        [tool.uv]
+        package = false
+        default-groups = ["test"]
+    "#})?;
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        context
+            .temp_dir
+            .child("wheels/leaf-1.0.0-py3-none-any.whl")
+            .path(),
+        "leaf",
+        "1.0.0",
+        "leaf-1.0.0",
+        "",
+        &[],
+    )?;
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--frozen", "--dry-run"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Checked 1 package in [TIME]
+    Would make no changes
+    "#);
+    uv_snapshot!(context.filters(), context.export().args(["--offline", "--no-header", "--no-hashes"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.export().args(["--offline", "--frozen", "--no-header", "--no-hashes"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.run().args([
+        "--offline", "python", "-c", "from importlib.metadata import version; print(version('leaf'))",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 1 package in [TIME]
+    "#);
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_batch_selects_each_context() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    workspace(&context)?;
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("default = true", "default = false"),
+    )?;
+    context.temp_dir.child("batch.toml").write_str(indoc! {r#"
+        [[export]]
+        output-file = "legacy.txt"
+        package = ["legacy"]
+        [[export]]
+        output-file = "next.txt"
+        package = ["next"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--no-header", "--no-hashes", "--batch", "batch.toml",
+        "--preview-features", "batch-export",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    "#);
+    insta::assert_snapshot!(context.read("legacy.txt"), @r#"
+    branch-one==1.0.0
+        # via legacy
+    common-leaf==1.0.0
+        # via
+        #   common
+        #   legacy
+    shared-leaf==1.0.0
+        # via branch-one
+    "#);
+    insta::assert_snapshot!(context.read("next.txt"), @r#"
+    branch-two==1.0.0
+        # via next
+    common-leaf==1.0.0
+        # via common
+    shared-leaf==2.0.0
+        # via branch-two
+    "#);
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--no-header", "--no-hashes", "--batch", "batch.toml",
+        "--preview-features", "batch-export,frozen-lockfile",
+    ]), @"exit_code: 0 (success)");
+    insta::assert_snapshot!(context.read("legacy.txt"), @r#"
+    branch-one==1.0.0
+        # via legacy
+    common-leaf==1.0.0
+        # via
+        #   common
+        #   legacy
+    shared-leaf==1.0.0
+        # via branch-one
+    "#);
+    insta::assert_snapshot!(context.read("next.txt"), @r#"
+    branch-two==1.0.0
+        # via next
+    common-leaf==1.0.0
+        # via common
+    shared-leaf==2.0.0
+        # via branch-two
+    "#);
     Ok(())
 }

@@ -94,7 +94,7 @@ mod tree;
 #[cfg(test)]
 mod windows_emulation_tests;
 mod workspace_groups;
-pub use workspace_groups::LockedWorkspaceGroup;
+pub use workspace_groups::{LockedWorkspaceGroup, WorkspaceGroupSelectionError};
 
 /// The current version of the lockfile format.
 const VERSION: u32 = 1;

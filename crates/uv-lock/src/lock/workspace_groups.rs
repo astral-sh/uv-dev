@@ -39,7 +39,97 @@ impl From<ResolvedWorkspaceGroup> for LockedWorkspaceGroup {
     }
 }
 
+/// A failure to select one compatible workspace context for the requested roots.
+#[derive(Debug, thiserror::Error)]
+pub enum WorkspaceGroupSelectionError {
+    #[error("Workspace group `{0}` is not present in the lockfile; run `uv lock`")]
+    Missing(GroupName),
+    #[error("The selected packages are not all reachable in workspace group `{0}`")]
+    Target(GroupName),
+    #[error(
+        "The selected packages are not covered by a single workspace group; add them to a group or select a narrower target"
+    )]
+    Uncovered,
+    #[error(
+        "The lockfile contains multiple workspace contexts; select one with `--workspace-group`"
+    )]
+    Ambiguous,
+    #[error(transparent)]
+    Lock(#[from] LockError),
+}
+
 impl Lock {
+    /// Select compatible workspace contexts for a named group or ordinary package roots.
+    pub fn select_workspace_context(
+        &self,
+        name: Option<&GroupName>,
+        members: &BTreeSet<PackageName>,
+    ) -> Result<Self, WorkspaceGroupSelectionError> {
+        if self.workspace_groups.is_empty() {
+            return if let Some(name) = name {
+                Err(WorkspaceGroupSelectionError::Missing(name.clone()))
+            } else {
+                Ok(self.clone())
+            };
+        }
+        let members = if members.is_empty() {
+            self.members()
+        } else {
+            members
+        };
+        let name = name.or_else(|| {
+            self.workspace_groups
+                .iter()
+                .find(|group| group.definition.default)
+                .map(|group| &group.definition.name)
+        });
+        if let Some(name) = name {
+            let selected = self
+                .select_workspace_group(name)?
+                .ok_or_else(|| WorkspaceGroupSelectionError::Missing(name.clone()))?;
+            if !selected.contains_workspace_members(members) {
+                return Err(WorkspaceGroupSelectionError::Target(name.clone()));
+            }
+            return Ok(selected);
+        }
+        let mut candidates = Vec::new();
+        let mut covered = BTreeSet::new();
+        for group in &self.workspace_groups {
+            let Some(candidate) = self.select_workspace_group(&group.definition.name)? else {
+                continue;
+            };
+            let available = candidate
+                .packages
+                .iter()
+                .map(Package::name)
+                .collect::<BTreeSet<_>>();
+            let contained = members
+                .iter()
+                .filter(|name| available.contains(name))
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if contained.is_empty() {
+                continue;
+            }
+            let Some(candidate) = candidate.select_workspace_members(&contained)? else {
+                continue;
+            };
+            covered.extend(contained);
+            candidates.push(candidate);
+        }
+        if covered != *members {
+            return Err(WorkspaceGroupSelectionError::Uncovered);
+        }
+        Self::merge_workspace_resolutions(candidates)?
+            .ok_or(WorkspaceGroupSelectionError::Ambiguous)
+    }
+
+    fn contains_workspace_members(&self, members: &BTreeSet<PackageName>) -> bool {
+        members
+            .iter()
+            .all(|name| self.packages.iter().any(|package| &package.id.name == name))
+    }
+
     /// Return the workspace contexts recorded in this lockfile.
     pub fn workspace_groups(&self) -> &[LockedWorkspaceGroup] {
         &self.workspace_groups
@@ -230,10 +320,7 @@ impl Lock {
         &self,
         members: &BTreeSet<PackageName>,
     ) -> Result<Option<Self>, LockError> {
-        if !members
-            .iter()
-            .all(|name| self.packages.iter().any(|package| &package.id.name == name))
-        {
+        if !self.contains_workspace_members(members) {
             return Ok(None);
         }
         let mut selected = self.clone();

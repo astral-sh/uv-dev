@@ -227,7 +227,7 @@ pub struct Project {
     /// The name of the project
     pub name: PackageName,
     /// The version of the project
-    version: Option<Version>,
+    pub(crate) version: Option<Version>,
     /// The Python versions this project is compatible with.
     pub(crate) requires_python: Option<VersionSpecifiers>,
     /// The dependencies of the project.

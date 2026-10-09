@@ -294,6 +294,8 @@ pub enum WorkspaceErrorKind {
     DisjointWorkspaceGroupPython(GroupName),
     #[error("Invalid dependency in workspace group `{0}` member `{1}`: {2}")]
     InvalidWorkspaceGroupDependency(GroupName, PackageName, String),
+    #[error(transparent)]
+    WorkspaceGroupModifiers(uv_configuration::ScopedOverrideSourceError),
     // Workspace structure errors.
     #[error("No `pyproject.toml` found in current directory or any parent directory")]
     MissingPyprojectToml,

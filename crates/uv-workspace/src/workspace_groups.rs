@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
-use uv_configuration::NoSources;
-use uv_distribution_types::RequiresPython;
+use uv_configuration::{
+    DependencyModifierScope, DependencyModifiers, Excludes, NoSources, Override, Overrides,
+    PackageOverride,
+};
+use uv_distribution_types::{Requirement, RequirementSource, RequiresPython};
 use uv_normalize::{GroupName, PackageName};
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::{MarkerTree, Requirement};
-use uv_pypi_types::{SupportedEnvironments, VerbatimParsedUrl};
+use uv_pep508::{MarkerTree, Requirement as Pep508Requirement};
+use uv_pypi_types::{LenientRequirement, SupportedEnvironments, VerbatimParsedUrl};
 
 use crate::pyproject::{Source, WorkspaceReference};
 use crate::{Workspace, WorkspaceError, WorkspaceErrorKind};
@@ -67,6 +70,28 @@ impl Workspace {
         else {
             return Ok(Vec::new());
         };
+        let overrides = self
+            .overrides()
+            .into_iter()
+            .map(|entry| match entry {
+                Override::Requirement(requirement) => Override::Requirement(requirement.into()),
+                Override::Package(package) => Override::Package(PackageOverride {
+                    package: package.package,
+                    dependencies: package
+                        .dependencies
+                        .into_vec()
+                        .into_iter()
+                        .map(Requirement::from)
+                        .collect(),
+                }),
+            })
+            .collect();
+        let modifiers = DependencyModifiers::new(
+            Overrides::from_entries(overrides).map_err(|error| {
+                WorkspaceError::from(WorkspaceErrorKind::WorkspaceGroupModifiers(error))
+            })?,
+            Excludes::from_entries(self.exclude_dependencies()),
+        );
         let mut names = BTreeSet::new();
         let mut default = None;
         let mut groups = Vec::with_capacity(definitions.len());
@@ -107,7 +132,9 @@ impl Workspace {
                     .into());
                 }
             }
-            for (name, active) in self.reachable_workspace_members(definition, no_sources)? {
+            for (name, active) in
+                self.reachable_workspace_members(definition, no_sources, &modifiers)?
+            {
                 if let Some(requires_python) = self
                     .packages()
                     .get(&name)
@@ -147,6 +174,7 @@ impl Workspace {
         &self,
         group: &WorkspaceGroup,
         no_sources: &NoSources,
+        modifiers: &DependencyModifiers,
     ) -> Result<BTreeMap<PackageName, MarkerTree>, WorkspaceError> {
         let mut reached = BTreeMap::new();
         let mut pending = group
@@ -171,21 +199,54 @@ impl Workspace {
                 .as_ref()
                 .and_then(|tool| tool.uv.as_ref())
                 .and_then(|uv| uv.sources.as_ref());
-            for dependency in member.project().dependencies.iter().flatten() {
-                let requirement =
-                    Requirement::<VerbatimParsedUrl>::from_str(dependency).map_err(|error| {
-                        WorkspaceError::from(WorkspaceErrorKind::InvalidWorkspaceGroupDependency(
-                            group.name.clone(),
-                            name.clone(),
-                            error.to_string(),
-                        ))
-                    })?;
-                if no_sources.for_package(&requirement.name) {
-                    continue;
-                }
+            let requirements = member
+                .project()
+                .dependencies
+                .iter()
+                .flatten()
+                .map(|dependency| {
+                    LenientRequirement::<VerbatimParsedUrl>::from_str(dependency)
+                        .map(Pep508Requirement::from)
+                        .map(Requirement::from)
+                        .map_err(|error| {
+                            WorkspaceError::from(
+                                WorkspaceErrorKind::InvalidWorkspaceGroupDependency(
+                                    group.name.clone(),
+                                    name.clone(),
+                                    error.to_string(),
+                                ),
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let scope = member
+                .project()
+                .version
+                .as_ref()
+                .map_or(DependencyModifierScope::Global, |version| {
+                    DependencyModifierScope::Package(&name, version)
+                });
+            for requirement in modifiers.apply(scope, &requirements) {
                 let Some(target) = self.packages().get(&requirement.name) else {
                     continue;
                 };
+                match &requirement.source {
+                    RequirementSource::Directory { install_path, .. } => {
+                        if uv_fs::normalize_path(install_path.as_ref()) == *target.root() {
+                            pending
+                                .push((requirement.name.clone(), active.and(requirement.marker)));
+                        }
+                        continue;
+                    }
+                    RequirementSource::Registry { .. } => {}
+                    RequirementSource::Url { .. }
+                    | RequirementSource::GitDirectory { .. }
+                    | RequirementSource::GitPath { .. }
+                    | RequirementSource::Path { .. } => continue,
+                }
+                if no_sources.for_package(&requirement.name) {
+                    continue;
+                }
                 let sources = member_sources
                     .and_then(|sources| sources.inner().get(&requirement.name))
                     .map(|sources| (sources, member.root()))
