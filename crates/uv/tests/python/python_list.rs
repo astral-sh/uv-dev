@@ -1037,7 +1037,7 @@ async fn python_list_remote_ndjson_metadata() -> Result<()> {
     Ok(())
 }
 
-/// Preview metadata uses the configured Astral mirror.
+/// Explicit preview metadata uses its mirror even when all previews are also enabled.
 #[tokio::test]
 async fn python_list_preview_metadata_mirror() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_keys();
@@ -1067,6 +1067,7 @@ async fn python_list_preview_metadata_mirror() -> Result<()> {
         .arg("cpython-3.13")
         .arg("--preview-features")
         .arg("remote-python-download-metadata")
+        .env(EnvVars::UV_PREVIEW, "1")
         .env("UV_ASTRAL_MIRROR_URL", format!("{}/", server.uri()))
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @r#"
     exit_code: 0 (success)

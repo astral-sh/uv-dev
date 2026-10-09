@@ -4036,6 +4036,7 @@ fn preview_features() {
     +            WheelVariants,
     +            RemotePythonDownloadMetadata,
     +        ],
+    +        explicit_flags: [],
          },
          python_preference: Managed,
          python_arch: None,
@@ -4051,7 +4052,20 @@ fn preview_features() {
     );
 
     // Compare against output of `--preview` alone.
-    diff_uv_snapshot!(context.filters(), &preview, add_shared_args(context.version()).arg("--show-settings").arg("--preview").arg("--preview-features").arg("python-install-default"), @""
+    diff_uv_snapshot!(context.filters(), &preview, add_shared_args(context.version()).arg("--show-settings").arg("--preview").arg("--preview-features").arg("python-install-default"), @"
+    ...
+                 BuildDependencyHashes,
+                 RemotePythonDownloadMetadata,
+             ],
+    -        explicit_flags: [],
+    +        explicit_flags: [
+    +            PythonInstallDefault,
+    +        ],
+         },
+         python_preference: Managed,
+         python_arch: None,
+    ...
+    "
     );
 
     let preview_features = diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.version()).arg("--show-settings").arg("--preview-features").arg("python-install-default,json-output"), @"
@@ -4250,12 +4264,25 @@ fn preview_precedence() -> anyhow::Result<()> {
         preview = true
     "})?;
 
-    // `preview = true` in a config file should mask `--preview-features`.
+    // Configured enable-all retains explicit CLI feature selections.
     diff_uv_snapshot!(
         context.filters(),
         &enabled,
         show_settings().arg("--preview-features").arg("pylock"),
-        @""
+        @"
+    ...
+                 BuildDependencyHashes,
+                 RemotePythonDownloadMetadata,
+             ],
+    -        explicit_flags: [],
+    +        explicit_flags: [
+    +            Pylock,
+    +        ],
+         },
+         python_preference: Managed,
+         python_arch: None,
+    ...
+    "
     );
 
     // `UV_PREVIEW=false` should fall through to configuration.
@@ -4270,7 +4297,7 @@ fn preview_precedence() -> anyhow::Result<()> {
     project_config.write_str("")?;
     user_config.write_str("")?;
 
-    // `UV_PREVIEW=true` should override any explicit CLI feature list.
+    // `UV_PREVIEW=true` enables all features and retains the explicit CLI selection.
     diff_uv_snapshot!(
         context.filters(),
         &enabled,
@@ -4278,7 +4305,20 @@ fn preview_precedence() -> anyhow::Result<()> {
             .arg("--preview-features")
             .arg("pylock")
             .env(EnvVars::UV_PREVIEW, "1"),
-        @""
+        @"
+    ...
+                 BuildDependencyHashes,
+                 RemotePythonDownloadMetadata,
+             ],
+    -        explicit_flags: [],
+    +        explicit_flags: [
+    +            Pylock,
+    +        ],
+         },
+         python_preference: Managed,
+         python_arch: None,
+    ...
+    "
     );
 
     // `--no-preview` should override `UV_PREVIEW=true`.
@@ -4416,13 +4456,22 @@ fn preview_precedence() -> anyhow::Result<()> {
         @""
     );
 
-    // `--preview` masks the unknown project setting without warning.
+    // Enable-all retains configured feature selections, including unknown-feature warnings.
     // Compare against `--preview`.
     diff_uv_snapshot!(
         context.filters(),
         &enabled,
         show_settings().arg("--preview"),
-        @""
+        @"
+    ...
+             malware_check_url: None,
+         },
+     }
+    +
+    +----- stderr -----
+    +warning: Unknown preview feature: `unknown-preview-feature`
+    ...
+    "
     );
 
     project_config.write_str(indoc::indoc! {r"
@@ -4430,13 +4479,26 @@ fn preview_precedence() -> anyhow::Result<()> {
         preview-features = true
     "})?;
 
-    // Both enable-all spellings have the same precedence.
+    // Both enable-all spellings retain the explicit CLI feature selection.
     // Compare against `--preview`.
     diff_uv_snapshot!(
         context.filters(),
         &enabled,
         show_settings().arg("--preview-features").arg("pylock"),
-        @""
+        @"
+    ...
+                 BuildDependencyHashes,
+                 RemotePythonDownloadMetadata,
+             ],
+    -        explicit_flags: [],
+    +        explicit_flags: [
+    +            Pylock,
+    +        ],
+         },
+         python_preference: Managed,
+         python_arch: None,
+    ...
+    "
     );
 
     Ok(())
