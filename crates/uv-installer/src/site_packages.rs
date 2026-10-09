@@ -7,6 +7,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use fs_err as fs;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use tracing::debug;
 
 use uv_configuration::{
     DependencyMode, DependencyModifierScope, DependencyModifiers, ExcludeDependency, Excludes,
@@ -246,9 +247,16 @@ impl SitePackages {
                     continue;
                 }
 
-                let Ok(metadata) = distribution.read_metadata() else {
-                    incomplete.insert(package.clone());
-                    continue;
+                let metadata = match distribution.read_metadata() {
+                    Ok(metadata) => metadata,
+                    Err(err) => {
+                        debug!(
+                            "Failed to read installed metadata at `{}`: {err:?}",
+                            distribution.install_path().simplified_display()
+                        );
+                        incomplete.insert(package.clone());
+                        continue;
+                    }
                 };
 
                 for dependency in &metadata.requires_dist {
