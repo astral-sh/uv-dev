@@ -2970,3 +2970,175 @@ fn explicit_roots_pylock_conflicts_use_selected_python_domain() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Dependency-activated extras select the same locked fork for conflict checks and installation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_project_conflicts_follow_transitive_extras() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "explicit-roots-transitive-extra-forks"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.bridge.versions."1.0.0"]
+        requires = ["shared", "selector[legacy]"]
+        sdist = false
+        [packages.bridge.versions."2.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12");
+    let index = server.index_url();
+    context.temp_dir.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "selector", "shared"]
+        roots = ["app", "selector"]
+        [tool.uv.sources]
+        selector = {{ workspace = true }}
+        [tool.uv]
+        conflicts = [
+            [{{ package = "app" }}, {{ package = "shared" }}],
+            [{{ package = "selector", extra = "legacy" }}, {{ package = "selector", extra = "modern" }}],
+        ]
+        [[tool.uv.index]]
+        url = "{index}"
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["bridge", "selector[modern]"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("selector/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "selector"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        legacy = ["bridge<2"]
+        modern = ["bridge>=2"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--preview-features", "package-conflicts"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "app", "--frozen", "--offline", "--dry-run", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + bridge==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--package", "app", "--frozen", "--offline", "--no-header", "--no-hashes", "--no-annotate",
+        "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==2.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "app", "--package", "selector", "--frozen", "--offline", "--dry-run",
+        "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + bridge==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--package", "app", "--package", "selector", "--frozen", "--offline", "--no-header", "--no-hashes",
+        "--no-annotate", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==2.0.0
+    ");
+
+    context
+        .lock()
+        .args([
+            "--upgrade",
+            "--preview-features",
+            "package-conflicts",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "app", "--frozen", "--offline", "--dry-run", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + bridge==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--package", "app", "--frozen", "--offline", "--no-header", "--no-hashes", "--no-annotate",
+        "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==2.0.0
+    ");
+
+    context.temp_dir.child("app/pyproject.toml").write_str(
+        &context
+            .read("app/pyproject.toml")
+            .replace("selector[modern]", "selector[legacy]"),
+    )?;
+    context
+        .lock()
+        .args(["--preview-features", "package-conflicts"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "app", "--frozen", "--offline", "--dry-run", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--package", "app", "--frozen", "--offline", "--no-header", "--no-hashes", "--no-annotate",
+        "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    ");
+    Ok(())
+}
