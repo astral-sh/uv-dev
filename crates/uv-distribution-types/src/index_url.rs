@@ -18,7 +18,7 @@ use uv_redacted::SafeUrl;
 use uv_redacted::policy::{SerializationPolicy, Stripped};
 use uv_warnings::warn_user;
 
-use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Verbatim};
+use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Origin, Verbatim};
 
 pub static PYPI_URL: LazyLock<SafeUrl> =
     LazyLock::new(|| SafeUrl::parse("https://pypi.org/simple").unwrap());
@@ -290,6 +290,32 @@ impl IndexLocations {
             flat_index: self.flat_index.into_iter().chain(flat_index).collect(),
             no_index: self.no_index || no_index,
         }
+    }
+
+    /// Add index definitions from sources, retaining command-line precedence.
+    #[must_use]
+    pub fn with_source_indexes(mut self, indexes: Vec<Index>) -> Self {
+        if indexes.is_empty() {
+            return self;
+        }
+        let names = indexes
+            .iter()
+            .filter_map(|index| index.name.clone())
+            .collect::<FxHashSet<_>>();
+        let (command_line, configured): (Vec<_>, Vec<_>) = self
+            .indexes
+            .into_iter()
+            .partition(|index| index.origin == Some(Origin::Cli));
+        self.indexes = command_line
+            .into_iter()
+            .chain(indexes)
+            .chain(
+                configured
+                    .into_iter()
+                    .filter(|index| index.name.as_ref().is_none_or(|name| !names.contains(name))),
+            )
+            .collect();
+        self
     }
 
     /// Returns `true` if no index configuration is set, i.e., the [`IndexLocations`] matches the
