@@ -161,8 +161,55 @@ fn create_venv_caches_interpreter_from_venv() -> Result<()> {
     Ok(())
 }
 
-/// A symlink inside a Python installation is retained when deriving cached venv metadata,
-/// but resolved by CPython when querying the venv.
+/// CPython 3.10 initializes the base executable differently from the 3.11+ path resolver.
+#[test]
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+fn create_venv_caches_legacy_cpython_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.10.22").assert().success();
+    let output = context.python_find().arg("3.10.22").assert().success();
+    let python = Path::new(std::str::from_utf8(&output.get_output().stdout)?.trim());
+    let installation = python
+        .parent()
+        .and_then(Path::parent)
+        .context("Python executable has no installation directory")?;
+    let relocated = context.temp_dir.child("python");
+    fs_err::rename(installation, relocated.path())?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg(relocated.child("bin/python3.10").path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.10.22 interpreter at: python/bin/python3.10
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    let site_packages = site_packages_path(context.venv.path(), "python3.10");
+    fs_err::write(
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
+    )?;
+    let startup_marker = context.venv.child("interpreter-started");
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    startup_marker.assert(predicate::path::is_file());
+    assert_eq!(
+        queried.interpreter().to_base_python()?,
+        context.venv.join("bin/python")
+    );
+    fs_err::remove_file(&startup_marker)?;
+
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    startup_marker.assert(predicate::path::missing());
+    assert_eq!(cached, queried);
+    Ok(())
+}
+
+/// Executable symlinks can warm the cache with the same base metadata that Python reports.
 #[test]
 #[cfg(all(target_os = "linux", feature = "test-python-managed"))]
 fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
@@ -212,15 +259,16 @@ fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
     let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
     startup_marker.assert(predicate::path::is_file());
 
-    // The base executable should not depend on whether the cache is warm: astral-sh/uv#22383.
+    // The base executable should not depend on whether the cache is warm.
     let cached_base = cached.interpreter().to_base_python()?;
     let queried_base = queried.interpreter().to_base_python()?;
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/python3");
+        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/python3.12");
         insta::assert_snapshot!(queried_base.display(), @"[PYTHON_BIN]/python3.12");
     });
+    assert_eq!(cached, queried);
 
-    // Consume the created environment with each cache to expose the different executable targets.
+    // Both caches should select the same base executable for a child environment.
     uv_snapshot!(context.filters(), context.venv()
         .arg("cached")
         .arg("--python")
@@ -246,14 +294,14 @@ fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
     let cached_target = fs_err::read_link(context.temp_dir.child("cached/bin/python"))?;
     let queried_target = fs_err::read_link(context.temp_dir.child("queried/bin/python"))?;
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(cached_target.display(), @"[PYTHON_BIN]/python3");
+        insta::assert_snapshot!(cached_target.display(), @"[PYTHON_BIN]/python3.12");
         insta::assert_snapshot!(queried_target.display(), @"[PYTHON_BIN]/python3.12");
     });
 
     Ok(())
 }
 
-/// Recreating a venv through an executable symlink leaves its canonical target unchanged.
+/// Recreation can change the reported base path without changing the canonical executable.
 #[test]
 #[cfg(all(target_os = "linux", feature = "test-python-managed"))]
 fn create_venv_caches_recreated_symlinked_interpreter() -> Result<()> {
@@ -282,14 +330,23 @@ fn create_venv_caches_recreated_symlinked_interpreter() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     ");
 
+    let alias = context.temp_dir.child("python-alias");
+    symlink(relocated.path(), alias.path())?;
+    let symlinked_python = python_directory.child("python-link");
+    symlink(
+        alias.child("bin/python3.12").path(),
+        symlinked_python.path(),
+    )?;
+    let context = context.with_filtered_path(alias.child("bin").path(), "PYTHON_ALIAS_BIN");
+
     let executable_target = fs_err::canonicalize(context.venv.child("bin/python"))?;
     uv_snapshot!(context.filters(), context.venv()
         .arg("--clear")
         .arg("--python")
-        .arg(python_directory.child("python3").path()), @"
+        .arg(symlinked_python.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.12.9 interpreter at: python/bin/python3
+    Using CPython 3.12.9 interpreter at: python/bin/python-link
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     ");
@@ -298,29 +355,30 @@ fn create_venv_caches_recreated_symlinked_interpreter() -> Result<()> {
         executable_target
     );
 
-    let site_packages = site_packages_path(context.venv.path(), "python3.12");
-    fs_err::write(
-        site_packages.join("interpreter-started.pth"),
-        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
-    )?;
-    let startup_marker = context.venv.child("interpreter-started");
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
         .init_no_wait()?
         .context("Interpreter cache is locked")?;
     let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
-    startup_marker.assert(predicate::path::missing());
 
     let fresh_cache = Cache::temp()?
         .init_no_wait()?
         .context("Fresh interpreter cache is locked")?;
     let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
-    startup_marker.assert(predicate::path::is_file());
     let cached_base = cached.interpreter().to_base_python()?;
     let queried_base = queried.interpreter().to_base_python()?;
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/python3");
-        insta::assert_snapshot!(queried_base.display(), @"[PYTHON_BIN]/python3.12");
+        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_ALIAS_BIN]/python3.12");
+        insta::assert_snapshot!(queried_base.display(), @"[PYTHON_ALIAS_BIN]/python3.12");
     });
+    assert_eq!(
+        cached.interpreter().sys_base_prefix(),
+        queried.interpreter().sys_base_prefix()
+    );
+    assert_eq!(
+        cached.interpreter().stdlib(),
+        queried.interpreter().stdlib()
+    );
+    assert_eq!(cached, queried);
 
     Ok(())
 }
@@ -383,7 +441,7 @@ fn create_venv_caches_absolute_symlink_target() -> Result<()> {
 
     let target = fs_err::read_link(context.temp_dir.child("child/bin/python"))?;
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(target.display(), @"[PYTHON_BIN]/python-link");
+        insta::assert_snapshot!(target.display(), @"[PYTHON_BIN]/alias/../bin/python3.12");
     });
 
     Ok(())
@@ -437,9 +495,10 @@ fn create_venv_caches_interpreter_at_symlink_limit() -> Result<()> {
     let cached_base = cached.interpreter().to_base_python()?;
     let queried_base = queried.interpreter().to_base_python()?;
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/chain-0");
+        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/python");
         insta::assert_snapshot!(queried_base.display(), @"[PYTHON_BIN]/python");
     });
+    assert_eq!(cached, queried);
 
     uv_snapshot!(context.filters(), context.external_command(context.venv.child("bin/python").path())
         .arg("-I")
