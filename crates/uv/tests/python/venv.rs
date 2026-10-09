@@ -121,6 +121,86 @@ fn create_venv_caches_interpreter() -> Result<()> {
     Ok(())
 }
 
+/// A symlink inside a Python installation is retained when deriving cached venv metadata,
+/// but resolved by CPython when querying the venv.
+#[test]
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.12.9").assert().success();
+    let output = context.python_find().arg("3.12.9").assert().success();
+    let python = Path::new(std::str::from_utf8(&output.get_output().stdout)?.trim());
+
+    // Move the installation out of the managed directory to avoid transparent patch upgrades.
+    let installation = python
+        .parent()
+        .and_then(Path::parent)
+        .context("Python executable has no installation directory")?;
+    let relocated = context.temp_dir.child("python");
+    fs_err::rename(installation, relocated.path())?;
+    let python_directory = relocated.child("bin");
+    let symlinked_python = python_directory.child("python3");
+    assert!(symlinked_python.is_symlink());
+    let context = context.with_filtered_path(python_directory.path(), "PYTHON_BIN");
+
+    uv_snapshot!(context.filters(), context.venv().arg("--python").arg(symlinked_python.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: python/bin/python3
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+
+    // The base executable should not depend on whether the cache is warm: astral-sh/uv#22383.
+    let cached_base = cached.interpreter().to_base_python()?;
+    let queried_base = queried.interpreter().to_base_python()?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/python3");
+        insta::assert_snapshot!(queried_base.display(), @"[PYTHON_BIN]/python3.12");
+    });
+
+    // Consume the created environment with each cache to expose the different executable targets.
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("cached")
+        .arg("--python")
+        .arg(context.venv.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: .venv/bin/python
+    Creating virtual environment at: cached
+    Activate with: source cached/[BIN]/activate
+    ");
+    let context = context.with_cache_dir(fresh_cache.root());
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("queried")
+        .arg("--python")
+        .arg(context.venv.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: .venv/bin/python
+    Creating virtual environment at: queried
+    Activate with: source queried/[BIN]/activate
+    ");
+
+    let cached_target = fs_err::read_link(context.temp_dir.child("cached/bin/python"))?;
+    let queried_target = fs_err::read_link(context.temp_dir.child("queried/bin/python"))?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(cached_target.display(), @"[PYTHON_BIN]/python3");
+        insta::assert_snapshot!(queried_target.display(), @"[PYTHON_BIN]/python3.12");
+    });
+
+    Ok(())
+}
+
 /// Cached metadata matches Python after recreating an upgradeable venv.
 #[test]
 #[cfg(feature = "test-python-managed")]
