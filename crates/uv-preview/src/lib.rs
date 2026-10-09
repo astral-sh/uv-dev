@@ -466,6 +466,8 @@ pub enum PreviewFeature {
     /// hashes](./projects/build.md#project-build-dependency-hashes) for configuration and exceptions.
     BuildDependencyHashes,
     /// Fetches available CPython downloads from the remote Python release metadata.
+    /// Enable it explicitly with `--preview-features remote-python-download-metadata`;
+    /// `--preview` alone does not enable this feature.
     RemotePythonDownloadMetadata,
 }
 
