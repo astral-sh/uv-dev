@@ -2,6 +2,7 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{ChildPath, FileTouch, FileWriteStr, PathChild};
 use indoc::{formatdoc, indoc};
+use uv_test::packse::PackseServer;
 use uv_test::{TestContext, uv_snapshot};
 
 fn member(root: &ChildPath, name: &str, requires_python: Option<&str>) -> Result<()> {
@@ -301,5 +302,200 @@ fn explicit_roots_membership_filters_and_freshness() -> Result<()> {
     uv_snapshot!(context.filters(), context.export().args([
         "--frozen", "--offline", "--no-header", "--no-hashes", "--no-emit-workspace",
     ]), @"exit_code: 0 (success)");
+    Ok(())
+}
+
+#[test]
+fn explicit_roots_reuse_lock_with_omitted_group_metadata() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "explicit-roots-freshness"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12");
+    let index = server.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency"]
+        [tool.uv]
+        package = false
+        [tool.uv.workspace]
+        members = ["unused"]
+        roots = ["app"]
+        [[tool.uv.index]]
+        url = "{index}"
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("unused/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "unused"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        docs = []
+        [tool.uv]
+        package = false
+        default-groups = []
+        [tool.uv.dependency-groups]
+        docs = { requires-python = ">=3.13" }
+    "#})?;
+    context.lock().assert().success();
+    let locked = context.read("uv.lock");
+    // Resolving the registry dependency is impossible without the index or its cache.
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    assert_eq!(locked, context.read("uv.lock"));
+
+    let unused = context
+        .read("unused/pyproject.toml")
+        .replace(">=3.12", ">=3.14");
+    context
+        .temp_dir
+        .child("unused/pyproject.toml")
+        .write_str(&unused)?;
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    assert_eq!(locked, context.read("uv.lock"));
+    Ok(())
+}
+
+#[test]
+fn explicit_roots_validate_non_root_python_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        shared = { workspace = true }
+        [tool.uv.workspace]
+        members = ["shared"]
+        roots = ["app"]
+    "#})?;
+    member(&context.temp_dir.child("shared"), "shared", Some(">=3.12"))?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    let locked = context.read("uv.lock");
+    member(&context.temp_dir.child("shared"), "shared", Some(">=3.13"))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-index"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and shared==0.1.0 depends on Python>=3.13, we can conclude that shared==0.1.0 cannot be used.
+             And because only shared==0.1.0 is available and your project depends on shared, we can conclude that your project's requirements are unsatisfiable.
+             And because only app==0.1.0 is available and your project requires app, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., shared==0.1.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    "#);
+    assert_eq!(locked, context.read("uv.lock"));
+    Ok(())
+}
+
+#[test]
+fn explicit_roots_conditional_python_requirement_and_legacy_metadata() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "explicit-roots-conditional-python"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12");
+    let index = server.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency", "shared; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        shared = {{ workspace = true }}
+        [tool.uv.workspace]
+        members = ["shared"]
+        roots = ["app"]
+        [[tool.uv.index]]
+        url = "{index}"
+        default = true
+    "#})?;
+    member(&context.temp_dir.child("shared"), "shared", Some(">=3.13"))?;
+    context.lock().assert().success();
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+    assert_eq!(locked, context.read("uv.lock"));
+
+    let mut legacy: toml::Value = toml::from_str(&locked)?;
+    let shared = legacy["package"]
+        .as_array_mut()
+        .expect("packages")
+        .iter_mut()
+        .find(|package| package["name"].as_str() == Some("shared"))
+        .expect("shared member");
+    shared["metadata"]
+        .as_table_mut()
+        .expect("shared metadata")
+        .remove("requires-python");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&toml::to_string(&legacy)?)?;
+    // A legacy lock needs one refresh to record the non-root declaration.
+    context.lock().assert().success();
+    assert_eq!(locked, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+
+    member(&context.temp_dir.child("shared"), "shared", Some(">=3.14"))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.13')
+      cause: Because only shared{python_full_version >= '3.13'}==0.1.0 is available and the requested Python version (>=3.12) does not satisfy Python>=3.14, we can conclude that all versions of shared{python_full_version >= '3.13'} cannot be used.
+             And because your project depends on shared{python_full_version >= '3.13'}, we can conclude that your project's requirements are unsatisfiable.
+             And because only app==0.1.0 is available and your project requires app, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    "#);
+    assert_eq!(locked, context.read("uv.lock"));
     Ok(())
 }

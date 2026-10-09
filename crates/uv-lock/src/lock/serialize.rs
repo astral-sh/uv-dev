@@ -378,11 +378,15 @@ fn write_package(
     }
 
     let metadata = &package.metadata;
-    let has_metadata = !metadata.requires_dist.is_empty()
+    let has_metadata = metadata.requires_python.is_some()
+        || !metadata.requires_dist.is_empty()
         || !metadata.dependency_groups.is_empty()
         || !metadata.provides_extra.is_empty();
     if has_metadata {
         writer.table(&["package", "metadata"])?;
+        if let Some(requires_python) = &metadata.requires_python {
+            writer.key_value("requires-python", serialize_value(requires_python)?)?;
+        }
         write_serialized_non_empty_array(writer, "requires-dist", &metadata.requires_dist)?;
         if !metadata.provides_extra.is_empty() {
             writer.key_start("provides-extras")?;
