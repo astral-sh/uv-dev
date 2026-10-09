@@ -874,22 +874,26 @@ async fn do_lock(
             // If an existing lockfile exists, build up a set of preferences.
             let LockedRequirements { preferences, git } = versions_lock
                 .map(|lock| {
+                    let activation = if lock_required_environments.as_markers().is_empty() {
+                        None
+                    } else {
+                        Some(lock.package_reachability(
+                            target.install_path(),
+                            &requires_python,
+                            lock_supported_environments.as_markers(),
+                            packages,
+                            &requirements,
+                            &dependency_groups,
+                            &overrides,
+                            &excludes,
+                        )?)
+                    };
                     read_lock_requirements(
                         lock,
                         target.install_path(),
                         upgrade,
-                        &requires_python,
                         lock_required_environments.as_markers(),
-                        lock_required_environments.as_markers().is_empty()
-                            || lock.root_activation_is_current(
-                                target.install_path(),
-                                &requires_python,
-                                packages,
-                                &requirements,
-                                &dependency_groups,
-                                &overrides,
-                                &excludes,
-                            )?,
+                        activation,
                         minimum_libc_version,
                     )
                 })
