@@ -42,14 +42,13 @@ use which::which;
 use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_CANT_ACCESS_FILE, WIN32_ERROR};
 
 /// A Python executable and its associated platform markers.
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Interpreter {
     platform: Platform,
     markers: Box<MarkerEnvironment>,
     scheme: Scheme,
     virtualenv: Scheme,
-    manylinux_compatible: bool,
+    manylinux_compatible: ManylinuxCompatibility,
     sys_prefix: PathBuf,
     sys_base_prefix: PathBuf,
     sys_base_executable: Option<PathBuf>,
@@ -295,7 +294,7 @@ impl Interpreter {
                 self.implementation_name(),
                 self.implementation_tuple(),
                 TagsOptions {
-                    manylinux_compatible: self.manylinux_compatible,
+                    manylinux_compatible: self.manylinux_compatible.into(),
                     gil_disabled: self.gil_disabled,
                     debug_enabled: self.debug_enabled,
                     is_cross: false,
@@ -515,7 +514,7 @@ impl Interpreter {
 
     /// Return whether this interpreter is `manylinux` compatible.
     pub fn manylinux_compatible(&self) -> bool {
-        self.manylinux_compatible
+        self.manylinux_compatible.into()
     }
 
     /// Return the [`PointerSize`] of the Python interpreter (i.e., 32- vs. 64-bit).
@@ -1156,14 +1155,13 @@ pub enum InterpreterInfoError {
     EmscriptenNotPyodide,
 }
 
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub(crate) struct InterpreterInfo {
     platform: Platform,
     markers: MarkerEnvironment,
     scheme: Scheme,
     virtualenv: Scheme,
-    manylinux_compatible: bool,
+    manylinux_compatible: ManylinuxCompatibility,
     sys_prefix: PathBuf,
     sys_base_exec_prefix: PathBuf,
     sys_base_prefix: PathBuf,
@@ -1177,6 +1175,32 @@ pub(crate) struct InterpreterInfo {
     pointer_size: PointerSize,
     gil_disabled: bool,
     debug_enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(from = "bool", into = "bool")]
+enum ManylinuxCompatibility {
+    Compatible,
+    Incompatible,
+}
+
+impl From<bool> for ManylinuxCompatibility {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Compatible
+        } else {
+            Self::Incompatible
+        }
+    }
+}
+
+impl From<ManylinuxCompatibility> for bool {
+    fn from(compatibility: ManylinuxCompatibility) -> Self {
+        match compatibility {
+            ManylinuxCompatibility::Compatible => true,
+            ManylinuxCompatibility::Incompatible => false,
+        }
+    }
 }
 
 impl InterpreterInfo {
@@ -1635,6 +1659,32 @@ mod tests {
 
     use crate::Interpreter;
     use crate::interpreter::{InterpreterInfo, canonicalize_executable};
+
+    use super::ManylinuxCompatibility;
+
+    #[test]
+    fn test_manylinux_compatibility_serialization() -> Result<()> {
+        for (value, expected) in [
+            (true, ManylinuxCompatibility::Compatible),
+            (false, ManylinuxCompatibility::Incompatible),
+        ] {
+            let json = serde_json::to_string(&value)?;
+            assert_eq!(
+                serde_json::from_str::<ManylinuxCompatibility>(&json)?,
+                expected
+            );
+            assert_eq!(serde_json::to_string(&expected)?, json);
+
+            let msgpack = rmp_serde::to_vec(&value)?;
+            assert_eq!(
+                rmp_serde::from_slice::<ManylinuxCompatibility>(&msgpack)?,
+                expected
+            );
+            assert_eq!(rmp_serde::to_vec(&expected)?, msgpack);
+        }
+
+        Ok(())
+    }
 
     fn mocked_interpreter_response() -> &'static str {
         indoc! {r##"
