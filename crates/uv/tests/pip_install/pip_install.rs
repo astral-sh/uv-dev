@@ -1,5 +1,9 @@
 use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::ffi::OsStr;
 use std::fmt::Write;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -15937,6 +15941,91 @@ fn reject_reserved_wheel_data_script_name() -> Result<()> {
     }?;
 
     Ok(())
+}
+
+#[cfg(not(windows))]
+#[test]
+fn reject_cached_foreign_python_host_platform() {
+    let context = uv_test::test_context!("3.13").with_filter((
+        r"you're on [^ ]+ \(`.*`\)",
+        "you're on [PLATFORM] (`[TAG]`)",
+    ));
+
+    // Prime the interpreter cache while a cross-compilation platform is present.
+    context
+        .python_find()
+        .arg(context.interpreter())
+        .env("_PYTHON_HOST_PLATFORM", "win-amd64")
+        .assert()
+        .success();
+
+    let wheel = context
+        .workspace_root
+        .join("test/links/wheel_tag_test-0.1.0-py3-none-win_amd64.whl");
+
+    // An explicitly requested cross-compilation platform must remain effective.
+    context
+        .pip_install()
+        .arg(&wheel)
+        .arg("--dry-run")
+        .env("_PYTHON_HOST_PLATFORM", "win-amd64")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel).env_remove("_PYTHON_HOST_PLATFORM"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to determine installation plan
+      cause: A path ([WORKSPACE]/test/links/wheel_tag_test-0.1.0-py3-none-win_amd64.whl) dependency is incompatible with the current platform
+
+    hint: The wheel is compatible with Windows (`win_amd64`), but you're on [PLATFORM] (`[TAG]`)
+    ");
+}
+#[cfg(unix)]
+#[test]
+fn reject_cached_non_unicode_python_host_platform() {
+    let context = uv_test::test_context!("3.13").with_filter((
+        r"you're on [^ ]+ \(`.*`\)",
+        "you're on [PLATFORM] (`[TAG]`)",
+    ));
+
+    // Python accepts this override despite its non-UTF-8 middle component.
+    context
+        .python_find()
+        .arg(context.interpreter())
+        .env(
+            "_PYTHON_HOST_PLATFORM",
+            OsStr::from_bytes(b"win-\xff-amd64"),
+        )
+        .assert()
+        .success();
+
+    let wheel = context
+        .workspace_root
+        .join("test/links/wheel_tag_test-0.1.0-py3-none-win_amd64.whl");
+
+    // An explicitly requested cross-compilation platform must remain effective.
+    context
+        .pip_install()
+        .arg(&wheel)
+        .arg("--dry-run")
+        .env(
+            "_PYTHON_HOST_PLATFORM",
+            OsStr::from_bytes(b"win-\xff-amd64"),
+        )
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel).env_remove("_PYTHON_HOST_PLATFORM"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to determine installation plan
+      cause: A path ([WORKSPACE]/test/links/wheel_tag_test-0.1.0-py3-none-win_amd64.whl) dependency is incompatible with the current platform
+
+    hint: The wheel is compatible with Windows (`win_amd64`), but you're on [PLATFORM] (`[TAG]`)
+    ");
 }
 
 fn repacked_wheel_with_entrypoint(

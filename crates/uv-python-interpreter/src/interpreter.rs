@@ -1404,6 +1404,7 @@ impl InterpreterInfo {
 
     /// Return the cache entry for an interpreter's absolute and canonical executable paths.
     fn cache_entry(absolute: &Path, canonical: &Path, cache: &Cache) -> CacheEntry {
+        let host_platform = env::var_os("_PYTHON_HOST_PLATFORM");
         let python_executable = env::var_os(EnvVars::PYTHONEXECUTABLE).map(PathBuf::from);
         let pyvenv_launcher = env::var_os(EnvVars::PYVENV_LAUNCHER).map(PathBuf::from);
         // We use the absolute path for the cache entry to avoid cache collisions for relative
@@ -1414,9 +1415,16 @@ impl InterpreterInfo {
         // have a `.venv/bin/python` pointing to both Python 3.12 and Python 3.13 that were
         // modified at the same time.
         //
-        // Launcher overrides can also change the reported executable and virtual environment
-        // without changing either executable path.
-        let file_stem = cache_digest(&(absolute, canonical, &python_executable, &pyvenv_launcher));
+        // A host platform override changes the reported compatibility tags, while launcher
+        // overrides can change the reported executable and virtual environment. None of these
+        // overrides change either executable path.
+        let file_stem = cache_digest(&(
+            absolute,
+            canonical,
+            host_platform.as_ref().map(|value| value.as_encoded_bytes()),
+            &python_executable,
+            &pyvenv_launcher,
+        ));
         cache.entry(
             CacheBucket::Interpreter,
             // Shard interpreter metadata by host architecture, operating system, and version, to
