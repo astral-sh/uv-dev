@@ -2042,7 +2042,7 @@ pub fn detect_conflicts(
         return Ok(());
     }
 
-    let packages = target.packages(extras, groups);
+    let packages = target.selected_workspace_members(extras, groups)?;
     // CLI extras and groups apply to selected roots, independently of transitive production members.
     let roots = target.roots().collect::<BTreeSet<_>>();
     let group_root = target.group_root(groups);
