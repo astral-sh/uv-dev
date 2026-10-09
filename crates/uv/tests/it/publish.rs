@@ -214,7 +214,7 @@ fn artifact_registry_no_credentials() {
         .arg("https://us-central1-python.pkg.dev/project/repository/")
         .arg(dummy_wheel())
         .env(EnvVars::GITHUB_ACTIONS, "true")
-        .env("GOOGLE_APPLICATION_CREDENTIALS", context.temp_dir.join("missing-credentials.json")), @r#"
+        .env(EnvVars::GOOGLE_APPLICATION_CREDENTIALS, context.temp_dir.join("missing-credentials.json")), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to https://us-central1-python.pkg.dev/project/repository/
@@ -237,7 +237,7 @@ fn artifact_registry_malformed_credentials() -> anyhow::Result<()> {
         .arg("--publish-url")
         .arg("https://us-central1-python.pkg.dev/project/repository/")
         .arg(dummy_wheel())
-        .env("GOOGLE_APPLICATION_CREDENTIALS", context.temp_dir.child("credentials.json").path()), @r#"
+        .env(EnvVars::GOOGLE_APPLICATION_CREDENTIALS, context.temp_dir.child("credentials.json").path()), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to https://us-central1-python.pkg.dev/project/repository/
@@ -263,7 +263,7 @@ fn artifact_registry_netrc_precedes_malformed_adc() -> anyhow::Result<()> {
         .args(["--dry-run", "--publish-url", "https://us-central1-python.pkg.dev/project/repository/"])
         .arg(dummy_wheel())
         .env(EnvVars::NETRC, context.temp_dir.child("netrc").path())
-        .env("GOOGLE_APPLICATION_CREDENTIALS", context.temp_dir.child("credentials.json").path()), @r#"
+        .env(EnvVars::GOOGLE_APPLICATION_CREDENTIALS, context.temp_dir.child("credentials.json").path()), @r#"
     exit_code: 0 (success)
     ----- stderr -----
     Checking 1 file against https://us-central1-python.pkg.dev/project/repository/
@@ -1515,4 +1515,91 @@ fn non_normalized_filename_skip() {
     warning: `ok-1.01.0.tar.gz` has a non-normalized filename (expected `ok-1.1.0.tar.gz`), skipping
     "
     );
+}
+
+/// Named-index credentials are selected before Google discovery; a skipped filename avoids HTTP.
+#[test]
+fn artifact_registry_named_index_credentials_precede_adc() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("credentials.json")
+        .write_str("{malformed}")?;
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        [[index]]
+        name = "private-registry"
+        url = "https://us-central1-python.pkg.dev/project/repository/simple/"
+        publish-url = "https://us-central1-python.pkg.dev/project/repository/"
+    "#})?;
+    let wheel = context.temp_dir.child("ok-1.01.0-py3-none-any.whl");
+    wheel.touch()?;
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--dry-run", "--index", "private-registry"])
+        .arg(wheel.path())
+        .env(EnvVars::index_username("PRIVATE_REGISTRY"), "index-user")
+        .env(EnvVars::index_password("PRIVATE_REGISTRY"), "index-password")
+        .env(EnvVars::GOOGLE_APPLICATION_CREDENTIALS, context.temp_dir.child("credentials.json").path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checking 1 file against https://us-central1-python.pkg.dev/project/repository/
+    warning: `ok-1.01.0-py3-none-any.whl` has a non-normalized filename (expected `ok-1.1.0-py3-none-any.whl`), skipping
+    "#);
+    Ok(())
+}
+
+/// Credentials in a named index URL are available to the initial publishing credential probe.
+#[test]
+fn artifact_registry_index_url_credentials_precede_adc() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("credentials.json")
+        .write_str("{malformed}")?;
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        [[index]]
+        name = "private-registry"
+        url = "https://index-user:index-password@us-central1-python.pkg.dev/project/repository/simple/"
+        publish-url = "https://us-central1-python.pkg.dev/project/repository/"
+    "#})?;
+    let wheel = context.temp_dir.child("ok-1.01.0-py3-none-any.whl");
+    wheel.touch()?;
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--dry-run", "--index", "private-registry"])
+        .arg(wheel.path())
+        .env(EnvVars::GOOGLE_APPLICATION_CREDENTIALS, context.temp_dir.child("credentials.json").path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checking 1 file against https://us-central1-python.pkg.dev/project/repository/
+    warning: `ok-1.01.0-py3-none-any.whl` has a non-normalized filename (expected `ok-1.1.0-py3-none-any.whl`), skipping
+    "#);
+    Ok(())
+}
+
+/// An index that disables authentication also disables the Google credential probe.
+#[test]
+fn artifact_registry_index_authentication_policy_precedes_adc() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("credentials.json")
+        .write_str("{malformed}")?;
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        [[index]]
+        name = "private-registry"
+        url = "https://us-central1-python.pkg.dev/project/repository/simple/"
+        publish-url = "https://us-central1-python.pkg.dev/project/repository/"
+        authenticate = "never"
+    "#})?;
+    let wheel = context.temp_dir.child("ok-1.01.0-py3-none-any.whl");
+    wheel.touch()?;
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--dry-run", "--index", "private-registry"])
+        .arg(wheel.path())
+        .env(EnvVars::GOOGLE_APPLICATION_CREDENTIALS, context.temp_dir.child("credentials.json").path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checking 1 file against https://us-central1-python.pkg.dev/project/repository/
+    warning: `ok-1.01.0-py3-none-any.whl` has a non-normalized filename (expected `ok-1.1.0-py3-none-any.whl`), skipping
+    "#);
+    Ok(())
 }

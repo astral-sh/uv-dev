@@ -1480,6 +1480,16 @@ impl EnvVars {
     #[attr_added_in("0.8.21")]
     pub const UV_S3_ENDPOINT_URL: &'static str = "UV_S3_ENDPOINT_URL";
 
+    /// The path to Application Default Credentials used for Google Cloud Storage and Google
+    /// Artifact Registry authentication.
+    #[attr_added_in("0.9.26")]
+    pub const GOOGLE_APPLICATION_CREDENTIALS: &'static str = "GOOGLE_APPLICATION_CREDENTIALS";
+
+    /// The Google Cloud SDK configuration directory. uv searches this directory for Application
+    /// Default Credentials when authenticating to Google Artifact Registry.
+    #[attr_added_in("next release")]
+    pub const CLOUDSDK_CONFIG: &'static str = "CLOUDSDK_CONFIG";
+
     /// The URL to treat as a GCS-compatible storage endpoint. Requests to this endpoint
     /// will be signed using Google Cloud authentication based on the `GOOGLE_APPLICATION_CREDENTIALS`
     /// environment variable or Application Default Credentials.

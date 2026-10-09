@@ -33,13 +33,6 @@ const GOOGLE_ARTIFACT_REGISTRY_USERNAME: &str = "oauth2accesstoken";
 /// The hostname suffix used by Google Artifact Registry's Python package repositories.
 const GOOGLE_ARTIFACT_REGISTRY_PYTHON_HOST_SUFFIX: &str = "-python.pkg.dev";
 
-/// The environment variable containing the path to explicit Google Application Default
-/// Credentials.
-const GOOGLE_APPLICATION_CREDENTIALS: &str = "GOOGLE_APPLICATION_CREDENTIALS";
-
-/// The environment variable containing the path to the Google Cloud SDK configuration directory.
-const GOOGLE_CLOUD_SDK_CONFIG: &str = "CLOUDSDK_CONFIG";
-
 /// Refresh Google Artifact Registry credentials periodically, since access tokens are short-lived.
 const GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION: Duration = Duration::from_mins(1);
 
@@ -130,7 +123,7 @@ impl ProvideCredential for ArtifactRegistryCredentialProvider {
         context: &Context,
     ) -> reqsign::Result<Option<Self::Credential>> {
         if let Some(path) = context
-            .env_var(GOOGLE_APPLICATION_CREDENTIALS)
+            .env_var(EnvVars::GOOGLE_APPLICATION_CREDENTIALS)
             .filter(|path| !path.is_empty())
         {
             return reqsign::google::FileCredentialProvider::new(path)
@@ -157,7 +150,7 @@ impl ProvideCredential for ArtifactRegistryCredentialProvider {
 
 fn google_cloud_sdk_adc_path(context: &Context) -> Option<String> {
     let config_dir = if let Some(path) = context
-        .env_var(GOOGLE_CLOUD_SDK_CONFIG)
+        .env_var(EnvVars::CLOUDSDK_CONFIG)
         .filter(|path| !path.is_empty())
     {
         PathBuf::from(path)
@@ -248,8 +241,8 @@ impl ArtifactRegistryProvider {
             return Ok(credentials.credentials.clone());
         }
 
-        let explicit_adc =
-            std::env::var_os(GOOGLE_APPLICATION_CREDENTIALS).is_some_and(|path| !path.is_empty());
+        let explicit_adc = std::env::var_os(EnvVars::GOOGLE_APPLICATION_CREDENTIALS)
+            .is_some_and(|path| !path.is_empty());
         let adc_credentials = match self.credentials_from_adc(url).await {
             Ok(credentials) => credentials,
             Err(err) if explicit_adc => return Err(err),
@@ -835,11 +828,11 @@ mod tests {
             .with_env(StaticEnv {
                 envs: HashMap::from([
                     (
-                        GOOGLE_APPLICATION_CREDENTIALS.to_string(),
+                        EnvVars::GOOGLE_APPLICATION_CREDENTIALS.to_string(),
                         "/missing/credentials.json".to_string(),
                     ),
                     (
-                        GOOGLE_CLOUD_SDK_CONFIG.to_string(),
+                        EnvVars::CLOUDSDK_CONFIG.to_string(),
                         "/cloud-sdk".to_string(),
                     ),
                 ]),
@@ -863,7 +856,7 @@ mod tests {
         let context = Context::new()
             .with_env(StaticEnv {
                 envs: HashMap::from([(
-                    GOOGLE_CLOUD_SDK_CONFIG.to_string(),
+                    EnvVars::CLOUDSDK_CONFIG.to_string(),
                     "/cloud-sdk".to_string(),
                 )]),
                 home_dir: None,
@@ -900,7 +893,7 @@ mod tests {
         let explicit_cloud_sdk_config = Context::new().with_env(StaticEnv {
             envs: HashMap::from([
                 (
-                    GOOGLE_CLOUD_SDK_CONFIG.to_string(),
+                    EnvVars::CLOUDSDK_CONFIG.to_string(),
                     "/cloud-sdk".to_string(),
                 ),
                 (EnvVars::APPDATA.to_string(), "/app-data".to_string()),
@@ -948,7 +941,7 @@ mod tests {
         let context = Context::new()
             .with_env(StaticEnv {
                 envs: HashMap::from([(
-                    GOOGLE_CLOUD_SDK_CONFIG.to_string(),
+                    EnvVars::CLOUDSDK_CONFIG.to_string(),
                     "/cloud-sdk".to_string(),
                 )]),
                 home_dir: None,

@@ -1440,6 +1440,8 @@ mod tests {
         let password = "test-token";
         let url = Url::parse("https://us-central1-python.pkg.dev/project/index/simple")?;
         let middleware = AuthMiddleware::new()
+            .with_netrc(None)
+            .with_text_store(None)
             .with_cache(CredentialsCache::new())
             .with_artifact_registry_provider(ArtifactRegistryProvider::with_signer(
                 reqsign::google::default_signer("artifactregistry.googleapis.com")
@@ -1471,6 +1473,8 @@ mod tests {
     -> Result<(), Error> {
         let url = Url::parse("https://us-central1-python.pkg.dev/project/index/simple")?;
         let middleware = AuthMiddleware::new()
+            .with_netrc(None)
+            .with_text_store(None)
             .with_cache(CredentialsCache::new())
             .with_keyring(Some(KeyringProvider::dummy([(
                 "example.com",
@@ -1499,6 +1503,8 @@ mod tests {
     async fn test_artifact_registry_credentials_preserve_explicit_username() -> Result<(), Error> {
         let url = Url::parse("https://us-central1-python.pkg.dev/project/index/simple")?;
         let middleware = AuthMiddleware::new()
+            .with_netrc(None)
+            .with_text_store(None)
             .with_cache(CredentialsCache::new())
             .with_artifact_registry_provider(ArtifactRegistryProvider::with_signer(
                 reqsign::google::default_signer("artifactregistry.googleapis.com")
@@ -1529,6 +1535,8 @@ mod tests {
         let password = "test-token";
         let url = Url::parse("https://us-central1-python.pkg.dev/project/index/simple")?;
         let middleware = AuthMiddleware::new()
+            .with_netrc(None)
+            .with_text_store(None)
             .with_cache(CredentialsCache::new())
             .with_artifact_registry_provider(ArtifactRegistryProvider::with_signer(
                 reqsign::google::default_signer("artifactregistry.googleapis.com")
@@ -1575,6 +1583,8 @@ mod tests {
                 )),
         );
         let middleware = AuthMiddleware::new()
+            .with_netrc(None)
+            .with_text_store(None)
             .with_cache(CredentialsCache::new())
             .with_artifact_registry_provider(provider.clone());
         let authentication = middleware
@@ -1611,6 +1621,8 @@ mod tests {
                 )),
         );
         let middleware = AuthMiddleware::new()
+            .with_netrc(None)
+            .with_text_store(None)
             .with_cache(CredentialsCache::new())
             .with_artifact_registry_provider(provider.clone());
         assert!(
@@ -1651,6 +1663,7 @@ mod tests {
             "machine us-central1-python.pkg.dev login user password netrc-token"
         )?;
         let middleware = AuthMiddleware::new()
+            .with_text_store(None)
             .with_cache(CredentialsCache::new())
             .with_netrc(Netrc::from_file(netrc_file.path()).ok())
             .with_artifact_registry_provider(ArtifactRegistryProvider::with_signer(
@@ -1694,6 +1707,7 @@ mod tests {
         );
         store.insert(crate::Service::try_from(url.clone())?, credentials.clone());
         let middleware = AuthMiddleware::new()
+            .with_netrc(None)
             .with_cache(CredentialsCache::new())
             .with_text_store(Some(store))
             .with_artifact_registry_provider(ArtifactRegistryProvider::with_signer(
@@ -1725,6 +1739,8 @@ mod tests {
         );
         provider.cache_missing_credentials().await;
         let middleware = AuthMiddleware::new()
+            .with_netrc(None)
+            .with_text_store(None)
             .with_cache(CredentialsCache::new())
             .with_artifact_registry_provider(provider.clone());
 

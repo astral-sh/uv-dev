@@ -86,6 +86,8 @@ pub async fn publish(
         (publish_url, check_url)
     };
 
+    let client_builder = client_builder.clone().index_locations(&index_locations)?;
+
     let distributions = PublishSession::prepare(paths, no_attestations)?;
     match distributions.len() {
         0 => bail!("No files found to publish"),
