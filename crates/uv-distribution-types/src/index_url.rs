@@ -400,6 +400,7 @@ impl<'a> IndexLocations {
             .flat_index
             .iter()
             .chain(self.simple_indexes())
+            .chain(self.default_index())
             .chain(source_indexes)
         {
             if is_same_index(index.url(), url) {
@@ -693,6 +694,17 @@ mod tests {
         let mut shadowed = simple.clone();
         shadowed.format = IndexFormat::Flat;
         let locations = IndexLocations::new(vec![simple, shadowed], vec![], false);
+        assert!(!locations.is_flat_index(&url, &[]));
+        Ok(())
+    }
+
+    #[test]
+    fn implicit_pypi_default_prevents_flat_exemption() -> Result<(), Box<dyn Error>> {
+        let mut flat = Index::from_str("unused=https://pypi.org/simple")?;
+        flat.format = IndexFormat::Flat;
+        flat.explicit = true;
+        let url = flat.url().clone();
+        let locations = IndexLocations::new(vec![flat], vec![], false);
         assert!(!locations.is_flat_index(&url, &[]));
         Ok(())
     }
