@@ -13,8 +13,9 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
-    AuthorFrom, DependencyGroupsWithDefaults, InitKind, InitProjectKind, ProjectBuildBackend,
-    VersionControlError, VersionControlSystem,
+    AuthorFrom, DependencyGroupsWithDefaults, InitDescription, InitKind, InitMode, InitProjectKind,
+    InitPythonPin, InitReadme, InitWorkspaceDiscovery, ProjectBuildBackend, VersionControlError,
+    VersionControlSystem,
 };
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
@@ -29,7 +30,7 @@ use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::PythonVersionFile;
 use uv_python_discovery::VersionFileDiscoveryOptions;
 use uv_python_discovery::find_requires_python;
-use uv_python_discovery::init_script_python_requirement;
+use uv_python_discovery::{PythonPinDiscovery, init_script_python_requirement};
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
@@ -44,23 +45,22 @@ use uv_workspace::{
 };
 
 /// Add one or more packages to the project requirements.
-#[expect(clippy::single_match_else, clippy::fn_params_excessive_bools)]
+#[expect(clippy::single_match_else)]
 pub async fn init(
     project_dir: &Path,
     explicit_path: Option<PathBuf>,
     name: Option<PackageName>,
     init_kind: InitKind,
-    bare: bool,
-    description: Option<String>,
-    no_description: bool,
+    bare: InitMode,
+    description: InitDescription,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
-    no_readme: bool,
+    readme: InitReadme,
     author_from: Option<AuthorFrom>,
-    pin_python: bool,
+    pin_python: InitPythonPin,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
-    no_workspace: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
@@ -86,8 +86,8 @@ pub async fn init(
                 python_downloads,
                 cache,
                 printer,
-                no_workspace,
-                no_readme,
+                workspace_discovery,
+                readme,
                 author_from,
                 pin_python,
                 config_discovery,
@@ -151,21 +151,21 @@ pub async fn init(
                 }
             };
 
+            let readme = readme.for_mode(bare);
             Box::pin(init_project(
                 &path,
                 &name,
                 project_kind,
                 bare,
                 description,
-                no_description,
                 vcs,
                 build_backend,
-                no_readme,
+                readme,
                 author_from,
                 pin_python,
                 python,
                 install_mirrors,
-                no_workspace,
+                workspace_discovery,
                 client_builder,
                 python_preference,
                 python_arch,
@@ -177,11 +177,14 @@ pub async fn init(
             .await?;
 
             // Create the `README.md` if it does not already exist.
-            if !no_readme && !bare {
-                let readme = path.join("README.md");
-                if !readme.exists() {
-                    fs_err::write(readme, String::new())?;
+            match readme {
+                InitReadme::Include => {
+                    let readme = path.join("README.md");
+                    if !readme.exists() {
+                        fs_err::write(readme, String::new())?;
+                    }
                 }
+                InitReadme::Omit => {}
             }
 
             match explicit_path {
@@ -207,10 +210,9 @@ pub async fn init(
     Ok(ExitStatus::Success)
 }
 
-#[expect(clippy::fn_params_excessive_bools)]
 async fn init_script(
     script_path: &Path,
-    bare: bool,
+    bare: InitMode,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     client_builder: &BaseClientBuilder<'_>,
@@ -219,16 +221,16 @@ async fn init_script(
     python_downloads: PythonDownloads,
     cache: &Cache,
     printer: Printer,
-    no_workspace: bool,
-    no_readme: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
+    readme: InitReadme,
     author_from: Option<AuthorFrom>,
-    pin_python: bool,
+    pin_python: InitPythonPin,
     config_discovery: ConfigDiscovery,
 ) -> Result<()> {
-    if no_workspace {
+    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
         warn_user_once!("`--no-workspace` is a no-op for Python scripts, which are standalone");
     }
-    if no_readme {
+    if matches!(readme, InitReadme::Omit) {
         warn_user_once!("`--no-readme` is a no-op for Python scripts, which are standalone");
     }
     if author_from.is_some() {
@@ -265,7 +267,10 @@ async fn init_script(
         python.as_deref(),
         &install_mirrors,
         script_path.parent().unwrap_or(&CWD),
-        !pin_python,
+        match pin_python {
+            InitPythonPin::Pin => PythonPinDiscovery::Respect,
+            InitPythonPin::DoNotPin => PythonPinDiscovery::Ignore,
+        },
         python_preference,
         python_arch,
         python_downloads,
@@ -280,28 +285,32 @@ async fn init_script(
         fs_err::tokio::create_dir_all(parent).await?;
     }
 
-    Pep723Script::create(script_path, requires_python.specifiers(), content, bare).await?;
+    Pep723Script::create(
+        script_path,
+        requires_python.specifiers(),
+        content,
+        matches!(bare, InitMode::Bare),
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Initialize a project (and, implicitly, a workspace root) at the given path.
-#[expect(clippy::fn_params_excessive_bools)]
 async fn init_project(
     path: &Path,
     name: &PackageName,
     project_kind: InitProjectKind,
-    bare: bool,
-    description: Option<String>,
-    no_description: bool,
+    bare: InitMode,
+    description: InitDescription,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
-    no_readme: bool,
+    readme: InitReadme,
     author_from: Option<AuthorFrom>,
-    pin_python: bool,
+    pin_python: InitPythonPin,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
-    no_workspace: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
@@ -338,7 +347,7 @@ async fn init_project(
         {
             Ok(workspace) => {
                 // Ignore the current workspace if `--no-workspace` was provided.
-                if no_workspace {
+                if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                     debug!("Ignoring discovered workspace due to `--no-workspace`");
                     None
                 } else {
@@ -350,13 +359,13 @@ async fn init_project(
                     err.as_ref(),
                     WorkspaceErrorKind::MissingPyprojectToml | WorkspaceErrorKind::NonWorkspace(_)
                 ) {
-                    if no_workspace {
+                    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                         warn!("`--no-workspace` was provided, but no workspace was found");
                     }
                     None
                 } else {
                     // If the user runs with `--no-workspace`, ignore the error.
-                    if no_workspace {
+                    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                         warn!("Ignoring workspace discovery error due to `--no-workspace`: {err}");
                         None
                     } else {
@@ -417,13 +426,12 @@ async fn init_project(
         name,
         path,
         &requires_python,
-        description.as_deref(),
-        no_description,
+        &description,
         bare,
         vcs,
         build_backend,
         author_from,
-        no_readme,
+        readme,
     )?;
 
     if let Some(workspace) = workspace {
@@ -505,7 +513,7 @@ async fn init_project(
 
 async fn determine_requires_python(
     path: &Path,
-    pin_python: bool,
+    pin_python: InitPythonPin,
     install_mirrors: PythonInstallMirrors,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
@@ -528,12 +536,11 @@ async fn determine_requires_python(
                     u64::from(*minor),
                 ]));
 
-                let python_pin = if pin_python {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
+                let python_pin = match pin_python {
+                    InitPythonPin::Pin => Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         *major, *minor, *variant,
-                    )))
-                } else {
-                    None
+                    ))),
+                    InitPythonPin::DoNotPin => None,
                 };
 
                 (requires_python, python_pin)
@@ -550,12 +557,11 @@ async fn determine_requires_python(
                     u64::from(*patch),
                 ]));
 
-                let python_pin = if pin_python {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinorPatch(
-                        *major, *minor, *patch, *variant,
-                    )))
-                } else {
-                    None
+                let python_pin = match pin_python {
+                    InitPythonPin::Pin => Some(PythonRequest::Version(
+                        VersionRequest::MajorMinorPatch(*major, *minor, *patch, *variant),
+                    )),
+                    InitPythonPin::DoNotPin => None,
                 };
 
                 (requires_python, python_pin)
@@ -563,29 +569,30 @@ async fn determine_requires_python(
             python_request @ PythonRequest::Version(VersionRequest::Range(specifiers, variant)) => {
                 let requires_python = RequiresPython::from_specifiers(specifiers.clone());
 
-                let python_pin = if pin_python {
-                    let interpreter = PythonInstallation::find_or_download(
-                        Some(python_request),
-                        EnvironmentPreference::OnlySystem,
-                        python_preference,
-                        python_arch,
-                        python_downloads,
-                        client_builder,
-                        cache,
-                        Some(reporter),
-                        install_mirrors.mirrors(),
-                        install_mirrors.python_downloads_json_url.as_deref(),
-                    )
-                    .await?
-                    .into_interpreter();
+                let python_pin = match pin_python {
+                    InitPythonPin::Pin => {
+                        let interpreter = PythonInstallation::find_or_download(
+                            Some(python_request),
+                            EnvironmentPreference::OnlySystem,
+                            python_preference,
+                            python_arch,
+                            python_downloads,
+                            client_builder,
+                            cache,
+                            Some(reporter),
+                            install_mirrors.mirrors(),
+                            install_mirrors.python_downloads_json_url.as_deref(),
+                        )
+                        .await?
+                        .into_interpreter();
 
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                        interpreter.python_major(),
-                        interpreter.python_minor(),
-                        *variant,
-                    )))
-                } else {
-                    None
+                        Some(PythonRequest::Version(VersionRequest::MajorMinor(
+                            interpreter.python_major(),
+                            interpreter.python_minor(),
+                            *variant,
+                        )))
+                    }
+                    InitPythonPin::DoNotPin => None,
                 };
 
                 (requires_python, python_pin)
@@ -609,14 +616,13 @@ async fn determine_requires_python(
                 let requires_python =
                     RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
-                let python_pin = if pin_python {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
+                let python_pin = match pin_python {
+                    InitPythonPin::Pin => Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         interpreter.python_major(),
                         interpreter.python_minor(),
                         PythonVariant::Default,
-                    )))
-                } else {
-                    None
+                    ))),
+                    InitPythonPin::DoNotPin => None,
                 };
 
                 (requires_python, python_pin)
@@ -634,14 +640,13 @@ async fn determine_requires_python(
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
         // Pin to the minor version.
-        let python_pin = if pin_python {
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
+        let python_pin = match pin_python {
+            InitPythonPin::Pin => Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
                 interpreter.python_minor(),
                 PythonVariant::Default,
-            )))
-        } else {
-            None
+            ))),
+            InitPythonPin::DoNotPin => None,
         };
 
         debug!(
@@ -660,29 +665,30 @@ async fn determine_requires_python(
             .unwrap_or(PythonRequest::Default);
 
         // Pin to the minor version.
-        let python_pin = if pin_python {
-            let interpreter = PythonInstallation::find_or_download(
-                Some(&python_request),
-                EnvironmentPreference::OnlySystem,
-                python_preference,
-                python_arch,
-                python_downloads,
-                client_builder,
-                cache,
-                Some(reporter),
-                install_mirrors.mirrors(),
-                install_mirrors.python_downloads_json_url.as_deref(),
-            )
-            .await?
-            .into_interpreter();
+        let python_pin = match pin_python {
+            InitPythonPin::Pin => {
+                let interpreter = PythonInstallation::find_or_download(
+                    Some(&python_request),
+                    EnvironmentPreference::OnlySystem,
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    client_builder,
+                    cache,
+                    Some(reporter),
+                    install_mirrors.mirrors(),
+                    install_mirrors.python_downloads_json_url.as_deref(),
+                )
+                .await?
+                .into_interpreter();
 
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                interpreter.python_major(),
-                interpreter.python_minor(),
-                PythonVariant::Default,
-            )))
-        } else {
-            None
+                Some(PythonRequest::Version(VersionRequest::MajorMinor(
+                    interpreter.python_major(),
+                    interpreter.python_minor(),
+                    PythonVariant::Default,
+                )))
+            }
+            InitPythonPin::DoNotPin => None,
         };
 
         debug!("Using Python version `{requires_python}` from project workspace");
@@ -709,14 +715,13 @@ async fn determine_requires_python(
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
         // Pin to the minor version.
-        let python_pin = if pin_python {
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
+        let python_pin = match pin_python {
+            InitPythonPin::Pin => Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
                 interpreter.python_minor(),
                 PythonVariant::Default,
-            )))
-        } else {
-            None
+            ))),
+            InitPythonPin::DoNotPin => None,
         };
 
         debug!("Using Python version `{requires_python}` from default interpreter");
@@ -731,13 +736,12 @@ fn init_project_kind(
     name: &PackageName,
     path: &Path,
     requires_python: &RequiresPython,
-    description: Option<&str>,
-    no_description: bool,
-    bare: bool,
+    description: &InitDescription,
+    bare: InitMode,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
     author_from: Option<AuthorFrom>,
-    no_readme: bool,
+    readme: InitReadme,
 ) -> Result<()> {
     fs_err::create_dir_all(path)?;
 
@@ -755,14 +759,8 @@ fn init_project_kind(
     let author = get_author_info(path, author_from);
 
     // Create the `pyproject.toml`
-    let mut pyproject = pyproject_project(
-        name,
-        requires_python,
-        author.as_ref(),
-        description,
-        no_description,
-        no_readme || bare,
-    );
+    let mut pyproject =
+        pyproject_project(name, requires_python, author.as_ref(), description, readme);
 
     match project_kind {
         // Create only the most barebones `pyproject.toml`, no build system
@@ -802,7 +800,7 @@ fn init_project_kind(
             // (This isn't intended to be a particularly special or magical filename, just nice)
             // TODO(zanieb): Only create `main.py` if there are no other Python files?
             let main_py = path.join("main.py");
-            if !main_py.try_exists()? && !bare {
+            if !main_py.try_exists()? && matches!(bare, InitMode::Full) {
                 fs_err::write(path.join("main.py"), main_contents)?;
             }
         }
@@ -853,9 +851,8 @@ fn pyproject_project(
     name: &PackageName,
     requires_python: &RequiresPython,
     author: Option<&Author>,
-    description: Option<&str>,
-    no_description: bool,
-    no_readme: bool,
+    description: &InitDescription,
+    readme: InitReadme,
 ) -> String {
     indoc::formatdoc! {r#"
         [project]
@@ -864,11 +861,14 @@ fn pyproject_project(
         requires-python = "{requires_python}"
         dependencies = []
     "#,
-        readme = if no_readme { "" } else { "\nreadme = \"README.md\"" },
-        description = if no_description {
-            String::new()
-        } else {
-            format!("\ndescription = \"{description}\"", description = description.unwrap_or("Add your description here"))
+        readme = match readme {
+            InitReadme::Include => "\nreadme = \"README.md\"",
+            InitReadme::Omit => "",
+        },
+        description = match description {
+            InitDescription::Default => "\ndescription = \"Add your description here\"".to_string(),
+            InitDescription::Custom(description) => format!("\ndescription = \"{description}\""),
+            InitDescription::None => String::new(),
         },
         authors = author.map_or_else(String::new, |author| format!("\nauthors = [\n    {}\n]", author.to_toml_string())),
         requires_python = requires_python.specifiers(),

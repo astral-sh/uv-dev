@@ -20,7 +20,8 @@ use uv_configuration::{
     ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildOptions, Concurrency,
     DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
-    GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
+    GitLfsSetting, HashCheckingMode, IndexStrategy, InitDescription, InitKind, InitMode,
+    InitProjectKind, InitPythonPin, InitReadme, InitWorkspaceDiscovery, InstallOptions,
     KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
     PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
     PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
@@ -471,15 +472,14 @@ pub struct InitSettings {
     pub path: Option<PathBuf>,
     pub name: Option<PackageName>,
     pub kind: InitKind,
-    pub bare: bool,
-    pub description: Option<String>,
-    pub no_description: bool,
+    pub bare: InitMode,
+    pub description: InitDescription,
     pub vcs: Option<VersionControlSystem>,
     pub build_backend: Option<ProjectBuildBackend>,
-    pub no_readme: bool,
+    pub readme: InitReadme,
     pub author_from: Option<AuthorFrom>,
-    pub pin_python: bool,
-    pub no_workspace: bool,
+    pub pin_python: InitPythonPin,
+    pub workspace_discovery: InitWorkspaceDiscovery,
     pub python: Option<String>,
     pub install_mirrors: PythonInstallMirrors,
 }
@@ -521,6 +521,7 @@ impl InitSettings {
             .unwrap_or_default();
 
         let no_description = no_description || (bare && description.is_none());
+        let description = InitDescription::from_args(description, no_description);
 
         if r#virtual && lib {
             bail!("`--virtual` and `--lib` are mutually exclusive");
@@ -583,15 +584,16 @@ impl InitSettings {
             path,
             name,
             kind,
-            bare,
+            bare: InitMode::from_args(bare),
             description,
-            no_description,
             vcs: vcs.or(bare.then_some(VersionControlSystem::None)),
             build_backend,
-            no_readme,
+            readme: InitReadme::from_args(no_readme),
             author_from,
-            pin_python: flag(pin_python, no_pin_python, "pin-python")?.unwrap_or(!bare),
-            no_workspace,
+            pin_python: InitPythonPin::from_args(
+                flag(pin_python, no_pin_python, "pin-python")?.unwrap_or(!bare),
+            ),
+            workspace_discovery: InitWorkspaceDiscovery::from_args(no_workspace),
             python: python.and_then(Maybe::into_option),
             install_mirrors: environment
                 .install_mirrors

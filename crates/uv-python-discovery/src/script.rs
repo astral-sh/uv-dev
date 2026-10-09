@@ -29,12 +29,19 @@ use crate::PythonDownloadReporter;
 use crate::PythonRequestSource;
 use crate::PythonSelectionError;
 
+/// Whether interpreter selection honors an existing Python version file.
+#[derive(Debug, Clone, Copy)]
+pub enum PythonPinDiscovery {
+    Respect,
+    Ignore,
+}
+
 /// Determine the [`RequiresPython`] requirement for a new PEP 723 script.
 pub async fn init_script_python_requirement(
     python: Option<&str>,
     install_mirrors: &PythonInstallMirrors,
     directory: &Path,
-    no_pin_python: bool,
+    pin_discovery: PythonPinDiscovery,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
@@ -46,8 +53,8 @@ pub async fn init_script_python_requirement(
     let python_request = if let Some(request) = python {
         // (1) Explicit request from user
         Some(PythonRequest::parse(request))
-    } else if let (false, Some(request)) = (
-        no_pin_python,
+    } else if let (PythonPinDiscovery::Respect, Some(request)) = (
+        pin_discovery,
         PythonVersionFile::discover(
             directory,
             &VersionFileDiscoveryOptions::default().with_config_discovery(config_discovery),
