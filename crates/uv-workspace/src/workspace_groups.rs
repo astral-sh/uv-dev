@@ -230,54 +230,50 @@ impl Workspace {
                 let Some(target) = self.packages().get(&requirement.name) else {
                     continue;
                 };
-                match &requirement.source {
-                    RequirementSource::Directory { install_path, .. } => {
-                        if uv_fs::normalize_path(install_path.as_ref()) == *target.root() {
-                            pending
-                                .push((requirement.name.clone(), active.and(requirement.marker)));
-                        }
-                        continue;
-                    }
-                    RequirementSource::Registry { .. } => {}
-                    RequirementSource::Url { .. }
-                    | RequirementSource::GitDirectory { .. }
-                    | RequirementSource::GitPath { .. }
-                    | RequirementSource::Path { .. } => continue,
-                }
-                if no_sources.for_package(&requirement.name) {
-                    continue;
-                }
-                let sources = member_sources
-                    .and_then(|sources| sources.inner().get(&requirement.name))
-                    .map(|sources| (sources, member.root()))
-                    .or_else(|| {
-                        self.sources()
-                            .get(&requirement.name)
-                            .map(|sources| (sources, self.install_path()))
-                    });
-                let Some((sources, base)) = sources else {
-                    continue;
+                let sources = if no_sources.for_package(&requirement.name) {
+                    None
+                } else {
+                    member_sources
+                        .and_then(|sources| sources.inner().get(&requirement.name))
+                        .map(|sources| (sources, member.root()))
+                        .or_else(|| {
+                            self.sources()
+                                .get(&requirement.name)
+                                .map(|sources| (sources, self.install_path()))
+                        })
                 };
-                for source in sources.iter() {
-                    if source.extra().is_some() || source.group().is_some() {
-                        continue;
-                    }
-                    let local = match source {
-                        Source::Workspace {
-                            workspace: WorkspaceReference::Bool(true),
-                            ..
-                        } => true,
-                        Source::Path { path, .. } => {
-                            uv_fs::normalize_path(base.join(path.as_ref())) == *target.root()
+                let mut remaining = active.and(requirement.marker);
+                if let Some((sources, base)) = sources {
+                    for source in sources.iter() {
+                        if source.extra().is_some() || source.group().is_some() {
+                            continue;
                         }
-                        _ => false,
-                    };
-                    if local {
-                        let marker = active.and(requirement.marker).and(source.marker());
-                        if !marker.is_false() {
-                            pending.push((requirement.name.clone(), marker));
+                        remaining = remaining.and(source.marker().negate());
+                        let local = match source {
+                            Source::Workspace {
+                                workspace: WorkspaceReference::Bool(true),
+                                ..
+                            } => true,
+                            Source::Path { path, .. } => {
+                                uv_fs::normalize_path(base.join(path.as_ref())) == *target.root()
+                            }
+                            _ => false,
+                        };
+                        if local {
+                            let marker = active.and(requirement.marker).and(source.marker());
+                            if !marker.is_false() {
+                                pending.push((requirement.name.clone(), marker));
+                            }
                         }
                     }
+                }
+                // Source overrides replace even direct URL requirements. The original source
+                // applies only in marker domains that the configured overrides do not cover.
+                if !remaining.is_false()
+                    && let RequirementSource::Directory { install_path, .. } = &requirement.source
+                    && uv_fs::normalize_path(install_path.as_ref()) == *target.root()
+                {
+                    pending.push((requirement.name.clone(), remaining));
                 }
             }
         }

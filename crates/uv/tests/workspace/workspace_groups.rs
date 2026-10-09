@@ -1216,6 +1216,67 @@ fn workspace_groups_conditional_member_python() -> Result<()> {
 }
 
 #[test]
+fn workspace_groups_url_source_override_member_python() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf @ https://example.com/leaf-0.1.0-py3-none-any.whl"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock["workspace-group"][0]["effective-requires-python"].as_str(),
+        Some(">=3.13")
+    );
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index", "--check"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
 fn workspace_groups_removed_regenerates_ordinary_lock() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
