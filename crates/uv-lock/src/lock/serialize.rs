@@ -172,15 +172,6 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
         }
     }
 
-    if !options.prerelease.package.is_empty() {
-        writer.table(&["options", "prerelease-package"])?;
-        let mut packages = options.prerelease.package.iter().collect::<Vec<_>>();
-        packages.sort_unstable_by_key(|(name, _)| *name);
-        for (name, mode) in packages {
-            writer.key_value(name.as_ref(), mode.to_string())?;
-        }
-    }
-
     if !options.indexes.is_empty() {
         writer.key_start("indexes")?;
         writer.array(&options.indexes, |writer, index| {
@@ -213,6 +204,15 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
             Ok(())
         })?;
         writer.raw("\n");
+    }
+
+    if !options.prerelease.package.is_empty() {
+        writer.table(&["options", "prerelease-package"])?;
+        let mut packages = options.prerelease.package.iter().collect::<Vec<_>>();
+        packages.sort_unstable_by_key(|(name, _)| *name);
+        for (name, mode) in packages {
+            writer.key_value(name.as_ref(), mode.to_string())?;
+        }
     }
 
     if !exclude_newer.package.is_empty() {

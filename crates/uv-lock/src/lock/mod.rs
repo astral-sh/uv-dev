@@ -2629,7 +2629,7 @@ impl Lock {
             fork_strategy: resolution.options.fork_strategy,
             minimum_libc_version: resolution.options.minimum_libc_version,
             exclude_newer: resolution.options.exclude_newer.clone(),
-            indexes: Vec::new(),
+            indexes: ResolverIndex::from_locations(index_locations, root)?,
         };
         // Canonicalize the top-level fork markers to match what is persisted in
         // `uv.lock`. In particular, conflict-only fork markers can serialize to
@@ -2933,16 +2933,6 @@ impl Lock {
                 .map(Package::name)
                 .chain(self.options.exclude_newer.package.keys()),
         )
-    }
-
-    /// Record the ordered index policy that was used to generate this lock.
-    pub fn with_index_locations(
-        mut self,
-        index_locations: &IndexLocations,
-        root: &Path,
-    ) -> Result<Self, LockError> {
-        self.options.indexes = ResolverIndex::from_locations(index_locations, root)?;
-        Ok(self)
     }
 
     /// Returns `true` if this [`Lock`] includes `provides-extra` metadata.
@@ -6294,7 +6284,7 @@ impl ResolverIndex {
         let default_locations = IndexLocations::default();
         let default_index = default_locations.default_index();
 
-        index_locations
+        let indexes = index_locations
             .allowed_indexes()
             .into_iter()
             .filter(|index| Some(*index) != default_index)
@@ -6307,6 +6297,10 @@ impl ResolverIndex {
                         let mut url = index.url().without_credentials().into_owned();
                         url.set_query(None);
                         url.set_fragment(None);
+                        if index.format == IndexFormat::Simple {
+                            let path = url.path().trim_end_matches('/').to_owned();
+                            url.set_path(&path);
+                        }
                         RegistrySource::Url(UrlString::from(url))
                     }
                     IndexUrl::Path(_) => RegistrySource::from_index_url(index.url(), root)?,
@@ -6320,7 +6314,16 @@ impl ResolverIndex {
                     ignore_error_codes: index.ignore_error_codes.clone(),
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, LockError>>()?;
+        // Equivalent repeated indexes do not change package priority. Normalize them after
+        // removing credentials and simple-index trailing slashes.
+        let mut unique = Vec::with_capacity(indexes.len());
+        for index in indexes {
+            if !unique.contains(&index) {
+                unique.push(index);
+            }
+        }
+        Ok(unique)
     }
 }
 

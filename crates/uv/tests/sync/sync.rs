@@ -13440,6 +13440,7 @@ fn sync_build_tag() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "[TEMP_DIR]/links", format = "flat" }]
 
         [[package]]
         name = "build-tag"

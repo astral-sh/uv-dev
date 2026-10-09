@@ -5876,6 +5876,7 @@ fn tool_install_locks_are_preview() {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat" }]
 
         [manifest]
         requirements = [{ name = "simple-launcher" }]
@@ -6202,6 +6203,7 @@ fn tool_install_lock_resolution_inputs_constraints() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat" }]
 
         [manifest]
         requirements = [
