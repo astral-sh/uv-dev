@@ -1,0 +1,47 @@
+name: PBS macOS signing experiments
+
+on:
+  push:
+    branches: [zb/pbs-macos-signing-poc]
+    paths:
+      - .github/workflows/pbs-macos-signing-poc.yml
+      - scripts/pbs_macos_signing_poc.py
+      - scripts/pbs-macos-signing-poc/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  experiment:
+    name: ${{ matrix.design }} / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        design: [rewrite, rpath, stub]
+        runner: [macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.13"
+          enable-cache: false
+      - name: Compare runtime and embedding behavior
+        env:
+          POC_DESIGN: ${{ matrix.design }}
+        run: uv run --no-project --no-config --python 3.12 scripts/pbs_macos_signing_poc.py "$POC_DESIGN" --report-directory poc-reports
+      - name: Save experiment evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pbs-macos-${{ matrix.design }}-${{ matrix.runner }}
+          path: poc-reports/
+          if-no-files-found: error
