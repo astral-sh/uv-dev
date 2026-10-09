@@ -38455,6 +38455,35 @@ fn lock_script_editable_path_dependency_change() -> Result<()> {
     Ok(())
 }
 
+/// Initializing a script through an alias writes the lockfile beside its target.
+#[cfg(all(unix, feature = "test-universal"))]
+#[test]
+fn lock_script_initialize_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scripts = context.temp_dir.child("scripts");
+    scripts.create_dir_all()?;
+    scripts
+        .child("main.py")
+        .write_str("print('Hello, world!')\n")?;
+    fs_err::os::unix::fs::symlink("scripts/main.py", context.temp_dir.child("linked.py"))?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--script").arg("linked.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+
+    assert!(context.temp_dir.child("scripts/main.py.lock").is_file());
+    assert!(!context.temp_dir.child("linked.py.lock").exists());
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--locked").arg("--script").arg("scripts/main.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    Ok(())
+}
+
 /// `uv lock --script` should add a PEP 723 tag, if it doesn't exist already.
 #[cfg(feature = "test-universal")]
 #[test]

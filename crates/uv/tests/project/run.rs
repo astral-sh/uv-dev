@@ -1093,6 +1093,102 @@ fn run_pep723_script_build_constraints() -> Result<()> {
     Ok(())
 }
 
+/// A script alias uses the underlying script's lockfile without changing Python's arguments.
+#[cfg(unix)]
+#[test]
+fn run_pep723_script_lock_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("main.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = []
+        # ///
+
+        import sys
+        print(sys.argv[0])
+        "#
+    })?;
+    fs_err::os::unix::fs::symlink("main.py", context.temp_dir.child("linked.py"))?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--script").arg("main.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.run().arg("--quiet").arg("--offline").arg("--locked").arg("linked.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    linked.py
+    ");
+
+    uv_snapshot!(context.filters(), context.run().arg("--quiet").arg("--offline").arg("--frozen").arg("linked.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    linked.py
+    ");
+
+    assert!(!context.temp_dir.child("linked.py.lock").exists());
+    Ok(())
+}
+
+/// A script's relative source and lockfile share the underlying script directory.
+#[cfg(unix)]
+#[test]
+fn run_pep723_script_lock_symlink_relative_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scripts = context.temp_dir.child("scripts");
+    let links = scripts.child("links");
+    links.create_dir_all()?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        links.child("ok-1.0.0-py3-none-any.whl"),
+    )?;
+    scripts.child("main.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = ["ok"]
+        #
+        # [tool.uv.sources]
+        # ok = { path = "./links/ok-1.0.0-py3-none-any.whl" }
+        # ///
+
+        import ok
+        print("ok")
+        "#
+    })?;
+    let elsewhere = context.temp_dir.child("elsewhere");
+    elsewhere.create_dir_all()?;
+    fs_err::os::unix::fs::symlink("../scripts/main.py", elsewhere.child("linked.py"))?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--script").arg("scripts/main.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let lock = context.read("scripts/main.py.lock");
+    assert!(lock.contains(r#"source = { path = "links/ok-1.0.0-py3-none-any.whl" }"#));
+
+    uv_snapshot!(context.filters(), context.run().current_dir(&elsewhere).arg("--quiet").arg("--offline").arg("--locked").arg("linked.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+    ");
+
+    uv_snapshot!(context.filters(), context.lock().current_dir(&elsewhere).arg("--offline").arg("--locked").arg("--script").arg("linked.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    assert_eq!(context.read("scripts/main.py.lock"), lock);
+    assert!(!elsewhere.child("linked.py.lock").exists());
+    Ok(())
+}
+
 /// Run a PEP 723-compatible script with a lockfile.
 #[test]
 fn run_pep723_script_lock() -> Result<()> {

@@ -12,6 +12,7 @@ use tracing::instrument;
 use url::Url;
 
 use uv_configuration::NoSources;
+use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
 use uv_pypi_types::VerbatimParsedUrl;
@@ -158,7 +159,9 @@ impl<'item> From<&'item Pep723Script> for Pep723ItemRef<'item> {
 /// A PEP 723 script, including its [`Pep723Metadata`].
 #[derive(Debug, Clone)]
 pub struct Pep723Script {
-    /// The path to the Python script.
+    /// The canonical path to the Python script.
+    ///
+    /// The script's lockfile and relative metadata paths are rooted at this location.
     pub path: PathBuf,
     /// The parsed [`Pep723Metadata`] table from the script.
     pub metadata: Pep723Metadata,
@@ -192,7 +195,7 @@ impl Pep723Script {
         let metadata = Pep723Metadata::from_str(&metadata)?;
 
         Ok(Some(Self {
-            path: std::path::absolute(file)?,
+            path: file.as_ref().simple_canonicalize()?,
             metadata,
             prelude,
             postlude,
@@ -209,7 +212,7 @@ impl Pep723Script {
         let contents = fs_err::tokio::read(&file).await?;
         let (prelude, metadata, postlude) = Self::init_metadata(&contents, requires_python)?;
         Ok(Self {
-            path: std::path::absolute(file)?,
+            path: file.as_ref().simple_canonicalize()?,
             metadata,
             prelude,
             postlude,
