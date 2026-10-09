@@ -168,7 +168,7 @@ pub async fn sync_from_lock(
 
     // Determine the markers to use for resolution.
     let marker_env = resolution_markers(None, python_platform, venv.interpreter());
-    target.validate_extra_resolution(extras, groups, Some(&marker_env))?;
+    target.validate_workspace_resolution(extras, groups, Some(&marker_env))?;
 
     // Validate that the platform is supported by the lockfile.
     let environments = target.lock().supported_environments();
