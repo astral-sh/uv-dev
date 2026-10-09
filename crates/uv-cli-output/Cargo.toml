@@ -41,5 +41,4 @@ fs-err = { workspace = true, features = ["tokio"] }
 indicatif = { workspace = true }
 owo-colors = { workspace = true }
 rustc-hash = { workspace = true }
-tokio = { workspace = true }
 tracing = { workspace = true }

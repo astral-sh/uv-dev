@@ -41,7 +41,7 @@ impl CompatibleProjectPython {
     }
 
     /// Retain the resolved request for environment creation.
-    pub fn into_requested_interpreter(self) -> RequestedInterpreter {
+    pub(crate) fn into_requested_interpreter(self) -> RequestedInterpreter {
         self.0
     }
 }
@@ -477,7 +477,7 @@ pub enum PythonRequirementSource {
 /// Returns an error if the [`Interpreter`] does not satisfy `requires_python`.
 ///
 /// The requirement source determines which conflicting declarations are included in the diagnostic.
-pub(crate) fn validate_python_requirement(
+fn validate_python_requirement(
     interpreter: &Interpreter,
     requires_python: &RequiresPython,
     source: &PythonRequestSource,

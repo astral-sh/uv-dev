@@ -45,7 +45,7 @@ impl Printer {
     }
 
     /// Return the [`ProgressDrawTarget`] for this printer.
-    pub fn target(self) -> ProgressDrawTarget {
+    pub(crate) fn target(self) -> ProgressDrawTarget {
         if self.suppresses_progress() {
             ProgressDrawTarget::hidden()
         } else {

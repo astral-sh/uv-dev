@@ -75,8 +75,8 @@ impl FromStr for VersionBump {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VersionBumpSpec {
-    pub bump: VersionBump,
-    pub value: Option<u64>,
+    bump: VersionBump,
+    value: Option<u64>,
 }
 
 impl Display for VersionBumpSpec {
