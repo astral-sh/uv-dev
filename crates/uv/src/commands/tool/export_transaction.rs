@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::fmt::Write;
 use std::io::{self, Read, Write as _};
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -28,6 +28,15 @@ use crate::commands::tool::recovery::{
     same_entrypoint_location, same_existing_entrypoint_location,
 };
 use crate::printer::Printer;
+
+/// Restrict Unix staging access from the initial directory creation.
+fn private_staging_directory(parent: &Path, prefix: &str) -> io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    builder.permissions(std::fs::Permissions::from_mode(0o700));
+    builder.tempdir_in(parent)
+}
 
 const JOURNAL_PREFIX: &str = ".uv-tool-exports-";
 const JOURNAL_VERSION: u8 = 1;
@@ -643,9 +652,7 @@ impl FreshToolExportPlan {
         if fs_err::canonicalize(&self.directory)? != self.canonical_directory {
             bail!("Executable directory changed during installation");
         }
-        let staging = tempfile::Builder::new()
-            .prefix(JOURNAL_PREFIX)
-            .tempdir_in(&self.canonical_directory)?;
+        let staging = private_staging_directory(&self.canonical_directory, JOURNAL_PREFIX)?;
         let mut exports = Vec::with_capacity(self.exports.len());
         for (index, export) in self.exports.iter().enumerate() {
             let filename = export.entrypoint.install_path.file_name().ok_or_else(|| {
@@ -1114,6 +1121,30 @@ mod tests {
             .output()?;
         anyhow::ensure!(output.status.success(), "{output:?}");
         Ok(None)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn export_staging_is_private_at_creation() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(root) = isolated_root("export_staging_is_private_at_creation")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
+        let (transaction, _) = installation.begin(false)?;
+        let staging = fs_err::read_dir(&installation.directory)?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(super::JOURNAL_PREFIX)
+            })
+            .context("Missing export staging directory")?;
+        assert_eq!(staging.metadata()?.permissions().mode() & 0o777, 0o700);
+        drop(transaction);
+        Ok(())
     }
 
     struct Installation {
