@@ -1031,17 +1031,16 @@ fn edits(
 
         // Update the `pyproject.toml`.
         let edit = match &dependency_type {
-            DependencyType::Production => {
-                toml.add_dependency(&requirement, source.as_ref(), raw)?
-            }
-            DependencyType::Dev => toml.add_dev_dependency(&requirement, source.as_ref(), raw)?,
+            DependencyType::Production => toml.add_dependency(&requirement, source.as_ref(), raw),
+            DependencyType::Dev => toml.add_dev_dependency(&requirement, source.as_ref(), raw),
             DependencyType::Optional(extra) => {
-                toml.add_optional_dependency(extra, &requirement, source.as_ref(), raw)?
+                toml.add_optional_dependency(extra, &requirement, source.as_ref(), raw)
             }
             DependencyType::Group(group) => {
-                toml.add_dependency_group_requirement(group, &requirement, source.as_ref(), raw)?
+                toml.add_dependency_group_requirement(group, &requirement, source.as_ref(), raw)
             }
-        };
+        }
+        .map_err(ProjectError::from)?;
 
         // If the edit was inserted before the end of the list, update the existing edits.
         if let ArrayEdit::Add(index) = &edit {
