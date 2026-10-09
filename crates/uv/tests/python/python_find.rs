@@ -637,8 +637,8 @@ fn virtual_dependency_group() {
 fn python_find_venv() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         // Enable additional filters for Windows compatibility
-        .with_filtered_exe_suffix()
         .with_filtered_python_names()
+        .with_filtered_exe_suffix()
         .with_filtered_virtualenv_bin();
 
     // Create a virtual environment
@@ -675,18 +675,10 @@ fn python_find_venv() {
     ");
 
     // Unless, `--no-system` is included
-    #[cfg(not(windows))]
     uv_snapshot!(context.filters(), context.python_find().arg("--no-system").env(EnvVars::UV_SYSTEM_PYTHON, "1"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [VENV]/[BIN]/[PYTHON]
-    ");
-
-    #[cfg(windows)]
-    uv_snapshot!(context.filters(), context.python_find().arg("--no-system").env(EnvVars::UV_SYSTEM_PYTHON, "1"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [VENV]/[BIN]/python
     ");
 
     // We should find virtual environments from a child directory
