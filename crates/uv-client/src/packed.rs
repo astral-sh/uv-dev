@@ -23,7 +23,8 @@ use uv_redacted::DisplaySafeUrl;
 
 use crate::httpcache::{BeforeRequest, CachePolicy, CachePolicyBuilder};
 use crate::{
-    CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, RegistryClient, RetryState,
+    CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, ErrorKind, RegistryClient,
+    RetryState,
 };
 
 /// An original distribution archive, retained without extracting or building it.
@@ -148,7 +149,13 @@ impl PackedArchiveEntry {
     ///
     /// A changed source invalidates the packed copy. A missing source can still be served from
     /// the retained bytes, unless the caller explicitly requested cache refresh.
-    pub async fn read_local(&self) -> Result<Option<(fs_err::tokio::File, Timestamp)>> {
+    pub async fn read_local(
+        &self,
+    ) -> Result<Option<(fs_err::tokio::File, Timestamp)>, crate::Error> {
+        self.read_local_inner().await.map_err(packed_error)
+    }
+
+    async fn read_local_inner(&self) -> Result<Option<(fs_err::tokio::File, Timestamp)>> {
         if self.url.scheme() != "file" {
             return Ok(None);
         }
@@ -224,10 +231,9 @@ impl PackedArchiveEntry {
                 .to_archived()
                 .is_storable()
             {
-                return Err(std::io::Error::other(format!(
-                    "Response for {} does not permit caching",
-                    self.url
-                )));
+                return Err(crate::Error::from(ErrorKind::Io(std::io::Error::other(
+                    format!("Response for {} does not permit caching", self.url),
+                ))));
             }
             let input = response
                 .bytes_stream()
@@ -236,7 +242,7 @@ impl PackedArchiveEntry {
             let metadata = self
                 .persist(input.compat(), expected_hash, expected_size)
                 .await
-                .map_err(std::io::Error::other)?;
+                .map_err(packed_error)?;
             downloaded.store(true, Ordering::Relaxed);
             Ok(metadata)
         };
@@ -362,7 +368,17 @@ impl PackedArchiveEntry {
         if let Some(expected) = expected_hash
             && !hashes.contains(expected)
         {
-            bail!("Hash mismatch for {url}: expected {expected}");
+            let actual = hashes
+                .iter()
+                .find(|hash| hash.algorithm() == expected.algorithm())
+                .expect("the requested hash algorithm was computed")
+                .clone();
+            return Err(crate::Error::from(ErrorKind::PackedArchiveHashMismatch {
+                url: url.clone(),
+                expected: expected.clone(),
+                actual,
+            })
+            .into());
         }
         if let Some(expected) = expected_size
             && size != expected
@@ -414,12 +430,26 @@ impl PackedArchiveEntry {
             .into_iter()
             .map(HashDigest::from)
             .collect::<Vec<_>>();
-        if size != metadata.size
-            || !hashes.contains(&metadata.hash)
-            || expected_hash.is_some_and(|expected| !hashes.contains(expected))
-            || expected_size.is_some_and(|expected| size != expected)
-        {
-            bail!("Hash or size mismatch for packed archive {url}");
+        for expected in std::iter::once(&metadata.hash).chain(expected_hash) {
+            if !hashes.contains(expected) {
+                let actual = hashes
+                    .iter()
+                    .find(|hash| hash.algorithm() == expected.algorithm())
+                    .expect("the requested hash algorithm was computed")
+                    .clone();
+                return Err(crate::Error::from(ErrorKind::PackedArchiveHashMismatch {
+                    url: url.clone(),
+                    expected: expected.clone(),
+                    actual,
+                })
+                .into());
+            }
+        }
+        if size != metadata.size || expected_size.is_some_and(|expected| size != expected) {
+            bail!(
+                "Size mismatch for packed archive {url}: expected {}, got {size}",
+                expected_size.unwrap_or(metadata.size)
+            );
         }
         file.seek(SeekFrom::Start(0)).await?;
         debug!("Using packed distribution: {url}");
@@ -427,6 +457,16 @@ impl PackedArchiveEntry {
     }
 
     pub(crate) async fn read_http(
+        &self,
+        request: &Request,
+        cache_control: &CacheControl,
+    ) -> Result<Option<(PackedArchive, Box<CachePolicy>)>, crate::Error> {
+        self.read_http_inner(request, cache_control)
+            .await
+            .map_err(packed_error)
+    }
+
+    async fn read_http_inner(
         &self,
         request: &Request,
         cache_control: &CacheControl,
@@ -588,9 +628,17 @@ impl PackedArchive {
     }
 }
 
-fn packed_client_error(error: CachedClientError<std::io::Error>) -> anyhow::Error {
+fn packed_client_error(error: CachedClientError<crate::Error>) -> anyhow::Error {
     match error {
         CachedClientError::Client(error) => error.into(),
         CachedClientError::Callback { err, .. } => err.into(),
+    }
+}
+
+/// Preserve typed integrity errors while adapting other packed-cache failures to client I/O errors.
+pub(crate) fn packed_error(error: anyhow::Error) -> crate::Error {
+    match error.downcast::<crate::Error>() {
+        Ok(error) => error,
+        Err(error) => ErrorKind::Io(std::io::Error::other(error)).into(),
     }
 }

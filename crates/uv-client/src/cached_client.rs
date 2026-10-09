@@ -242,7 +242,7 @@ impl CachedClient {
         entry
             .response(req, cache_control)
             .await
-            .map_err(|err| ErrorKind::Io(std::io::Error::other(err)).into())
+            .map_err(crate::packed::packed_error)
     }
 
     /// The underlying [`BaseClient`] without caching.
