@@ -1,4 +1,4 @@
-<!-- Generated with `cargo dev render-scenario` -->
+<!-- Dependency graph for `remove-prune-extra.toml`. -->
 
 # remove-prune-graph
 
@@ -88,7 +88,25 @@ remove-prune-graph
 │   ├── remaining-1.0.0
 │   │   └── requires candidate
 │   │       └── satisfied by candidate-1.0.0
-│   └── remaining-2.0.0
+│   ├── remaining-1.0.0[foo]
+│   │   └── requires candidate
+│   │       └── satisfied by candidate-1.0.0
+│   ├── remaining-2.0.0
+│   └── remaining-2.0.0[foo]
+│       └── requires candidate
+│           └── satisfied by candidate-1.0.0
+├── remaining-external
+│   └── remaining-external-1.0.0
+│       └── requires remaining
+│           ├── satisfied by remaining-1.0.0
+│           └── satisfied by remaining-2.0.0
+├── remaining-extra-external
+│   └── remaining-extra-external-1.0.0
+│       └── requires remaining[foo]
+│           ├── satisfied by remaining-1.0.0
+│           ├── satisfied by remaining-1.0.0[foo]
+│           ├── satisfied by remaining-2.0.0
+│           └── satisfied by remaining-2.0.0[foo]
 ├── removed
 │   └── removed-1.0.0
 │       ├── requires candidate
