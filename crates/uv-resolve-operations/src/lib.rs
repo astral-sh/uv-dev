@@ -1,5 +1,6 @@
 //! Dependency resolution workflows used by uv commands.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -266,10 +267,12 @@ pub async fn resolve(
         requirements
     };
 
-    // Incorporate hashes from requirements discovered while resolving source trees and groups.
+    let build_dependencies = build_dependencies.unwrap_or_default();
+    // Build roots participate in lookahead discovery and hash policy without requiring callers
+    // to duplicate them in the runtime requirements.
     let mut hasher = hasher
         .clone()
-        .augment_with_requirements(requirements.iter())?;
+        .augment_with_requirements(requirements.iter().chain(&build_dependencies.requirements))?;
 
     // Resolve the overrides from the provided sources.
     let overrides = {
@@ -330,8 +333,19 @@ pub async fn resolve(
         DependencyMode::Transitive => {
             let constraints = constraints.clone().with_recorder(recorder.clone());
             let modifiers = modifiers.clone().with_recorder(recorder.clone());
+            let lookahead_requirements = if build_dependencies.requirements.is_empty() {
+                Cow::Borrowed(requirements.as_slice())
+            } else {
+                Cow::Owned(
+                    requirements
+                        .iter()
+                        .chain(&build_dependencies.requirements)
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            };
             let (lookaheads, updated_hasher) = LookaheadResolver::new(
-                &requirements,
+                &lookahead_requirements,
                 &constraints,
                 &modifiers,
                 &hasher,
@@ -366,7 +380,7 @@ pub async fn resolve(
         exclusions,
         lookaheads,
     )
-    .with_build_dependencies(build_dependencies.unwrap_or_default())
+    .with_build_dependencies(build_dependencies)
     .with_recorder(recorder.clone());
 
     // Resolve the dependencies.

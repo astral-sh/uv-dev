@@ -25,7 +25,7 @@ use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, Dist, ExtraBuildVariables, HashCollection, Identifier,
     Index, IndexLocations, MinimumLibcVersion, Name, NameRequirementSpecification, Origin,
     PackageConfigSettings, Requirement, RequirementScope, RequirementSource, RequiresPython,
-    ResolvedDist, UnresolvedRequirementSpecification, Verbatim,
+    ResolvedDist, Verbatim,
 };
 use uv_fs::{CWD, Simplified};
 use uv_git::ResolvedRepositoryReference;
@@ -740,20 +740,7 @@ pub async fn pip_compile(
             requirement_states.push(previous_requirements);
             previous_requirements = active_state;
 
-            resolution = resolve(
-                requirements
-                    .iter()
-                    .cloned()
-                    .chain(
-                        active_requirements
-                            .iter()
-                            .cloned()
-                            .map(UnresolvedRequirementSpecification::from),
-                    )
-                    .collect(),
-                active_requirements,
-            )
-            .await?;
+            resolution = resolve(requirements.clone(), active_requirements).await?;
         }
     }
 
