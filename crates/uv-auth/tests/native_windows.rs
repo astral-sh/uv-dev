@@ -108,8 +108,17 @@ async fn native_store_distinguishes_signed_url_identities() -> Result<(), Box<dy
     let result = async {
         provider.store(&first_url, &first).await?;
         provider.store(&second_url, &second).await?;
-        if provider.fetch(&first_url, Some("signed")).await? != Some(first) {
+        if provider.fetch(&first_url, Some("signed")).await? != Some(first.clone()) {
             return Err(std::io::Error::other("unexpected stored credentials").into());
+        }
+        let mut username_url = first_url.clone();
+        username_url
+            .set_username("signed")
+            .map_err(|()| std::io::Error::other("invalid username"))?;
+        if provider.fetch(&username_url, Some("signed")).await? != Some(first) {
+            return Err(
+                std::io::Error::other("URL username changed the exact credential match").into(),
+            );
         }
         if provider.fetch(&second_url, Some("signed")).await? != Some(second) {
             return Err(std::io::Error::other("unexpected stored credentials").into());

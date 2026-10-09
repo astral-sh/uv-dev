@@ -197,6 +197,8 @@ pub(crate) async fn fetch(
     url: &DisplaySafeUrl,
     username: Option<&str>,
 ) -> Result<Option<NativeCredentials>, Error> {
+    let url = url.without_credentials();
+    let url = DisplaySafeUrl::ref_cast(url.as_ref());
     let realm = Realm::from(url);
     let legacy_match = {
         let realm_guard = acquire_realm_read(&realm).await?;
