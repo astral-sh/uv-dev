@@ -3982,7 +3982,7 @@ impl Lock {
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
         if !allow_missing_package_metadata
-            && self.workspace_members.contains_key(&package.id.name)
+            && self.manifest.workspace_members().contains(&package.id.name)
             && !self.manifest.members.contains(&package.id.name)
             && package.metadata.requires_python.as_ref() != package_requires_python
         {
