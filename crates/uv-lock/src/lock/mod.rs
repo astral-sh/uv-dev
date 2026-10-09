@@ -2534,8 +2534,7 @@ impl Lock {
                 && !manifest.members.contains(dist.name())
             {
                 package.metadata.requires_python = dist
-                    .metadata
-                    .as_ref()
+                    .metadata()
                     .map(|metadata| metadata.requires_python.clone().unwrap_or_default());
             }
             let mut wheel_marker = dist.marker;
