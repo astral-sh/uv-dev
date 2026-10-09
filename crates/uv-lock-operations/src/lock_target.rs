@@ -510,7 +510,12 @@ impl<'lock> LockTarget<'lock> {
                 Ok(metadata
                     .requires_dist
                     .into_iter()
-                    .map(|requirement| requirement.with_origin(RequirementOrigin::Workspace))
+                    .map(|mut requirement| {
+                        requirement
+                            .origin
+                            .get_or_insert(RequirementOrigin::Workspace);
+                        requirement
+                    })
                     .collect::<Vec<_>>())
             }
             Self::Script(script) => {
