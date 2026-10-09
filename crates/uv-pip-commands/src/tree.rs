@@ -18,6 +18,7 @@ use uv_distribution_types::{
     DependencyMetadata, Diagnostic, IndexCapabilities, IndexLocations, Name, RequiresPython,
 };
 use uv_installer::SitePackages;
+use uv_lock::{TreeDedupe, TreeOptions};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{Requirement, VersionOrUrl};
@@ -32,16 +33,19 @@ use uv_command_support::Printer;
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::reporters::LatestVersionReporter;
 
+/// Display options for the installed dependency tree.
+#[derive(Debug, Clone, Copy)]
+pub struct PipTreeOptions {
+    pub tree: TreeOptions,
+    pub show_version_specifiers: bool,
+}
+
 /// Display the installed packages in the current environment as a dependency tree.
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn pip_tree(
     python_arch: Option<PythonArchitecture>,
-    show_version_specifiers: bool,
-    depth: u8,
     prune: &[PackageName],
     package: &[PackageName],
-    no_dedupe: bool,
-    invert: bool,
+    tree: PipTreeOptions,
     outdated: bool,
     prerelease: Prerelease,
     index_locations: IndexLocations,
@@ -154,12 +158,10 @@ pub async fn pip_tree(
 
     // Render the tree.
     let rendered_tree = DisplayDependencyGraph::new(
-        depth.into(),
         prune,
         package,
-        no_dedupe,
-        invert,
-        show_version_specifiers,
+        tree.tree,
+        tree.show_version_specifiers,
         &markers,
         &packages,
         &latest,
@@ -172,7 +174,7 @@ pub async fn pip_tree(
     }
 
     if rendered_tree.contains("(*)") {
-        let message = if no_dedupe {
+        let message = if tree.tree.dedupe == TreeDedupe::Disabled {
             "(*) Package tree is a cycle and cannot be shown".italic()
         } else {
             "(*) Package tree already displayed".italic()
@@ -208,24 +210,18 @@ struct DisplayDependencyGraph<'env> {
     roots: Vec<NodeIndex>,
     /// The latest known version of each package.
     latest: &'env FxHashMap<&'env PackageName, Version>,
-    /// Maximum display depth of the dependency tree
-    depth: usize,
-    /// Whether to de-duplicate the displayed dependencies.
-    no_dedupe: bool,
-    /// Whether to invert the dependency tree.
-    invert: bool,
-    /// Whether to include the version specifiers in the tree.
+    /// Options controlling how the dependency tree is displayed.
+    options: TreeOptions,
+    /// Whether to display dependency version constraints.
     show_version_specifiers: bool,
 }
 
 impl<'env> DisplayDependencyGraph<'env> {
     /// Create a new [`DisplayDependencyGraph`] for the set of installed distributions.
     fn new(
-        depth: usize,
         prune: &[PackageName],
         package: &[PackageName],
-        no_dedupe: bool,
-        invert: bool,
+        options: TreeOptions,
         show_version_specifiers: bool,
         markers: &ResolverMarkerEnvironment,
         packages: &'env FxHashMap<&PackageName, Vec<&ResolutionMetadata>>,
@@ -287,7 +283,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         }
 
         // Step 2: Reverse the graph.
-        if invert {
+        if options.direction.is_inverted() {
             graph.reverse();
         }
 
@@ -356,9 +352,7 @@ impl<'env> DisplayDependencyGraph<'env> {
             graph,
             roots,
             latest,
-            depth,
-            no_dedupe,
-            invert,
+            options,
             show_version_specifiers,
         }
     }
@@ -371,7 +365,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         path: &mut Vec<&'env PackageName>,
     ) -> Vec<String> {
         // Short-circuit if the current path is longer than the provided depth.
-        if path.len() > self.depth {
+        if path.len() > self.options.depth {
             return Vec::new();
         }
 
@@ -385,7 +379,7 @@ impl<'env> DisplayDependencyGraph<'env> {
 
             let requirement = self.aggregate_requirement(cursor);
 
-            if self.invert {
+            if self.options.direction.is_inverted() {
                 let parent = self.graph.edge_endpoints(cursor.edge().unwrap()).unwrap().0;
 
                 let parent = &self.graph[parent].name;
@@ -414,7 +408,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         // 1. The package is in the current traversal path (i.e., a dependency cycle).
         // 2. The package has been visited and de-duplication is enabled (default).
         if let Some(requirements) = visited.get(package_name) {
-            if !self.no_dedupe || path.contains(&package_name) {
+            if self.options.dedupe == TreeDedupe::Enabled || path.contains(&package_name) {
                 return if requirements.is_empty() {
                     vec![line]
                 } else {
