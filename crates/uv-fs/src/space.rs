@@ -99,28 +99,33 @@ pub fn physical_disk_usage(path: &Path) -> io::Result<u64> {
             continue;
         }
 
-        let file = fs_err::File::open(entry.path())?;
-        let block_size = if let Some(&block_size) = filesystem_block_sizes.get(&metadata.dev()) {
-            block_size
-        } else {
-            let filesystem = rustix::fs::fstatvfs(&file)?;
-            let block_size = if filesystem.f_frsize == 0 {
-                filesystem.f_bsize
+        let mapped = (|| {
+            let file = fs_err::File::open(entry.path())?;
+            let block_size = if let Some(&block_size) = filesystem_block_sizes.get(&metadata.dev())
+            {
+                block_size
             } else {
-                filesystem.f_frsize
+                let filesystem = rustix::fs::fstatvfs(&file)?;
+                let block_size = if filesystem.f_frsize == 0 {
+                    filesystem.f_bsize
+                } else {
+                    filesystem.f_frsize
+                };
+                filesystem_block_sizes.insert(metadata.dev(), block_size);
+                block_size
             };
-            filesystem_block_sizes.insert(metadata.dev(), block_size);
-            block_size
-        };
-        if block_size == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "the filesystem reported a zero-byte allocation block",
-            ));
-        }
+            if block_size == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the filesystem reported a zero-byte allocation block",
+                ));
+            }
+            let extents = file_physical_extents(&file, &metadata).map_err(io::Error::other)?;
+            Ok((block_size, extents))
+        })();
 
-        match file_physical_extents(&file, &metadata) {
-            Ok(extents) => {
+        match mapped {
+            Ok((block_size, extents)) => {
                 let device_extents = physical_extents
                     .entry((metadata.dev(), block_size))
                     .or_default();
@@ -396,12 +401,15 @@ fn file_physical_extents(
     let mut extents = Vec::new();
 
     linux_file_extents(file, |extent| {
-        if extent.flags & (FIEMAP_EXTENT_DELALLOC | FIEMAP_EXTENT_DATA_INLINE) != 0 {
+        if extent.flags & FIEMAP_EXTENT_DATA_INLINE != 0 {
             return Ok(());
         }
 
         if extent.flags
-            & (FIEMAP_EXTENT_UNKNOWN | FIEMAP_EXTENT_ENCODED | FIEMAP_EXTENT_NOT_ALIGNED)
+            & (FIEMAP_EXTENT_DELALLOC
+                | FIEMAP_EXTENT_UNKNOWN
+                | FIEMAP_EXTENT_ENCODED
+                | FIEMAP_EXTENT_NOT_ALIGNED)
             != 0
         {
             return Err(io::Error::new(

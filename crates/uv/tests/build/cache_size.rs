@@ -224,3 +224,48 @@ fn cache_size_output_format_conflicts_with_human() {
     For more information, try '--help'.
     ");
 }
+
+/// Fresh allocations remain counted before the filesystem assigns final physical extents.
+#[cfg(target_os = "linux")]
+#[test]
+fn cache_size_physical_fresh_allocation() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
+    context.clean().assert().success();
+    let file = context.cache_dir.child("fresh.bin");
+    file.write_binary(&vec![42; 1024 * 1024])?;
+    let allocated = fs_err::metadata(file.path())?.blocks() * 512;
+    assert!(allocated > 0);
+    assert_eq!(uv_fs::physical_disk_usage(file.path())?, allocated);
+    uv_snapshot!(context.filters(), context.cache_size()
+        .args(["--preview-features", "cache-size,cache-physical-space"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [SIZE]
+    ");
+    Ok(())
+}
+
+/// Missing read permission does not hide the allocation metadata available to cache sizing.
+#[cfg(unix)]
+#[test]
+fn cache_size_physical_unreadable_file() -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
+    context.clean().assert().success();
+    let file = context.cache_dir.child("unreadable.bin");
+    file.write_binary(&vec![42; 1024 * 1024])?;
+    fs_err::set_permissions(file.path(), std::fs::Permissions::from_mode(0o0))?;
+    let error = fs_err::File::open(file.path()).expect_err("fixture must not be readable");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    let allocated = fs_err::metadata(file.path())?.blocks() * 512;
+    assert!(allocated > 0);
+    assert_eq!(uv_fs::physical_disk_usage(file.path())?, allocated);
+    uv_snapshot!(context.filters(), context.cache_size()
+        .args(["--preview-features", "cache-size,cache-physical-space"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [SIZE]
+    ");
+    Ok(())
+}
