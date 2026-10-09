@@ -39,11 +39,13 @@ pub struct ResolvedWorkspaceGroup {
     pub requires_python: RequiresPython,
     /// The supported environments, including conditional local-member Python bounds.
     pub environments: MarkerTree,
+    /// The environments in which each local member is reachable from these roots.
+    pub member_environments: BTreeMap<PackageName, MarkerTree>,
 }
 
 /// The roots and Python domain of one shared resolution attempt.
 #[derive(Debug, Clone)]
-pub(crate) struct WorkspaceResolution {
+pub struct WorkspaceResolution {
     pub roots: BTreeMap<PackageName, MarkerTree>,
     pub requires_python: RequiresPython,
     pub environments: SupportedEnvironments,
@@ -132,12 +134,12 @@ impl Workspace {
                     .into());
                 }
             }
-            for (name, active) in
-                self.reachable_workspace_members(definition, no_sources, &modifiers)?
-            {
+            let member_environments =
+                self.reachable_workspace_members(definition, no_sources, &modifiers)?;
+            for (name, active) in &member_environments {
                 if let Some(requires_python) = self
                     .packages()
-                    .get(&name)
+                    .get(name)
                     .and_then(|member| member.project().requires_python.as_ref())
                 {
                     let compatible = RequiresPython::from_specifiers(requires_python.clone())
@@ -164,6 +166,10 @@ impl Workspace {
                 definition: definition.clone(),
                 requires_python,
                 environments,
+                member_environments: member_environments
+                    .into_iter()
+                    .map(|(name, marker)| (name, marker.and(environments)))
+                    .collect(),
             });
         }
         Ok(groups)

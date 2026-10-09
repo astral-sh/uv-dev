@@ -2734,8 +2734,8 @@ impl Lock {
             }
 
             // A single-project lockfile can omit its root from the manifest's member list.
-            let is_member = manifest.members.contains(&dist.id.name)
-                || (manifest.members.is_empty()
+            let is_member = manifest.workspace_members().contains(&dist.id.name)
+                || (manifest.workspace_members().is_empty()
                     && workspace_members.is_empty()
                     && dist.id.source.is_implicit_root());
             if is_member {
@@ -2838,6 +2838,37 @@ impl Lock {
             .map(|marker| self.requires_python.complexify_markers(marker))
             .collect();
         self
+    }
+
+    /// Record resolved local members independently of a workspace context's resolution roots.
+    #[must_use]
+    pub fn with_workspace_members(
+        mut self,
+        packages: &BTreeMap<PackageName, WorkspaceMember>,
+        root: &Path,
+    ) -> Self {
+        self.workspace_members = self.resolved_workspace_members(packages, root);
+        let members = self.workspace_members.keys().cloned().collect();
+        self.manifest.workspace_members =
+            Some(members).filter(|members| *members != self.manifest.members);
+        self
+    }
+
+    fn resolved_workspace_members(
+        &self,
+        packages: &BTreeMap<PackageName, WorkspaceMember>,
+        root: &Path,
+    ) -> BTreeMap<PackageName, PackageIndex> {
+        self.packages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, package)| {
+                let member = packages.get(&package.id.name)?;
+                let source = package.id.source.as_source_tree()?;
+                (uv_fs::normalize_path(root.join(source)) == *member.root())
+                    .then(|| (package.id.name.clone(), PackageIndex(index)))
+            })
+            .collect()
     }
 
     /// Record the default groups for workspace members in a revision 5 or newer lockfile.
@@ -4238,6 +4269,21 @@ impl Lock {
         {
             let expected = members.iter().cloned().collect::<BTreeSet<_>>();
             let actual = &self.manifest.members;
+            if expected != *actual {
+                return Ok(SatisfiesResult::MismatchedMembers(expected, actual));
+            }
+        }
+
+        // Context roots can omit local members that are reached transitively. Refresh older
+        // contexts before frozen commands rely on their membership and group metadata.
+        if !members.is_empty()
+            && (self.manifest.workspace_members.is_some() || members.len() < packages.len())
+        {
+            let expected = self
+                .resolved_workspace_members(packages, root)
+                .into_keys()
+                .collect::<BTreeSet<_>>();
+            let actual = self.manifest.workspace_members();
             if expected != *actual {
                 return Ok(SatisfiesResult::MismatchedMembers(expected, actual));
             }
@@ -6304,6 +6350,9 @@ pub struct ResolverManifest {
     /// The workspace members included in the lockfile.
     #[serde(default)]
     members: BTreeSet<PackageName>,
+    /// Resolved workspace members when the context's roots are only a subset of the workspace.
+    #[serde(default)]
+    workspace_members: Option<BTreeSet<PackageName>>,
     /// Default dependency groups for a workspace root without a `[project]` table.
     #[serde(default)]
     default_groups: Option<DefaultGroups>,
@@ -6390,6 +6439,10 @@ fn collect_member_group_metadata(
 }
 
 impl ResolverManifest {
+    fn workspace_members(&self) -> &BTreeSet<PackageName> {
+        self.workspace_members.as_ref().unwrap_or(&self.members)
+    }
+
     /// Initialize a [`ResolverManifest`] with the given members, requirements, constraints, and
     /// overrides.
     pub fn new(
@@ -6405,6 +6458,7 @@ impl ResolverManifest {
         let normalize = uv_preview::is_enabled(PreviewFeature::LockfileNormalization);
         Self {
             members: members.into_iter().collect(),
+            workspace_members: None,
             default_groups: None,
             group_requires_python: BTreeMap::new(),
             requirements: normalize_collection::<_, NormalizedRequirements>(
@@ -6436,6 +6490,7 @@ impl ResolverManifest {
     pub fn relative_to(self, root: &Path) -> Result<Self, io::Error> {
         Ok(Self {
             members: self.members,
+            workspace_members: self.workspace_members,
             default_groups: self.default_groups,
             group_requires_python: self.group_requires_python,
             requirements: self

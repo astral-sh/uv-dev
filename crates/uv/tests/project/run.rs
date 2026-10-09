@@ -7891,3 +7891,34 @@ fn run_centralized_environment_path_file() -> Result<()> {
     "#);
     Ok(())
 }
+
+#[test]
+fn run_no_sync_frozen_without_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-sync", "--frozen", "python", "-c", "print('no lock required')",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    no lock required
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--no-sync", "python", "-c", "print('no lock required')"])
+        .env(EnvVars::UV_FROZEN, "1"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    no lock required
+    ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}

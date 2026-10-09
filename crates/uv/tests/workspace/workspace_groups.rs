@@ -83,11 +83,9 @@ fn workspace(context: &TestContext) -> Result<()> {
     Ok(())
 }
 
-fn workspace_groups_conflict_fixture(
-    context: &TestContext,
-    group_configuration: &str,
-    project_conflict_first: Option<bool>,
-) -> Result<PackseServer> {
+#[test]
+fn workspace_groups_inferred_extra_and_group_splits() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
     let scenario = toml::from_str::<Scenario>(indoc! {r#"
         name = "workspace-group-extra-group-splits"
         [root]
@@ -106,86 +104,55 @@ fn workspace_groups_conflict_fixture(
         [packages.group-leaf.versions."2.0.0"]
         sdist = false
     "#})?;
-    let project_conflict = r#"    [{ package = "root-a" }, { package = "root-b" }],"#;
-    context.temp_dir.child("pyproject.toml").write_str(
-        &indoc! {r#"
-            [tool.uv]
-            conflicts = [
-            # project-conflict-first
-                [{ package = "root-a", extra = "legacy" }, { package = "root-a", extra = "modern" }],
-                [{ package = "root-a", group = "legacy" }, { package = "root-a", group = "modern" }],
-            # project-conflict-last
-            ]
-            [tool.uv.workspace]
-            members = ["members/*"]
-            # workspace-groups
-        "#}
-        .replace(
-            "# project-conflict-first",
-            if project_conflict_first == Some(true) {
-                project_conflict
-            } else {
-                ""
-            },
-        )
-        .replace(
-            "# project-conflict-last",
-            if project_conflict_first == Some(false) {
-                project_conflict
-            } else {
-                ""
-            },
-        )
-        .replace("# workspace-groups", group_configuration),
-    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        conflicts = [
+            [{ package = "root-a", extra = "legacy" }, { package = "root-a", extra = "modern" }],
+            [{ package = "root-a", group = "legacy" }, { package = "root-a", group = "modern" }],
+        ]
+        [tool.uv.workspace]
+        members = ["members/*"]
+        [[tool.uv.workspace.groups]]
+        name = "a"
+        members = ["root-a"]
+        [[tool.uv.workspace.groups]]
+        name = "b"
+        members = ["root-b"]
+    "#})?;
     context
         .temp_dir
         .child("members/root-a/pyproject.toml")
         .write_str(indoc! {r#"
-            [project]
-            name = "root-a"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            dependencies = ["shared-leaf<2"]
-            [project.optional-dependencies]
-            legacy = ["extra-leaf<2"]
-            modern = ["extra-leaf>=2"]
-            [dependency-groups]
-            legacy = ["group-leaf<2"]
-            modern = ["group-leaf>=2"]
-            [tool.uv]
-            package = false
-        "#})?;
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf<2"]
+        [project.optional-dependencies]
+        legacy = ["extra-leaf<2"]
+        modern = ["extra-leaf>=2"]
+        [dependency-groups]
+        legacy = ["group-leaf<2"]
+        modern = ["group-leaf>=2"]
+        [tool.uv]
+        package = false
+    "#})?;
     context
         .temp_dir
         .child("members/root-b/pyproject.toml")
         .write_str(indoc! {r#"
-            [project]
-            name = "root-b"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            dependencies = ["shared-leaf>=2"]
-            [tool.uv]
-            package = false
-        "#})?;
-    Ok(PackseServer::from_scenario(&scenario))
-}
-
-#[test]
-fn workspace_groups_inferred_extra_and_group_splits() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let server = workspace_groups_conflict_fixture(
-        &context,
-        indoc! {r#"
-            [[tool.uv.workspace.groups]]
-            name = "a"
-            members = ["root-a"]
-            [[tool.uv.workspace.groups]]
-            name = "b"
-            members = ["root-b"]
-        "#},
-        None,
-    )?;
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf>=2"]
+        [tool.uv]
+        package = false
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -228,12 +195,71 @@ fn workspace_groups_inferred_extra_and_group_splits() -> Result<()> {
 #[test]
 fn workspace_groups_explicit_project_conflicts() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let groups = indoc! {r#"
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "workspace-group-extra-group-splits"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.extra-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.extra-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.group-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.group-leaf.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        conflicts = [
+            [{ package = "root-a", extra = "legacy" }, { package = "root-a", extra = "modern" }],
+            [{ package = "root-a", group = "legacy" }, { package = "root-a", group = "modern" }],
+            [{ package = "root-a" }, { package = "root-b" }],
+        ]
+        [tool.uv.workspace]
+        members = ["members/*"]
         [[tool.uv.workspace.groups]]
         name = "apps"
         members = ["root-a", "root-b"]
-    "#};
-    let server = workspace_groups_conflict_fixture(&context, groups, Some(false))?;
+    "#})?;
+    context
+        .temp_dir
+        .child("members/root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf<2"]
+        [project.optional-dependencies]
+        legacy = ["extra-leaf<2"]
+        modern = ["extra-leaf>=2"]
+        [dependency-groups]
+        legacy = ["group-leaf<2"]
+        modern = ["group-leaf>=2"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("members/root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf>=2"]
+        [tool.uv]
+        package = false
+    "#})?;
     uv_snapshot!(context.filters(), context.lock()
         .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
     exit_code: 0 (success)
@@ -274,7 +300,22 @@ fn workspace_groups_explicit_project_conflicts() -> Result<()> {
     ");
 
     // Project conflict ordering must not change the set of possible forks.
-    let server = workspace_groups_conflict_fixture(&context, groups, Some(true))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        conflicts = [
+            [{ package = "root-a" }, { package = "root-b" }],
+            [{ package = "root-a", extra = "legacy" }, { package = "root-a", extra = "modern" }],
+            [{ package = "root-a", group = "legacy" }, { package = "root-a", group = "modern" }],
+        ]
+        [tool.uv.workspace]
+        members = ["members/*"]
+        [[tool.uv.workspace.groups]]
+        name = "apps"
+        members = ["root-a", "root-b"]
+    "#})?;
     fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
     uv_snapshot!(context.filters(), context.lock()
         .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
@@ -288,7 +329,17 @@ fn workspace_groups_explicit_project_conflicts() -> Result<()> {
 #[test]
 fn workspace_groups_explicit_own_extra_conflict() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let server = workspace_groups_conflict_fixture(&context, "", None)?;
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "workspace-group-extra-group-splits"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
     context
         .temp_dir
         .child("pyproject.toml")
@@ -315,16 +366,16 @@ fn workspace_groups_explicit_own_extra_conflict() -> Result<()> {
             [tool.uv]
             package = false
         "#})?;
-    let failure = context
-        .lock()
+    uv_snapshot!(context.filters(), context.lock()
         .args(["--preview-features", "package-conflicts", "--index-url"])
-        .arg(server.index_url())
-        .assert()
-        .failure();
-    let stderr = std::str::from_utf8(&failure.get_output().stderr)?;
-    assert!(stderr.contains("Failed to resolve workspace group `apps`"));
-    assert!(stderr.contains("shared-leaf>=2"));
-    assert!(stderr.contains("shared-leaf<2"));
+        .arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to resolve workspace group `apps`
+      cause: No solution found when resolving dependencies for split (markers: python_full_version >= '3.12'; included: root-a[modern]; excluded: root-a)
+      cause: Because root-a[modern] depends on shared-leaf>=2 and your project depends on shared-leaf<2, we can conclude that your project and root-a[modern] are incompatible.
+             And because your project requires root-a[modern], we can conclude that your project's requirements are unsatisfiable.
+    ");
 
     // An explicitly conflicting extra is an alternative root, but still depends on its base.
     context
@@ -969,23 +1020,30 @@ fn workspace_groups_higher_order_conflict() -> Result<()> {
         .assert()
         .success();
     assert_eq!(original, context.read("uv.lock"));
-    for (name, excluded) in [("one", 1), ("two", 2), ("three", 3)] {
-        let output = context
-            .export()
-            .args([
-                "--offline",
-                "--frozen",
-                "--workspace-group",
-                name,
-                "--no-header",
-                "--no-hashes",
-            ])
-            .output()?;
-        output.clone().assert().success();
-        let output = String::from_utf8(output.stdout)?;
-        assert!(output.contains("leaf=="));
-        assert!(!output.contains(&format!("leaf=={excluded}.0.0")));
-    }
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--workspace-group", "one", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==3.0.0
+        # via one
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--workspace-group", "two", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==1.0.0
+        # via two
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--workspace-group", "three", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==1.0.0
+        # via three
+    ");
     Ok(())
 }
 
@@ -1666,6 +1724,337 @@ fn workspace_groups_batch_all_packages_uses_selected_roots() -> Result<()> {
     branch-two==1.0.0
     common-leaf==1.0.0
     shared-leaf==2.0.0
+    ");
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_ordinary_python_intersection() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["a", "b"]
+        [[tool.uv.workspace.groups]]
+        name = "first"
+        members = ["a"]
+        [[tool.uv.workspace.groups]]
+        name = "second"
+        members = ["b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = []
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "0.1.0"
+        requires-python = ">=3.13,<3.15"
+        dependencies = []
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .venv()
+        .args(["--clear", "--python", "3.12"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args(["--all-packages", "--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.python_command().arg("-c").arg("import sys; print(sys.version_info[:2])"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 13)
+    ");
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_frozen_transitive_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "common"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        [tool.uv.sources]
+        common = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["common"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("common/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "common"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("app/pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("common/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--workspace-group", "main", "--package", "common", "--preview-features", "frozen-lockfile",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"exit_code: 0 (success)");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--workspace-group", "main", "--package", "common", "--preview-features", "frozen-lockfile", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_retain_later_member_groups() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "workspace-group-member-metadata"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.test-leaf.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "common", "other"]
+        [[tool.uv.workspace.groups]]
+        name = "first"
+        members = ["app"]
+        [[tool.uv.workspace.groups]]
+        name = "second"
+        members = ["common", "other"]
+        [tool.uv.sources]
+        common = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["common", "shared-leaf<2"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("common/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "common"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["test-leaf"]
+        [tool.uv]
+        package = false
+        default-groups = ["test"]
+        [tool.uv.dependency-groups]
+        test = { requires-python = ">=3.13" }
+    "#})?;
+    context
+        .temp_dir
+        .child("other/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "other"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf>=2"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    context
+        .venv()
+        .args(["--clear", "--python", "3.12"])
+        .assert()
+        .success();
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("app/pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("common/pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("other/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--workspace-group", "second", "--package", "common", "--preview-features", "frozen-lockfile",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + test-leaf==1.0.0
+    ");
+    uv_snapshot!(context.python_command().arg("-c").arg("import sys; from importlib.metadata import version; print(sys.version_info[:2]); print(version('test-leaf'))"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 13)
+    1.0.0
+    ");
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_retain_context_resolution_inputs() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "workspace-group-retained-inputs"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.only-later.versions."1.0.0"]
+        sdist = false
+        [packages.later-leaf.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        exclude-dependencies = ["only-later"]
+        [tool.uv.exclude-newer-package]
+        later-leaf = "2100-01-01T00:00:00Z"
+        [tool.uv.workspace]
+        members = ["a", "b"]
+        [[tool.uv.workspace.groups]]
+        name = "first"
+        members = ["a"]
+        [[tool.uv.workspace.groups]]
+        name = "second"
+        members = ["b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf<2"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf>=2", "only-later", "later-leaf"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--preview-features", "resolution-inputs", "--index-url"])
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock.get("options")
+            .and_then(|options| options.get("exclude-newer-package"))
+            .and_then(|packages| packages.get("later-leaf"))
+            .and_then(toml::Value::as_str),
+        Some("2100-01-01T00:00:00Z"),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&context.read("pyproject.toml").replace(
+            "exclude-dependencies = [\"only-later\"]",
+            "exclude-dependencies = []",
+        ))?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--locked", "--preview-features", "resolution-inputs", "--index-url",
+    ]).arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     Ok(())
 }

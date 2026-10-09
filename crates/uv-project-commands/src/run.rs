@@ -87,8 +87,8 @@ struct GistFile {
 }
 
 use crate::lock::{
-    command_workspace_group, select_workspace_group_lock, select_workspace_group_result,
-    workspace_selection_members,
+    command_workspace_group, command_workspace_group_from_lock, select_workspace_group_lock,
+    select_workspace_group_result, workspace_selection_members,
 };
 
 /// Run a command.
@@ -645,41 +645,48 @@ pub async fn run(
         if let Some(project) = project {
             let mut selection_members =
                 workspace_selection_members(&project, package.as_slice(), all_packages);
-            let explicit_workspace_group = workspace_group.is_some();
-            let workspace_group = command_workspace_group(
-                project.workspace(),
-                workspace_group.as_ref(),
-                Some(&selection_members),
-                frozen,
-                &settings.resolver.sources,
-            )
-            .await
-            .map_err(UvError::from)?;
+            let workspace_group = if no_sync && frozen.is_some() && workspace_group.is_none() {
+                // An unqualified no-sync invocation does not require a lockfile to exist.
+                match LockTarget::Workspace(project.workspace()).read().await? {
+                    Some(lock) => {
+                        command_workspace_group_from_lock(&lock, None, Some(&selection_members))?
+                    }
+                    None => None,
+                }
+            } else {
+                command_workspace_group(
+                    project.workspace(),
+                    workspace_group.as_ref(),
+                    Some(&selection_members),
+                    frozen,
+                    &settings.resolver.sources,
+                )
+                .await
+                .map_err(UvError::from)?
+            };
             let select_group_roots = workspace_group
                 .as_ref()
-                .is_some_and(|group| explicit_workspace_group || group.definition.default);
+                .is_some_and(|group| group.name.is_some());
             if select_group_roots
                 && package.is_none()
                 && let Some(group) = &workspace_group
             {
-                selection_members.clone_from(&group.definition.members);
+                selection_members.clone_from(&group.members);
             }
-            let group_workspace = workspace_group.as_ref().map(|group| {
-                project
-                    .workspace()
-                    .with_workspace_groups(std::slice::from_ref(group))
-            });
+            let group_workspace = workspace_group
+                .as_ref()
+                .map(|group| group.scoped_workspace(project.workspace()));
             let environment_workspace = group_workspace
                 .as_ref()
                 .unwrap_or_else(|| project.workspace());
             let group_members = workspace_group
                 .as_ref()
                 .filter(|_| select_group_roots)
-                .map(|group| group.definition.members.iter().cloned().collect::<Vec<_>>());
+                .map(|group| group.members.iter().cloned().collect::<Vec<_>>());
             let selected_workspace_group = workspace_group
                 .as_ref()
                 .filter(|_| select_group_roots)
-                .map(|group| &group.definition.name);
+                .and_then(|group| group.name.as_ref());
             if let Some(project_name) = project.project_name() {
                 debug!(
                     "Discovered project `{project_name}` at: {}",

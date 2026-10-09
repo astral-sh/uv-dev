@@ -1254,24 +1254,32 @@ async fn do_lock(
                 lock_supported_environments.clone().into_markers(),
                 index_locations,
                 preview.is_enabled(PreviewFeature::LockWithoutMetadata),
-            )?
-            .with_conflicts(conflicts)
-            .with_required_environments(lock_required_environments.into_markers())
-            .with_member_default_groups(
-                packages
-                    .iter()
-                    .filter_map(|(name, member)| {
-                        member
-                            .pyproject_toml()
-                            .configured_default_groups()
-                            .cloned()
-                            .map(|groups| (name.clone(), groups))
-                    })
-                    .collect(),
-            )
-            .with_workspace_default_groups(workspace_default_groups)
-            .with_member_group_metadata(packages)?
-            .with_workspace_group_metadata(workspace_group_metadata);
+            )?;
+            let lock = if let LockTarget::Workspace(workspace) = target
+                && workspace.is_workspace_group_resolution()
+            {
+                lock.with_workspace_members(packages, target.install_path())
+            } else {
+                lock
+            };
+            let lock = lock
+                .with_conflicts(conflicts)
+                .with_required_environments(lock_required_environments.into_markers())
+                .with_member_default_groups(
+                    packages
+                        .iter()
+                        .filter_map(|(name, member)| {
+                            member
+                                .pyproject_toml()
+                                .configured_default_groups()
+                                .cloned()
+                                .map(|groups| (name.clone(), groups))
+                        })
+                        .collect(),
+                )
+                .with_workspace_default_groups(workspace_default_groups)
+                .with_member_group_metadata(packages)?
+                .with_workspace_group_metadata(workspace_group_metadata);
 
             let lock = if let Some(recorder) = recorder {
                 lock.prune_unused(recorder.take())

@@ -1078,7 +1078,9 @@ impl Workspace {
         &self.packages
     }
 
-    pub(crate) fn with_resolution(&self, resolution: WorkspaceResolution) -> Self {
+    /// Scope the workspace to the given resolution roots and environment.
+    #[must_use]
+    pub fn with_resolution(&self, resolution: WorkspaceResolution) -> Self {
         Self {
             resolution: Some(resolution),
             ..self.clone()

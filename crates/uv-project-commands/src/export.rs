@@ -286,7 +286,6 @@ pub async fn export(
         ),
         ExportSource::Manifest(ExportTarget::Script(_)) => BTreeSet::default(),
     };
-    let explicit_workspace_group = workspace_group.is_some();
     let workspace_group = match &source {
         ExportSource::Manifest(ExportTarget::Project(project)) => command_workspace_group(
             project.workspace(),
@@ -311,20 +310,18 @@ pub async fn export(
         }
     };
     let group_workspace = match (&source, &workspace_group) {
-        (ExportSource::Manifest(ExportTarget::Project(project)), Some(group)) => Some(
-            project
-                .workspace()
-                .with_workspace_groups(std::slice::from_ref(group)),
-        ),
+        (ExportSource::Manifest(ExportTarget::Project(project)), Some(group)) => {
+            Some(group.scoped_workspace(project.workspace()))
+        }
         _ => None,
     };
     if let Some(group) = &workspace_group
-        && (explicit_workspace_group || group.definition.default)
+        && (group.name.is_some())
         && package.is_empty()
     {
-        selection_members.clone_from(&group.definition.members);
+        selection_members.clone_from(&group.members);
         if !all_packages {
-            package.extend(group.definition.members.iter().cloned());
+            package.extend(group.members.iter().cloned());
         }
     }
 
@@ -439,12 +436,12 @@ pub async fn export(
     if let Some(batch) = &batch {
         let selected_group = workspace_group
             .as_ref()
-            .filter(|group| explicit_workspace_group || group.definition.default);
+            .filter(|group| group.name.is_some());
         let mut writers = Vec::with_capacity(batch.export.len());
         for entry in &batch.export {
             let entry_packages = if entry.package.is_empty() && !entry.all_packages {
                 selected_group
-                    .map(|group| group.definition.members.iter().cloned().collect())
+                    .map(|group| group.members.iter().cloned().collect())
                     .unwrap_or_default()
             } else {
                 entry.package.clone()
@@ -452,7 +449,7 @@ pub async fn export(
             let members = if entry.all_packages
                 && let Some(group) = selected_group
             {
-                group.definition.members.clone()
+                group.members.clone()
             } else {
                 match &source {
                     ExportSource::Manifest(ExportTarget::Project(project)) => {
@@ -473,7 +470,7 @@ pub async fn export(
                 }
             };
             let selected_lock = resolved_lock.select_workspace_context(
-                selected_group.map(|group| &group.definition.name),
+                selected_group.and_then(|group| group.name.as_ref()),
                 &members,
             )?;
 
@@ -569,8 +566,8 @@ pub async fn export(
         resolved_lock,
         workspace_group
             .as_ref()
-            .filter(|group| explicit_workspace_group || group.definition.default)
-            .map(|group| &group.definition.name),
+            .filter(|group| group.name.is_some())
+            .and_then(|group| group.name.as_ref()),
         &selection_members,
     )?;
     let lock = &resolved_lock;

@@ -154,7 +154,7 @@ impl Lock {
             .iter()
             .flat_map(|group| group.definition.members.iter().cloned())
             .collect();
-        let options = first.options.clone();
+        let mut options = first.options.clone();
         let conflicts = first.conflicts.clone();
         let mut supported_environments = MarkerTree::FALSE;
         let required_environments = first.required_environments.clone();
@@ -163,6 +163,11 @@ impl Lock {
         let mut fork_markers = BTreeSet::new();
 
         for (names, lock) in std::iter::once((first_names, first)).chain(resolutions) {
+            merge_manifest(&mut manifest, lock.manifest);
+            options
+                .exclude_newer
+                .package
+                .extend(lock.options.exclude_newer.package);
             if lock.supported_environments.is_empty() {
                 supported_environments = MarkerTree::TRUE;
             } else {
@@ -401,13 +406,18 @@ impl Lock {
         let revision = first.revision;
         let mut manifest = first.manifest.clone();
         manifest.members = member_environments.into_keys().collect();
-        let options = first.options.clone();
+        let mut options = first.options.clone();
         let conflicts = first.conflicts.clone();
         let required_environments = first.required_environments.clone();
         let mut packages = BTreeMap::<PackageId, Package>::new();
         let mut supported_environments = MarkerTree::FALSE;
         let mut fork_markers = BTreeSet::new();
         for lock in std::iter::once(first).chain(resolutions) {
+            merge_manifest(&mut manifest, lock.manifest);
+            options
+                .exclude_newer
+                .package
+                .extend(lock.options.exclude_newer.package);
             let environment = environment.and(super::implicit_constraints_marker(
                 lock.requires_python.to_exact_marker_tree(),
                 &lock.supported_environments,
@@ -641,6 +651,44 @@ fn root_marker(
     (!marker.is_false()).then_some(marker)
 }
 
+/// Retain inputs consulted by every independently resolved workspace context.
+fn merge_manifest(target: &mut ResolverManifest, manifest: ResolverManifest) {
+    let ResolverManifest {
+        members,
+        workspace_members,
+        default_groups,
+        group_requires_python,
+        requirements,
+        dependency_groups,
+        constraints,
+        overrides,
+        excludes,
+        build_constraints,
+        dependency_metadata,
+    } = manifest;
+    let full_members = target
+        .workspace_members
+        .get_or_insert_with(|| target.members.clone());
+    full_members.extend(workspace_members.unwrap_or(members));
+    if target.default_groups.is_none() {
+        target.default_groups = default_groups;
+    }
+    target.group_requires_python.extend(group_requires_python);
+    target.requirements.extend(requirements);
+    for (group, requirements) in dependency_groups {
+        target
+            .dependency_groups
+            .entry(group)
+            .or_default()
+            .extend(requirements);
+    }
+    target.constraints.extend(constraints);
+    target.overrides.extend(overrides);
+    target.excludes.extend(excludes);
+    target.build_constraints.extend(build_constraints);
+    target.dependency_metadata.extend(dependency_metadata);
+}
+
 fn merge_package(
     packages: &mut BTreeMap<PackageId, Package>,
     package: Package,
@@ -652,6 +700,12 @@ fn merge_package(
         }
         std::collections::btree_map::Entry::Occupied(mut entry) => {
             let target = entry.get_mut();
+            if target.default_groups.is_none() {
+                target.default_groups = package.default_groups;
+            }
+            target
+                .group_requires_python
+                .extend(package.group_requires_python);
             target.fork_markers.extend(package.fork_markers);
             target.fork_markers.sort();
             target.fork_markers.dedup();

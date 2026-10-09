@@ -169,7 +169,6 @@ pub async fn sync(
         ),
         SyncTarget::Manifest(SyncManifest::Script(_)) => BTreeSet::default(),
     };
-    let explicit_workspace_group = workspace_group.is_some();
     let workspace_group = match &target {
         SyncTarget::Manifest(SyncManifest::Project(project)) => command_workspace_group(
             project.workspace(),
@@ -194,20 +193,18 @@ pub async fn sync(
         }
     };
     let group_workspace = match (&target, &workspace_group) {
-        (SyncTarget::Manifest(SyncManifest::Project(project)), Some(group)) => Some(
-            project
-                .workspace()
-                .with_workspace_groups(std::slice::from_ref(group)),
-        ),
+        (SyncTarget::Manifest(SyncManifest::Project(project)), Some(group)) => {
+            Some(group.scoped_workspace(project.workspace()))
+        }
         _ => None,
     };
     if let Some(group) = &workspace_group
-        && (explicit_workspace_group || group.definition.default)
+        && (group.name.is_some())
         && package.is_empty()
     {
-        selection_members.clone_from(&group.definition.members);
+        selection_members.clone_from(&group.members);
         if !all_packages {
-            package.extend(group.definition.members.iter().cloned());
+            package.extend(group.members.iter().cloned());
         }
     }
 
@@ -234,8 +231,8 @@ pub async fn sync(
 
     let selected_workspace_group = workspace_group
         .as_ref()
-        .filter(|group| explicit_workspace_group || group.definition.default)
-        .map(|group| &group.definition.name);
+        .filter(|group| group.name.is_some())
+        .and_then(|group| group.name.as_ref());
     let selected_frozen_lock = match (&target, frozen_lock.as_ref()) {
         (SyncTarget::Lockfile { workspace, .. }, _) => Some(select_workspace_group_lock(
             workspace.lock().clone(),

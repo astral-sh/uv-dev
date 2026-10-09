@@ -25,6 +25,7 @@ use uv_normalize::{GroupName, PackageName};
 use uv_pep440::Version;
 use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
+use uv_pypi_types::SupportedEnvironments;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -37,6 +38,7 @@ use uv_settings::{FrozenSource, LockCheck, PythonInstallMirrors, ResolverSetting
 use uv_warnings::warn_user;
 use uv_workspace::{
     DiscoveryOptions, ResolvedWorkspaceGroup, VirtualProject, Workspace, WorkspaceCache,
+    WorkspaceResolution,
 };
 
 use crate::{ProjectError, ScriptPath};
@@ -110,12 +112,46 @@ pub(crate) fn lockfile_selection_members(
     }
 }
 
+/// The interpreter domain of selected roots, with an optional named context.
+pub(crate) struct CommandWorkspaceSelection {
+    pub name: Option<GroupName>,
+    pub members: BTreeSet<PackageName>,
+    requires_python: RequiresPython,
+    environments: MarkerTree,
+}
+
+impl From<ResolvedWorkspaceGroup> for CommandWorkspaceSelection {
+    fn from(group: ResolvedWorkspaceGroup) -> Self {
+        Self {
+            name: Some(group.definition.name),
+            members: group.definition.members,
+            requires_python: group.requires_python,
+            environments: group.environments,
+        }
+    }
+}
+
+impl CommandWorkspaceSelection {
+    pub(crate) fn scoped_workspace(&self, workspace: &Workspace) -> Workspace {
+        workspace.with_resolution(WorkspaceResolution {
+            roots: self
+                .members
+                .iter()
+                .cloned()
+                .map(|name| (name, self.environments))
+                .collect(),
+            requires_python: self.requires_python.clone(),
+            environments: SupportedEnvironments::from_markers(vec![self.environments]),
+        })
+    }
+}
+
 /// Select group metadata for Python discovery from an existing lockfile.
 pub(crate) fn command_workspace_group_from_lock(
     lock: &Lock,
     name: Option<&GroupName>,
     members: Option<&BTreeSet<PackageName>>,
-) -> Result<Option<ResolvedWorkspaceGroup>, ProjectError> {
+) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
     if lock.workspace_groups().is_empty() {
         return if let Some(name) = name {
             Err(WorkspaceGroupSelectionError::Missing(name.clone()).into())
@@ -139,8 +175,9 @@ pub(crate) fn command_workspace_group_from_lock(
                 .flatten()
         })
     {
-        return Ok(Some(ResolvedWorkspaceGroup {
-            definition: group.definition.clone(),
+        return Ok(Some(CommandWorkspaceSelection {
+            name: Some(group.definition.name.clone()),
+            members: group.definition.members.clone(),
             requires_python: group.effective_requires_python.clone(),
             environments: group.effective_environment(),
         }));
@@ -157,30 +194,15 @@ pub(crate) fn command_workspace_group_from_lock(
         members
     };
     let selected = select_workspace_group_lock(lock.clone(), None, members)?;
-    // This synthetic view is only used for interpreter discovery. Ordinary targeting
-    // keeps the union of compatible contexts instead of choosing one by name.
-    for group in lock.workspace_groups() {
-        if let Some(candidate) = lock.select_workspace_group(&group.definition.name)?
-            && candidate
-                .packages()
-                .iter()
-                .any(|package| members.contains(package.name()))
-        {
-            let mut definition = group.definition.clone();
-            definition.members.clone_from(members);
-            definition.requires_python = None;
-            definition.default = false;
-            return Ok(Some(ResolvedWorkspaceGroup {
-                definition,
-                requires_python: selected.requires_python().clone(),
-                environments: implicit_constraints_marker(
-                    selected.requires_python().to_exact_marker_tree(),
-                    selected.supported_environments(),
-                ),
-            }));
-        }
-    }
-    Ok(None)
+    Ok(Some(CommandWorkspaceSelection {
+        name: None,
+        members: members.clone(),
+        requires_python: selected.requires_python().clone(),
+        environments: implicit_constraints_marker(
+            selected.requires_python().to_exact_marker_tree(),
+            selected.supported_environments(),
+        ),
+    }))
 }
 
 /// Select group metadata for Python discovery, using only the lock in frozen mode.
@@ -190,7 +212,7 @@ pub(crate) async fn command_workspace_group(
     members: Option<&BTreeSet<PackageName>>,
     frozen: Option<FrozenSource>,
     no_sources: &NoSources,
-) -> Result<Option<ResolvedWorkspaceGroup>, ProjectError> {
+) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
     if let Some(frozen) = frozen {
         let lock = LockTarget::Workspace(workspace)
             .read_frozen(frozen.into())
@@ -202,7 +224,7 @@ pub(crate) async fn command_workspace_group(
         return groups
             .into_iter()
             .find(|group| group.definition.name == *name)
-            .map(Some)
+            .map(|group| Some(CommandWorkspaceSelection::from(group)))
             .ok_or_else(|| {
                 uv_workspace::WorkspaceError::from(
                     uv_workspace::WorkspaceErrorKind::UnknownWorkspaceGroup(name.clone()),
@@ -211,42 +233,40 @@ pub(crate) async fn command_workspace_group(
             });
     }
     if let Some(group) = groups.iter().find(|group| group.definition.default) {
-        return Ok(Some(group.clone()));
+        return Ok(Some(group.clone().into()));
     }
-    let all_members;
-    let members = if let Some(members) = members {
-        members
+    if groups.is_empty() {
+        return Ok(None);
+    }
+    let environments = if let Some(members) = members {
+        let mut environments = MarkerTree::TRUE;
+        for member in members {
+            let supported = groups
+                .iter()
+                .filter_map(|group| group.member_environments.get(member))
+                .fold(MarkerTree::FALSE, |supported, marker| supported.or(*marker));
+            if supported.is_false() {
+                return Err(WorkspaceGroupSelectionError::Uncovered.into());
+            }
+            environments = environments.and(supported);
+        }
+        environments
     } else {
-        all_members = workspace.packages().keys().cloned().collect();
-        &all_members
-    };
-    let mut candidates = groups
-        .iter()
-        .filter(|group| members.is_subset(&group.definition.members))
-        .cloned()
-        .collect::<Vec<_>>();
-    if candidates.is_empty() {
-        candidates = groups;
-    }
-    let Some(requires_python) =
-        RequiresPython::union(candidates.iter().map(|group| &group.requires_python))
-    else {
-        return Ok(None);
-    };
-    let environments = candidates
-        .iter()
-        .fold(MarkerTree::FALSE, |environment, group| {
+        // Batch exports select their roots independently and can use any supported context.
+        groups.iter().fold(MarkerTree::FALSE, |environment, group| {
             environment.or(group.environments)
-        });
-    let Some(mut group) = candidates.into_iter().next() else {
-        return Ok(None);
+        })
     };
-    group.definition.members.clone_from(members);
-    group.definition.requires_python = None;
-    group.definition.default = false;
-    group.requires_python = requires_python;
-    group.environments = environments;
-    Ok(Some(group))
+    let requires_python = RequiresPython::from_marker_tree(environments)
+        .ok_or(WorkspaceGroupSelectionError::Ambiguous)?;
+    Ok(Some(CommandWorkspaceSelection {
+        name: None,
+        members: members
+            .cloned()
+            .unwrap_or_else(|| workspace.packages().keys().cloned().collect()),
+        requires_python,
+        environments,
+    }))
 }
 
 /// Resolve the project requirements into a lockfile.
