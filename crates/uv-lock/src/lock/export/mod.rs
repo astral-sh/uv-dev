@@ -525,7 +525,7 @@ fn validate_requested_conflicts<'lock>(
         .iter()
         .map(|(item, marker)| (item.clone(), *marker))
         .collect::<BTreeMap<_, _>>();
-    for request in requests.finish(&known_conflicts, None) {
+    for request in requests.finish(&known_conflicts) {
         let (index, extra, marker) = request?;
         let package = lock.package(index);
         if groups.prod() && lock.is_workspace_package(package) {

@@ -9,7 +9,7 @@ use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use uv_normalize::{ExtraName, GroupName};
 use uv_pep508::MarkerTree;
-use uv_pypi_types::{ConflictItem, ConflictSet, ResolverMarkerEnvironment};
+use uv_pypi_types::{ConflictItem, ConflictSet};
 use uv_resolver_types::graph_ops::{Reachable, marker_reachability};
 use uv_resolver_types::universal_marker::resolve_activated_extras;
 use uv_resolver_types::{ConflictMarker, UniversalMarker};
@@ -187,7 +187,6 @@ impl<'lock> ConflictRequests<'lock> {
     pub(super) fn finish(
         self,
         known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
-        marker_environment: Option<&ResolverMarkerEnvironment>,
     ) -> impl Iterator<Item = Result<(PackageIndex, Option<ExtraName>, MarkerTree), LockError>>
     {
         let known_conflicts = self.global_conflicts(known_conflicts);
@@ -200,10 +199,7 @@ impl<'lock> ConflictRequests<'lock> {
                     .get(&node)
                     .copied()
                     .unwrap_or(MarkerTree::FALSE);
-                if marker.is_false()
-                    || marker_environment
-                        .is_some_and(|environment| !marker.evaluate(environment.markers(), &[]))
-                {
+                if marker.is_false() {
                     return None;
                 }
                 let package = lock.package(index);
@@ -507,7 +503,7 @@ mod tests {
         );
         assert!(requests.queue.is_empty());
         let requests = requests
-            .finish(&FxHashMap::default(), None)
+            .finish(&FxHashMap::default())
             .collect::<Result<Vec<_>, _>>()?;
         assert!(requests.is_empty());
         Ok(())
