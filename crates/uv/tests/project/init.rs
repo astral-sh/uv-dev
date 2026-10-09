@@ -3818,6 +3818,7 @@ fn init_application_package_hatchling() -> Result<()> {
 #[test]
 fn init_with_description() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let description = r#"A "quoted" description with C:\new\thing"#;
 
     let child = context.temp_dir.join("foo");
     fs_err::create_dir_all(&child)?;
@@ -3827,13 +3828,17 @@ fn init_with_description() -> Result<()> {
         .init()
         .current_dir(&child)
         .arg("--description")
-        .arg("A sample project description")
+        .arg(description)
         .arg("--lib")
         .assert()
         .success();
 
     // Read the generated pyproject.toml
     let pyproject = context.read("foo/pyproject.toml");
+
+    // Snapshot filters normalize backslashes, so check the decoded description separately.
+    let parsed: toml::Value = toml::from_str(&pyproject)?;
+    assert_eq!(parsed["project"]["description"].as_str(), Some(description));
 
     // Verify the description in pyproject.toml
     insta::with_settings!({
@@ -3844,7 +3849,7 @@ fn init_with_description() -> Result<()> {
         [project]
         name = "foo"
         version = "0.1.0"
-        description = "A sample project description"
+        description = 'A "quoted" description with C:/new/thing'
         readme = "README.md"
         requires-python = ">=3.12"
         dependencies = []
@@ -3857,6 +3862,33 @@ fn init_with_description() -> Result<()> {
     });
 
     Ok(())
+}
+
+#[test]
+fn init_with_description_rejects_newlines() {
+    let context = uv_test::test_context!("3.12");
+
+    uv_snapshot!(context.filters(), context.init()
+        .arg("carriage-return")
+        .arg("--description")
+        .arg("First line\rSecond line")
+        .arg("--lib"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--description` must be a single line
+    ");
+    assert!(!context.temp_dir.child("carriage-return").exists());
+
+    uv_snapshot!(context.filters(), context.init()
+        .arg("line-feed")
+        .arg("--description")
+        .arg("First line\nSecond line")
+        .arg("--lib"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--description` must be a single line
+    ");
+    assert!(!context.temp_dir.child("line-feed").exists());
 }
 
 #[test]
