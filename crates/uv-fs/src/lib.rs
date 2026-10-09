@@ -622,10 +622,31 @@ pub fn with_retry_sync(
 /// Why a file persist failed
 #[cfg(windows)]
 enum PersistRetryError {
-    /// Something went wrong while persisting, maybe retry (contains error message)
-    Persist(String),
+    /// Something went wrong while persisting, maybe retry.
+    Persist(io::Error),
     /// Something went wrong trying to retrieve the file to persist, we must bail
     LostState,
+}
+
+/// Retain the operating system error while adding the destination to the diagnostic.
+#[cfg(any(windows, test))]
+#[derive(Debug, thiserror::Error)]
+#[error("Failed to persist temporary file to `{}`", path.display())]
+struct PersistErrorContext {
+    path: PathBuf,
+    #[source]
+    source: io::Error,
+}
+
+#[cfg(any(windows, test))]
+fn persist_error(path: &Path, source: io::Error) -> io::Error {
+    io::Error::new(
+        source.kind(),
+        PersistErrorContext {
+            path: path.to_path_buf(),
+            source,
+        },
+    )
 }
 
 /// Persist a `NamedTempFile`, retrying (on Windows) if it fails due to transient operating system
@@ -676,11 +697,10 @@ async fn persist_with_retry(
                     .take();
                 if let Some(file) = maybe_file {
                     file.persist(to).map_err(|err| {
-                        let error_message: String = err.to_string();
                         // Set back the `NamedTempFile` returned back by the Error
                         if let Ok(mut guard) = from2.lock() {
                             *guard = Some(err.file);
-                            PersistRetryError::Persist(error_message)
+                            PersistRetryError::Persist(err.error)
                         } else {
                             PersistRetryError::LostState
                         }
@@ -696,11 +716,11 @@ async fn persist_with_retry(
             .sleep(tokio::time::sleep)
             .when(|err| matches!(err, PersistRetryError::Persist(_)))
             .notify(|err, _dur| {
-                if let PersistRetryError::Persist(error_message) = err {
+                if let PersistRetryError::Persist(error) = err {
                     warn!(
-                        "Retrying to persist temporary file to `{}`: {}",
+                        "Retrying to persist temporary file to `{}`: failed to persist temporary file: {}",
                         to.display(),
-                        error_message,
+                        error,
                     );
                 }
             })
@@ -708,11 +728,7 @@ async fn persist_with_retry(
 
         match persisted {
             Ok(_) => Ok(()),
-            Err(PersistRetryError::Persist(error_message)) => Err(std::io::Error::other(format!(
-                "Failed to persist temporary file to `{}`: {}",
-                to.display(),
-                error_message,
-            ))),
+            Err(PersistRetryError::Persist(error)) => Err(persist_error(to, error)),
             Err(PersistRetryError::LostState) => Err(std::io::Error::other(format!(
                 "Failed to retrieve temporary file while trying to persist to `{}`",
                 to.display()
@@ -752,10 +768,9 @@ pub fn persist_with_retry_sync(
             // Needed because we cannot move out of `from`, a captured variable in an `FnMut` closure, and then pass it to the async move block
             if let Some(file) = from.take() {
                 file.persist(to).map_err(|err| {
-                    let error_message = err.to_string();
                     // Set back the NamedTempFile returned back by the Error
                     from = Some(err.file);
-                    PersistRetryError::Persist(error_message)
+                    PersistRetryError::Persist(err.error)
                 })
             } else {
                 Err(PersistRetryError::LostState)
@@ -767,11 +782,11 @@ pub fn persist_with_retry_sync(
             .sleep(std::thread::sleep)
             .when(|err| matches!(err, PersistRetryError::Persist(_)))
             .notify(|err, _dur| {
-                if let PersistRetryError::Persist(error_message) = err {
+                if let PersistRetryError::Persist(error) = err {
                     warn!(
-                        "Retrying to persist temporary file to `{}`: {}",
+                        "Retrying to persist temporary file to `{}`: failed to persist temporary file: {}",
                         to.display(),
-                        error_message,
+                        error,
                     );
                 }
             })
@@ -779,11 +794,7 @@ pub fn persist_with_retry_sync(
 
         match persisted {
             Ok(_) => Ok(()),
-            Err(PersistRetryError::Persist(error_message)) => Err(std::io::Error::other(format!(
-                "Failed to persist temporary file to `{}`: {}",
-                to.display(),
-                error_message,
-            ))),
+            Err(PersistRetryError::Persist(error)) => Err(persist_error(to, error)),
             Err(PersistRetryError::LostState) => Err(std::io::Error::other(format!(
                 "Failed to retrieve temporary file while trying to persist to `{}`",
                 to.display()
@@ -1039,8 +1050,109 @@ pub fn clear_virtualenv(location: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
+    use std::error::Error;
+
+    #[cfg(windows)]
+    use fs_err::os::windows::fs::OpenOptionsExt;
 
     use super::*;
+
+    #[test]
+    fn persist_error_retains_kind_source_and_destination() -> io::Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let destination = tempdir.path().join("missing").join("file");
+        let failure = tempfile_in(tempdir.path())?
+            .persist(&destination)
+            .expect_err("destination parent does not exist");
+        let expected_message = format!(
+            "Failed to persist temporary file to `{}`",
+            destination.display()
+        );
+        let expected_source = failure.error.to_string();
+        let expected_os_error = failure.error.raw_os_error();
+
+        let error = persist_error(&destination, failure.error);
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(error.to_string(), expected_message);
+        let source = error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .expect("persist error retains its I/O source");
+        assert_eq!(source.kind(), io::ErrorKind::NotFound);
+        assert_eq!(source.to_string(), expected_source);
+        assert_eq!(source.raw_os_error(), expected_os_error);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn persist_with_retry_sync_retains_not_found() -> io::Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let destination = tempdir.path().join("missing").join("file");
+        let error = persist_with_retry_sync(tempfile_in(tempdir.path())?, &destination)
+            .expect_err("destination parent does not exist");
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        let source = error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .expect("persist error retains its I/O source");
+        assert_eq!(source.kind(), io::ErrorKind::NotFound);
+        assert!(source.raw_os_error().is_some());
+        Ok(())
+    }
+
+    /// A destination open without sharing keeps persistence blocked through every retry.
+    #[cfg(windows)]
+    #[test]
+    fn persist_with_retry_sync_retains_locked_destination_error() -> io::Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let destination = tempdir.path().join("destination");
+        fs_err::write(&destination, "unchanged")?;
+        let locked = fs_err::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&destination)?;
+        let failure = tempfile_in(tempdir.path())?
+            .persist(&destination)
+            .expect_err("destination is open without sharing");
+        let expected_kind = failure.error.kind();
+        let expected_os_error = failure.error.raw_os_error();
+
+        let error = persist_with_retry_sync(failure.file, &destination)
+            .expect_err("destination stays locked during retries");
+
+        assert_eq!(error.kind(), expected_kind);
+        let source = error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .expect("persist error retains its I/O source");
+        assert_eq!(source.kind(), expected_kind);
+        assert_eq!(source.raw_os_error(), expected_os_error);
+        drop(locked);
+        assert_eq!(fs_err::read_to_string(destination)?, "unchanged");
+        Ok(())
+    }
+
+    #[cfg(all(windows, feature = "tokio"))]
+    #[tokio::test]
+    async fn persist_with_retry_retains_not_found() -> io::Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let destination = tempdir.path().join("missing").join("file");
+        let error = persist_with_retry(tempfile_in(tempdir.path())?, &destination)
+            .await
+            .expect_err("destination parent does not exist");
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        let source = error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .expect("persist error retains its I/O source");
+        assert_eq!(source.kind(), io::ErrorKind::NotFound);
+        assert!(source.raw_os_error().is_some());
+        Ok(())
+    }
 
     #[cfg(feature = "tokio")]
     #[test]
