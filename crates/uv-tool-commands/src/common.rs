@@ -730,7 +730,7 @@ pub(super) async fn refine_interpreter(
 }
 
 /// Collect executable destinations for the requested packages in an environment.
-pub(super) fn collect_tool_entrypoint_targets<'a>(
+fn collect_tool_entrypoint_targets<'a>(
     environment: &PythonEnvironment,
     packages: impl IntoIterator<Item = &'a PackageName>,
 ) -> anyhow::Result<Vec<(PackageName, PathBuf)>> {
@@ -758,7 +758,7 @@ pub(super) fn collect_tool_entrypoint_targets<'a>(
 }
 
 /// Check all prospective targets before changing installed packages or executables.
-pub(super) fn check_tool_entrypoint_targets(
+fn check_tool_entrypoint_targets(
     targets: Vec<(PackageName, PathBuf)>,
     existing_tool: &Tool,
 ) -> anyhow::Result<()> {
