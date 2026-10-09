@@ -48682,3 +48682,268 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
 
     Ok(())
 }
+
+/// Conflicts declared by named members apply to groups that include their dependencies.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_member_group_include_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [tool.uv.workspace]
+            members = ["child", "tools"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("tools")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "tools"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            test = [{ include-group = "base" }]
+            base = ["sortedcontainers==2.3.0"]
+            other = ["sortedcontainers==2.4.0"]
+
+            [tool.uv]
+            conflicts = [[{ group = "base" }, { group = "other" }]]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("include-group-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Workspace-group conflicts also apply to member groups that include them transitively.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_group_include_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            lint = [{ include-group = "format" }]
+            format = ["sortedcontainers==2.3.0"]
+            other = ["sortedcontainers==2.4.0"]
+
+            [tool.uv]
+            conflicts = [[{ group = "format" }, { group = "other" }]]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            lint = []
+            dev = [{ include-group = "lint" }]
+
+            [tool.uv.dependency-groups]
+            lint = { include-workspace-groups = ["lint"] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("include-group-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Conflict propagation follows group inclusion depth even when it exceeds the member count.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_group_deep_conflict_propagation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "deep-member-group-conflicts"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        [packages.example.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["a", "b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        g1 = []
+        g2 = ["example==1.0.0"]
+        other = ["example==2.0.0"]
+        [tool.uv]
+        conflicts = [[{ group = "g2" }, { group = "other" }]]
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = [{ package = "b", group = "g0" }] }
+        g1 = { include-workspace-groups = [{ package = "b", group = "g1" }] }
+    "#})?;
+    context
+        .temp_dir
+        .child("b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        g0 = []
+        g1 = []
+        [tool.uv.dependency-groups]
+        g0 = { include-workspace-groups = [{ package = "a", group = "g1" }] }
+        g1 = { include-workspace-groups = [{ package = "a", group = "g2" }] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A non-project root retains the conflict scope of included member groups and root aliases.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_nonproject_group_include_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "nonproject-root-group-conflicts"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        [packages.example.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        lint = [{ include-group = "check" }]
+        check = []
+        [tool.uv.dependency-groups]
+        check = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["tools", "child"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+        other = ["example==2.0.0"]
+        [tool.uv]
+        conflicts = [[{ group = "test" }, { group = "other" }]]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = ["lint"] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    "#);
+    Ok(())
+}
