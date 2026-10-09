@@ -152,8 +152,31 @@ impl ChecksumAuthority {
     ) -> Result<reqwest::Response, Error> {
         self.lookup(artifact)
             .await?
-            .verify_response(response, temporary_directory)
+            .verify_response(response, temporary_directory, |_| {})
             .await
+            .map(VerifiedArchive::into_response)
+    }
+}
+
+/// A complete authenticated archive and the metadata from its HTTP response.
+pub struct VerifiedArchive {
+    parts: http::response::Parts,
+    file: fs_err::tokio::File,
+}
+
+impl VerifiedArchive {
+    /// Reuse the authenticated file for seekable extraction.
+    pub fn into_parts(self) -> (http::response::Parts, fs_err::tokio::File) {
+        (self.parts, self.file)
+    }
+
+    /// Read authenticated bytes as a response while retaining its original metadata.
+    pub fn into_response(self) -> reqwest::Response {
+        http::Response::from_parts(
+            self.parts,
+            reqwest::Body::wrap_stream(ReaderStream::new(self.file)),
+        )
+        .into()
     }
 }
 
@@ -163,7 +186,8 @@ impl VerifiedRecord {
         &self,
         response: reqwest::Response,
         temporary_directory: &Path,
-    ) -> Result<reqwest::Response, Error> {
+        mut on_progress: impl FnMut(u64),
+    ) -> Result<VerifiedArchive, Error> {
         let record = self.record();
         let artifact = record.artifact();
         if response.status() != reqwest::StatusCode::OK {
@@ -188,6 +212,7 @@ impl VerifiedRecord {
             remaining = next_remaining;
             hasher.update(&chunk);
             file.write_all(&chunk).await?;
+            on_progress(chunk.len() as u64);
         }
         if remaining != 0 {
             return Err(Error::SizeMismatch {
@@ -204,10 +229,7 @@ impl VerifiedRecord {
             });
         }
         file.rewind().await?;
-        Ok(
-            http::Response::from_parts(parts, reqwest::Body::wrap_stream(ReaderStream::new(file)))
-                .into(),
-        )
+        Ok(VerifiedArchive { parts, file })
     }
 }
 
