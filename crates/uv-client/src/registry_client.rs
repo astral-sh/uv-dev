@@ -1639,11 +1639,6 @@ impl VersionFiles {
     }
 }
 
-/// A compact, cache-local representation of a registry file from the Simple API.
-///
-/// Filenames recoverable from the URL and false `yanked` markers are omitted, while optional
-/// scalar values use presence bits. Converting back to [`File`] restores equivalent Simple API
-/// metadata.
 #[derive(Debug, Clone, Copy, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 enum CachedDistInfoMetadata {
@@ -1652,6 +1647,11 @@ enum CachedDistInfoMetadata {
     Unadvertised,
 }
 
+/// A compact, cache-local representation of a registry file from the Simple API.
+///
+/// Filenames recoverable from the URL and false `yanked` markers are omitted, while optional
+/// scalar values use presence bits. Converting back to [`File`] restores equivalent Simple API
+/// metadata.
 #[derive(Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 pub struct CachedFile {
