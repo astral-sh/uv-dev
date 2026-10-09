@@ -2674,14 +2674,14 @@ fn create_venv_validates_home_before_modifying_destination() -> Result<()> {
     let base = invalid_home.child("python");
     fs_err::copy(&python, base.path())?;
     let wrapper = context.temp_dir.child("python-wrapper");
-    wrapper.write_str(&indoc::formatdoc! {r#"
+    wrapper.write_str(&indoc::formatdoc! {r"
         #!{python}
         import sys
 
         sys.executable = {base}
         sys._base_executable = {base}
         exec(sys.argv[sys.argv.index('-c') + 1])
-    "#, base = serde_json::to_string(&base.path())?})?;
+    ", base = serde_json::to_string(&base.path())?})?;
     fs_err::set_permissions(wrapper.path(), std::fs::Permissions::from_mode(0o755))?;
     uv_snapshot!(context.filters(), context.venv().arg("--allow-existing").arg("--python").arg(wrapper.path()), @"
     exit_code: 2 (failure)
