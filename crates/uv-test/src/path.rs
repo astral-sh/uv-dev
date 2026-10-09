@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
-use uv_fs::Simplified;
+use uv_fs::{Simplified, verbatim_path};
 
 /// Assert that no filesystem entry exists at `path`.
 ///
@@ -27,7 +27,8 @@ pub fn assert_path_missing(path: impl AsRef<Path>) {
 
 /// Assert that a symlink or junction stores the expected target path.
 ///
-/// Targets are compared without canonicalizing them or checking whether they exist.
+/// Targets are compared without canonicalizing them or checking whether they exist. On Windows,
+/// both targets are converted to verbatim paths to account for junction target normalization.
 #[track_caller]
 pub fn assert_link_target(path: impl AsRef<Path>, expected: impl AsRef<Path>) {
     let path = path.as_ref();
@@ -36,8 +37,8 @@ pub fn assert_link_target(path: impl AsRef<Path>, expected: impl AsRef<Path>) {
         Err(error) => panic!("Could not read link `{}`: {error}", path.user_display()),
     };
     assert_eq!(
-        target,
-        expected.as_ref(),
+        verbatim_path(&target),
+        verbatim_path(expected.as_ref()),
         "Unexpected target for link `{}`",
         path.user_display()
     );
