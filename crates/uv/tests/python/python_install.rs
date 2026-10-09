@@ -4376,3 +4376,37 @@ async fn python_install_implicit_prerelease_uses_one_scan() -> anyhow::Result<()
     ");
     Ok(())
 }
+
+/// Full-catalog fetches redact signed URLs when HEAD fails and GET still succeeds.
+#[tokio::test]
+async fn python_install_ndjson_head_failure_redacts_signed_url() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs();
+    let server = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(405))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"version":"3.99.1","artifacts":[]}"#,
+            "application/x-ndjson",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.python_install().args(["3.99", "--reinstall"])
+        .env(EnvVars::RUST_LOG, "uv_python_managed::downloads=debug")
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/versions.ndjson?X-Amz-Signature=secret-signature&safe=value", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    DEBUG Failed to validate Python downloads metadata with HEAD request: HTTP status client error (405 Method Not Allowed) for url (http://[LOCALHOST]/versions.ndjson?X-Amz-Signature=****&safe=value)
+    error: No download found for request: cpython-3.99-[PLATFORM]
+    ");
+    Ok(())
+}

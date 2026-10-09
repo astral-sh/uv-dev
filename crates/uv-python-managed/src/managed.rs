@@ -347,7 +347,7 @@ impl ManagedPythonInstallation {
             implementation,
             url: Some(download.url().clone()),
             sha256: download.sha256().cloned(),
-            build: download.build().map(Cow::Borrowed),
+            build: download.build().map(|build| Cow::Owned(build.to_owned())),
         })
     }
 

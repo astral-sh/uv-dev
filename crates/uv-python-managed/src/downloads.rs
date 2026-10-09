@@ -8,7 +8,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, SystemTimeError};
 use std::{env, io};
@@ -209,7 +209,7 @@ pub struct ManagedPythonDownload {
     key: PythonInstallationKey,
     url: Cow<'static, str>,
     sha256: Option<Digest<32>>,
-    build: Option<&'static str>,
+    build: Option<Arc<str>>,
 }
 
 const BUILTIN_PYTHON_DOWNLOADS_ZSTD: &[u8] =
@@ -612,12 +612,18 @@ async fn fetch_versions_cache_etag(client: &BaseClient, url: &DisplaySafeUrl) ->
         Ok(response) => match response.error_for_status() {
             Ok(response) => response,
             Err(err) => {
-                debug!("Failed to validate Python downloads metadata with HEAD request: {err}");
+                debug!(
+                    "Failed to validate Python downloads metadata with HEAD request: {}",
+                    url.redact_in(&err.to_string())
+                );
                 return None;
             }
         },
         Err(err) => {
-            debug!("Failed to send HEAD request for Python downloads metadata: {err}");
+            debug!(
+                "Failed to send HEAD request for Python downloads metadata: {}",
+                url.redact_in(&err.to_string())
+            );
             return None;
         }
     };
@@ -732,12 +738,18 @@ async fn fetch_ndjson_cached(
         Ok(response) => match response.error_for_status() {
             Ok(response) => Some(response),
             Err(err) => {
-                debug!("Failed to validate Python downloads metadata with HEAD request: {err}");
+                debug!(
+                    "Failed to validate Python downloads metadata with HEAD request: {}",
+                    url.redact_in(&err.to_string())
+                );
                 None
             }
         },
         Err(err) => {
-            debug!("Failed to send HEAD request for Python downloads metadata: {err}");
+            debug!(
+                "Failed to send HEAD request for Python downloads metadata: {}",
+                url.redact_in(&err.to_string())
+            );
             None
         }
     };
@@ -1193,13 +1205,13 @@ fn merge_with_embedded_non_cpython(
 
     for download in downloads {
         merged
-            .entry((download.key().clone(), download.build()))
+            .entry((download.key().clone(), download.build.clone()))
             .or_insert(download);
     }
 
     for download in filter_downloads(embedded_non_cpython_downloads()?, filter) {
         merged
-            .entry((download.key().clone(), download.build()))
+            .entry((download.key().clone(), download.build.clone()))
             .or_insert(download);
     }
 
@@ -1309,8 +1321,8 @@ impl ManagedPythonDownload {
         self.sha256.as_ref()
     }
 
-    pub fn build(&self) -> Option<&'static str> {
-        self.build
+    pub fn build(&self) -> Option<&str> {
+        self.build.as_deref()
     }
 
     /// Download and extract a Python distribution, retrying on failure.
@@ -1875,9 +1887,7 @@ fn parse_json_downloads(
 
             let url = Cow::Owned(entry.url);
             let sha256 = entry.sha256;
-            let build = entry
-                .build
-                .map(|s| Box::leak(s.into_boxed_str()) as &'static str);
+            let build = entry.build.map(Arc::from);
 
             Some(ManagedPythonDownload {
                 key: PythonInstallationKey::new_from_version(
@@ -1942,7 +1952,7 @@ fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<Manag
     };
 
     let release = build.and_then(|value| value.parse::<u64>().ok());
-    let build = build.map(|value| Box::leak(value.to_owned().into_boxed_str()) as &'static str);
+    let build: Option<Arc<str>> = build.map(Arc::from);
 
     let mut artifacts = version_info.artifacts;
     // Match the built-in metadata generator's deterministic tie-breaker when two artifacts have
@@ -1951,7 +1961,8 @@ fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<Manag
 
     let mut selected = BTreeMap::new();
     for artifact in artifacts {
-        let Some((download, priority)) = parse_ndjson_artifact(&version, build, release, artifact)
+        let Some((download, priority)) =
+            parse_ndjson_artifact(&version, build.clone(), release, artifact)
         else {
             continue;
         };
@@ -1980,7 +1991,7 @@ fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<Manag
 
 fn parse_ndjson_artifact(
     version: &PythonVersion,
-    build: Option<&'static str>,
+    build: Option<Arc<str>>,
     release: Option<u64>,
     artifact: NdjsonPythonArtifact,
 ) -> Option<(ManagedPythonDownload, (usize, i8))> {
@@ -3483,7 +3494,7 @@ mod tests {
             key,
             url: Cow::Borrowed(url),
             sha256: Some(Digest::from_bytes([0xab; 32])),
-            build: Some("20240713"),
+            build: Some(Arc::from("20240713")),
         }
     }
 
