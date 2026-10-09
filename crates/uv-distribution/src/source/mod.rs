@@ -189,7 +189,16 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
         };
         let project = ProjectWorkspace::from_maybe_project_root(
             source_tree.path(),
-            &DiscoveryOptions::default(),
+            &DiscoveryOptions {
+                stop_discovery_at: source_tree.git.as_ref().map(|fetch| {
+                    fetch
+                        .path()
+                        .parent()
+                        .expect("git checkout has a parent")
+                        .to_path_buf()
+                }),
+                ..DiscoveryOptions::default()
+            },
             self.cache,
             workspace_cache,
         )

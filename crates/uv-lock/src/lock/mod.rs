@@ -2823,13 +2823,15 @@ impl Lock {
     ///
     /// Project locks describe local sources relative to the project root. Tool locks live next to
     /// their receipts instead, so those sources must be made absolute before copying a project lock
-    /// into a tool environment. The provided manifest replaces the project manifest.
+    /// into a tool environment. The provided manifest replaces the project manifest. Sources under
+    /// `non_editable_root` are installed as wheels because that directory can be temporary.
     pub fn into_absolute_paths(
         mut self,
         root: &Path,
         project_name: &PackageName,
         editable: bool,
         required_members: &BTreeMap<PackageName, Editability>,
+        non_editable_root: Option<&Path>,
         manifest: ResolverManifest,
     ) -> Result<Self, LockError> {
         for package in &mut self.packages {
@@ -2840,7 +2842,10 @@ impl Lock {
                     .get(&package.id.name)
                     .map(|explicit| explicit.unwrap_or(editable))
             };
-            package.id.source.make_absolute(root, package_editable)?;
+            package
+                .id
+                .source
+                .make_absolute(root, package_editable, non_editable_root)?;
 
             for dependency in package
                 .dependencies
@@ -2855,10 +2860,11 @@ impl Lock {
                         .get(&dependency.package_id.name)
                         .map(|explicit| explicit.unwrap_or(editable))
                 };
-                dependency
-                    .package_id
-                    .source
-                    .make_absolute(root, dependency_editable)?;
+                dependency.package_id.source.make_absolute(
+                    root,
+                    dependency_editable,
+                    non_editable_root,
+                )?;
             }
 
             package.metadata.requires_dist = std::mem::take(&mut package.metadata.requires_dist)
@@ -7815,27 +7821,28 @@ enum Source {
 
 impl Source {
     /// Resolve local sources against the root of their original lockfile.
-    fn make_absolute(&mut self, root: &Path, editable: Option<bool>) -> Result<(), LockError> {
+    fn make_absolute(
+        &mut self,
+        root: &Path,
+        editable: Option<bool>,
+        non_editable_root: Option<&Path>,
+    ) -> Result<(), LockError> {
+        let default_editable = matches!(self, Self::Editable(_));
         match self {
             Self::Registry(RegistrySource::Path(path)) | Self::Path(path) => {
                 *path = absolute_path(root, path)?.into_boxed_path();
             }
-            Self::Directory(path) => match editable {
-                Some(true) => {
-                    *self = Self::Editable(absolute_path(root, path)?.into_boxed_path());
-                }
-                Some(false) | None => {
-                    *path = absolute_path(root, path)?.into_boxed_path();
-                }
-            },
-            Self::Editable(path) => match editable {
-                Some(false) => {
-                    *self = Self::Directory(absolute_path(root, path)?.into_boxed_path());
-                }
-                Some(true) | None => {
-                    *path = absolute_path(root, path)?.into_boxed_path();
-                }
-            },
+            Self::Directory(path) | Self::Editable(path) => {
+                let path = absolute_path(root, path)?.into_boxed_path();
+                // Cached Git checkouts cannot back an editable installation that outlives them.
+                let editable = editable.unwrap_or(default_editable)
+                    && !non_editable_root.is_some_and(|root| path.starts_with(root));
+                *self = if editable {
+                    Self::Editable(path)
+                } else {
+                    Self::Directory(path)
+                };
+            }
             Self::Virtual(path) => {
                 *path = absolute_path(root, path)?.into_boxed_path();
             }

@@ -492,6 +492,7 @@ impl ToolLock {
             project_name,
             editable,
             workspace.required_members(),
+            lock.git.as_ref().map(Fetch::path),
             manifest,
         )?;
         Ok(ValidatedToolLock {

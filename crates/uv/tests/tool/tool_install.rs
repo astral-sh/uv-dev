@@ -6232,6 +6232,132 @@ fn tool_install_locked_preserves_editable_workspace_dependency() -> Result<()> {
     Ok(())
 }
 
+/// Explicit editable workspace sources in Git must remain usable after a temporary checkout ends.
+#[test]
+#[cfg(feature = "test-git")]
+fn tool_install_locked_git_editable_workspace_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+    let dependency = project.child("child");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+            [project]
+            name = "foo"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["child"]
+
+            [project.scripts]
+            foo = "foo:main"
+
+            [tool.uv.sources]
+            child = { workspace = true, editable = true }
+
+            [tool.uv.workspace]
+            members = ["child"]
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+    "#})?;
+    let project_module = project.child("src").child("foo").child("__init__.py");
+    project_module.write_str(indoc! {r#"
+        VALUE = "ROOT"
+
+        def main():
+            import child
+            print(f"{VALUE} {child.VALUE}")
+    "#})?;
+    dependency.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    let dependency_module = dependency.child("src").child("child").child("__init__.py");
+    dependency_module.write_str("VALUE = 'CHILD'\n")?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(project.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved [N] packages in [TIME]
+    "#);
+
+    Command::new("git")
+        .arg("init")
+        .arg(project.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(project.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(project.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+        .assert()
+        .success();
+    let repository_url = Url::from_directory_path(project.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let path = tool_install_git_path(&bin_dir);
+    let mut filters = context.filters();
+    filters.push((
+        r"file://[^\s]+/git-v1/checkouts/",
+        "file://[CACHE_DIR]/git-v1/checkouts/",
+    ));
+    filters.push((
+        r"git-v1/checkouts/[0-9a-f]+/[0-9a-f]+",
+        "git-v1/checkouts/[CHECKOUT]/[COMMIT]",
+    ));
+    uv_snapshot!(filters, context.tool_install()
+        .arg(format!("foo @ git+{repository_url}"))
+        .args(["--locked", "--no-cache"])
+        .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, path.as_os_str()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + child==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[COMMIT]/child)
+     + foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[COMMIT])
+    Installed 1 executable: foo
+    "#);
+
+    // The no-cache checkout has been removed before the installed tool starts.
+    uv_snapshot!(context.filters(), context.external_command("foo")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ROOT CHILD
+    ");
+    Ok(())
+}
+
 #[test]
 fn tool_install_locked_preserves_noneditable_workspace_dependency() -> Result<()> {
     let context = uv_test::test_context!("3.12")
@@ -8461,7 +8587,7 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
         "git-v1/checkouts/[CHECKOUT]/[REV]",
     ));
     uv_snapshot!(filters, context.tool_install()
-        .arg(format!("git+{repository_url}@{}#subdirectory=foo", commit.trim()))
+        .arg(format!("foo @ git+{repository_url}@{}#subdirectory=foo", commit.trim()))
         .args(["--locked", "--no-cache", "--preview-features", "tool-install-locks"])
         .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh")
         .env(EnvVars::PATH, &path), @r#"
