@@ -3397,43 +3397,32 @@ fn build_wheel_project_name_mismatch() -> Result<()> {
         build-backend = "backend"
         backend-path = ["."]
     "#})?;
-    project.child("backend.py").write_str(indoc! {r#"
-        import os
-        import pathlib
-        import zipfile
-
+    let (filename, wheel) = generate_wheel(
+        &"different-name".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        import shutil
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-            wheel_name = os.environ["UV_TEST_WHEEL_NAME"]
-            name, version, *_ = wheel_name.split("-")
-            dist_info = f"{name}-{version}.dist-info"
-            records = [
-                (f"{name}/__init__.py", b""),
-                (
-                    f"{dist_info}/METADATA",
-                    f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n".encode(),
-                ),
-                (
-                    f"{dist_info}/WHEEL",
-                    b"Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-                ),
-            ]
-
-            with zipfile.ZipFile(pathlib.Path(wheel_directory, wheel_name), "w") as wheel:
-                for path, contents in records:
-                    wheel.writestr(path, contents)
-                record = "\n".join(f"{path},," for path, _ in records)
-                wheel.writestr(f"{dist_info}/RECORD", f"{record}\n{dist_info}/RECORD,,\n")
-
-            return wheel_name
-    "#})?;
+            filename = {filename:?}
+            shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+            return filename
+    "})?;
 
     let dist = project.child("dist");
     dist.create_dir_all()?;
     let existing = dist.child("existing.txt");
     existing.write_binary(b"existing artifact")?;
 
-    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel").env("UV_TEST_WHEEL_NAME", "different_name-1.0.0-py3-none-any.whl"), @"
+    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building wheel...
@@ -3465,43 +3454,32 @@ fn build_wheel_project_version_mismatch() -> Result<()> {
         build-backend = "backend"
         backend-path = ["."]
     "#})?;
-    project.child("backend.py").write_str(indoc! {r#"
-        import os
-        import pathlib
-        import zipfile
-
+    let (filename, wheel) = generate_wheel(
+        &"configured-name".parse()?,
+        &"9.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        import shutil
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-            wheel_name = os.environ["UV_TEST_WHEEL_NAME"]
-            name, version, *_ = wheel_name.split("-")
-            dist_info = f"{name}-{version}.dist-info"
-            records = [
-                (f"{name}/__init__.py", b""),
-                (
-                    f"{dist_info}/METADATA",
-                    f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n".encode(),
-                ),
-                (
-                    f"{dist_info}/WHEEL",
-                    b"Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-                ),
-            ]
-
-            with zipfile.ZipFile(pathlib.Path(wheel_directory, wheel_name), "w") as wheel:
-                for path, contents in records:
-                    wheel.writestr(path, contents)
-                record = "\n".join(f"{path},," for path, _ in records)
-                wheel.writestr(f"{dist_info}/RECORD", f"{record}\n{dist_info}/RECORD,,\n")
-
-            return wheel_name
-    "#})?;
+            filename = {filename:?}
+            shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+            return filename
+    "})?;
 
     let dist = project.child("dist");
     dist.create_dir_all()?;
     let existing = dist.child("existing.txt");
     existing.write_binary(b"existing artifact")?;
 
-    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel").env("UV_TEST_WHEEL_NAME", "configured_name-9.0.0-py3-none-any.whl"), @"
+    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building wheel...
@@ -3533,38 +3511,27 @@ fn build_wheel_project_skip_filename_check() -> Result<()> {
         build-backend = "backend"
         backend-path = ["."]
     "#})?;
-    project.child("backend.py").write_str(indoc! {r#"
-        import os
-        import pathlib
-        import zipfile
-
+    let (filename, wheel) = generate_wheel(
+        &"different-name".parse()?,
+        &"9.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        import shutil
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-            wheel_name = os.environ["UV_TEST_WHEEL_NAME"]
-            name, version, *_ = wheel_name.split("-")
-            dist_info = f"{name}-{version}.dist-info"
-            records = [
-                (f"{name}/__init__.py", b""),
-                (
-                    f"{dist_info}/METADATA",
-                    f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n".encode(),
-                ),
-                (
-                    f"{dist_info}/WHEEL",
-                    b"Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-                ),
-            ]
+            filename = {filename:?}
+            shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+            return filename
+    "})?;
 
-            with zipfile.ZipFile(pathlib.Path(wheel_directory, wheel_name), "w") as wheel:
-                for path, contents in records:
-                    wheel.writestr(path, contents)
-                record = "\n".join(f"{path},," for path, _ in records)
-                wheel.writestr(f"{dist_info}/RECORD", f"{record}\n{dist_info}/RECORD,,\n")
-
-            return wheel_name
-    "#})?;
-
-    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel").env("UV_TEST_WHEEL_NAME", "different_name-9.0.0-py3-none-any.whl").env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1"), @"
+    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel").env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Building wheel...
@@ -3592,38 +3559,27 @@ fn build_wheel_project_local_version() -> Result<()> {
         build-backend = "backend"
         backend-path = ["."]
     "#})?;
-    project.child("backend.py").write_str(indoc! {r#"
-        import os
-        import pathlib
-        import zipfile
-
+    let (filename, wheel) = generate_wheel(
+        &"configured-name".parse()?,
+        &"1.0.0+local".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        import shutil
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-            wheel_name = os.environ["UV_TEST_WHEEL_NAME"]
-            name, version, *_ = wheel_name.split("-")
-            dist_info = f"{name}-{version}.dist-info"
-            records = [
-                (f"{name}/__init__.py", b""),
-                (
-                    f"{dist_info}/METADATA",
-                    f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n".encode(),
-                ),
-                (
-                    f"{dist_info}/WHEEL",
-                    b"Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-                ),
-            ]
+            filename = {filename:?}
+            shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+            return filename
+    "})?;
 
-            with zipfile.ZipFile(pathlib.Path(wheel_directory, wheel_name), "w") as wheel:
-                for path, contents in records:
-                    wheel.writestr(path, contents)
-                record = "\n".join(f"{path},," for path, _ in records)
-                wheel.writestr(f"{dist_info}/RECORD", f"{record}\n{dist_info}/RECORD,,\n")
-
-            return wheel_name
-    "#})?;
-
-    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel").env("UV_TEST_WHEEL_NAME", "configured_name-1.0.0+local-py3-none-any.whl"), @"
+    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Building wheel...
