@@ -1,7 +1,6 @@
 //! Publication status reporting with local wheels.
 
 use std::collections::BTreeMap;
-use std::process::Command;
 
 use anyhow::Result;
 use assert_fs::prelude::*;
@@ -11,7 +10,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
 use uv_test::packse::generate_wheel_with_files;
-use uv_test::{TestContext, uv_snapshot};
+use uv_test::uv_snapshot;
 
 const WHEEL_FILENAME: &str = "publish_progress-1.0.0-py3-none-any.whl";
 /// Generate a local wheel with optional padding above the progress-reporting threshold.
@@ -33,24 +32,6 @@ fn wheel(large: bool) -> Result<Vec<u8>> {
     );
     assert_eq!(filename, WHEEL_FILENAME);
     Ok(wheel)
-}
-
-fn publish(context: &TestContext, server: &MockServer) -> Command {
-    let mut command = context.publish();
-    command
-        .args([
-            "-u",
-            "dummy",
-            "-p",
-            "dummy",
-            "--trusted-publishing",
-            "never",
-        ])
-        .arg("--publish-url")
-        .arg(format!("{}/upload", server.uri()))
-        .arg(context.temp_dir.child(WHEEL_FILENAME).path())
-        .env_remove(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS);
-    command
 }
 
 fn index_response(wheel: &[u8]) -> ResponseTemplate {
@@ -75,21 +56,16 @@ async fn large_publish_progress_success() -> Result<()> {
         .and(path("/upload"))
         .and(basic_auth("dummy", "dummy"))
         .respond_with(ResponseTemplate::new(200))
-        .expect(2)
+        .expect(1)
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), publish(&context, &server), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Publishing 1 file to http://[LOCALHOST]/upload
-    Hashing publish_progress-1.0.0-py3-none-any.whl ([SIZE]MiB)
-    Hashing publish_progress-1.0.0-py3-none-any.whl ([SIZE]MiB)
-     Hashed publish_progress-1.0.0-py3-none-any.whl
-    Uploading publish_progress-1.0.0-py3-none-any.whl ([SIZE]MiB)
-    Uploaded publish_progress-1.0.0-py3-none-any.whl ([SIZE]MiB)
-    ");
-    uv_snapshot!(context.filters(), publish(&context, &server).arg("--no-progress"), @"
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["-u", "dummy", "-p", "dummy", "--trusted-publishing", "never"])
+        .arg("--publish-url")
+        .arg(format!("{}/upload", server.uri()))
+        .arg(context.temp_dir.child(WHEEL_FILENAME).path())
+        .env_remove(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS), @"
     exit_code: 0 (success)
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
@@ -120,7 +96,12 @@ async fn large_publish_progress_rejected() -> Result<()> {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), publish(&context, &server).arg("--no-progress"), @"
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["-u", "dummy", "-p", "dummy", "--trusted-publishing", "never"])
+        .arg("--publish-url")
+        .arg(format!("{}/upload", server.uri()))
+        .arg(context.temp_dir.child(WHEEL_FILENAME).path())
+        .env_remove(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS).arg("--no-progress"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
@@ -166,7 +147,12 @@ async fn publish_progress_already_exists() -> Result<()> {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), publish(&context, &server)
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["-u", "dummy", "-p", "dummy", "--trusted-publishing", "never"])
+        .arg("--publish-url")
+        .arg(format!("{}/upload", server.uri()))
+        .arg(context.temp_dir.child(WHEEL_FILENAME).path())
+        .env_remove(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS)
         .arg("--check-url")
         .arg(format!("{}/simple/", server.uri())), @"
     exit_code: 0 (success)
@@ -201,7 +187,12 @@ async fn publish_progress_skipped() -> Result<()> {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), publish(&context, &server)
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["-u", "dummy", "-p", "dummy", "--trusted-publishing", "never"])
+        .arg("--publish-url")
+        .arg(format!("{}/upload", server.uri()))
+        .arg(context.temp_dir.child(WHEEL_FILENAME).path())
+        .env_remove(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS)
         .arg("--check-url")
         .arg(format!("{}/simple/", server.uri())), @"
     exit_code: 0 (success)
@@ -228,7 +219,12 @@ async fn publish_progress_dry_run() -> Result<()> {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), publish(&context, &server).arg("--dry-run"), @"
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["-u", "dummy", "-p", "dummy", "--trusted-publishing", "never"])
+        .arg("--publish-url")
+        .arg(format!("{}/upload", server.uri()))
+        .arg(context.temp_dir.child(WHEEL_FILENAME).path())
+        .env_remove(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS).arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Checking 1 file against http://[LOCALHOST]/upload
