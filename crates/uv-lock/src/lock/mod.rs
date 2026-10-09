@@ -608,13 +608,8 @@ impl<'a> LockedDependencyBuilder<'a> {
         context: DependencyContext<'_>,
         activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
     ) -> Result<bool, LockError> {
-        let empty_requirements = BTreeSet::new();
-        let requirements = match context {
-            DependencyContext::Production | DependencyContext::Extra(_) => &expected.declarations,
-            DependencyContext::Group(group) => expected
-                .dependency_groups
-                .get(group)
-                .unwrap_or(&empty_requirements),
+        let Some(requirements) = expected.requirements(context) else {
+            return Ok(true);
         };
         let mut edges: BTreeMap<(PackageId, BTreeSet<ExtraName>), UniversalMarker> =
             BTreeMap::new();
@@ -1735,6 +1730,161 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
             ),
             workspace_root,
         }
+    }
+
+    /// Return the declarations belonging to this dependency section.
+    fn requirements(&self, context: DependencyContext<'_>) -> Option<&BTreeSet<Requirement>> {
+        match context {
+            DependencyContext::Production | DependencyContext::Extra(_) => Some(&self.declarations),
+            DependencyContext::Group(group) => self.dependency_groups.get(group),
+        }
+    }
+
+    /// Return the first requirement whose marker is not covered by its locked dependency section.
+    fn uncovered_dependency(
+        &self,
+        context: DependencyContext<'_>,
+        activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
+    ) -> Result<Option<Requirement>, LockError> {
+        if let DependencyContext::Extra(extra) = context
+            && !self.lock.is_workspace_package(self.package)
+            && !self.activated_extras.contains_key(extra)
+        {
+            return Ok(None);
+        }
+        let Some(requirements) = self.requirements(context) else {
+            return Ok(None);
+        };
+        let lock = self.lock;
+        let package = self.package;
+        let root = self.workspace_root;
+        let dependencies = context.dependencies(package);
+        let parent_marker =
+            self.context_activation_marker(context, self.context_parent_marker(context));
+        let is_distribution_dependency = match context {
+            DependencyContext::Production | DependencyContext::Extra(_) => true,
+            DependencyContext::Group(_) => false,
+        };
+        for requirement in requirements {
+            let mut required =
+                UniversalMarker::from_combined(context.requirement_marker(requirement.marker));
+            required.and(parent_marker);
+            for extra in &requirement.extras {
+                if lock.conflicts.contains(&requirement.name, extra)
+                    && !context.omits_conflicting_extra(lock, package, &requirement.name, extra)
+                {
+                    required.and(UniversalMarker::new(
+                        MarkerTree::TRUE,
+                        ConflictMarker::from_conflict_item(&ConflictItem::from((
+                            requirement.name.clone(),
+                            extra.clone(),
+                        ))),
+                    ));
+                }
+            }
+            let selects_project = requirement.extras.is_empty()
+                || requirement.extras.iter().any(|extra| {
+                    context.omits_conflicting_extra(lock, package, &requirement.name, extra)
+                });
+            if selects_project
+                && lock
+                    .conflicts
+                    .contains(&requirement.name, ConflictKindRef::Project)
+            {
+                required.and(UniversalMarker::new(
+                    MarkerTree::TRUE,
+                    ConflictMarker::from_conflict_item(&ConflictItem::from(
+                        requirement.name.clone(),
+                    )),
+                ));
+            }
+            if let RequirementSource::Registry {
+                conflict: Some(conflict),
+                ..
+            } = &requirement.source
+            {
+                required.and(UniversalMarker::new(
+                    MarkerTree::TRUE,
+                    ConflictMarker::from_conflict_item(conflict),
+                ));
+            }
+            // Compare both sides in the same valid conflict world without expanding unrelated sets.
+            let conflicts = ConflictMarker::from_relevant_conflicts(
+                &lock.conflicts,
+                iter::once(required).chain(
+                    dependencies
+                        .iter()
+                        .filter(|dependency| dependency.package_id.name == requirement.name)
+                        .map(|dependency| dependency.complexified_marker),
+                ),
+            );
+            required.and(UniversalMarker::new(MarkerTree::TRUE, conflicts));
+            let required = lock.requires_python.simplify_markers(required.combined());
+            if required.is_false() {
+                continue;
+            }
+
+            // Self-constraints apply to the parent package without creating dependency edges.
+            if requirement.name == package.id.name && is_distribution_dependency {
+                if !Lock::package_satisfies_requirement(package, requirement, root)? {
+                    return Ok(Some(requirement.clone()));
+                }
+                continue;
+            }
+
+            let mut covered = MarkerTree::FALSE;
+            let mut extra_coverage = requirement
+                .extras
+                .iter()
+                .map(|extra| (extra, MarkerTree::FALSE))
+                .collect::<BTreeMap<_, _>>();
+            for dependency in dependencies {
+                if dependency.package_id.name != requirement.name {
+                    continue;
+                }
+                let target = lock.package(dependency.index);
+                let marker = lock
+                    .requires_python
+                    .simplify_markers(dependency.simplified_marker.as_simplified_marker_tree())
+                    .and(
+                        lock.requires_python
+                            .simplify_markers(parent_marker.combined()),
+                    );
+                covered = covered.or(marker);
+                for (extra, coverage) in &mut extra_coverage {
+                    // Lock construction drops empty sections and conflicting workspace labels.
+                    if dependency.extra.contains(*extra)
+                        || !target.optional_dependencies.contains_key(*extra)
+                        || context.omits_conflicting_extra(lock, package, &requirement.name, extra)
+                    {
+                        *coverage = coverage.or(marker);
+                    }
+                    // Retain the declaration's request even when its edge label was dropped. The
+                    // target's refreshed metadata then distinguishes an empty extra from a removed
+                    // nonempty section, and later parents can trigger extra validation again.
+                    let mut activation = dependency.complexified_marker;
+                    activation.and(UniversalMarker::from_combined(required));
+                    if !activation.combined().is_false() {
+                        activated_extras
+                            .entry(dependency.package_id.clone())
+                            .or_default()
+                            .entry((**extra).clone())
+                            .and_modify(|marker| marker.or(activation))
+                            .or_insert(activation);
+                    }
+                }
+            }
+
+            if !required.implies(covered).is_true()
+                || extra_coverage
+                    .values()
+                    .any(|coverage| !required.implies(*coverage).is_true())
+            {
+                return Ok(Some(requirement.clone()));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Return the source environment if a locked package matches this exact declaration.
@@ -4059,35 +4209,10 @@ impl Lock {
         if !missing_metadata {
             // Metadata declarations precede overrides, exclusions, and recursive-extra flattening.
             // Compare effective requirements in the same contexts used to construct dependency edges.
-            let empty_requirements = BTreeSet::new();
             for context in expected.contexts() {
-                if let DependencyContext::Extra(extra) = context
-                    && !self.is_workspace_package(package)
-                    && !expected.activated_extras.contains_key(extra)
+                if let Some(requirement) =
+                    expected.uncovered_dependency(context, activated_extras)?
                 {
-                    continue;
-                }
-                let requirements = match context {
-                    DependencyContext::Production | DependencyContext::Extra(_) => {
-                        &expected.declarations
-                    }
-                    DependencyContext::Group(group) => expected
-                        .dependency_groups
-                        .get(group)
-                        .unwrap_or(&empty_requirements),
-                };
-                if let Some(requirement) = self.uncovered_dependency(
-                    requirements,
-                    context.dependencies(package),
-                    context,
-                    expected.context_activation_marker(
-                        context,
-                        expected.context_parent_marker(context),
-                    ),
-                    package,
-                    root,
-                    activated_extras,
-                )? {
                     return Ok(SatisfiesResult::UncoveredPackageDependency(
                         &package.id.name,
                         package.id.version.as_ref(),
@@ -4238,143 +4363,6 @@ impl Lock {
                 }
             }
         }
-    }
-
-    /// Return the first requirement whose marker is not covered by matching dependency edges.
-    fn uncovered_dependency(
-        &self,
-        requirements: &BTreeSet<Requirement>,
-        dependencies: &[Dependency],
-        context: DependencyContext<'_>,
-        parent_marker: UniversalMarker,
-        package: &Package,
-        root: &Path,
-        activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
-    ) -> Result<Option<Requirement>, LockError> {
-        let is_distribution_dependency = match context {
-            DependencyContext::Production | DependencyContext::Extra(_) => true,
-            DependencyContext::Group(_) => false,
-        };
-        for requirement in requirements {
-            let mut required =
-                UniversalMarker::from_combined(context.requirement_marker(requirement.marker));
-            required.and(parent_marker);
-            for extra in &requirement.extras {
-                if self.conflicts.contains(&requirement.name, extra)
-                    && !context.omits_conflicting_extra(self, package, &requirement.name, extra)
-                {
-                    required.and(UniversalMarker::new(
-                        MarkerTree::TRUE,
-                        ConflictMarker::from_conflict_item(&ConflictItem::from((
-                            requirement.name.clone(),
-                            extra.clone(),
-                        ))),
-                    ));
-                }
-            }
-            let selects_project = requirement.extras.is_empty()
-                || requirement.extras.iter().any(|extra| {
-                    context.omits_conflicting_extra(self, package, &requirement.name, extra)
-                });
-            if selects_project
-                && self
-                    .conflicts
-                    .contains(&requirement.name, ConflictKindRef::Project)
-            {
-                required.and(UniversalMarker::new(
-                    MarkerTree::TRUE,
-                    ConflictMarker::from_conflict_item(&ConflictItem::from(
-                        requirement.name.clone(),
-                    )),
-                ));
-            }
-            if let RequirementSource::Registry {
-                conflict: Some(conflict),
-                ..
-            } = &requirement.source
-            {
-                required.and(UniversalMarker::new(
-                    MarkerTree::TRUE,
-                    ConflictMarker::from_conflict_item(conflict),
-                ));
-            }
-            // Compare both sides in the same valid conflict world without expanding unrelated sets.
-            let conflicts = ConflictMarker::from_relevant_conflicts(
-                &self.conflicts,
-                iter::once(required).chain(
-                    dependencies
-                        .iter()
-                        .filter(|dependency| dependency.package_id.name == requirement.name)
-                        .map(|dependency| dependency.complexified_marker),
-                ),
-            );
-            required.and(UniversalMarker::new(MarkerTree::TRUE, conflicts));
-            let required = self.requires_python.simplify_markers(required.combined());
-            if required.is_false() {
-                continue;
-            }
-
-            // Self-constraints apply to the parent package without creating dependency edges.
-            if requirement.name == package.id.name && is_distribution_dependency {
-                if !Self::package_satisfies_requirement(package, requirement, root)? {
-                    return Ok(Some(requirement.clone()));
-                }
-                continue;
-            }
-
-            let mut covered = MarkerTree::FALSE;
-            let mut extra_coverage = requirement
-                .extras
-                .iter()
-                .map(|extra| (extra, MarkerTree::FALSE))
-                .collect::<BTreeMap<_, _>>();
-            for dependency in dependencies {
-                if dependency.package_id.name != requirement.name {
-                    continue;
-                }
-                let target = self.package(dependency.index);
-                let marker = self
-                    .requires_python
-                    .simplify_markers(dependency.simplified_marker.as_simplified_marker_tree())
-                    .and(
-                        self.requires_python
-                            .simplify_markers(parent_marker.combined()),
-                    );
-                covered = covered.or(marker);
-                for (extra, coverage) in &mut extra_coverage {
-                    // Lock construction drops empty sections and conflicting workspace labels.
-                    if dependency.extra.contains(*extra)
-                        || !target.optional_dependencies.contains_key(*extra)
-                        || context.omits_conflicting_extra(self, package, &requirement.name, extra)
-                    {
-                        *coverage = coverage.or(marker);
-                    }
-                    // Retain the declaration's request even when its edge label was dropped. The
-                    // target's refreshed metadata then distinguishes an empty extra from a removed
-                    // nonempty section, and later parents can trigger extra validation again.
-                    let mut activation = dependency.complexified_marker;
-                    activation.and(UniversalMarker::from_combined(required));
-                    if !activation.combined().is_false() {
-                        activated_extras
-                            .entry(dependency.package_id.clone())
-                            .or_default()
-                            .entry((**extra).clone())
-                            .and_modify(|marker| marker.or(activation))
-                            .or_insert(activation);
-                    }
-                }
-            }
-
-            if !required.implies(covered).is_true()
-                || extra_coverage
-                    .values()
-                    .any(|coverage| !required.implies(*coverage).is_true())
-            {
-                return Ok(Some(requirement.clone()));
-            }
-        }
-
-        Ok(None)
     }
 
     /// Check whether the lock matches the project structure, requirements and configuration.
@@ -11038,18 +11026,25 @@ source = { registry = "https://example.com/simple" }
                 .as_deref(),
             Some("python_full_version >= '3.12' and sys_platform == 'darwin'")
         );
+        let sources = DependencySources::default();
+        let expected = ExpectedPackageDependencies::new(
+            &lock,
+            package.metadata.requires_dist.clone(),
+            &[],
+            &BTreeMap::new(),
+            &sources,
+            &DependencyModifiers::default(),
+            None,
+            package.id.version.as_ref(),
+            package,
+            BTreeMap::new(),
+            Path::new("."),
+        );
         assert!(
-            lock.uncovered_dependency(
-                &package.metadata.requires_dist,
-                &package.dependencies,
-                DependencyContext::Production,
-                UniversalMarker::from_combined(lock.fork_markers_union()),
-                package,
-                Path::new("."),
-                &mut FxHashMap::default(),
-            )
-            .expect("valid source")
-            .is_none()
+            expected
+                .uncovered_dependency(DependencyContext::Production, &mut FxHashMap::default())
+                .expect("valid source")
+                .is_none()
         );
     }
 
