@@ -49469,3 +49469,91 @@ fn lock_required_environment_retains_stable_prerelease_fallback() -> Result<()> 
     });
     Ok(())
 }
+
+/// Soft wheel preferences do not split a fresh fewest-versions resolution across Python forks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_preserves_sibling_fork_preference() -> Result<()> {
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheels-sibling-preference"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example"]
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = ["python_version == '3.12'", "python_version == '3.13'"]
+        required-environments = ["python_version == '3.13' and sys_platform == 'linux'"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12, <3.14"
+    resolution-markers = [
+        "python_full_version < '3.13'",
+        "python_full_version >= '3.13'",
+    ]
+    supported-markers = [
+        "python_full_version < '3.13'",
+        "python_full_version >= '3.13'",
+    ]
+    required-markers = [
+        "python_full_version >= '3.13' and sys_platform == 'linux'",
+    ]
+
+    [options]
+    fork-strategy = "fewest"
+
+    [[package]]
+    name = "example"
+    version = "2.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    sdist = { url = "http://[LOCALHOST]/files/example-2.0.0.tar.gz", hash = "sha256:[SHA256:example-2.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/example-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:example-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "example" },
+    ]
+
+    [package.metadata]
+    requires-dist = [{ name = "example" }]
+    "#);
+    });
+    Ok(())
+}

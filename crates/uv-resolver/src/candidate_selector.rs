@@ -113,7 +113,7 @@ impl CandidateSelector {
         // If `--upgrade` is provided, we should still search for a matching preference. In
         // practice, preferences should be empty if `--upgrade` is provided, but it's the caller's
         // responsibility to ensure that.
-        if let Some(preferred) = self.get_preferred(
+        if let Some((preferred, source)) = self.get_preferred(
             package_name,
             range,
             version_maps,
@@ -134,21 +134,30 @@ impl CandidateSelector {
                 }
                 PrereleaseSelection::PreferStable => PrereleaseSelection::Disallow,
             };
-            if preferred.dist().prioritized().is_some_and(|dist| {
-                !Self::supports_required_environments(
-                    dist,
+            let persisted = match source {
+                PreferenceSource::Resolver => false,
+                PreferenceSource::Lock
+                | PreferenceSource::Environment
+                | PreferenceSource::RequirementsTxt => true,
+            };
+            if persisted
+                && preferred.dist().prioritized().is_some_and(|dist| {
+                    !Self::supports_required_environments(
+                        dist,
+                        env,
+                        required_environments,
+                        self.minimum_libc_version,
+                    )
+                })
+                && let Some(candidate) = self.select_no_preference_with(
+                    package_name,
+                    range,
+                    version_maps,
+                    replacement_prerelease,
                     env,
-                    required_environments,
-                    self.minimum_libc_version,
+                    Some(required_environments),
                 )
-            }) && let Some(candidate) = self.select_no_preference_with(
-                package_name,
-                range,
-                version_maps,
-                replacement_prerelease,
-                env,
-                Some(required_environments),
-            ) {
+            {
                 debug!(
                     "Ignoring preference {} {} in favor of {} with wheels for the required environments",
                     preferred.name, preferred.version, candidate.version
@@ -232,7 +241,7 @@ impl CandidateSelector {
         prerelease_selection: PrereleaseSelection,
         env: &ResolverEnvironment,
         tags: Option<&'a Tags>,
-    ) -> Option<Candidate<'a>> {
+    ) -> Option<(Candidate<'a>, PreferenceSource)> {
         let preferences = preferences.get(package_name);
 
         // If there are multiple preferences for the same package, we need to sort them by priority.
@@ -301,7 +310,7 @@ impl CandidateSelector {
         reinstall: bool,
         prerelease_selection: PrereleaseSelection,
         tags: Option<&Tags>,
-    ) -> Option<Candidate<'a>> {
+    ) -> Option<(Candidate<'a>, PreferenceSource)> {
         for (version, source) in preferences {
             // Respect the version range for this requirement.
             if !range.contains(version) {
@@ -331,14 +340,17 @@ impl CandidateSelector {
                                 continue;
                             }
 
-                            return Some(Candidate {
-                                name: package_name,
-                                version,
-                                dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(
-                                    dist,
-                                )),
-                                choice_kind: VersionChoiceKind::Preference,
-                            });
+                            return Some((
+                                Candidate {
+                                    name: package_name,
+                                    version,
+                                    dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(
+                                        dist,
+                                    )),
+                                    choice_kind: VersionChoiceKind::Preference,
+                                },
+                                source,
+                            ));
                         }
                     }
                     // We do not consider installed distributions with multiple versions because
@@ -393,21 +405,22 @@ impl CandidateSelector {
                         }
                         if let Some(dist) = version_map.get(local) {
                             debug!("Preferring local version `{package_name}` (v{local})");
-                            return Some(Candidate::new(
-                                package_name,
-                                local,
-                                dist,
-                                VersionChoiceKind::Preference,
+                            return Some((
+                                Candidate::new(
+                                    package_name,
+                                    local,
+                                    dist,
+                                    VersionChoiceKind::Preference,
+                                ),
+                                source,
                             ));
                         }
                     }
                 }
 
-                return Some(Candidate::new(
-                    package_name,
-                    version,
-                    file,
-                    VersionChoiceKind::Preference,
+                return Some((
+                    Candidate::new(package_name, version, file, VersionChoiceKind::Preference),
+                    source,
                 ));
             }
         }
