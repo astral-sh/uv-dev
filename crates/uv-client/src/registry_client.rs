@@ -1125,8 +1125,8 @@ impl RegistryClient {
             .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?;
         let archive = match entry.read_http(&request, &control).await? {
             PackedArchiveRead::Fresh(archive, _) => archive,
-            PackedArchiveRead::Stale(hash) => {
-                return Ok(PackedWheelMetadata::Stale { entry, hash });
+            PackedArchiveRead::Stale(revision) => {
+                return Ok(PackedWheelMetadata::Stale { entry, revision });
             }
             PackedArchiveRead::Missing => return Ok(PackedWheelMetadata::Missing),
         };
@@ -1453,14 +1453,14 @@ enum PackedWheelMetadata {
     Missing,
     Stale {
         entry: PackedArchiveEntry,
-        hash: HashDigest,
+        revision: Vec<u8>,
     },
 }
 
 impl PackedWheelMetadata {
     async fn invalidate_stale(self) -> Result<(), Error> {
         match self {
-            Self::Stale { entry, hash } => entry.invalidate(&hash).await,
+            Self::Stale { entry, revision } => entry.invalidate(&revision).await,
             Self::Found(_) | Self::Missing => Ok(()),
         }
     }
