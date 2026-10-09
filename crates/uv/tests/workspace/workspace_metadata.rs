@@ -829,14 +829,19 @@ fn workspace_metadata_script_does_not_create_environment_when_resolution_fails()
 "#,
     )?;
 
-    context
-        .workspace_metadata()
+    uv_snapshot!(context.filters(), context.workspace_metadata()
         .arg("--script")
         .arg(script.path())
         .arg("--sync")
-        .arg("--offline")
-        .assert()
-        .failure();
+        .arg("--offline"), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    error: No solution found when resolving dependencies
+      cause: Because missing-metadata-dependency was not found in the cache and you require missing-metadata-dependency==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    ");
 
     assert!(!context.cache_dir.child("environments-v2").exists());
 
@@ -1110,6 +1115,23 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
         metadata["environment"]["root"].as_str().map(Path::new),
         Some(target.as_path())
     );
+
+    // Reusing the cached environment must restore a missing project link.
+    uv_fs::remove_symlink(context.temp_dir.child(".venv"))?;
+    assert!(target.exists());
+    let assert = context
+        .workspace_metadata()
+        .arg("--sync")
+        .arg("--preview-features")
+        .arg("workspace-metadata,centralized-project-envs")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    assert_eq!(
+        metadata["environment"]["root"].as_str().map(Path::new),
+        Some(target.as_path())
+    );
+    assert_eq!(fs_err::read_link(context.temp_dir.child(".venv"))?, target);
 
     // Remove the manifest to discover the workspace and its environment from the lockfile.
     fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
@@ -1711,12 +1733,18 @@ dependencies = ["missing-metadata-dependency==1.0.0"]
 "#,
     )?;
 
-    context
-        .workspace_metadata()
+    uv_snapshot!(context.filters(), context.workspace_metadata()
         .arg("--sync")
-        .arg("--offline")
-        .assert()
-        .failure();
+        .arg("--offline"), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: No solution found when resolving dependencies
+      cause: Because missing-metadata-dependency was not found in the cache and your project depends on missing-metadata-dependency==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    ");
 
     assert!(!context.temp_dir.child(".venv").exists());
 

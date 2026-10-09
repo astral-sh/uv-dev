@@ -13,7 +13,7 @@ use uv_dispatch::UniversalState;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, ScriptEnvironment,
+    ProjectInterpreter, ScriptEnvironment, centralized_environments_enabled,
 };
 use uv_lock::{Lock, Metadata, Package};
 use uv_lock_operations::{
@@ -30,7 +30,7 @@ use uv_settings::{
     FrozenSource, LockCheck, MalwareCheckSettings, PythonInstallMirrors, ResolverSettings,
 };
 use uv_warnings::warn_user;
-use uv_workspace::{DiscoveryOptions, WorkspaceCache};
+use uv_workspace::{DiscoveryOptions, ProjectEnvironmentSelection, WorkspaceCache};
 
 use super::module_owners::collect_module_owners;
 
@@ -228,6 +228,16 @@ pub async fn metadata(
         },
     };
     let mut export = metadata_for_target(install_target);
+    // Centralized environment initialization also refreshes the project's `.venv` link.
+    if sync.is_some()
+        && let MetadataSource::Manifest(LockTarget::Workspace(workspace)) = &source
+        && centralized_environments_enabled(
+            &ProjectEnvironmentSelection::from_install_path(workspace.install_path(), active),
+            cache,
+        )
+    {
+        environment = None;
+    }
     let environment = match environment {
         Some(environment) => Some(environment),
         None if sync.is_some() => Some(match &source {
