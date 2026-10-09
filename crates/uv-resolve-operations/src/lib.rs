@@ -118,7 +118,7 @@ pub async fn resolve(
     index: &InMemoryIndex,
     build_dispatch: &BuildDispatch<'_>,
     concurrency: &Concurrency,
-    options: Options,
+    mut options: Options,
     recorder: Option<ResolutionRecorder>,
     logger: Box<dyn ResolveLogger>,
     printer: Printer,
@@ -225,6 +225,10 @@ pub async fn resolve(
                 path: pyproject_path.clone(),
                 source: Box::new(source),
             })?;
+
+            options
+                .workspace_wheel_exemptions
+                .extend(metadata.workspace_member_paths);
 
             // Complain if dependency groups are named that don't appear.
             for name in groups.explicit_names() {

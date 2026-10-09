@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use uv_auth::CredentialsCache;
@@ -48,6 +48,8 @@ use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
 #[derive(Debug, Clone)]
 pub struct SourcedDependencyGroups {
     pub name: Option<PackageName>,
+    /// Local workspace sources whose paths were used while lowering these groups.
+    pub workspace_member_paths: BTreeSet<PathBuf>,
     pub dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
 }
 
@@ -101,6 +103,7 @@ impl SourcedDependencyGroups {
         if matches!(no_sources, NoSources::All) {
             return Ok(Self {
                 name: project.project_name().cloned(),
+                workspace_member_paths: BTreeSet::new(),
                 dependency_groups: dependency_groups
                     .into_iter()
                     .map(|(name, group)| {
@@ -188,6 +191,13 @@ impl SourcedDependencyGroups {
 
         Ok(Self {
             name: project.project_name().cloned(),
+            workspace_member_paths: project
+                .workspace()
+                .packages()
+                .iter()
+                .filter(|(name, _)| !no_sources.for_package(name))
+                .map(|(_, member)| member.root().clone())
+                .collect(),
             dependency_groups: lowered_dependency_groups,
         })
     }
