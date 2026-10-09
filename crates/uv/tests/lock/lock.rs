@@ -140,10 +140,7 @@ fn lock_required_environment_prefers_matching_wheel() -> Result<()> {
     lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
     lock.arg("--index-url").arg(server.index_url());
     uv_snapshot!(context.filters(), lock, @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
@@ -167,10 +164,7 @@ fn lock_required_environment_prefers_matching_wheel() -> Result<()> {
     lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
     lock.arg("--index-url").arg(server.index_url());
     uv_snapshot!(context.filters(), lock, @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
@@ -194,10 +188,7 @@ fn lock_required_environment_prefers_matching_wheel() -> Result<()> {
     lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
     lock.arg("--index-url").arg(server.index_url());
     uv_snapshot!(context.filters(), lock, @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     Updated upgradeable v1.0.0 -> v2.0.0
@@ -209,10 +200,7 @@ fn lock_required_environment_prefers_matching_wheel() -> Result<()> {
         .arg(server.index_url())
         .arg("--locked");
     uv_snapshot!(context.filters(), lock, @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
@@ -48849,5 +48837,360 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
+    Ok(())
+}
+
+/// Updating a locked preference respects the package activation and complete wheel coverage.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_respects_package_activation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheels-package-activation"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["py3-none-manylinux_2_17_x86_64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example; sys_platform == 'linux'"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"sys_platform == 'win32'\"]\n",
+        fs_err::read_to_string(pyproject.path())?
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock["package"]
+            .as_array()
+            .and_then(|packages| packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("example")))
+            .and_then(|package| package["version"].as_str()),
+        Some("2.0.0")
+    );
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock["package"]
+            .as_array()
+            .and_then(|packages| packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("example")))
+            .and_then(|package| package["version"].as_str()),
+        Some("2.0.0")
+    );
+    Ok(())
+}
+
+/// Updating a locked preference respects the package activation and complete wheel coverage.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_wheels_match_current_fork() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheels-current-fork"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64", "cp313-cp313-win_amd64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        environments = ["python_version == '3.13'"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let initial: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let initial_version = initial["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("example"))
+        })
+        .and_then(|package| package["version"].as_str());
+    assert_eq!(initial_version, Some("2.0.0"));
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&format!(
+        "{}\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        fs_err::read_to_string(pyproject.path())?
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated example v2.0.0 -> v1.0.0
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock["package"]
+            .as_array()
+            .and_then(|packages| packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("example")))
+            .and_then(|package| package["version"].as_str()),
+        Some("1.0.0")
+    );
+    Ok(())
+}
+
+/// Updating a locked preference respects the package activation and complete wheel coverage.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_wheel_excludes_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheels-python-exclusion"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-any"]
+        requires_python = ">=3.12"
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["py3-none-any"]
+        requires_python = ">=3.12,!=3.13.*"
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        environments = ["python_version == '3.13'"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let initial: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let initial_version = initial["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("example"))
+        })
+        .and_then(|package| package["version"].as_str());
+    assert_eq!(initial_version, Some("2.0.0"));
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&format!(
+        "{}\nrequired-environments = [\"python_version == '3.13'\"]\n",
+        fs_err::read_to_string(pyproject.path())?
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated example v2.0.0 -> v1.0.0
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock["package"]
+            .as_array()
+            .and_then(|packages| packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("example")))
+            .and_then(|package| package["version"].as_str()),
+        Some("1.0.0")
+    );
+    Ok(())
+}
+
+/// Updating a locked preference respects the package activation and complete wheel coverage.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_combines_libc_wheels() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheels-combined-libc"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-manylinux_2_17_x86_64", "py3-none-musllinux_1_2_x86_64"]
+        [packages.example.versions."2.0.0"]
+        wheel = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        preview-features = ["minimum-libc-version"]
+        minimum-libc-version = { glibc = "2.17", musl = "1.2" }
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let initial: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let initial_version = initial["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("example"))
+        })
+        .and_then(|package| package["version"].as_str());
+    assert_eq!(initial_version, Some("2.0.0"));
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&format!(
+        "{}\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        fs_err::read_to_string(pyproject.path())?
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated example v2.0.0 -> v1.0.0
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock["package"]
+            .as_array()
+            .and_then(|packages| packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("example")))
+            .and_then(|package| package["version"].as_str()),
+        Some("1.0.0")
+    );
+    Ok(())
+}
+
+/// A soft wheel preference cannot replace a usable stable pin under the default prerelease policy.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_retains_stable_prerelease_fallback() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheels-stable-fallback"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0a1"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"python_version == '3.13'\"]\n",
+        fs_err::read_to_string(pyproject.path())?
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let version = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("example"))
+        })
+        .and_then(|package| package["version"].as_str());
+    assert_eq!(version, Some("1.0.0"));
+    uv_snapshot!(context.filters(), context.lock().args(["--prerelease", "allow"])
+        .arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolving despite existing lockfile due to change in pre-release mode: `if-necessary` vs. `allow`
+    Resolved 2 packages in [TIME]
+    Updated example v1.0.0 -> v2.0.0a1
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let version = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("example"))
+        })
+        .and_then(|package| package["version"].as_str());
+    assert_eq!(version, Some("2.0.0a1"));
     Ok(())
 }
