@@ -89,8 +89,9 @@ class CodspeedShards(unittest.TestCase):
             patch.object(profiles, "github_items", side_effect=items),
         ):
             self.assertEqual(profiles.find_source_run(sha, "23"), "23")
-            artifacts.pop()
+            artifact = artifacts.pop()
             self.assertIsNone(profiles.find_source_run(sha, "23"))
+            artifacts.append(artifact)
             jobs.pop()
             self.assertIsNone(profiles.find_source_run(sha, "23"))
 
