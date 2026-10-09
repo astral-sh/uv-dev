@@ -72,12 +72,10 @@ fn entry(
 ) -> Result<uv_keyring::Entry, Error> {
     ensure_service_realm(guard.realm(), service)?;
     Ok(uv_keyring::Entry::new_with_credential(Box::new(
-        uv_keyring::windows::WinCredential {
-            username: String::new(),
-            target_name: target(guard.realm(), service, username),
-            target_alias: String::new(),
-            comment: CREDENTIAL_COMMENT.to_string(),
-        },
+        uv_keyring::windows::WinCredential::with_target(
+            target(guard.realm(), service, username),
+            CREDENTIAL_COMMENT.to_string(),
+        )?,
     )))
 }
 
@@ -90,7 +88,7 @@ pub(super) async fn load_persisted_credentials(
     let entries = uv_keyring::windows::WinCredential::enumerate(&prefix).await?;
     let mut credentials = Vec::with_capacity(entries.len());
     for enumerated in entries {
-        let target_name = &enumerated.credential().target_name;
+        let target_name = enumerated.credential().target_name();
         if !target_has_valid_shape(target_name, &prefix) {
             warn!("Ignoring native credential with an invalid target in realm {realm}");
             continue;

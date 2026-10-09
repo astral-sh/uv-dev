@@ -71,7 +71,7 @@ pub(super) enum RealmGuardRef<'a> {
 
 impl RealmGuardRef<'_> {
     /// Return the realm protected by this guard.
-    pub(super) fn realm(&self) -> &Realm {
+    fn realm(&self) -> &Realm {
         match self {
             Self::Read(guard) => &guard.realm,
             Self::Write(guard) => &guard.realm,
@@ -81,7 +81,7 @@ impl RealmGuardRef<'_> {
 
 impl RealmWriteGuard {
     /// Return the realm protected by this guard.
-    pub(super) fn realm(&self) -> &Realm {
+    fn realm(&self) -> &Realm {
         &self.realm
     }
 }
@@ -127,7 +127,7 @@ pub(super) enum LegacyGuardRef<'a> {
 
 impl LegacyGuardRef<'_> {
     /// Return the exact legacy service name protected by this guard.
-    pub(super) fn service_name(&self) -> &str {
+    fn service_name(&self) -> &str {
         match self {
             Self::Read(guard) => &guard.service_name,
             Self::Write(guard) => &guard.service_name,
@@ -185,20 +185,29 @@ pub(super) async fn remove(service: &Service, username: &str) -> Result<(), Erro
     }
 }
 
+/// A native credential and its persisted service scope, when available.
+pub(crate) struct NativeCredentials {
+    pub(crate) credentials: Credentials,
+    pub(crate) snapshot: Option<Vec<PersistentCredential>>,
+}
+
 /// Fetch the best matching credentials, migrating a legacy entry when safe.
 #[instrument]
-pub(super) async fn fetch(
+pub(crate) async fn fetch(
     url: &DisplaySafeUrl,
     username: Option<&str>,
-) -> Result<Option<Credentials>, Error> {
+) -> Result<Option<NativeCredentials>, Error> {
     let realm = Realm::from(url);
     let legacy_match = {
         let realm_guard = acquire_realm_read(&realm).await?;
-        let credentials =
+        let credentials_snapshot =
             platform::load_persisted_credentials(RealmGuardRef::Read(&realm_guard)).await?;
 
-        if let Some(credentials) = credentials.select(url, username)? {
-            return Ok(Some(credentials.clone()));
+        if let Some(credentials) = credentials_snapshot.select(url, username)? {
+            return Ok(Some(NativeCredentials {
+                credentials: credentials.clone(),
+                snapshot: Some(credentials_snapshot.0),
+            }));
         }
 
         let mut legacy_match = None;
@@ -228,13 +237,22 @@ pub(super) async fn fetch(
         return Ok(None);
     };
 
-    if should_migrate
-        && let Err(err) = migrate_legacy_credential(&realm, &service_name, &credentials).await
-    {
-        warn!("Failed to migrate legacy credentials in realm {realm}: {err}");
-    }
+    let snapshot = if should_migrate {
+        match migrate_legacy_credential(&realm, &service_name, &credentials).await {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                warn!("Failed to migrate legacy credentials in realm {realm}: {err}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
-    Ok(Some(credentials))
+    Ok(Some(NativeCredentials {
+        credentials,
+        snapshot,
+    }))
 }
 
 /// Migrate an unchanged legacy credential into persisted realm storage.
@@ -243,9 +261,9 @@ async fn migrate_legacy_credential(
     realm: &Realm,
     service_name: &str,
     credentials: &Credentials,
-) -> Result<(), Error> {
+) -> Result<Option<Vec<PersistentCredential>>, Error> {
     let Some(username) = credentials.username() else {
-        return Ok(());
+        return Ok(None);
     };
 
     let service = if service_name.contains("://") {
@@ -255,11 +273,11 @@ async fn migrate_legacy_credential(
     };
     let Ok(service) = service else {
         warn!("Failed to parse a legacy credential service during migration");
-        return Ok(());
+        return Ok(None);
     };
     if Realm::from(service.url()) != *realm {
         trace!("Skipping migration for a legacy credential outside realm `{realm}`");
-        return Ok(());
+        return Ok(None);
     }
 
     let realm_guard = acquire_realm_write(realm).await?;
@@ -267,28 +285,29 @@ async fn migrate_legacy_credential(
     let Some(current_password) =
         system_fetch_legacy(LegacyGuardRef::Write(&legacy_guard), username).await?
     else {
-        return Ok(());
+        return Ok(None);
     };
     if credentials.password() != Some(current_password.as_str()) {
-        return Ok(());
+        return Ok(None);
     }
 
     let credential = PersistentCredential {
         service,
         credentials: Credentials::basic(Some(username.to_string()), Some(current_password)),
     };
-    let persisted_credentials =
+    let mut persisted_credentials =
         platform::load_persisted_credentials(RealmGuardRef::Write(&realm_guard)).await?;
     if persisted_credentials.iter().any(|persisted| {
         persisted.service == credential.service
             && persisted.credentials.to_username() == credential.credentials.to_username()
     }) {
         system_remove_legacy(&legacy_guard, username).await?;
-        return Ok(());
+        return Ok(Some(persisted_credentials.0));
     }
     platform::store_persisted_credential(&realm_guard, &credential).await?;
     system_remove_legacy(&legacy_guard, username).await?;
-    Ok(())
+    persisted_credentials.0.push(credential);
+    Ok(Some(persisted_credentials.0))
 }
 
 /// Return legacy service names in lookup order.
@@ -479,7 +498,7 @@ fn legacy_lock_key(service_name: &str) -> String {
 }
 
 /// Fetch a legacy password from the system keyring.
-pub(super) async fn system_fetch_legacy(
+async fn system_fetch_legacy(
     guard: LegacyGuardRef<'_>,
     username: &str,
 ) -> Result<Option<String>, Error> {
@@ -495,7 +514,7 @@ pub(super) async fn system_fetch_legacy(
 }
 
 /// Remove a legacy password from the system keyring.
-pub(super) async fn system_remove_legacy(
+async fn system_remove_legacy(
     guard: &Arc<LegacyWriteGuard>,
     username: &str,
 ) -> Result<bool, Error> {

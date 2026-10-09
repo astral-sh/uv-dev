@@ -491,9 +491,9 @@ async fn native_auth_reports_ambiguous_package_credentials() -> Result<()> {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to fetch: `http://[LOCALHOST]/basic-auth/simple/iniconfig/`
-      Caused by: Failed to fetch credentials from the native credential store
-      Caused by: Multiple credentials found for URL 'http://[LOCALHOST]/basic-auth/simple/iniconfig/', specify which username to use
+    error: Failed to fetch: http://[LOCALHOST]/basic-auth/simple/iniconfig/
+      cause: Failed to fetch credentials from the native credential store
+      cause: Multiple credentials found for URL 'http://[LOCALHOST]/basic-auth/simple/iniconfig/', specify which username to use
     ");
 
     Ok(())
@@ -961,8 +961,8 @@ async fn logout_native_auth() -> Result<()> {
     uv_snapshot!(context.filters(), context.auth_logout()
         .arg(proxy.url("/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-     exit_code: 0 (success)
-     ----- stderr -----
+    exit_code: 0 (success)
+    ----- stderr -----
     Removed credentials for public@http://[LOCALHOST]/basic-auth
     ");
 

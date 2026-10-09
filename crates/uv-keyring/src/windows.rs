@@ -63,10 +63,10 @@ use zeroize::Zeroize;
 /// See the module header for the meanings of these fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WinCredential {
-    pub username: String,
-    pub target_name: String,
-    pub target_alias: String,
-    pub comment: String,
+    username: String,
+    target_name: String,
+    target_alias: String,
+    comment: String,
 }
 
 /// A credential returned by [`WinCredential::enumerate`].
@@ -351,6 +351,23 @@ impl WinCredential {
             Ok(enumerated)
         })
         .await
+    }
+
+    /// Create a credential with a custom target and description.
+    pub fn with_target(target: String, comment: String) -> Result<Self> {
+        let credential = Self {
+            username: String::new(),
+            target_name: target,
+            target_alias: String::new(),
+            comment,
+        };
+        credential.validate_attributes(None, None)?;
+        Ok(credential)
+    }
+
+    /// Return the target identifying this credential.
+    pub fn target_name(&self) -> &str {
+        &self.target_name
     }
 
     fn validate_attributes(&self, secret: Option<&[u8]>, password: Option<&str>) -> Result<()> {

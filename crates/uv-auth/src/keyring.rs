@@ -12,6 +12,7 @@ use crate::persistent::PersistentCredential;
 use crate::service::{Service, ServiceParseError};
 
 mod native;
+pub(crate) use native::fetch as fetch_native;
 
 /// A backend for retrieving credentials from a keyring.
 ///
@@ -171,7 +172,9 @@ impl KeyringProvider {
         );
 
         match &self.backend {
-            KeyringProviderBackend::Native => native::fetch(url, username).await,
+            KeyringProviderBackend::Native => Ok(native::fetch(url, username)
+                .await?
+                .map(|fetched| fetched.credentials)),
             KeyringProviderBackend::Subprocess => {
                 let credentials = self.fetch_subprocess_with_fallback(url, username).await;
                 Ok(credentials

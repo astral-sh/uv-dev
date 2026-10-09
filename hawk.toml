@@ -352,3 +352,21 @@ reason = "retained as a public pyvenv.cfg editing helper"
 crate = "uv_extract"
 module = "dirhash"
 reason = "intentionally public"
+
+[[override]]
+lint = "hawk::unnecessary_restricted_visibility"
+crate = "uv_keyring"
+item = "blocking::spawn_blocking"
+kind = "function"
+level = "expect"
+target = 'cfg(not(any(target_os = "macos", target_os = "windows")))'
+reason = "called by the macOS and Windows keyring backends"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_keyring"
+item = "Entry::new_with_credential"
+kind = "inherent_method"
+level = "expect"
+target = "cfg(not(windows))"
+reason = "used across crates by uv-auth's Windows native credential store"

@@ -975,20 +975,27 @@ impl AuthMiddleware {
                     cache_scope: CredentialsCacheScope::Stored(snapshot),
                 }),
                 Ok(None) if username.is_none() => None,
-                Ok(None) => {
-                    let native_store = KeyringProvider::native();
-                    native_store
-                        .fetch(url, username.as_deref())
-                        .await
-                        .inspect_err(|err| {
-                            debug!("Failed to get credentials from native store: {err}");
-                        })
-                        .map_err(Self::native_store_error)?
-                        .map(|credentials| FetchedCredentials {
-                            credentials: Arc::new(Authentication::from(credentials)),
-                            cache_scope: CredentialsCacheScope::FetchOnly,
-                        })
-                }
+                Ok(None) => crate::keyring::fetch_native(url, username.as_deref())
+                    .await
+                    .inspect_err(|err| {
+                        debug!("Failed to get credentials from native store: {err}");
+                    })
+                    .map_err(Self::native_store_error)?
+                    .map(|fetched| {
+                        let cache_scope = if let Some(snapshot) = fetched.snapshot {
+                            let snapshot = StoredCredentials::from(snapshot);
+                            self.cache()
+                                .native_realms
+                                .done(realm.clone(), Ok(Arc::clone(&snapshot)));
+                            CredentialsCacheScope::Stored(snapshot)
+                        } else {
+                            CredentialsCacheScope::FetchOnly
+                        };
+                        FetchedCredentials {
+                            credentials: Arc::new(Authentication::from(fetched.credentials)),
+                            cache_scope,
+                        }
+                    }),
                 Err(_) => {
                     return Err(Self::native_store_error(
                         crate::keyring::Error::AmbiguousUsername(url.clone()),

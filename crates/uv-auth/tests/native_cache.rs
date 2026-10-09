@@ -114,3 +114,80 @@ async fn native_credentials_are_cached_by_service_path() -> Result<(), Box<dyn s
 
     result
 }
+
+#[tokio::test]
+async fn migrated_native_credentials_are_cached_by_service_path()
+-> Result<(), Box<dyn std::error::Error>> {
+    let preview =
+        Preview::from_feature_names([&MaybePreviewFeature::Known(PreviewFeature::NativeAuth)]);
+    let provider = match AuthBackend::from_settings(preview).await? {
+        AuthBackend::System(provider) => provider,
+        AuthBackend::TextStore(..) => {
+            return Err(std::io::Error::other("expected native authentication backend").into());
+        }
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path_regex("/private.*"))
+        .and(basic_auth("legacy-user", "legacy-password"))
+        .respond_with(ResponseTemplate::new(200))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+
+    let private = DisplaySafeUrl::parse(&format!("{}/private", server.uri()))?;
+    let legacy = uv_keyring::Entry::new(&format!("uv:{private}"), "legacy-user")?;
+    legacy.set_password("legacy-password").await?;
+    let result = async {
+        let cache = Arc::new(CredentialsCache::new());
+        let first_client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+            .with(
+                AuthMiddleware::new()
+                    .with_cache_arc(Arc::clone(&cache))
+                    .with_preview(preview),
+            )
+            .build();
+        let second_client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+            .with(
+                AuthMiddleware::new()
+                    .with_cache_arc(cache)
+                    .with_preview(preview),
+            )
+            .build();
+        let mut request = private.clone();
+        request
+            .set_username("legacy-user")
+            .map_err(|()| std::io::Error::other("invalid username"))?;
+        assert_eq!(
+            first_client.get(request.as_str()).send().await?.status(),
+            200
+        );
+
+        // Removing the migrated entry makes any subsequent native lookup fail. Shared clients
+        // must retain the migrated service scope in their cached realm snapshot.
+        provider.remove(&private, "legacy-user").await?;
+        assert_eq!(
+            second_client
+                .get(format!("{request}/package"))
+                .send()
+                .await?
+                .status(),
+            200
+        );
+        request.set_path("/sibling");
+        assert_eq!(
+            second_client.get(request.as_str()).send().await?.status(),
+            401
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = provider.remove(&private, "legacy-user").await;
+    let _ = legacy.delete_credential().await;
+    result
+}
