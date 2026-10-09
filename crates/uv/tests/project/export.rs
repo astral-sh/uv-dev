@@ -10381,6 +10381,53 @@ fn requirements_txt_undefined_dependency_extra_conflict() -> Result<()> {
     Ok(())
 }
 
+/// Scoped overrides can add an empty conflicting extra to an otherwise dependency-free root.
+#[test]
+fn requirements_txt_scoped_override_adds_conflicting_empty_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "scoped-empty-conflicting-extra"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.child.versions."1"]
+        extras = { feature = [] }
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [dependency-groups]
+        dev = ["child"]
+
+        [tool.uv]
+        override-dependencies = [
+            { package = { name = "project", version = "0.1.0" }, dependencies = ["child[feature]"] },
+        ]
+        conflicts = [[{ group = "dev" }, { package = "child", extra = "feature" }]]
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args(["--group", "dev"]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Found conflicting selections `child[feature]` and `project:dev` enabled simultaneously
+    ");
+    uv_snapshot!(context.filters(), context.export().args(["--frozen", "--group", "dev"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting selections `child[feature]` and `project:dev` enabled simultaneously
+    ");
+    Ok(())
+}
+
 /// Dependency-activated extras also conflict with selected groups and production packages.
 #[cfg(feature = "test-universal")]
 #[test]
