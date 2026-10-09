@@ -10200,12 +10200,26 @@ fn requirements_txt_transitive_extra_conflict_disjoint() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Overlapping activations still conflict.
+    let original = context.read("pyproject.toml");
     context.temp_dir.child("pyproject.toml").write_str(
-        &context
-            .read("pyproject.toml")
-            .replace("sys_platform == 'win32'", "sys_platform == 'linux'"),
+        &original
+            .replace("child[a]; sys_platform == 'linux'", "child[a]")
+            .replace(
+                "[tool.uv]",
+                "[tool.uv]\nenvironments = [\"sys_platform == 'linux'\"]",
+            ),
     )?;
+    uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // Overlapping activations still conflict.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&original.replace("sys_platform == 'win32'", "sys_platform == 'linux'"))?;
     uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
     exit_code: 2 (failure)
     ----- stderr -----

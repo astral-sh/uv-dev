@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -11,9 +11,8 @@ use uv_configuration::{
     ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
 };
 use uv_distribution_types::{Index, RequiresPython, Resolution};
-use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
-use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
-use uv_pep508::MarkerTree;
+use uv_lock::{Installable, Lock, LockError, Package};
+use uv_normalize::{DEV_DEPENDENCIES, GroupName, PackageName};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{
     DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,
@@ -784,160 +783,5 @@ impl<'lock> InstallTarget<'lock> {
         }
 
         Ok(())
-    }
-
-    /// Return the conditions under which workspace packages and their extras are selected.
-    pub(super) fn conflict_activations(
-        &self,
-        extras: &ExtrasSpecification,
-        groups: &DependencyGroupsWithDefaults,
-        marker_env: Option<&ResolverMarkerEnvironment>,
-    ) -> Result<ConflictActivations<'_>, LockError> {
-        let mut activations = ConflictActivations::default();
-        match self.package_selection() {
-            Some(
-                PackageSelection::Projects(_)
-                | PackageSelection::Workspace
-                | PackageSelection::NonProjectWorkspace,
-            ) => {
-                let lock = self.lock();
-                let modifiers = lock.dependency_modifiers()?;
-                let roots = self.roots().collect::<FxHashSet<_>>();
-                let root_marker = lock.requires_python().to_marker_tree();
-                let packages = lock
-                    .packages()
-                    .iter()
-                    .map(|package| (package.name(), package))
-                    .collect::<BTreeMap<_, _>>();
-                for name in &roots {
-                    activations.packages.insert(*name, root_marker);
-                }
-
-                let mut traversal = ConflictTraversal {
-                    queue: VecDeque::new(),
-                    markers: BTreeMap::new(),
-                    marker_environment: marker_env,
-                };
-                for (name, root_kind) in roots
-                    .iter()
-                    .copied()
-                    .map(|name| (name, InstallableRootKind::Production))
-                    .chain(
-                        self.group_root(groups)
-                            .map(|name| (name, InstallableRootKind::DependencyGroups)),
-                    )
-                {
-                    let Some(root_package) = packages.get(name) else {
-                        continue;
-                    };
-                    if root_kind == InstallableRootKind::Production && groups.prod() {
-                        traversal.push(name, None, root_marker);
-                        for extra in extras.extra_names(root_package.optional_dependencies().keys())
-                        {
-                            traversal.push(name, Some(extra.clone()), root_marker);
-                        }
-                    }
-                    for (group_name, dependencies) in root_package.resolved_dependency_groups() {
-                        if !self.includes_group(Some(root_package.name()), group_name, groups) {
-                            continue;
-                        }
-                        for dependency in dependencies {
-                            let (marker, extras) = root_package.dependency_activation(
-                                dependency,
-                                None,
-                                Some(group_name),
-                                &modifiers,
-                            );
-                            let name = dependency.package_name();
-                            traversal.push(name, None, root_marker.and(marker));
-                            for (extra, marker) in extras {
-                                traversal.push(name, Some(extra), root_marker.and(marker));
-                            }
-                        }
-                    }
-                }
-                while let Some((package_name, extra, parent_marker)) = traversal.queue.pop_front() {
-                    if lock.members().contains(package_name) {
-                        activations
-                            .packages
-                            .entry(package_name)
-                            .and_modify(|marker| *marker = marker.or(parent_marker))
-                            .or_insert(parent_marker);
-                    }
-                    if let Some(extra) = &extra {
-                        activations
-                            .extras
-                            .entry((package_name, extra.clone()))
-                            .and_modify(|marker| *marker = marker.or(parent_marker))
-                            .or_insert(parent_marker);
-                    }
-                    let Some(package) = packages.get(package_name) else {
-                        continue;
-                    };
-                    let Some(dependencies) = extra
-                        .as_ref()
-                        .map(|extra| {
-                            package
-                                .optional_dependencies()
-                                .get(extra)
-                                .map(Vec::as_slice)
-                        })
-                        .unwrap_or(Some(package.dependencies()))
-                    else {
-                        continue;
-                    };
-                    for dependency in dependencies {
-                        let (marker, extras) = package.dependency_activation(
-                            dependency,
-                            extra.as_ref(),
-                            None,
-                            &modifiers,
-                        );
-                        let name = dependency.package_name();
-                        traversal.push(name, None, parent_marker.and(marker));
-                        for (extra, marker) in extras {
-                            traversal.push(name, Some(extra), parent_marker.and(marker));
-                        }
-                    }
-                }
-            }
-            None => {}
-        }
-        Ok(activations)
-    }
-}
-
-/// Conditions under which selected workspace packages and extras can participate in conflicts.
-#[derive(Default)]
-pub(super) struct ConflictActivations<'lock> {
-    pub(super) packages: BTreeMap<&'lock PackageName, MarkerTree>,
-    pub(super) extras: BTreeMap<(&'lock PackageName, ExtraName), MarkerTree>,
-}
-
-/// Revisit dependencies whenever another path expands their activation conditions.
-struct ConflictTraversal<'lock, 'env> {
-    queue: VecDeque<(&'lock PackageName, Option<ExtraName>, MarkerTree)>,
-    markers: BTreeMap<(&'lock PackageName, Option<ExtraName>), MarkerTree>,
-    marker_environment: Option<&'env ResolverMarkerEnvironment>,
-}
-
-impl<'lock> ConflictTraversal<'lock, '_> {
-    fn push(&mut self, package: &'lock PackageName, extra: Option<ExtraName>, marker: MarkerTree) {
-        if marker.is_false()
-            || self
-                .marker_environment
-                .is_some_and(|environment| !marker.evaluate(environment.markers(), &[]))
-        {
-            return;
-        }
-        let combined = self
-            .markers
-            .entry((package, extra.clone()))
-            .or_insert(MarkerTree::FALSE);
-        let expanded = combined.or(marker);
-        if expanded != *combined {
-            *combined = expanded;
-            self.queue.push_back((package, extra, expanded));
-        }
     }
 }

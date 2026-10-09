@@ -71,6 +71,7 @@ use uv_warnings::warn_user_once;
 use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
 use uv_workspace::{Editability, WorkspaceMember};
 
+pub use crate::lock::conflicts::activated_conflicts;
 pub use crate::lock::deserialize::Error as CanonicalLockError;
 pub use crate::lock::export::RequirementsTxtExport;
 pub use crate::lock::export::{
@@ -83,6 +84,7 @@ pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
 
+mod conflicts;
 mod deserialize;
 pub(crate) mod export;
 mod inputs;
@@ -3146,7 +3148,7 @@ impl Lock {
     }
 
     /// Return the dependency overrides and exclusions recorded in the lockfile.
-    pub fn dependency_modifiers(&self) -> Result<DependencyModifiers, LockError> {
+    fn dependency_modifiers(&self) -> Result<DependencyModifiers, LockError> {
         Ok(DependencyModifiers::new(
             Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
                 .map_err(LockErrorKind::InvalidScopedOverride)?,
@@ -7395,37 +7397,23 @@ impl Package {
         &self.dependency_groups
     }
 
-    /// Return the conditions under which an effective dependency and its extras are requested.
-    pub fn dependency_activation(
+    /// Prepare effective declarations once for a dependency section, when metadata is available.
+    fn dependency_requirements(
         &self,
-        dependency: &Dependency,
-        extra: Option<&ExtraName>,
-        group: Option<&GroupName>,
+        context: DependencyContext<'_>,
         modifiers: &DependencyModifiers,
-    ) -> (MarkerTree, BTreeMap<ExtraName, MarkerTree>) {
-        let requirements = group.map_or(Some(&self.metadata.requires_dist), |group| {
-            self.metadata.dependency_groups.get(group)
-        });
-        let fallback = || {
-            let marker = dependency.complexified_marker.pep508();
-            (
-                marker,
-                dependency
-                    .extra
-                    .iter()
-                    .cloned()
-                    .map(|extra| (extra, marker))
-                    .collect(),
-            )
+        root: &Path,
+        requires_python: &RequiresPython,
+    ) -> Result<Option<Vec<Requirement>>, LockError> {
+        let requirements = match context {
+            DependencyContext::Group(group) => self.metadata.dependency_groups.get(group),
+            DependencyContext::Production | DependencyContext::Extra(_) => {
+                Some(&self.metadata.requires_dist)
+            }
         };
         let Some(requirements) = requirements.filter(|requirements| !requirements.is_empty())
         else {
-            return fallback();
-        };
-        let context = match (group, extra) {
-            (Some(group), _) => DependencyContext::Group(group),
-            (None, Some(extra)) => DependencyContext::Extra(extra),
-            (None, None) => DependencyContext::Production,
+            return Ok(None);
         };
         let requirements = Lock::preprocess_requirements(
             &self.id.name,
@@ -7434,32 +7422,14 @@ impl Package {
             context,
             modifiers,
         );
-        let mut requirements = requirements
-            .iter()
-            .filter(|requirement| {
-                requirement.name == *dependency.package_name()
-                    && dependency
-                        .extra
-                        .iter()
-                        .all(|extra| requirement.extras.contains(extra))
+        requirements
+            .into_iter()
+            .map(|mut requirement| {
+                requirement.marker = context.requirement_marker(requirement.marker);
+                normalize_requirement(requirement, root, requires_python)
             })
-            .peekable();
-        if requirements.peek().is_none() {
-            return fallback();
-        }
-        let mut marker = MarkerTree::FALSE;
-        let mut extras = BTreeMap::<ExtraName, MarkerTree>::new();
-        for requirement in requirements {
-            let requirement_marker = context.requirement_marker(requirement.marker);
-            marker = marker.or(requirement_marker);
-            for extra in &requirement.extras {
-                extras
-                    .entry(extra.clone())
-                    .and_modify(|marker| *marker = marker.or(requirement_marker))
-                    .or_insert(requirement_marker);
-            }
-        }
-        (marker, extras)
+            .collect::<Result<Vec<_>, LockError>>()
+            .map(Some)
     }
 
     /// Returns an [`InstallTarget`] view for filtering decisions.
@@ -9321,6 +9291,72 @@ impl Dependency {
     /// Returns the package name of this dependency.
     pub fn package_name(&self) -> &PackageName {
         &self.package_id.name
+    }
+
+    /// Return the conditions under which the effective declarations request this dependency.
+    fn activation(
+        &self,
+        requirements: Option<&[Requirement]>,
+        root: &Path,
+    ) -> Result<(MarkerTree, BTreeMap<ExtraName, MarkerTree>), LockError> {
+        let fallback = || {
+            let marker = self.complexified_marker.pep508();
+            Ok((
+                marker,
+                self.extra
+                    .iter()
+                    .cloned()
+                    .map(|extra| (extra, marker))
+                    .collect(),
+            ))
+        };
+        let Some(requirements) = requirements else {
+            return fallback();
+        };
+        let mut matched = false;
+        let mut marker = MarkerTree::FALSE;
+        let mut extras = BTreeMap::<ExtraName, MarkerTree>::new();
+        for requirement in requirements {
+            if requirement.name != *self.package_name()
+                || requirement
+                    .source
+                    .version_specifiers()
+                    .zip(self.package_id.version.as_ref())
+                    .is_some_and(|(specifiers, version)| !specifiers.contains(version))
+            {
+                continue;
+            }
+            // An unqualified registry declaration can inherit a direct source from another root.
+            let source_matches = match &requirement.source {
+                RequirementSource::Registry { index: None, .. } => true,
+                source => self
+                    .package_id
+                    .source
+                    .satisfies_requirement_source(source, root)?,
+            };
+            if !source_matches {
+                continue;
+            }
+            matched = true;
+            marker = marker.or(requirement.marker);
+            for extra in &requirement.extras {
+                extras
+                    .entry(extra.clone())
+                    .and_modify(|marker| *marker = marker.or(requirement.marker))
+                    .or_insert(requirement.marker);
+            }
+        }
+        if !matched {
+            return fallback();
+        }
+        // A merged edge may receive its extras from separate declarations.
+        for extra in &self.extra {
+            marker = marker.and(extras.get(extra).copied().unwrap_or(MarkerTree::FALSE));
+        }
+        for extra_marker in extras.values_mut() {
+            *extra_marker = extra_marker.and(marker);
+        }
+        Ok((marker, extras))
     }
 
     /// Returns the extras specified on this dependency.

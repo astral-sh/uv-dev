@@ -9898,6 +9898,202 @@ fn no_binary_error() -> Result<()> {
     Ok(())
 }
 
+/// Separate declarations can contribute the extras on one merged locked edge.
+#[test]
+fn sync_detects_conflict_through_merged_extra_declarations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[a]", "child[b]", "child[a,b]; sys_platform == '{inactive_platform}'"]
+
+        [tool.uv]
+        conflicts = [[{{ package = "project" }}, {{ package = "child" }}]]
+
+        [tool.uv.workspace]
+        members = ["child", "payload"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+        payload = {{ workspace = true }}
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["payload"]
+        b = ["payload"]
+    "#})?;
+    context
+        .temp_dir
+        .child("payload/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "payload"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    Ok(())
+}
+
+/// Distinct versions and sources of a name retain their own extra requests.
+#[test]
+fn sync_transitive_extra_conflict_distinct_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let active_platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context.temp_dir.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child", "bridge==1; sys_platform == '{active_platform}'", "bridge==2; sys_platform == '{inactive_platform}'"]
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        conflicts = [[{{ group = "dev" }}, {{ package = "child", extra = "b" }}]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+        exclude = ["bridge1", "bridge2"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+        bridge = [
+            {{ path = "bridge1", marker = "sys_platform == '{active_platform}'" }},
+            {{ path = "bridge2", marker = "sys_platform == '{inactive_platform}'" }},
+        ]
+    "#})?;
+    context
+        .temp_dir
+        .child("bridge1/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "bridge"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["child[a]"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        child = { path = "../child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("bridge2/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "bridge"
+        version = "2"
+        requires-python = ">=3.12"
+        dependencies = ["child[b]"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        child = { path = "../child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = []
+        b = []
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    let inactive_target = if cfg!(windows) {
+        "x86_64-apple-darwin"
+    } else {
+        "x86_64-pc-windows-msvc"
+    };
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("dev")
+        .arg("--python-platform").arg(inactive_target), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `b` and group `dev` are incompatible with the declared conflicts: {`child[b]`, `project:dev`}
+    ");
+
+    // Sources remain distinct even when their versions agree.
+    context.temp_dir.child("bridge2/pyproject.toml").write_str(
+        &context
+            .read("bridge2/pyproject.toml")
+            .replace("version = \"2\"", "version = \"1\""),
+    )?;
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("bridge==2", "bridge==1"),
+    )?;
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("dev")
+        .arg("--python-platform").arg(inactive_target), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `b` and group `dev` are incompatible with the declared conflicts: {`child[b]`, `project:dev`}
+    ");
+    Ok(())
+}
+
 /// Dependency-activated extras must only participate in conflicts on an applicable platform.
 #[test]
 fn sync_transitive_extra_conflict_platform() -> Result<()> {

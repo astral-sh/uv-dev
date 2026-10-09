@@ -23,9 +23,8 @@ use uv_distribution_types::{
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
-use uv_lock::{Installable, Lock};
+use uv_lock::{Installable, Lock, activated_conflicts};
 use uv_normalize::PackageName;
-use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{
     ConflictItem, ConflictKind, ConflictSet, Conflicts, ResolverMarkerEnvironment,
@@ -2045,42 +2044,12 @@ pub fn detect_conflicts(
     if conflicts.is_empty() {
         return Ok(());
     }
-    let activations = target.conflict_activations(extras, groups, marker_env)?;
+    let activations = activated_conflicts(target, extras, groups, marker_env)?;
     for set in conflicts.iter() {
         let mut active = vec![];
         for item in set.iter() {
-            let Some(package_marker) = activations.packages.get(item.package()) else {
-                continue;
-            };
-            let marker = match item.kind() {
-                ConflictKind::Project => {
-                    if groups.prod() {
-                        *package_marker
-                    } else {
-                        MarkerTree::FALSE
-                    }
-                }
-                ConflictKind::Extra(extra) => {
-                    if extras.contains(extra) {
-                        *package_marker
-                    } else {
-                        activations
-                            .extras
-                            .get(&(item.package(), extra.clone()))
-                            .copied()
-                            .unwrap_or(MarkerTree::FALSE)
-                    }
-                }
-                ConflictKind::Group(group) => {
-                    if groups.contains(group) {
-                        *package_marker
-                    } else {
-                        MarkerTree::FALSE
-                    }
-                }
-            };
-            if !marker.is_false() {
-                active.push((item, marker));
+            if let Some(marker) = activations.get(item).filter(|marker| !marker.is_false()) {
+                active.push((item, *marker));
             }
         }
         let conflicts = active
