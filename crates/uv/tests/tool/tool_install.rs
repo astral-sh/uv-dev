@@ -6141,103 +6141,186 @@ fn tool_install_locked_workspace_member() -> Result<()> {
 }
 
 #[test]
-fn tool_install_locked_preserves_workspace_member_editability() -> Result<()> {
-    for (root_editable, dependency_editable) in [(false, true), (true, false)] {
-        let context = uv_test::test_context!("3.12")
-            .with_filtered_counts()
-            .with_filtered_exe_suffix();
-        let tool_dir = context.temp_dir.child("tools");
-        let bin_dir = context.temp_dir.child("bin");
-        let project = context.temp_dir.child("foo");
-        let dependency = project.child("child");
+fn tool_install_locked_preserves_editable_workspace_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+    let dependency = project.child("child");
 
-        project.child("pyproject.toml").write_str(&format!(
-            indoc! {r#"
-                [project]
-                name = "foo"
-                version = "0.1.0"
-                requires-python = ">=3.12"
-                dependencies = ["child"]
-
-                [project.scripts]
-                foo = "foo:main"
-
-                [tool.uv.sources]
-                child = {{ workspace = true, editable = {dependency_editable} }}
-
-                [tool.uv.workspace]
-                members = ["child"]
-
-                [build-system]
-                requires = ["uv_build>=0.7,<10000"]
-                build-backend = "uv_build"
-            "#},
-            dependency_editable = dependency_editable
-        ))?;
-        let project_module = project.child("src").child("foo").child("__init__.py");
-        project_module.write_str(indoc! {r#"
-            VALUE = "ROOT"
-
-            def main():
-                import child
-                print(f"{VALUE} {child.VALUE}")
-        "#})?;
-        dependency.child("pyproject.toml").write_str(indoc! {r#"
+    project.child("pyproject.toml").write_str(indoc! {r#"
             [project]
-            name = "child"
+            name = "foo"
             version = "0.1.0"
             requires-python = ">=3.12"
+            dependencies = ["child"]
+
+            [project.scripts]
+            foo = "foo:main"
+
+            [tool.uv.sources]
+            child = { workspace = true, editable = true }
+
+            [tool.uv.workspace]
+            members = ["child"]
 
             [build-system]
             requires = ["uv_build>=0.7,<10000"]
             build-backend = "uv_build"
-        "#})?;
-        let dependency_module = dependency.child("src").child("child").child("__init__.py");
-        dependency_module.write_str("VALUE = 'CHILD'\n")?;
-        context
-            .lock()
-            .current_dir(project.path())
-            .assert()
-            .success();
+    "#})?;
+    let project_module = project.child("src").child("foo").child("__init__.py");
+    project_module.write_str(indoc! {r#"
+        VALUE = "ROOT"
 
-        let mut install = context.tool_install();
-        install
-            .arg(project.as_os_str())
-            .arg("--locked")
-            .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-            .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
-            .env(EnvVars::PATH, bin_dir.as_os_str());
-        if root_editable {
-            install.arg("--editable");
-        }
-        install.assert().success();
+        def main():
+            import child
+            print(f"{VALUE} {child.VALUE}")
+    "#})?;
+    dependency.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
 
-        project_module.write_str(indoc! {r#"
-            VALUE = "ROOT-CHANGED"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    let dependency_module = dependency.child("src").child("child").child("__init__.py");
+    dependency_module.write_str("VALUE = 'CHILD'\n")?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(project.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved [N] packages in [TIME]
+    "#);
 
-            def main():
-                import child
-                print(f"{VALUE} {child.VALUE}")
-        "#})?;
-        dependency_module.write_str("VALUE = 'CHILD-CHANGED'\n")?;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(project.as_os_str())
+        .arg("--locked")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + child==0.1.0 (from file://[TEMP_DIR]/foo/child)
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    "#);
 
-        if root_editable {
-            uv_snapshot!(context.filters(), Command::new("foo")
-                .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-            exit_code: 0 (success)
-            ----- stdout -----
-            ROOT-CHANGED CHILD
-            ");
-        } else {
-            uv_snapshot!(context.filters(), Command::new("foo")
-                .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-            exit_code: 0 (success)
-            ----- stdout -----
-            ROOT CHILD-CHANGED
-            ");
-        }
-    }
+    project_module.write_str(indoc! {r#"
+        VALUE = "ROOT-CHANGED"
+
+        def main():
+            import child
+            print(f"{VALUE} {child.VALUE}")
+    "#})?;
+    dependency_module.write_str("VALUE = 'CHILD-CHANGED'\n")?;
+    uv_snapshot!(context.filters(), context.external_command("foo")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ROOT CHILD-CHANGED
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_locked_preserves_noneditable_workspace_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+    let dependency = project.child("child");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+            [project]
+            name = "foo"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["child"]
+
+            [project.scripts]
+            foo = "foo:main"
+
+            [tool.uv.sources]
+            child = { workspace = true, editable = false }
+
+            [tool.uv.workspace]
+            members = ["child"]
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+    "#})?;
+    let project_module = project.child("src").child("foo").child("__init__.py");
+    project_module.write_str(indoc! {r#"
+        VALUE = "ROOT"
+
+        def main():
+            import child
+            print(f"{VALUE} {child.VALUE}")
+    "#})?;
+    dependency.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    let dependency_module = dependency.child("src").child("child").child("__init__.py");
+    dependency_module.write_str("VALUE = 'CHILD'\n")?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(project.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved [N] packages in [TIME]
+    "#);
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(project.as_os_str())
+        .arg("--locked")
+        .arg("--editable")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + child==0.1.0 (from file://[TEMP_DIR]/foo/child)
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    "#);
+
+    project_module.write_str(indoc! {r#"
+        VALUE = "ROOT-CHANGED"
+
+        def main():
+            import child
+            print(f"{VALUE} {child.VALUE}")
+    "#})?;
+    dependency_module.write_str("VALUE = 'CHILD-CHANGED'\n")?;
+    uv_snapshot!(context.filters(), context.external_command("foo")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ROOT-CHANGED CHILD
+    ");
 
     Ok(())
 }
