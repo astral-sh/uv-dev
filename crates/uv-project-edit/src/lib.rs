@@ -309,6 +309,11 @@ impl PyProjectTomlMut {
         root_dir: &Path,
         member_indexes: &[&Index],
     ) -> Result<(), Error> {
+        let original_names = self
+            .index_tables()
+            .filter_map(|index| index.get("name").and_then(Item::as_str))
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
         let shadowed_names = member_indexes
             .iter()
             .filter_map(|member| {
@@ -325,12 +330,16 @@ impl PyProjectTomlMut {
                     .then(|| name.clone())
             })
             .collect::<BTreeSet<_>>();
-        let mut renames = Vec::new();
+        let mut renames = std::collections::BTreeMap::new();
         for index in indexes {
             let previous_names =
                 self.edit_index(index, root_dir, &shadowed_names, member_indexes)?;
             if let Some(name) = index.name.as_deref() {
-                renames.push((previous_names, name));
+                for previous in previous_names {
+                    if previous != name {
+                        renames.insert(previous, name.to_owned());
+                    }
+                }
             }
         }
         let names = self
@@ -338,9 +347,20 @@ impl PyProjectTomlMut {
             .filter_map(|index| index.get("name").and_then(Item::as_str))
             .map(ToOwned::to_owned)
             .collect::<BTreeSet<_>>();
-        for (mut previous_names, name) in renames {
-            previous_names.retain(|name| !names.contains(name));
-            self.rename_index_sources(&previous_names, name);
+        // Only original root bindings can rename inherited sources. Stop a rename chain when
+        // its declaration survives as an alias, so a member override cannot capture the source.
+        for original in original_names {
+            let mut name = original.as_str();
+            let mut visited = BTreeSet::new();
+            while !names.contains(name) && visited.insert(name) {
+                let Some(next) = renames.get(name) else {
+                    break;
+                };
+                name = next;
+            }
+            if name != original && names.contains(name) {
+                self.rename_index_sources(std::slice::from_ref(&original), name);
+            }
         }
         Ok(())
     }
@@ -522,7 +542,11 @@ impl PyProjectTomlMut {
         let incoming_shadowed = replacement_name.is_some_and(|name| {
             member_indexes.iter().any(|member| {
                 member.name.as_deref() == Some(name)
-                    && (member.url != index.url || member.format != replacement_format)
+                    && (table
+                        .get("url")
+                        .and_then(Item::as_str)
+                        .is_none_or(|url| !index_locations_equal(url, &member.url, root_dir))
+                        || member.format != replacement_format)
             })
         });
 
@@ -2597,6 +2621,77 @@ url = "https://example.com/simple"
 [tool.uv.sources]
 foo = { index = "new" }
 "#);
+    }
+
+    #[test]
+    fn add_indexes_do_not_rename_member_only_sources() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[tool.uv.sources]
+foo = { index = "member-only" }
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let temporary = Index::from_str("member-only=https://example.com/simple").unwrap();
+        let new = Index::from_str("new=https://example.com/simple").unwrap();
+        let member = Index::from_str("member-only=https://member.example.com/simple").unwrap();
+        doc.add_indexes(&[&temporary, &new], Path::new("."), &[&member])
+            .unwrap();
+        assert_eq!(
+            doc.doc["tool"]["uv"]["sources"]["foo"]["index"].as_str(),
+            Some("member-only")
+        );
+        assert_eq!(doc.index_tables().count(), 1);
+    }
+
+    #[test]
+    fn add_indexes_stop_rename_chains_at_retained_aliases() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/simple"
+[tool.uv.sources]
+foo = { index = "old" }
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let middle = Index::from_str("middle=https://example.com/simple").unwrap();
+        let new = Index::from_str("new=https://example.com/simple").unwrap();
+        let member = Index::from_str("new=https://member.example.com/simple").unwrap();
+        doc.add_indexes(&[&middle, &new], Path::new("."), &[&member])
+            .unwrap();
+        assert_eq!(
+            doc.doc["tool"]["uv"]["sources"]["foo"]["index"].as_str(),
+            Some("middle")
+        );
+        assert_eq!(doc.index_tables().count(), 2);
+    }
+
+    #[test]
+    fn add_index_equivalent_member_location_does_not_retain_alias() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/simple"
+[tool.uv.sources]
+foo = { index = "old" }
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let incoming = Index::from_str("new=https://example.com/simple").unwrap();
+        let member = Index::from_str("new=https://example.com/simple/").unwrap();
+        doc.add_indexes(&[&incoming], Path::new("."), &[&member])
+            .unwrap();
+        assert_eq!(
+            doc.doc["tool"]["uv"]["sources"]["foo"]["index"].as_str(),
+            Some("new")
+        );
+        assert_eq!(doc.index_tables().count(), 1);
     }
 
     #[cfg(windows)]
