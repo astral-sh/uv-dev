@@ -289,19 +289,17 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
 }
 
 impl<'lock> InstallTarget<'lock> {
-    /// Intersect the lockfile's Python requirement with the selected groups' requirements.
+    /// Intersect the lockfile's Python requirement with selected members and groups.
     pub fn python_requirement(
         &self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<ProjectPythonRequirement, EnvironmentError> {
         let lock = self.lock();
         let mut group_requirements = RequiresPythonSources::new();
-        for package in lock.workspace_packages().filter(|package| {
-            groups.prod()
-                && self.roots().any(|root| root == package.name())
-                && lock.workspace_members().contains(package.name())
-                && !lock.members().contains(package.name())
-        }) {
+        for package in lock
+            .non_root_workspace_packages()
+            .filter(|package| groups.prod() && self.roots().any(|root| root == package.name()))
+        {
             let requires_python = package.workspace_requires_python().ok_or_else(|| {
                 EnvironmentError::MissingWorkspaceMemberPython(package.name().clone())
             })?;
@@ -705,12 +703,8 @@ impl<'lock> InstallTarget<'lock> {
         let lock = self.lock();
         let roots = self.roots().collect::<FxHashSet<_>>();
         let selected = lock
-            .workspace_packages()
-            .filter(|package| {
-                roots.contains(package.name())
-                    && lock.workspace_members().contains(package.name())
-                    && !lock.members().contains(package.name())
-            })
+            .non_root_workspace_packages()
+            .filter(|package| roots.contains(package.name()))
             .collect::<Vec<_>>();
         if selected.is_empty() {
             return Ok(());
@@ -800,11 +794,10 @@ impl<'lock> InstallTarget<'lock> {
             .roots()
             .chain(self.group_root(groups))
             .collect::<FxHashSet<_>>();
-        for package in lock.workspace_packages().filter(|package| {
-            roots.contains(package.name())
-                && lock.workspace_members().contains(package.name())
-                && !lock.members().contains(package.name())
-        }) {
+        for package in lock
+            .non_root_workspace_packages()
+            .filter(|package| roots.contains(package.name()))
+        {
             for group in package
                 .dependency_groups()
                 .keys()
