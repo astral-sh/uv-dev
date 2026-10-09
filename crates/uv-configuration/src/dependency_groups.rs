@@ -608,13 +608,139 @@ mod tests {
             Vec::new(),
             false,
         );
-        let debug = format!("{groups:?}");
-
-        assert!(debug.contains("include: Some([GroupName(\"included-0\")"));
-        assert!(debug.contains("GroupName(\"included-8\")])"));
-        assert!(debug.contains("exclude: [GroupName(\"excluded-0\")"));
-        assert!(debug.contains("GroupName(\"excluded-8\")]"));
-        assert!(!debug.contains("include_index"));
-        assert!(!debug.contains("exclude_index"));
+        insta::assert_debug_snapshot!(groups, @r#"
+        DependencyGroups(
+            DependencyGroupsInner {
+                include: Some(
+                    [
+                        GroupName(
+                            "included-0",
+                        ),
+                        GroupName(
+                            "included-1",
+                        ),
+                        GroupName(
+                            "included-2",
+                        ),
+                        GroupName(
+                            "included-3",
+                        ),
+                        GroupName(
+                            "included-4",
+                        ),
+                        GroupName(
+                            "included-5",
+                        ),
+                        GroupName(
+                            "included-6",
+                        ),
+                        GroupName(
+                            "included-7",
+                        ),
+                        GroupName(
+                            "included-8",
+                        ),
+                    ],
+                ),
+                exclude: [
+                    GroupName(
+                        "excluded-0",
+                    ),
+                    GroupName(
+                        "excluded-1",
+                    ),
+                    GroupName(
+                        "excluded-2",
+                    ),
+                    GroupName(
+                        "excluded-3",
+                    ),
+                    GroupName(
+                        "excluded-4",
+                    ),
+                    GroupName(
+                        "excluded-5",
+                    ),
+                    GroupName(
+                        "excluded-6",
+                    ),
+                    GroupName(
+                        "excluded-7",
+                    ),
+                    GroupName(
+                        "excluded-8",
+                    ),
+                ],
+                only_groups: false,
+                history: DependencyGroupsHistory {
+                    dev_mode: None,
+                    group: [
+                        GroupName(
+                            "included-0",
+                        ),
+                        GroupName(
+                            "included-1",
+                        ),
+                        GroupName(
+                            "included-2",
+                        ),
+                        GroupName(
+                            "included-3",
+                        ),
+                        GroupName(
+                            "included-4",
+                        ),
+                        GroupName(
+                            "included-5",
+                        ),
+                        GroupName(
+                            "included-6",
+                        ),
+                        GroupName(
+                            "included-7",
+                        ),
+                        GroupName(
+                            "included-8",
+                        ),
+                    ],
+                    only_group: [],
+                    no_group: [
+                        GroupName(
+                            "excluded-0",
+                        ),
+                        GroupName(
+                            "excluded-1",
+                        ),
+                        GroupName(
+                            "excluded-2",
+                        ),
+                        GroupName(
+                            "excluded-3",
+                        ),
+                        GroupName(
+                            "excluded-4",
+                        ),
+                        GroupName(
+                            "excluded-5",
+                        ),
+                        GroupName(
+                            "excluded-6",
+                        ),
+                        GroupName(
+                            "excluded-7",
+                        ),
+                        GroupName(
+                            "excluded-8",
+                        ),
+                    ],
+                    all_groups: false,
+                    no_default_groups: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        )
+        "#);
     }
 }

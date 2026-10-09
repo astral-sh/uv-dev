@@ -495,13 +495,138 @@ mod tests {
             Vec::new(),
             false,
         );
-        let debug = format!("{extras:?}");
-
-        assert!(debug.contains("include: Some([ExtraName(\"included-0\")"));
-        assert!(debug.contains("ExtraName(\"included-8\")])"));
-        assert!(debug.contains("exclude: [ExtraName(\"excluded-0\")"));
-        assert!(debug.contains("ExtraName(\"excluded-8\")]"));
-        assert!(!debug.contains("include_index"));
-        assert!(!debug.contains("exclude_index"));
+        insta::assert_debug_snapshot!(extras, @r#"
+        ExtrasSpecification(
+            ExtrasSpecificationInner {
+                include: Some(
+                    [
+                        ExtraName(
+                            "included-0",
+                        ),
+                        ExtraName(
+                            "included-1",
+                        ),
+                        ExtraName(
+                            "included-2",
+                        ),
+                        ExtraName(
+                            "included-3",
+                        ),
+                        ExtraName(
+                            "included-4",
+                        ),
+                        ExtraName(
+                            "included-5",
+                        ),
+                        ExtraName(
+                            "included-6",
+                        ),
+                        ExtraName(
+                            "included-7",
+                        ),
+                        ExtraName(
+                            "included-8",
+                        ),
+                    ],
+                ),
+                exclude: [
+                    ExtraName(
+                        "excluded-0",
+                    ),
+                    ExtraName(
+                        "excluded-1",
+                    ),
+                    ExtraName(
+                        "excluded-2",
+                    ),
+                    ExtraName(
+                        "excluded-3",
+                    ),
+                    ExtraName(
+                        "excluded-4",
+                    ),
+                    ExtraName(
+                        "excluded-5",
+                    ),
+                    ExtraName(
+                        "excluded-6",
+                    ),
+                    ExtraName(
+                        "excluded-7",
+                    ),
+                    ExtraName(
+                        "excluded-8",
+                    ),
+                ],
+                only_extras: false,
+                history: ExtrasSpecificationHistory {
+                    extra: [
+                        ExtraName(
+                            "included-0",
+                        ),
+                        ExtraName(
+                            "included-1",
+                        ),
+                        ExtraName(
+                            "included-2",
+                        ),
+                        ExtraName(
+                            "included-3",
+                        ),
+                        ExtraName(
+                            "included-4",
+                        ),
+                        ExtraName(
+                            "included-5",
+                        ),
+                        ExtraName(
+                            "included-6",
+                        ),
+                        ExtraName(
+                            "included-7",
+                        ),
+                        ExtraName(
+                            "included-8",
+                        ),
+                    ],
+                    only_extra: [],
+                    no_extra: [
+                        ExtraName(
+                            "excluded-0",
+                        ),
+                        ExtraName(
+                            "excluded-1",
+                        ),
+                        ExtraName(
+                            "excluded-2",
+                        ),
+                        ExtraName(
+                            "excluded-3",
+                        ),
+                        ExtraName(
+                            "excluded-4",
+                        ),
+                        ExtraName(
+                            "excluded-5",
+                        ),
+                        ExtraName(
+                            "excluded-6",
+                        ),
+                        ExtraName(
+                            "excluded-7",
+                        ),
+                        ExtraName(
+                            "excluded-8",
+                        ),
+                    ],
+                    all_extras: false,
+                    no_default_extras: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        )
+        "#);
     }
 }
