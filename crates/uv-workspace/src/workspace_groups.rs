@@ -213,7 +213,7 @@ impl Workspace {
                                 WorkspaceErrorKind::InvalidWorkspaceGroupDependency(
                                     group.name.clone(),
                                     name.clone(),
-                                    error.to_string(),
+                                    Box::new(error),
                                 ),
                             )
                         })

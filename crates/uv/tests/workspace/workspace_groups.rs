@@ -1324,6 +1324,19 @@ fn workspace_groups_lenient_dependencies() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     "#);
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("leaf>=1.9.*", "leaf>=?"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid dependency in workspace group `main` member `app`
+      cause: expected version to start with a number, but no leading ASCII digits were found
+             leaf>=?
+                 ^^^
+    ");
     Ok(())
 }
 
@@ -1536,5 +1549,62 @@ fn workspace_groups_batch_selects_each_context() -> Result<()> {
     shared-leaf==2.0.0
         # via branch-two
     "#);
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_batch_all_packages_uses_selected_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    workspace(&context)?;
+    context.temp_dir.child("batch.toml").write_str(indoc! {r#"
+        [[export]]
+        output-file = "all.txt"
+        all-packages = true
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--no-header", "--no-hashes", "--no-annotate", "--batch", "batch.toml",
+        "--preview-features", "batch-export",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    insta::assert_snapshot!(context.read("all.txt"), @"
+    branch-one==1.0.0
+    common-leaf==1.0.0
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--no-header", "--no-hashes", "--no-annotate", "--batch", "batch.toml",
+        "--workspace-group", "next", "--preview-features", "batch-export",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    insta::assert_snapshot!(context.read("all.txt"), @"
+    branch-two==1.0.0
+    common-leaf==1.0.0
+    shared-leaf==2.0.0
+    ");
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--no-header", "--no-hashes", "--no-annotate", "--batch", "batch.toml",
+        "--preview-features", "batch-export,frozen-lockfile",
+    ]), @"exit_code: 0 (success)");
+    insta::assert_snapshot!(context.read("all.txt"), @"
+    branch-one==1.0.0
+    common-leaf==1.0.0
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--no-header", "--no-hashes", "--no-annotate", "--batch", "batch.toml",
+        "--workspace-group", "next", "--preview-features", "batch-export,frozen-lockfile",
+    ]), @"exit_code: 0 (success)");
+    insta::assert_snapshot!(context.read("all.txt"), @"
+    branch-two==1.0.0
+    common-leaf==1.0.0
+    shared-leaf==2.0.0
+    ");
     Ok(())
 }

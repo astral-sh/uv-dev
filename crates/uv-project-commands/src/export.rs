@@ -437,39 +437,43 @@ pub async fn export(
         }
     };
     if let Some(batch) = &batch {
+        let selected_group = workspace_group
+            .as_ref()
+            .filter(|group| explicit_workspace_group || group.definition.default);
         let mut writers = Vec::with_capacity(batch.export.len());
         for entry in &batch.export {
             let entry_packages = if entry.package.is_empty() && !entry.all_packages {
-                workspace_group
-                    .as_ref()
-                    .filter(|group| explicit_workspace_group || group.definition.default)
+                selected_group
                     .map(|group| group.definition.members.iter().cloned().collect())
                     .unwrap_or_default()
             } else {
                 entry.package.clone()
             };
-            let members = match &source {
-                ExportSource::Manifest(ExportTarget::Project(project)) => {
-                    workspace_selection_members(project, &entry_packages, entry.all_packages)
-                }
-                ExportSource::Lockfile {
-                    workspace,
-                    project_name,
-                } => lockfile_selection_members(
-                    workspace.lock(),
-                    project_name.as_ref(),
-                    &entry_packages,
-                    entry.all_packages,
-                ),
-                ExportSource::Manifest(ExportTarget::Script(_)) => {
-                    bail!("`--batch` does not support scripts")
+            let members = if entry.all_packages
+                && let Some(group) = selected_group
+            {
+                group.definition.members.clone()
+            } else {
+                match &source {
+                    ExportSource::Manifest(ExportTarget::Project(project)) => {
+                        workspace_selection_members(project, &entry_packages, entry.all_packages)
+                    }
+                    ExportSource::Lockfile {
+                        workspace,
+                        project_name,
+                    } => lockfile_selection_members(
+                        workspace.lock(),
+                        project_name.as_ref(),
+                        &entry_packages,
+                        entry.all_packages,
+                    ),
+                    ExportSource::Manifest(ExportTarget::Script(_)) => {
+                        bail!("`--batch` does not support scripts")
+                    }
                 }
             };
             let selected_lock = resolved_lock.select_workspace_context(
-                workspace_group
-                    .as_ref()
-                    .filter(|group| explicit_workspace_group || group.definition.default)
-                    .map(|group| &group.definition.name),
+                selected_group.map(|group| &group.definition.name),
                 &members,
             )?;
 

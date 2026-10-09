@@ -25,7 +25,7 @@ use uv_fs::{CWD, Simplified, normalize_path};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
 use uv_once_map::OnceMap;
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::{MarkerTree, VerbatimUrl};
+use uv_pep508::{MarkerTree, Pep508Error, VerbatimUrl};
 use uv_pypi_types::{ConflictError, Conflicts, SupportedEnvironments, VerbatimParsedUrl};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
@@ -292,8 +292,12 @@ pub enum WorkspaceErrorKind {
     UnknownWorkspaceGroup(GroupName),
     #[error("Workspace group `{0}` has incompatible `requires-python` declarations")]
     DisjointWorkspaceGroupPython(GroupName),
-    #[error("Invalid dependency in workspace group `{0}` member `{1}`: {2}")]
-    InvalidWorkspaceGroupDependency(GroupName, PackageName, String),
+    #[error("Invalid dependency in workspace group `{0}` member `{1}`")]
+    InvalidWorkspaceGroupDependency(
+        GroupName,
+        PackageName,
+        #[source] Box<Pep508Error<VerbatimParsedUrl>>,
+    ),
     #[error(transparent)]
     WorkspaceGroupModifiers(uv_configuration::ScopedOverrideSourceError),
     // Workspace structure errors.
