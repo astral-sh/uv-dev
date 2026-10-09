@@ -172,7 +172,6 @@ async fn artifactory_sidecar_does_not_replace_wheel_hash_check_unadvertised() ->
     let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;
     mount_index(&server, false, WRONG_HASH).await;
-    mount_wheel(&server).await?;
     context
         .temp_dir
         .child("pyproject.toml")
@@ -194,6 +193,7 @@ async fn artifactory_sidecar_does_not_replace_wheel_hash_check_unadvertised() ->
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    mount_wheel(&server).await?;
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -216,7 +216,6 @@ async fn artifactory_sidecar_does_not_replace_wheel_hash_check_advertised() -> R
     let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;
     mount_index(&server, true, WRONG_HASH).await;
-    mount_wheel(&server).await?;
     context
         .temp_dir
         .child("pyproject.toml")
@@ -238,6 +237,7 @@ async fn artifactory_sidecar_does_not_replace_wheel_hash_check_advertised() -> R
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    mount_wheel(&server).await?;
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 1 (failure)
     ----- stderr -----
