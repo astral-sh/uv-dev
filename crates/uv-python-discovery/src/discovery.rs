@@ -837,10 +837,17 @@ impl Error {
                 {
                     return true;
                 }
-                debug!(
-                    "Skipping bad interpreter at `{}` from {source}: {err}",
-                    path.display()
-                );
+                if let Some(cause) = std::error::Error::source(&**err) {
+                    debug!(
+                        "Skipping bad interpreter at `{}` from {source}: {err}: {cause}",
+                        path.display()
+                    );
+                } else {
+                    debug!(
+                        "Skipping bad interpreter at `{}` from {source}: {err}",
+                        path.display()
+                    );
+                }
                 false
             }
             Self::VirtualEnv(VirtualEnvError::MissingPyVenvCfg(path)) => {

@@ -165,8 +165,9 @@ fn run_with_python_executable_wrapper_reuses_environment() -> Result<()> {
     let wrapper = python_dir.child("requested-python");
     wrapper.write_str(&formatdoc! {r#"
         #!/bin/sh
+        printf 'query\n' >> "{queries}"
         exec "{python}" "$@"
-    "#, python = context.python_versions[0].1.display()})?;
+    "#, python = context.python_versions[0].1.display(), queries = context.temp_dir.child("queries").display()})?;
     fs_err::set_permissions(wrapper.path(), Permissions::from_mode(0o755))?;
 
     uv_snapshot!(context.filters(), context.run()
@@ -183,6 +184,7 @@ fn run_with_python_executable_wrapper_reuses_environment() -> Result<()> {
     ");
     let retained = context.temp_dir.child(".venv/keep");
     retained.write_str("keep")?;
+    context.temp_dir.child("queries").write_str("")?;
 
     uv_snapshot!(context.filters(), context.run()
         .arg("-p").arg("requested-python").arg("python").arg("--version")
@@ -197,6 +199,7 @@ fn run_with_python_executable_wrapper_reuses_environment() -> Result<()> {
     Checked in [TIME]
     ");
     retained.assert(predicate::path::exists());
+    assert_eq!(context.read("queries"), "query\n");
     Ok(())
 }
 

@@ -815,13 +815,26 @@ impl Interpreter {
         true
     }
 
+    /// Compare the identity reported by a queried executable, including wrapper targets.
+    fn matches_resolved_interpreter(&self, other: &Self) -> bool {
+        let executable = other.sys_executable();
+        if is_same_executable(executable, self.sys_executable())
+            || self
+                .sys_base_executable()
+                .is_some_and(|base| is_same_executable(executable, base))
+        {
+            return true;
+        }
+        // Windows virtual environments copy executables, so compare their base interpreters.
+        cfg!(windows)
+            && other
+                .sys_base_executable()
+                .zip(self.sys_base_executable())
+                .is_some_and(|(other, current)| is_same_executable(other, current))
+    }
+
     /// Check whether this interpreter satisfies the given request.
     pub fn matches_request(&self, request: &PythonRequest, cache: &Cache) -> bool {
-        /// Returns `true` if the two paths refer to the same interpreter executable.
-        fn is_same_executable(path1: &Path, path2: &Path) -> bool {
-            path1 == path2 || is_same_file(path1, path2).unwrap_or(false)
-        }
-
         match request {
             PythonRequest::Default | PythonRequest::Any => true,
             PythonRequest::Version(version_request) => {
@@ -851,24 +864,7 @@ impl Interpreter {
                 }
                 // A wrapper can report a different executable from the file used to invoke it.
                 if let Ok(file_interpreter) = Self::query(file, cache) {
-                    let executable = file_interpreter.sys_executable();
-                    if is_same_executable(executable, self.sys_executable())
-                        || self
-                            .sys_base_executable()
-                            .is_some_and(|base| is_same_executable(executable, base))
-                    {
-                        return true;
-                    }
-                    // Windows virtual environments copy their executables, so compare their bases.
-                    if cfg!(windows)
-                        && let (Some(file_base), Some(interpreter_base)) = (
-                            file_interpreter.sys_base_executable(),
-                            self.sys_base_executable(),
-                        )
-                        && is_same_executable(file_base, interpreter_base)
-                    {
-                        return true;
-                    }
+                    return self.matches_resolved_interpreter(&file_interpreter);
                 }
                 false
             }
@@ -893,9 +889,7 @@ impl Interpreter {
                 // install, so we can find `foopython` here which got installed as `python`.
                 for executable in which_all(name).into_iter().flatten() {
                     match Self::query(&executable, cache) {
-                        Ok(_) => {
-                            return self.matches_request(&PythonRequest::File(executable), cache);
-                        }
+                        Ok(interpreter) => return self.matches_resolved_interpreter(&interpreter),
                         Err(err) if err.is_critical() => return false,
                         Err(_) => {}
                     }
@@ -912,6 +906,11 @@ impl Interpreter {
             PythonRequest::Key(request) => self.matches_download_request(request),
         }
     }
+}
+
+/// Returns `true` if the two paths refer to the same interpreter executable.
+fn is_same_executable(path1: &Path, path2: &Path) -> bool {
+    path1 == path2 || is_same_file(path1, path2).unwrap_or(false)
 }
 
 /// Calls `fs_err::canonicalize` on Unix. On Windows, avoids attempting to resolve symlinks
@@ -958,7 +957,7 @@ pub struct UnexpectedResponseError {
     err: serde_json::Error,
     stdout: String,
     stderr: String,
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
 }
 
 impl Display for UnexpectedResponseError {
@@ -995,7 +994,7 @@ pub struct StatusCodeError {
     code: ExitStatus,
     stdout: String,
     stderr: String,
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
 }
 
 impl Display for StatusCodeError {
