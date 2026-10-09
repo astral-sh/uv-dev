@@ -1,6 +1,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::Utf8Error;
+#[cfg(any(windows, test))]
+use std::str::from_utf8;
 
 #[cfg(windows)]
 use editpe::{
@@ -208,11 +210,20 @@ fn relocate_distlib_script_inner(
     let appended = contents.get(image_end..)?;
     let line_end = appended.iter().position(|byte| *byte == b'\n')?;
     let shebang = appended.get(..line_end)?.strip_prefix(b"#!")?;
-    let previous = previous_executable.simplified_display().to_string();
-    let quoted_previous = format!("\"{previous}\"");
-    let arguments = shebang
-        .strip_prefix(quoted_previous.as_bytes())
-        .or_else(|| shebang.strip_prefix(previous.as_bytes()))?;
+    let (executable, arguments) = if let Some(quoted) = shebang.strip_prefix(b"\"") {
+        let end = quoted.iter().position(|byte| *byte == b'"')?;
+        (quoted.get(..end)?, quoted.get(end + 1..)?)
+    } else {
+        let end = shebang
+            .iter()
+            .position(u8::is_ascii_whitespace)
+            .unwrap_or(shebang.len());
+        (shebang.get(..end)?, shebang.get(end..)?)
+    };
+    let executable = Path::new(from_utf8(executable).ok()?);
+    if executable.simplified() != previous_executable.simplified() {
+        return None;
+    }
     if arguments
         .first()
         .is_some_and(|byte| !matches!(byte, b' ' | b'\t' | b'\r'))

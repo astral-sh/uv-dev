@@ -77,3 +77,21 @@ fn executable_without_appended_script_is_unchanged() {
         .is_none()
     );
 }
+
+#[test]
+#[cfg(windows)]
+fn windows_path_separators_are_equivalent() -> Result<()> {
+    let (launcher, payload) =
+        launcher(b"#!\"C:\\old Python\\Scripts/python.exe\"\n", "__main__.py")?;
+    let relocated = relocate_distlib_script(
+        &launcher,
+        Path::new(r"C:\old Python\Scripts\python.exe"),
+        Path::new(r"C:\new\Scripts\python.exe"),
+    )
+    .ok_or_else(|| anyhow::anyhow!("equivalent Windows interpreter paths should match"))?;
+    let mut expected = STUB.to_vec();
+    expected.extend_from_slice(b"#!C:\\new\\Scripts\\python.exe\n");
+    expected.extend_from_slice(&payload);
+    assert_eq!(relocated, expected);
+    Ok(())
+}
