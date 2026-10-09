@@ -1675,9 +1675,10 @@ fn rename_index_source(source: &mut dyn TableLike, previous_names: &[String], na
     let Some(index) = source.get_mut("index").and_then(Item::as_value_mut) else {
         return;
     };
-    if !previous_names
-        .iter()
-        .any(|previous_name| index.as_str() == Some(previous_name.as_str()))
+    if index.as_str() == Some(name)
+        || !previous_names
+            .iter()
+            .any(|previous_name| index.as_str() == Some(previous_name.as_str()))
     {
         return;
     }
@@ -2333,6 +2334,43 @@ url = "https://example.com/simple"
         [[tool.uv.sources.tables]]
         index = "new"
         marker = "sys_platform != 'linux'"
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn add_index_same_name_preserves_source_string_representation() -> Result<()> {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"[project]
+name = "project"
+version = "0.1.0"
+dependencies = ["foo"]
+
+[tool.uv.sources]
+foo = { index = 'internal' } # Keep this source declaration.
+
+[[tool.uv.index]]
+name = "internal"
+url = "https://example.com/simple"
+"#,
+            DependencyTarget::PyProjectToml,
+        )?;
+        doc.add_index(
+            &Index::from_str("internal=https://example.com/simple")?,
+            Path::new("."),
+        )?;
+        assert_snapshot!(doc.to_string(), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = ["foo"]
+
+        [tool.uv.sources]
+        foo = { index = 'internal' } # Keep this source declaration.
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://example.com/simple"
         "#);
         Ok(())
     }
