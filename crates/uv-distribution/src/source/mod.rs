@@ -849,7 +849,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         let source_dist_entry = cache_shard.entry(SOURCE);
 
         // If the metadata is static, return it.
-        let dynamic =
+        let mut dynamic =
             match StaticMetadata::read(source, source_dist_entry.path(), subdirectory).await? {
                 StaticMetadata::Some(metadata) => {
                     return Ok(ArchiveMetadata {
@@ -906,18 +906,31 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         let revision = if source_dist_entry.path().is_dir() {
             revision
         } else {
-            self.heal_url_revision(
-                source,
-                ext,
-                url,
-                index,
-                &source_cache_shard.entry(HTTP_REVISION),
-                &source_dist_entry,
-                revision,
-                hashes,
-                client,
-            )
-            .await?
+            let revision = self
+                .heal_url_revision(
+                    source,
+                    ext,
+                    url,
+                    index,
+                    &source_cache_shard.entry(HTTP_REVISION),
+                    &source_dist_entry,
+                    revision,
+                    hashes,
+                    client,
+                )
+                .await?;
+            // Healing can restore complete static metadata without requiring a backend.
+            match StaticMetadata::read(source, source_dist_entry.path(), subdirectory).await? {
+                StaticMetadata::Some(metadata) => {
+                    return Ok(ArchiveMetadata {
+                        metadata: Metadata::from_metadata23(metadata),
+                        hashes: revision.into_hashes(),
+                    });
+                }
+                StaticMetadata::Dynamic => dynamic = true,
+                StaticMetadata::None => {}
+            }
+            revision
         };
 
         // Validate that the subdirectory exists.
