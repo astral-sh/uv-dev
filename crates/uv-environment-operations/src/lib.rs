@@ -29,6 +29,7 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_interpreter::{BrokenLink, Interpreter, InvalidEnvironmentKind, PythonEnvironment};
 use uv_python_managed::{PythonMinorVersionLink, UpgradePolicy};
 use uv_python_types::{
@@ -1146,6 +1147,7 @@ pub enum ScriptEnvironment {
 impl ScriptEnvironment {
     /// Initialize a virtual environment for a PEP 723 script.
     pub async fn get_or_init(
+        mode: ScriptEnvironmentMode,
         script: Pep723ItemRef<'_>,
         python_request: Option<PythonRequest>,
         client_builder: &BaseClientBuilder<'_>,
@@ -1169,6 +1171,7 @@ impl ScriptEnvironment {
             .ok();
 
         match ScriptInterpreter::discover(
+            mode,
             script,
             python_request,
             client_builder,
@@ -1191,7 +1194,7 @@ impl ScriptEnvironment {
             ScriptInterpreter::Interpreter(requested) => {
                 let upgrade_policy = UpgradePolicy::from_request(requested.request());
                 let interpreter = requested.into_interpreter();
-                let root = ScriptInterpreter::root(script, active, cache);
+                let root = ScriptInterpreter::root(mode, script, active, cache);
 
                 // The derived cache entry is owned by uv and can be repaired, but an active
                 // destination may contain user data.

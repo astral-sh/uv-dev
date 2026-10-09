@@ -8,6 +8,7 @@ use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
 use uv_fs::Simplified;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -140,6 +141,7 @@ pub async fn find_script(
     printer: Printer,
 ) -> Result<ExitStatus> {
     let interpreter = ScriptInterpreter::discover(
+        ScriptEnvironmentMode::Isolated,
         script,
         None,
         client_builder,

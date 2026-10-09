@@ -50,6 +50,7 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::PythonVersionFile;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::VersionFileDiscoveryOptions;
 use uv_python_interpreter::{Interpreter, PyVenvConfiguration, PythonEnvironment};
 use uv_python_types::{
@@ -210,6 +211,7 @@ pub async fn run(
 
             // Discover the interpreter for the script.
             let environment = ScriptEnvironment::get_or_init(
+                ScriptEnvironmentMode::Isolated,
                 (&script).into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
@@ -399,7 +401,17 @@ pub async fn run(
             )
             .await?
             .into_inner();
+            let environment_mode = if preview
+                .is_enabled(PreviewFeature::SharedScriptEnvironments)
+                && active != ActiveEnvironment::Prefer
+                && script_extra_build_requires.is_empty()
+            {
+                ScriptEnvironmentMode::Shared
+            } else {
+                ScriptEnvironmentMode::Isolated
+            };
             let environment = ScriptEnvironment::get_or_init(
+                environment_mode,
                 (&script).into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
@@ -425,10 +437,7 @@ pub async fn run(
                 })
                 .ok();
 
-            if preview.is_enabled(PreviewFeature::SharedScriptEnvironments)
-                && active != ActiveEnvironment::Prefer
-                && script_extra_build_requires.is_empty()
-            {
+            if environment_mode == ScriptEnvironmentMode::Shared {
                 let result = CachedEnvironment::from_spec(
                     spec.into(),
                     unlocked_build_constraints.clone(),
@@ -469,6 +478,10 @@ pub async fn run(
                                 "import site; site.addsitedir({})",
                                 parent_site_packages.escape_for_python()
                             ),
+                        )?;
+                        sync_shared_entrypoints(
+                            &environment,
+                            shared_environment.interpreter(),
                         )?;
                         set_parent_environment(&environment, shared_environment.root())?;
                         Some(environment.into_interpreter())

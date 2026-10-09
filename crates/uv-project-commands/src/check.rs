@@ -28,6 +28,7 @@ use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
@@ -300,6 +301,7 @@ pub async fn check(
 
         let interpreter = if let Some(script) = script.as_ref() {
             ScriptInterpreter::discover(
+                ScriptEnvironmentMode::Isolated,
                 script.into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
@@ -365,6 +367,7 @@ pub async fn check(
             venv
         } else {
             ScriptEnvironment::get_or_init(
+                ScriptEnvironmentMode::Isolated,
                 script.into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
