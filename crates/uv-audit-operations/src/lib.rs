@@ -305,7 +305,7 @@ impl AuditResults {
                         writeln!(
                             self.printer.stdout_important(),
                             "  Advisory information: {link}\n",
-                            link = link.to_string().blue()
+                            link = link.blue()
                         )?;
                     }
                 }
