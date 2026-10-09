@@ -201,6 +201,9 @@ impl OnExisting {
                 format!("{message} at `{}`", location.user_display()),
             )));
         }
+        if let Self::Allow = self {
+            return Ok(ExistingAction::Allow);
+        }
         if fs_err::read_dir(location)
             .map_err(&inspect_error)?
             .next()
