@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use uv_configuration::{ExcludeNewerChange, ExcludeNewerPackageChange};
+use uv_configuration::ExcludeNewerChange;
 use uv_distribution_types::{NameRequirementSpecification, Requirement};
 use uv_lock::SatisfiesResult;
 use uv_normalize::PackageName;
@@ -21,7 +21,7 @@ pub trait LockReporter {
 pub struct LockValidationReason {
     pub code: LockValidationReasonCode,
     pub package: Option<PackageName>,
-    pub message: Option<String>,
+    pub exclude_newer: Option<ExcludeNewerChange>,
     pub expected: Option<LockValidationValues>,
     pub actual: Option<LockValidationValues>,
 }
@@ -39,7 +39,7 @@ impl LockValidationReason {
         Self {
             code,
             package: None,
-            message: None,
+            exclude_newer: None,
             expected: None,
             actual: None,
         }
@@ -83,17 +83,7 @@ impl LockValidationReason {
 
     pub(crate) fn exclude_newer(change: &ExcludeNewerChange) -> Self {
         let mut reason = Self::new(LockValidationReasonCode::ExcludeNewerChanged);
-        reason.message = Some(change.to_string());
-        match change {
-            ExcludeNewerChange::GlobalChanged(_)
-            | ExcludeNewerChange::GlobalAdded(_)
-            | ExcludeNewerChange::GlobalRemoved => {}
-            ExcludeNewerChange::Package(
-                ExcludeNewerPackageChange::PackageAdded(package, _)
-                | ExcludeNewerPackageChange::PackageRemoved(package)
-                | ExcludeNewerPackageChange::PackageChanged(package, _),
-            ) => reason.package = Some(package.clone()),
-        }
+        reason.exclude_newer = Some(change.clone());
         reason
     }
 

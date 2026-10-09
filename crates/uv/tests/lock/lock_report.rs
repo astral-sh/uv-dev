@@ -287,6 +287,37 @@ fn lock_json_actions() -> Result<()> {
     warning: The lockfile at `uv.lock` was only checked for validity, not whether it is up-to-date, because `--check-exists` was provided; use `--check` instead
     "#);
     assert_eq!(context.read("uv.lock"), lock);
+
+    manifest.write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("name = \"project\"", "name = \"renamed\""),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--check-exists", "--output-format", "json", "--preview-features", "json-output", "--offline",
+    ]), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/uv.lock",
+      "status": "stale",
+      "action": "use",
+      "dry_run": false,
+      "reason": {
+        "code": "missing_root",
+        "package": "renamed"
+      }
+    }
+
+    ----- stderr -----
+    error: The lockfile at `uv.lock` needs to be updated, but `--check-exists` was provided: Missing workspace member `renamed`.
+
+    hint: To update the lockfile, run `uv lock`.
+    "#);
+    assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }
 
@@ -903,5 +934,53 @@ fn lock_check_json_script_editable_source() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     "#);
     assert_eq!(context.read("script.py.lock"), lock);
+    Ok(())
+}
+
+/// Structured errors retain marker-replacement hints from the shared diagnostic interface.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_json_overlapping_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.8"
+        [tool.uv]
+        environments = ["platform_system != 'Windows'", "python_version > '3.10'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--output-format", "json", "--preview-features", "json-output", "--offline",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/uv.lock",
+      "status": "stale",
+      "dry_run": false,
+      "reason": {
+        "code": "missing_lockfile"
+      },
+      "error": {
+        "code": "evaluation_failed",
+        "message": "Supported environments must be disjoint, but the following markers overlap: `sys_platform != 'win32'` and `python_full_version >= '3.11'`",
+        "hints": [
+          "replace `python_full_version >= '3.11'` with `python_full_version >= '3.11' and sys_platform == 'win32'`"
+        ]
+      }
+    }
+
+    ----- stderr -----
+    error: Supported environments must be disjoint, but the following markers overlap: `sys_platform != 'win32'` and `python_full_version >= '3.11'`
+
+    hint: replace `python_full_version >= '3.11'` with `python_full_version >= '3.11' and sys_platform == 'win32'`
+    "#);
     Ok(())
 }

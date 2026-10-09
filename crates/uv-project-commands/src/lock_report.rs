@@ -9,8 +9,9 @@ use serde::Serialize;
 
 use uv_client::{ErrorKind as ClientErrorKind, WrappedReqwestError};
 use uv_command_support::ExitStatus;
-use uv_configuration::DryRun;
+use uv_configuration::{DryRun, ExcludeNewerChange, ExcludeNewerPackageChange};
 use uv_distribution_types::{Name, RequirementSource};
+use uv_errors::Hinted;
 use uv_fs::PortablePathBuf;
 use uv_lock_operations::{
     LockError, LockMode, LockReporter, LockResult, LockValidationError, LockValidationReason,
@@ -156,11 +157,16 @@ impl LockReport {
             Some(ReasonCode::NonCanonicalFormatting)
         } else if let LockError::LockMismatch(..) = error {
             Some(ReasonCode::LockChanged)
+        } else if let LockError::LockWorkspaceMismatch(..) = error {
+            Some(ReasonCode::MissingRoot)
         } else {
             None
         };
         if let Some(reason) = reason {
-            self.reason.get_or_insert_with(|| LockReason::new(reason));
+            let reason = self.reason.get_or_insert_with(|| LockReason::new(reason));
+            if let LockError::LockWorkspaceMismatch(package, _) = error {
+                reason.package = Some(package.clone());
+            }
         } else {
             self.error = Some(ErrorReport::from_lock(error));
         }
@@ -263,10 +269,24 @@ impl LockReason {
 
 impl From<LockValidationReason> for LockReason {
     fn from(reason: LockValidationReason) -> Self {
+        let mut package = reason.package;
+        let message = reason.exclude_newer.map(|change| {
+            match &change {
+                ExcludeNewerChange::GlobalChanged(_)
+                | ExcludeNewerChange::GlobalAdded(_)
+                | ExcludeNewerChange::GlobalRemoved => {}
+                ExcludeNewerChange::Package(
+                    ExcludeNewerPackageChange::PackageAdded(name, _)
+                    | ExcludeNewerPackageChange::PackageRemoved(name)
+                    | ExcludeNewerPackageChange::PackageChanged(name, _),
+                ) => package = Some(name.clone()),
+            }
+            change.to_string()
+        });
         Self {
             code: reason.code.into(),
-            package: reason.package,
-            message: reason.message,
+            package,
+            message,
             expected: reason.expected.map(render_values),
             actual: reason.actual.map(render_values),
         }
@@ -428,6 +448,7 @@ impl ErrorReport {
 
     fn from_lock(error: &LockError) -> Self {
         let mut report = Self::new(error);
+        report.hints = error.hints().into_iter().map(plain).collect();
         if let LockError::Resolve(error) = error {
             report.resolution(error);
         }
@@ -444,6 +465,9 @@ impl ErrorReport {
 
     fn from_validation(error: &LockValidationError) -> Self {
         let mut report = Self::new(error);
+        if let LockValidationError::Lock(error) = error {
+            report.hints = error.hints().into_iter().map(plain).collect();
+        }
         if let LockValidationError::Lock(error) = error
             && let Some(package) = error.resolution_package()
         {
@@ -467,7 +491,6 @@ impl ErrorReport {
     }
 
     fn resolver_hints(&mut self, error: &NoSolutionError) {
-        self.hints = error.resolution_hints().map(plain).collect();
         for hint in error.resolution_hints() {
             if let PubGrubHint::Offline = hint {
                 self.code = ErrorCode::OfflineCacheMiss;
