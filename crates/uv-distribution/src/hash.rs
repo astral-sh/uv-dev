@@ -28,12 +28,14 @@ pub(crate) fn matches_authority(
     };
     let record = authority.record();
     size == Some(record.size())
-        && hashes.iter().any(|hash| {
-            hash.algorithm() == HashAlgorithm::Sha256
-                && hash
-                    .digest()
-                    .parse::<Sha256Digest>()
-                    .is_ok_and(|digest| digest == record.sha256())
+        && hashes.iter().any(|hash| match hash {
+            HashDigest::Sha256(digest) => {
+                Sha256Digest::from_bytes(digest.decode()) == record.sha256()
+            }
+            HashDigest::Md5(_)
+            | HashDigest::Sha384(_)
+            | HashDigest::Sha512(_)
+            | HashDigest::Blake2b256(_) => false,
         })
 }
 

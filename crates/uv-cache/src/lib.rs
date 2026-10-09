@@ -791,13 +791,20 @@ impl Cache {
                         continue;
                     }
 
-                    if !entry.path().join("metadata.msgpack").exists() {
+                    let entries = fs_err::read_dir(entry.path())?.collect::<Result<Vec<_>, _>>()?;
+                    let authority_revision = entries.iter().any(|child| {
+                        child
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with("authority-")
+                            && child.path().join("metadata.msgpack").is_file()
+                    });
+                    if !entry.path().join("metadata.msgpack").exists() && !authority_revision {
                         continue;
                     }
 
                     // Remove everything except the built wheel archive and the metadata.
-                    for entry in fs_err::read_dir(entry.path())? {
-                        let entry = entry?;
+                    for entry in entries {
                         let path = entry.path();
 
                         // Retain the resolved metadata (`metadata.msgpack`).
