@@ -59,8 +59,13 @@ pub enum EnvironmentError {
     #[error("Project virtual environment directory `{0}` cannot be used because {1}")]
     InvalidProjectEnvironmentDir(PathBuf, String),
 
-    #[error("Script virtual environment directory `{0}` cannot be used because {1}")]
-    InvalidScriptEnvironmentDir(PathBuf, String),
+    #[error("Script virtual environment directory `{path}` cannot be used because {reason}")]
+    InvalidScriptEnvironmentDir {
+        path: PathBuf,
+        reason: &'static str,
+        #[source]
+        source: Option<std::io::Error>,
+    },
 
     #[error(
         "Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check."
@@ -222,7 +227,7 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::LockedPythonIncompatibility(..)
             | EnvironmentError::LockedPlatformIncompatibility(..)
             | EnvironmentError::InvalidProjectEnvironmentDir(..)
-            | EnvironmentError::InvalidScriptEnvironmentDir(..)
+            | EnvironmentError::InvalidScriptEnvironmentDir { .. }
             | EnvironmentError::MalwareFound
             | EnvironmentError::Osv(..)
             | EnvironmentError::DroppedEnvironment
@@ -276,7 +281,7 @@ impl uv_errors::Hinted for EnvironmentError {
             | Self::LockedPythonIncompatibility(..)
             | Self::LockedPlatformIncompatibility(..)
             | Self::InvalidProjectEnvironmentDir(..)
-            | Self::InvalidScriptEnvironmentDir(..)
+            | Self::InvalidScriptEnvironmentDir { .. }
             | Self::MalwareFound
             | Self::Osv(..)
             | Self::DroppedEnvironment

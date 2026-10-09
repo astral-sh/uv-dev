@@ -19,7 +19,7 @@ use uv_virtualenv::{
 #[cfg(unix)]
 use fs_err::os::unix::fs::symlink;
 #[cfg(unix)]
-use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+use std::{ffi::OsStr, os::unix::ffi::OsStrExt, os::unix::fs::PermissionsExt};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
@@ -296,6 +296,27 @@ fn check_venv_replacement_links() -> Result<()> {
         CreationAction::Replace
     );
     assert_eq!(fs_err::read_link(directory.path())?, target.path());
+    Ok(())
+}
+
+/// Allowing existing contents does not require permission to enumerate the destination.
+#[test]
+#[cfg(unix)]
+fn check_venv_allow_existing_unreadable_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let directory = context.temp_dir.child("environment");
+    directory.create_dir_all()?;
+    let permissions = fs_err::metadata(directory.path())?.permissions();
+    fs_err::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o300))?;
+    let readable = fs_err::read_dir(directory.path()).is_ok();
+    let action = OnExisting::Allow.check(directory.path());
+    fs_err::set_permissions(directory.path(), permissions)?;
+
+    // Privileged users may bypass the mode bits and cannot exercise this fixture.
+    if readable {
+        return Ok(());
+    }
+    assert_eq!(action?, CreationAction::Create);
     Ok(())
 }
 

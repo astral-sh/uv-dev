@@ -1,5 +1,8 @@
 #![expect(clippy::disallowed_types)]
 
+#[cfg(unix)]
+use fs_err::os::unix::fs::symlink;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
@@ -4784,6 +4787,41 @@ fn run_active_script_environment_non_virtualenv() -> Result<()> {
         .child("pyvenv.cfg")
         .assert(predicate::path::is_file());
 
+    Ok(())
+}
+
+/// Script destination inspection failures retain their filesystem cause.
+#[test]
+#[cfg(unix)]
+fn run_active_script_environment_inspection_error() -> Result<()> {
+    let context =
+        uv_test::test_context!("3.12").with_filter((r"\(os error \d+\)", "(os error [ERRNO])"));
+    context.temp_dir.child("main.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    let active_environment = context.temp_dir.child("foo");
+    active_environment.create_dir_all()?;
+    active_environment
+        .child("important.txt")
+        .write_str("important data")?;
+    symlink("pyvenv.cfg", active_environment.child("pyvenv.cfg"))?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--active")
+        .arg("--python").arg(&context.python_versions[0].1)
+        .arg("--script").arg("main.py")
+        .env(EnvVars::VIRTUAL_ENV, "foo"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Script virtual environment directory `[TEMP_DIR]/foo` cannot be used because uv cannot determine if it is a virtual environment
+      cause: failed to query metadata of file `[TEMP_DIR]/foo/pyvenv.cfg`: Too many levels of symbolic links (os error [ERRNO])
+    ");
+    active_environment
+        .child("important.txt")
+        .assert("important data");
     Ok(())
 }
 
