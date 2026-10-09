@@ -8086,3 +8086,67 @@ fn tool_install_preflight_allows_distinct_case_names() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Reinstallation repairs package links left dangling after their cache is removed.
+#[test]
+#[cfg(unix)]
+fn tool_install_preflight_repairs_dangling_package_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let (filename, wheel_bytes) = generate_wheel_with_files(
+        &"repair-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("repair_tool/cli.py", "def main():\n    print('repaired')\n"),
+            (
+                "repair_tool-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nrepair-tool = repair_tool.cli:main\n",
+            ),
+        ],
+    );
+    let wheel = context.temp_dir.child(filename);
+    wheel.write_binary(&wheel_bytes)?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(wheel.path())
+        .args(["--link-mode", "symlink", "--no-index"])
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + repair-tool==1.0.0 (from file://[TEMP_DIR]/repair_tool-1.0.0-py3-none-any.whl)
+    Installed 1 executable: repair-tool
+    ");
+    context
+        .command()
+        .args(["cache", "clean", "repair-tool"])
+        .assert()
+        .success();
+    let package = context
+        .temp_dir
+        .join("tools/repair-tool/lib/python3.12/site-packages/repair_tool/cli.py");
+    assert!(fs_err::symlink_metadata(&package)?.is_symlink());
+    assert!(!package.exists());
+    uv_snapshot!(context.filters(), context.tool_install().arg(wheel.path())
+        .args(["--link-mode", "symlink", "--no-index", "--reinstall"])
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ repair-tool==1.0.0 (from file://[TEMP_DIR]/repair_tool-1.0.0-py3-none-any.whl)
+    Installed 1 executable: repair-tool
+    ");
+    uv_snapshot!(context.filters(), Command::new(bin.join("repair-tool")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    repaired
+    ");
+    Ok(())
+}

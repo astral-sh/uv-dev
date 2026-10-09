@@ -1322,7 +1322,17 @@ fn copy_preflight_contents(
         } else if fs_err::symlink_metadata(&target).is_ok() {
             // Keep the fresh interpreter, activation scripts and virtualenv configuration.
         } else {
-            fs_err::copy(entry.path(), target)?;
+            match fs_err::copy(entry.path(), target) {
+                Ok(_) => {}
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::NotFound
+                        && entry.file_type()?.is_symlink() =>
+                {
+                    // Cache cleanup can leave installed package links dangling. Synchronization
+                    // replaces their missing files when the tool is reinstalled.
+                }
+                Err(err) => return Err(err),
+            }
         }
     }
     ancestors.remove(&canonical);
