@@ -2620,9 +2620,12 @@ fn install_editable_unnamed_no_build() -> Result<()> {
         .arg("--no-build")
         .arg("-e")
         .arg("editable"), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: Building source distributions is disabled
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==0.1.0 (from file://[TEMP_DIR]/editable)
     "
     );
 
@@ -18817,9 +18820,9 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
     Ok(())
 }
 
-/// Inline script no-build restrictions also apply to unnamed legacy editables.
+/// Inline legacy no-build settings retain the same editable exemption as the command line.
 #[test]
-fn script_no_build_blocks_unnamed_editable() -> Result<()> {
+fn script_no_build_allows_unnamed_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context.temp_dir.child("script.py").write_str(indoc! {r"
         # /// script
@@ -18832,17 +18835,24 @@ fn script_no_build_blocks_unnamed_editable() -> Result<()> {
         .temp_dir
         .child("legacy/setup.py")
         .write_str(indoc! {r#"
-        raise RuntimeError("the backend must not run")
+        from pathlib import Path
+        from setuptools import setup
+
+        Path("backend-ran").write_text("called")
+        setup(name="example", version="0.1.0")
     "#})?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r").arg("script.py")
-        .arg("--editable").arg("legacy")
-        .arg("--offline"), @r#"
-    exit_code: 1 (failure)
+        .arg("--editable").arg("legacy"), @r#"
+    exit_code: 0 (success)
     ----- stderr -----
-    error: Building source distributions is disabled
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==0.1.0 (from file://[TEMP_DIR]/legacy)
     "#);
+    insta::assert_snapshot!(context.read("legacy/backend-ran"), @"called");
     Ok(())
 }
 
