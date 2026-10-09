@@ -200,7 +200,7 @@ impl PyProjectToml {
     /// Returns the workspace dependency groups included by a local group.
     ///
     /// A missing package indicates a group defined by the workspace root.
-    pub fn workspace_group_includes(
+    pub(crate) fn workspace_group_includes(
         &self,
         group: &GroupName,
     ) -> impl Iterator<Item = (Option<&PackageName>, &GroupName)> {
