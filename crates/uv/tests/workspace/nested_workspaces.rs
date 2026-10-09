@@ -4,15 +4,16 @@ use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
+use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
 use indoc::{formatdoc, indoc};
 use insta::assert_json_snapshot;
-use predicates::str::contains;
+use predicates::prelude::predicate;
 use serde::Deserialize;
 
 use uv_static::EnvVars;
 use uv_test::packse::{PackseServer, scenario::Scenario};
-use uv_test::{TestContext, copy_dir_ignore};
+use uv_test::{TestContext, copy_dir_ignore, uv_snapshot};
 
 fn index() -> Result<PackseServer> {
     let scenario: Scenario = toml::from_str(indoc! {r#"
@@ -353,25 +354,33 @@ fn nested_workspaces_require_parent_lock_for_resolution() -> Result<()> {
 
     write_workspace(&parent, "parent", &["shared==1.0.0"], &["services/*"])?;
     write_workspace(&child, "child", &["shared>=1"], &[])?;
-    lock(&context, child.path(), &server)
-        .assert()
-        .code(1)
-        .stderr(contains("Unable to find the parent workspace lockfile"))
-        .stderr(contains("Run `uv lock` in the parent workspace first"));
-    assert!(!parent.join("uv.lock").exists());
-    assert!(!child.join("uv.lock").exists());
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Unable to find the parent workspace lockfile at `[TEMP_DIR]/parent/uv.lock`. Run `uv lock` in the parent workspace first.
+    ");
+    parent.child("uv.lock").assert(predicate::path::missing());
+    child.child("uv.lock").assert(predicate::path::missing());
 
     parent.child("uv.lock").write_str("not a lockfile")?;
-    lock(&context, child.path(), &server)
-        .assert()
-        .code(1)
-        .stderr(contains("Failed to parse the parent workspace lockfile"))
-        .stderr(contains(parent.join("uv.lock").display().to_string()));
-    assert_eq!(
-        fs_err::read_to_string(parent.join("uv.lock"))?,
-        "not a lockfile"
-    );
-    assert!(!child.join("uv.lock").exists());
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path())
+        .args(["--preview-features", "nested-workspaces", "--default-index"])
+        .arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Failed to parse the parent workspace lockfile at `[TEMP_DIR]/parent/uv.lock`
+      cause: TOML parse error at line 1, column 5
+               |
+             1 | not a lockfile
+               |     ^
+             key with no value, expected `=`
+    ");
+    assert_eq!(context.read("parent/uv.lock"), "not a lockfile");
+    child.child("uv.lock").assert(predicate::path::missing());
     Ok(())
 }
 

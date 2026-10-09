@@ -8,7 +8,7 @@ use indoc::indoc;
 use predicates::prelude::predicate;
 
 use uv_static::EnvVars;
-use uv_test::TestContext;
+use uv_test::{TestContext, uv_snapshot};
 
 fn init_child(context: &TestContext, child: &Path) -> Command {
     let mut command = context.init();
@@ -56,46 +56,159 @@ fn has_workspace(pyproject: &toml::Value) -> bool {
 }
 
 #[test]
-fn init_nested_workspace_registrations() -> Result<()> {
-    for (pattern, create_child) in [
-        ("services/child", false),
-        ("services/*", false),
-        ("services/*", true),
-    ] {
-        let context = uv_test::test_context!("3.12");
-        let parent = context.temp_dir.child("parent");
-        let child = parent.child("services/child");
-        let parent_toml = format!("[tool.uv.workspace]\nworkspaces = [{pattern:?}]\n");
-        parent.child("pyproject.toml").write_str(&parent_toml)?;
-        if create_child {
-            child.create_dir_all()?;
-        }
+fn init_nested_workspace_literal_registration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let parent = context.temp_dir.child("parent");
+    let child = parent.child("services/child");
+    let parent_toml = indoc! {r#"
+        [tool.uv.workspace]
+        workspaces = ["services/child"]
+    "#};
+    parent.child("pyproject.toml").write_str(parent_toml)?;
 
-        init_child(&context, child.path()).assert().success();
+    uv_snapshot!(context.filters(), context.init().arg(child.path()).args([
+        "--bare", "--vcs", "none", "--no-pin-python", "--python", "3.12", "--offline",
+        "--preview-features", "nested-workspaces",
+    ]).env_remove(EnvVars::VIRTUAL_ENV), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Initialized project `child` at `[TEMP_DIR]/parent/services/child`
+    ");
+    assert_eq!(context.read("parent/pyproject.toml"), parent_toml);
+    insta::assert_snapshot!(context.read("parent/services/child/pyproject.toml"), @r#"
+    [project]
+    name = "child"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
 
-        assert_eq!(
-            fs_err::read_to_string(parent.join("pyproject.toml"))?,
-            parent_toml
-        );
-        assert_eq!(
-            fs_err::read_to_string(child.join("pyproject.toml"))?,
-            indoc! {r#"
-                [project]
-                name = "child"
-                version = "0.1.0"
-                requires-python = ">=3.12"
-                dependencies = []
+    [tool.uv.workspace]
+    "#);
 
-                [tool.uv.workspace]
-            "#}
-        );
+    uv_snapshot!(context.filters(), context.lock().current_dir(parent.path()).args([
+        "--python", "3.12", "--offline", "--preview-features", "nested-workspaces",
+    ]).env_remove(EnvVars::VIRTUAL_ENV), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path()).args([
+        "--python", "3.12", "--offline", "--preview-features", "nested-workspaces",
+    ]).env_remove(EnvVars::VIRTUAL_ENV), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    ");
+    parent.child("uv.lock").assert(predicate::path::is_file());
+    child.child("uv.lock").assert(predicate::path::is_file());
+    Ok(())
+}
 
-        // Each generated workspace is independently lockable once its parent has a lock.
-        lock(&context, parent.path()).assert().success();
-        lock(&context, child.path()).assert().success();
-        parent.child("uv.lock").assert(predicate::path::is_file());
-        child.child("uv.lock").assert(predicate::path::is_file());
-    }
+#[test]
+fn init_nested_workspace_glob_registration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let parent = context.temp_dir.child("parent");
+    let child = parent.child("services/child");
+    let parent_toml = indoc! {r#"
+        [tool.uv.workspace]
+        workspaces = ["services/*"]
+    "#};
+    parent.child("pyproject.toml").write_str(parent_toml)?;
+
+    uv_snapshot!(context.filters(), context.init().arg(child.path()).args([
+        "--bare", "--vcs", "none", "--no-pin-python", "--python", "3.12", "--offline",
+        "--preview-features", "nested-workspaces",
+    ]).env_remove(EnvVars::VIRTUAL_ENV), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Initialized project `child` at `[TEMP_DIR]/parent/services/child`
+    ");
+    assert_eq!(context.read("parent/pyproject.toml"), parent_toml);
+    insta::assert_snapshot!(context.read("parent/services/child/pyproject.toml"), @r#"
+    [project]
+    name = "child"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+
+    [tool.uv.workspace]
+    "#);
+
+    uv_snapshot!(context.filters(), context.lock().current_dir(parent.path()).args([
+        "--python", "3.12", "--offline", "--preview-features", "nested-workspaces",
+    ]).env_remove(EnvVars::VIRTUAL_ENV), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path()).args([
+        "--python", "3.12", "--offline", "--preview-features", "nested-workspaces",
+    ]).env_remove(EnvVars::VIRTUAL_ENV), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    ");
+    parent.child("uv.lock").assert(predicate::path::is_file());
+    child.child("uv.lock").assert(predicate::path::is_file());
+    Ok(())
+}
+
+#[test]
+fn init_nested_workspace_existing_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let parent = context.temp_dir.child("parent");
+    let child = parent.child("services/child");
+    let parent_toml = indoc! {r#"
+        [tool.uv.workspace]
+        workspaces = ["services/*"]
+    "#};
+    parent.child("pyproject.toml").write_str(parent_toml)?;
+    child.create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.init().arg(child.path()).args([
+        "--bare", "--vcs", "none", "--no-pin-python", "--python", "3.12", "--offline",
+        "--preview-features", "nested-workspaces",
+    ]).env_remove(EnvVars::VIRTUAL_ENV), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Initialized project `child` at `[TEMP_DIR]/parent/services/child`
+    ");
+    assert_eq!(context.read("parent/pyproject.toml"), parent_toml);
+    insta::assert_snapshot!(context.read("parent/services/child/pyproject.toml"), @r#"
+    [project]
+    name = "child"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+
+    [tool.uv.workspace]
+    "#);
+
+    uv_snapshot!(context.filters(), context.lock().current_dir(parent.path()).args([
+        "--python", "3.12", "--offline", "--preview-features", "nested-workspaces",
+    ]).env_remove(EnvVars::VIRTUAL_ENV), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().current_dir(child.path()).args([
+        "--python", "3.12", "--offline", "--preview-features", "nested-workspaces",
+    ]).env_remove(EnvVars::VIRTUAL_ENV), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    ");
+    parent.child("uv.lock").assert(predicate::path::is_file());
+    child.child("uv.lock").assert(predicate::path::is_file());
     Ok(())
 }
 
