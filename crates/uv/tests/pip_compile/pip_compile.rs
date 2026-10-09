@@ -21066,3 +21066,70 @@ fn include_build_dependencies_constraints_follow_selected_backend() -> Result<()
     ");
     Ok(())
 }
+
+/// Explicit package metadata permits collecting build inputs without building the package.
+#[test]
+fn include_build_dependencies_with_metadata_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "build-requirements-with-metadata-override"
+        [root]
+        requires = ["build-helper"]
+        [expected]
+        satisfiable = true
+        [packages.build-helper.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        dynamic = ["version"]
+    "#})?;
+    context
+        .temp_dir
+        .child("project/backend.py")
+        .write_str(indoc! {r#"
+        def get_requires_for_build_wheel(config_settings=None):
+            return ["build-helper==1.0.0"]
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            raise AssertionError("metadata generation is unavailable")
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            raise AssertionError("wheel generation is unavailable")
+    "#})?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [[tool.uv.dependency-metadata]]
+        name = "local-project"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--no-header",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-helper==1.0.0
+    ./project
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}

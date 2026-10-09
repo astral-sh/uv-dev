@@ -278,11 +278,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         source: &SourceDist,
         hashes: MetadataHashPolicy<'_>,
     ) -> Result<(), Error> {
-        let source = BuildableSource::Dist(source);
-        let policy = SourceBuildHashPolicy::new(&source, hashes);
-        SourceDistributionBuilder::new(self.build_context)
-            .with_build_requirements()
-            .download_and_build_metadata(&source, policy.archive_policy(), &self.client)
+        let buildable_source = BuildableSource::Dist(source);
+        let policy = SourceBuildHashPolicy::new(&buildable_source, hashes);
+        self.builder
+            .resolve_build_requirements(source, policy.archive_policy(), &self.client)
             .boxed_local()
             .await?;
         Ok(())
