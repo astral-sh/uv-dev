@@ -762,6 +762,18 @@ impl std::ops::Deref for PlatformState {
 }
 
 impl PlatformState {
+    /// Clone the lookup and download state with a fresh arena for environment-bound builders.
+    ///
+    /// Non-isolated builds retain their environment, so staging another environment must not
+    /// reuse builders prepared against the original one.
+    #[must_use]
+    pub fn with_fresh_build_arena(&self) -> Self {
+        Self(SharedState {
+            build_arena: BuildArena::default(),
+            ..self.0.clone()
+        })
+    }
+
     /// Fork the [`PlatformState`] to create a [`UniversalState`].
     pub fn fork(&self) -> UniversalState {
         UniversalState(self.0.fork())

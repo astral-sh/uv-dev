@@ -845,6 +845,7 @@ pub async fn install(
                     let mut preflight = create_preflight_environment(
                         package_name,
                         environment.interpreter().clone(),
+                        &state,
                         &cache,
                         Some(&environment),
                     )?;
@@ -856,7 +857,7 @@ pub async fn install(
                         Constraints::from_specifications(receipt_build_constraints.iter().cloned()),
                         (&settings).into(),
                         &client_builder,
-                        &state,
+                        &preflight.state,
                         Box::new(DefaultInstallLogger),
                         installer_metadata,
                         &concurrency,
@@ -926,6 +927,7 @@ pub async fn install(
                             let mut preflight = create_preflight_environment(
                                 package_name,
                                 environment.interpreter().clone(),
+                                &state,
                                 &cache,
                                 Some(environment),
                             )?;
@@ -941,7 +943,7 @@ pub async fn install(
                                 ),
                                 (&settings).into(),
                                 &client_builder,
-                                &state,
+                                &preflight.state,
                                 Box::new(DefaultInstallLogger),
                                 installer_metadata,
                                 &concurrency,
@@ -1120,8 +1122,13 @@ pub async fn install(
             HashStrategy::default()
         };
         if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
-            let mut preflight =
-                create_preflight_environment(package_name, interpreter.clone(), &cache, None)?;
+            let mut preflight = create_preflight_environment(
+                package_name,
+                interpreter.clone(),
+                &state,
+                &cache,
+                None,
+            )?;
             preflight.environment = sync_environment(
                 preflight.environment,
                 &resolution,
@@ -1130,7 +1137,7 @@ pub async fn install(
                 Constraints::from_specifications(receipt_build_constraints.iter().cloned()),
                 (&settings).into(),
                 &client_builder,
-                &state,
+                &preflight.state,
                 Box::new(DefaultInstallLogger),
                 installer_metadata,
                 &concurrency,
@@ -1212,6 +1219,7 @@ pub async fn install(
 /// Own a staged environment and the directory that keeps its files alive.
 struct PreflightEnvironment {
     environment: PythonEnvironment,
+    state: PlatformState,
     _temp_dir: tempfile::TempDir,
 }
 
@@ -1219,6 +1227,7 @@ struct PreflightEnvironment {
 fn create_preflight_environment(
     name: &PackageName,
     interpreter: Interpreter,
+    state: &PlatformState,
     cache: &Cache,
     existing: Option<&PythonEnvironment>,
 ) -> Result<PreflightEnvironment> {
@@ -1252,6 +1261,7 @@ fn create_preflight_environment(
     }
     Ok(PreflightEnvironment {
         environment,
+        state: state.with_fresh_build_arena(),
         _temp_dir: temp_dir,
     })
 }

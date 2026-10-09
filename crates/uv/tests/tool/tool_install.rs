@@ -3328,7 +3328,7 @@ fn tool_install_preflight_upgrades_shared_build_dependency() -> Result<()> {
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "tool"
-        version = "2.0.0"
+        dynamic = ["version"]
         requires-python = ">=3.12"
         dependencies = []
         [build-system]
