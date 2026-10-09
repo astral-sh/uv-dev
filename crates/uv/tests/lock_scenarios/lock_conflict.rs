@@ -499,8 +499,8 @@ fn explicit_root_python_range_incompatible_member() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version != '3.13.*'; included: root-a; excluded: root-b)
-      cause: Because the requested Python version (>=3.12, <3.14) does not satisfy Python>=3.13,<3.14 and member==0.1.0 depends on Python>=3.13,<3.14, we can conclude that member==0.1.0 cannot be used.
-             And because only member==0.1.0 is available and root-a depends on member, we can conclude that root-a's requirements are unsatisfiable.
+      cause: Because the requested Python version (>=3.12, <3.14) does not satisfy Python>=3.13,<3.14 and member depends on Python>=3.13,<3.14, we can conclude that member's requirements are unsatisfiable.
+             And because root-a depends on member, we can conclude that root-a's requirements are unsatisfiable.
              And because only root-a{python_full_version < '3.13'}==0.1.0 is available and your workspace requires root-a{python_full_version < '3.13'}, we can conclude that your workspace's requirements are unsatisfiable.
 
     hint: The `requires-python` value (>=3.12, <3.14) includes Python versions that are not supported by your dependencies (e.g., member==0.1.0 only supports >=3.13, <3.14). Consider using a more restrictive `requires-python` value (like >=3.13, <3.14).
