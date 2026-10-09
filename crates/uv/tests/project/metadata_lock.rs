@@ -6,13 +6,17 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+#[cfg(unix)]
+use fs_err::os::unix::fs::symlink;
 use indoc::{formatdoc, indoc};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use url::Url;
 use uv_cache_key::cache_digest;
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_static::EnvVars;
-use uv_test::TestContext;
 use uv_test::packse::PackseServer;
+use uv_test::{TestContext, uv_snapshot};
 
 async fn hold_metadata(path: &Path, kind: &str) -> Result<LockedFile> {
     let path = fs_err::canonicalize(path)?;
@@ -81,6 +85,274 @@ async fn finish_command(
         tokio::time::timeout(Duration::from_secs(30), child.wait_with_output()).await??;
     output.stderr = stderr.await??;
     output.assert().success();
+    Ok(())
+}
+
+/// Pause an actual requirements download after the command has entered its metadata admission.
+async fn pending_requirements(listener: &TcpListener) -> Result<TcpStream> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (stream, _) = listener.accept().await?;
+        let mut reader = tokio::io::BufReader::new(stream);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).await? == 0 {
+                anyhow::bail!("requirements connection closed before its headers completed");
+            }
+            if line == "\r\n" {
+                return Ok(reader.into_inner());
+            }
+        }
+    })
+    .await?
+}
+
+async fn release_requirements(mut stream: TcpStream, contents: &str) -> Result<()> {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{contents}",
+        contents.len(),
+    );
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        stream.write_all(response.as_bytes()),
+    )
+    .await??;
+    Ok(())
+}
+
+/// Membership publication drains a standalone writer that was admitted before the transition.
+#[tokio::test]
+async fn workspace_membership_waits_for_an_admitted_standalone_writer() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = []
+    "#})?;
+    let dep = context.temp_dir.child("dep");
+    dep.create_dir_all()?;
+    dep.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = []
+    "#})?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let requirements = format!("http://{}/requirements.txt", listener.local_addr()?);
+    let mut original = context.add();
+    original
+        .current_dir(dep.path())
+        .args(["--frozen", "--python", "3.12", "-r"])
+        .arg(&requirements);
+    let original = tokio::process::Command::from(original)
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let pending = pending_requirements(&listener).await?;
+
+    let mut membership = context.add();
+    membership.args(["./dep", "--workspace", "--frozen", "--python", "3.11"]);
+    let (membership, stderr) = queued_command(membership).await?;
+    assert!(
+        !context
+            .read("pyproject.toml")
+            .contains("[tool.uv.workspace]")
+    );
+    release_requirements(pending, "alpha==1\n").await?;
+    tokio::time::timeout(Duration::from_secs(30), original.wait_with_output())
+        .await??
+        .assert()
+        .success();
+    finish_command(membership, stderr).await?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["beta==1", "--package", "dep", "--frozen", "--python", "3.11"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    ");
+    insta::assert_snapshot!(context.read("dep/pyproject.toml"), @r#"
+    [project]
+    name = "dep"
+    version = "0.1.0"
+    requires-python = ">=3.11"
+    dependencies = [
+        "alpha==1",
+        "beta==1",
+    ]
+    "#);
+    insta::assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "parent"
+    version = "0.1.0"
+    requires-python = ">=3.11"
+    dependencies = [
+        "dep",
+    ]
+
+    [tool.uv.workspace]
+    members = [
+        "dep",
+    ]
+
+    [tool.uv.sources]
+    dep = { workspace = true }
+    "#);
+    Ok(())
+}
+
+/// Candidate admission must precede the shared interpreter lock, including requirements files.
+#[tokio::test]
+async fn workspace_membership_does_not_hold_the_members_interpreter_before_admission() -> Result<()>
+{
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let dep = context.temp_dir.child("dep");
+    dep.create_dir_all()?;
+    dep.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    local_wheel(&context, "alpha")?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let requirements = format!("http://{}/requirements.txt", listener.local_addr()?);
+    let mut membership = context.add();
+    membership
+        .args(["--workspace", "--python", "3.12", "--no-index", "-r"])
+        .arg(&requirements)
+        .arg("--find-links")
+        .arg(context.temp_dir.child("wheels").path())
+        .env(EnvVars::UV_PROJECT_ENVIRONMENT, context.venv.path());
+    let membership = tokio::process::Command::from(membership)
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let pending = pending_requirements(&listener).await?;
+
+    // Both commands explicitly select the same environment; a misplaced lock becomes visible
+    // as its real contention warning rather than leaving a test waiting for the default timeout.
+    uv_snapshot!(context.filters(), context.add()
+        .current_dir(dep.path())
+        .args(["alpha==1", "--frozen", "--python", "3.12"])
+        .env(EnvVars::UV_PROJECT_ENVIRONMENT, context.venv.path())
+        .env(EnvVars::UV_LOCK_TIMEOUT, "1")
+        .env(EnvVars::RUST_LOG, "uv_fs=info,uv_project_commands=warn"), @"exit_code: 0 (success)");
+    let dep_url = Url::from_directory_path(dep.path())
+        .map_err(|()| anyhow::anyhow!("dependency path must form a file URL"))?;
+    release_requirements(pending, &format!("dep @ {dep_url}\n")).await?;
+    tokio::time::timeout(Duration::from_secs(30), membership.wait_with_output())
+        .await??
+        .assert()
+        .success();
+    insta::assert_snapshot!(context.read("dep/pyproject.toml"), @r#"
+    [project]
+    name = "dep"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "alpha==1",
+    ]
+    "#);
+    Ok(())
+}
+
+/// An outside member and its direct path share admission even through a workspace symlink.
+#[tokio::test]
+#[cfg(unix)]
+async fn external_member_alias_and_standalone_writers_share_admission() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    let workspace = context.temp_dir.child("workspace");
+    workspace.create_dir_all()?;
+    let external = context.temp_dir.child("external");
+    external.create_dir_all()?;
+    external.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = []
+    "#})?;
+    let alias = context.temp_dir.child("alias");
+    symlink(external.path(), alias.path())?;
+    workspace
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = []
+
+        [tool.uv.workspace]
+        members = [{alias:?}]
+    "#, alias = alias.path()})?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let requirements = format!("http://{}/requirements.txt", listener.local_addr()?);
+    let mut direct = context.add();
+    direct
+        .current_dir(external.path())
+        .args(["--frozen", "--python", "3.12", "-r"])
+        .arg(&requirements);
+    let direct = tokio::process::Command::from(direct)
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let pending = pending_requirements(&listener).await?;
+
+    let mut member = context.add();
+    member.current_dir(workspace.path()).args([
+        "beta==1",
+        "--package",
+        "dep",
+        "--frozen",
+        "--python",
+        "3.11",
+    ]);
+    let (member, stderr) = queued_command(member).await?;
+    release_requirements(pending, "alpha==1\n").await?;
+    tokio::time::timeout(Duration::from_secs(30), direct.wait_with_output())
+        .await??
+        .assert()
+        .success();
+    finish_command(member, stderr).await?;
+    insta::assert_snapshot!(context.read("external/pyproject.toml"), @r#"
+    [project]
+    name = "dep"
+    version = "0.1.0"
+    requires-python = ">=3.11"
+    dependencies = [
+        "alpha==1",
+        "beta==1",
+    ]
+    "#);
+    assert_eq!(
+        context.read("alias/pyproject.toml"),
+        context.read("external/pyproject.toml")
+    );
     Ok(())
 }
 
