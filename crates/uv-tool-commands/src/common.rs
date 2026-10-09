@@ -741,6 +741,57 @@ pub(super) async fn refine_interpreter(
     Ok(Some(interpreter))
 }
 
+/// Check destination conflicts before removing an existing tool's executables.
+pub(super) fn check_entrypoint_conflicts(
+    environment: &PythonEnvironment,
+    name: &PackageName,
+    entrypoints: &[PackageName],
+    receipt: Option<&Tool>,
+    force: bool,
+) -> anyhow::Result<()> {
+    if force {
+        return Ok(());
+    }
+    let executable_directory = uv_tool::tool_executable_dir()?;
+    let site_packages = SitePackages::from_environment(environment)?;
+    let mut conflicts = BTreeSet::new();
+    for package in entrypoints.iter().chain(std::iter::once(name)) {
+        let installed = site_packages.get_packages(package);
+        let Some(dist) = installed.first() else {
+            continue;
+        };
+        for (name, source) in entrypoint_paths(&site_packages, dist.name(), dist.version())? {
+            let filename = source
+                .file_name()
+                .map(std::borrow::ToOwned::to_owned)
+                .unwrap_or_else(|| OsString::from(name));
+            let target = executable_directory.join(&filename);
+            if target.exists()
+                && !receipt.is_some_and(|receipt| {
+                    receipt
+                        .entrypoints()
+                        .iter()
+                        .any(|entrypoint| entrypoint.install_path == target)
+                })
+            {
+                conflicts.insert(filename.to_string_lossy().into_owned());
+            }
+        }
+    }
+    if !conflicts.is_empty() {
+        let (suffix, verb) = if conflicts.len() == 1 {
+            ("", "exists")
+        } else {
+            ("s", "exist")
+        };
+        bail!(
+            "Executable{suffix} already {verb}: {} (use `--force` to overwrite)",
+            conflicts.iter().map(|name| name.bold()).join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Finalizes a tool installation, after creation of an environment.
 ///
 /// Installs tool executables for a given package, handling any conflicts.
@@ -753,6 +804,7 @@ pub(super) fn finalize_tool_install(
     installed_tools: &InstalledTools,
     options: &ToolOptions,
     force: bool,
+    remove_environment_on_conflict: bool,
     python: Option<PythonRequest>,
     requirements: Vec<Requirement>,
     constraints: Vec<Requirement>,
@@ -887,7 +939,9 @@ pub(super) fn finalize_tool_install(
                         .iter()
                         .map(|entrypoint| entrypoint.install_path.as_path()),
                 );
-                installed_tools.remove_environment(name)?;
+                if remove_environment_on_conflict {
+                    installed_tools.remove_environment(name)?;
+                }
 
                 let existing_entrypoints = existing_entrypoints
                     // SAFETY: We know the target has a filename because we just constructed it above

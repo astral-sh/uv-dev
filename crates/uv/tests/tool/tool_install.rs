@@ -2691,6 +2691,203 @@ fn tool_install_restores_missing_executables() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn tool_install_restores_missing_executables_with_locks() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let first_bin_dir = context.temp_dir.child("first-bin");
+    let second_bin_dir = context.temp_dir.child("second-bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(&app).expect("Failed to convert app path to file URL")
+    );
+
+    context
+        .tool_install()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let launcher_executable =
+        first_bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    let app_executable = first_bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    fs_err::remove_file(&launcher_executable)?;
+    fs_err::remove_file(&app_executable)?;
+
+    context
+        .tool_install()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    launcher_executable.assert(predicate::path::exists());
+    app_executable.assert(predicate::path::exists());
+    fs_err::remove_file(&launcher_executable)?;
+    fs_err::remove_file(&app_executable)?;
+
+    context
+        .tool_upgrade()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    launcher_executable.assert(predicate::path::exists());
+    app_executable.assert(predicate::path::exists());
+
+    context
+        .tool_install()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+        .env(EnvVars::PATH, second_bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    second_bin_dir
+        .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+    second_bin_dir
+        .child(format!("basic-app{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_preserves_existing_bin_on_migration_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let original_bin = context.temp_dir.child("original-bin");
+    let destination_bin = context.temp_dir.child("destination-bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(app).expect("app file URL")
+    );
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, original_bin.as_os_str())
+        .env(EnvVars::PATH, original_bin.as_os_str())
+        .assert()
+        .success();
+    let receipt_path = tool_dir.child("simple-launcher/uv-receipt.toml");
+    let receipt = fs_err::read(&receipt_path)?;
+    let conflict = destination_bin.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    conflict.write_str("unrelated executable")?;
+
+    uv_snapshot!(context.filters(), context.tool_install().arg(&launcher)
+        .arg("--with-executables-from").arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination_bin.as_os_str())
+        .env(EnvVars::PATH, destination_bin.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    error: Executable already exists: basic-app (use `--force` to overwrite)
+    ");
+
+    assert_eq!(fs_err::read(&receipt_path)?, receipt);
+    assert_eq!(fs_err::read_to_string(&conflict)?, "unrelated executable");
+    original_bin
+        .child(format!("basic-app{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+    let executable = original_bin.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    Command::new(executable.path()).assert().success();
+    Ok(())
+}
+
+#[test]
+fn tool_install_preserves_existing_bin_on_migration_conflict_with_locks() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let original_bin = context.temp_dir.child("original-bin");
+    let destination_bin = context.temp_dir.child("destination-bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(app).expect("app file URL")
+    );
+    context
+        .tool_install()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, original_bin.as_os_str())
+        .env(EnvVars::PATH, original_bin.as_os_str())
+        .assert()
+        .success();
+    let receipt_path = tool_dir.child("simple-launcher/uv-receipt.toml");
+    let receipt = fs_err::read(&receipt_path)?;
+    let conflict = destination_bin.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    conflict.write_str("unrelated executable")?;
+
+    uv_snapshot!(context.filters(), context.tool_install().arg("--preview-features").arg("tool-install-locks").arg(&launcher)
+        .arg("--with-executables-from").arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination_bin.as_os_str())
+        .env(EnvVars::PATH, destination_bin.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Executable already exists: basic-app (use `--force` to overwrite)
+    ");
+
+    assert_eq!(fs_err::read(&receipt_path)?, receipt);
+    assert_eq!(fs_err::read_to_string(&conflict)?, "unrelated executable");
+    original_bin
+        .child(format!("basic-app{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+    let executable = original_bin.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    Command::new(executable.path()).assert().success();
+    Ok(())
+}
+
 /// Test installing a tool when its entry point already exists
 #[test]
 fn tool_install_force() {

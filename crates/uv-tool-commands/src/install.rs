@@ -39,8 +39,8 @@ use uv_workspace::WorkspaceCache;
 use uv_lock_operations::LockValidationError;
 
 use crate::common::{
-    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_entrypoints_are_fresh, tool_environment_spec,
+    ToolLock, ToolPython, check_entrypoint_conflicts, finalize_tool_install, refine_interpreter,
+    remove_entrypoints, tool_entrypoints_are_fresh, tool_environment_spec,
 };
 use crate::error::ToolLockError;
 use crate::requirements::resolve_names;
@@ -701,6 +701,7 @@ pub async fn install(
     // This lets us confirm the environment is valid before removing an existing install. However,
     // entrypoints always contain an absolute path to the relevant Python interpreter, which would
     // be invalidated by moving the environment.
+    let remove_environment_on_conflict = existing_environment.is_none();
     let (environment, tool_lock) = if let Some(environment) = existing_environment {
         let environment = environment.into_environment();
         let (environment, tool_lock) = if tool_locks {
@@ -885,6 +886,14 @@ pub async fn install(
             };
             (update.environment, None)
         };
+
+        check_entrypoint_conflicts(
+            &environment,
+            package_name,
+            entrypoints,
+            existing_tool_receipt.as_ref(),
+            force || invalid_tool_receipt,
+        )?;
 
         // At this point, we updated the existing environment, so we should remove any of its
         // existing executables.
@@ -1072,6 +1081,7 @@ pub async fn install(
         &installed_tools,
         &options,
         force || invalid_tool_receipt,
+        remove_environment_on_conflict,
         // Only persist the Python request if it was explicitly provided
         if explicit_python_request {
             python_request

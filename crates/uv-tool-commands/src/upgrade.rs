@@ -619,6 +619,12 @@ async fn upgrade_tool(
             installed_tools,
             &ToolOptions::from(options),
             true,
+            match outcome {
+                UpgradeOutcome::UpgradeEnvironment => true,
+                UpgradeOutcome::UpgradeTool
+                | UpgradeOutcome::UpgradeDependencies
+                | UpgradeOutcome::NoOp => false,
+            },
             existing_tool_receipt.python().to_owned(),
             existing_tool_receipt.requirements().to_vec(),
             existing_tool_receipt.constraints().to_vec(),
