@@ -662,8 +662,6 @@ async fn perform_install(
     };
 
     let installations: Vec<_> = downloaded.iter().chain(satisfied.iter().copied()).collect();
-    let installations_by_executable = OnceCell::new();
-
     // Ensure that the installations are _complete_ for both downloaded installations and existing
     // installations that match the request
     for installation in &installations {
@@ -674,7 +672,12 @@ async fn perform_install(
         if let Err(e) = installation.ensure_dylib_patched() {
             e.warn_user(installation);
         }
+    }
 
+    // Canonical executable repair can change an installation's executable path on Windows.
+    // Complete it for every installation before any collision initializes the lookup index.
+    let installations_by_executable = OnceCell::new();
+    for installation in &installations {
         let upgradeable = (default || is_default_install)
             || requested_minor_versions.contains(&installation.key().version().python_version());
 
