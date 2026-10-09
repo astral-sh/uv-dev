@@ -239,8 +239,8 @@ fn replace_windows_binary(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy a complete distribution before replacing any installed executable.
-fn install_binaries(executable: &Path, identity: &Handle, destination: &Path) -> Result<()> {
+/// Verify that the adjacent distribution belongs to the running executable.
+fn source_directory<'a>(executable: &'a Path, identity: &Handle) -> Result<&'a Path> {
     let source = executable
         .parent()
         .context("Executable has no parent directory")?;
@@ -254,6 +254,12 @@ fn install_binaries(executable: &Path, identity: &Handle, destination: &Path) ->
         source.display(),
         executable.display()
     );
+    Ok(source)
+}
+
+/// Copy a complete distribution before replacing any installed executable.
+fn install_binaries(executable: &Path, identity: &Handle, destination: &Path) -> Result<()> {
+    let source = source_directory(executable, identity)?;
     #[cfg(windows)]
     cleanup_previous_installations(destination);
     let staged = tempfile::tempdir_in(destination)?;
@@ -266,9 +272,22 @@ fn install_binaries(executable: &Path, identity: &Handle, destination: &Path) ->
         );
         fs_err::copy(&source, staged.path().join(name))?;
     }
+    commit_binaries(executable, identity, staged.path(), destination)
+}
+
+/// Publish a staged distribution after verifying the source still identifies the running process.
+fn commit_binaries(
+    executable: &Path,
+    identity: &Handle,
+    staged: &Path,
+    destination: &Path,
+) -> Result<()> {
+    // Another installer can replace the source while these files are copied. Check before
+    // publishing any staged executable, even when the two installers use different destinations.
+    source_directory(executable, identity)?;
     // Install the launcher last so it cannot select an incompletely copied uv binary.
     for name in executable_names() {
-        let source = staged.path().join(name);
+        let source = staged.join(name);
         let target = destination.join(name);
         #[cfg(windows)]
         if uv_fs::is_same_file_allow_missing(executable, &target) == Some(true) {
@@ -345,4 +364,52 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
         writeln!(printer.stderr(), "Restart your shell to apply changes")?;
     }
     Ok(ExitStatus::Success)
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use same_file::Handle;
+
+    use super::{commit_binaries, executable_names};
+
+    #[test]
+    fn changed_source_is_rejected_before_staged_files_are_committed() -> Result<()> {
+        let source = tempfile::tempdir()?;
+        let destination = tempfile::tempdir()?;
+        let staged = tempfile::tempdir_in(destination.path())?;
+        let uv_name = format!("uv{}", std::env::consts::EXE_SUFFIX);
+        let executable = source.path().join(&uv_name);
+        fs_err::write(&executable, "running executable")?;
+        let identity = Handle::from_path(&executable)?;
+        for name in executable_names() {
+            fs_err::write(destination.path().join(name), "installed executable")?;
+            fs_err::write(staged.path().join(name), "replacement executable")?;
+        }
+
+        // Another installer replaces the source while this distribution is being staged.
+        fs_err::rename(&executable, source.path().join("previous"))?;
+        fs_err::write(&executable, "replacement executable")?;
+        let error = commit_binaries(&executable, &identity, staged.path(), destination.path())
+            .expect_err("a replaced source cannot authorize the staged distribution");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Cannot install from `{}`: `{uv_name}` does not identify the running executable `{}`",
+                source.path().display(),
+                executable.display(),
+            ),
+        );
+        for name in executable_names() {
+            assert_eq!(
+                fs_err::read_to_string(destination.path().join(name))?,
+                "installed executable"
+            );
+            assert_eq!(
+                fs_err::read_to_string(staged.path().join(name))?,
+                "replacement executable"
+            );
+        }
+        Ok(())
+    }
 }
