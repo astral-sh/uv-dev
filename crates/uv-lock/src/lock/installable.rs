@@ -13,7 +13,9 @@ use uv_configuration::{
     BuildOptions, DependencyGroupsWithDefaults, DependencyModifierScope, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions,
 };
-use uv_distribution_types::{Edge, FirstParty, Node, Requirement, Resolution, ResolvedDist};
+use uv_distribution_types::{
+    Edge, FirstParty, Node, Requirement, RequiresPython, Resolution, ResolvedDist,
+};
 use uv_normalize::{DefaultExtras, ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
@@ -126,6 +128,7 @@ pub trait Installable<'lock> {
         &self,
         extras: &ExtrasSpecification,
         groups: &DependencyGroupsWithDefaults,
+        requires_python: &RequiresPython,
         marker_env: Option<&ResolverMarkerEnvironment>,
     ) -> Result<BTreeSet<&'lock PackageName>, LockError> {
         let lock = self.lock();
@@ -133,7 +136,7 @@ pub trait Installable<'lock> {
         let roots = self.roots().collect::<FxHashSet<_>>();
         let group_root = self.group_root(groups);
         let root_marker = UniversalMarker::from_combined(implicit_constraints_marker(
-            lock.requires_python().to_marker_tree(),
+            requires_python.to_marker_tree(),
             lock.supported_environments(),
         ));
         let known_conflicts = lock
