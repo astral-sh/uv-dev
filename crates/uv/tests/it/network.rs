@@ -26,20 +26,17 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 use uv_static::EnvVars;
 use uv_test::{TestContext, uv_snapshot};
 
-/// Complete, hash-verified wheel downloads can supply later resolution metadata. Index hash
-/// changes, weak identities, explicit refreshes, and configured file cache policies still fetch
-/// metadata from the origin.
-#[tokio::test]
-async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
-    const FILENAME: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
-    const METADATA: &str = "Metadata-Version: 2.3\nName: build-tag\nVersion: 1.0.0\n";
-    for (algorithm, override_cache) in [
-        (Some("sha256"), false),
-        (Some("md5"), false),
-        (None, false),
-        (Some("sha256"), true),
-    ] {
-        let context = uv_test::test_context!("3.12");
+struct CachedWheelMetadataFixture {
+    _server: MockServer,
+    index: String,
+    generation: Arc<AtomicUsize>,
+    artifact_requests: Arc<AtomicUsize>,
+}
+
+impl CachedWheelMetadataFixture {
+    async fn new(context: &TestContext, algorithm: Option<&'static str>) -> Result<Self> {
+        const FILENAME: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
+        const METADATA: &str = "Metadata-Version: 2.3\nName: build-tag\nVersion: 1.0.0\n";
         context
             .temp_dir
             .child("requirements.in")
@@ -118,64 +115,144 @@ async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
             .mount(&server)
             .await;
         let index = format!("{}/simple", server.uri());
-        let config = context.temp_dir.child("cache-control.toml");
-        config.write_str(&formatdoc! {
-            r#"
-            [[index]]
-            url = "{index}"
-            default = true
-            cache-control = {{ files = "max-age=0" }}
-            "#
-        })?;
-        let configure = |command: &mut std::process::Command| {
-            if override_cache {
-                command.arg("--config-file").arg(config.path());
-            } else {
-                command.arg("--default-index").arg(&index);
-            }
-        };
-        let mut install = context.pip_install();
-        install.arg("--no-deps").arg("build-tag==1.0.0");
-        configure(&mut install);
-        let output = tokio::task::spawn_blocking(move || install.output()).await??;
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(artifact_requests.load(Ordering::SeqCst), 1);
-        let run = async |refresh| -> Result<Vec<u8>> {
-            let mut command = context.pip_compile();
-            command
-                .arg("requirements.in")
-                .arg("--no-header")
-                .arg("--no-annotate");
-            configure(&mut command);
-            if refresh {
-                command.arg("--refresh");
-            }
-            let output = tokio::task::spawn_blocking(move || command.output()).await??;
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            Ok(output.stdout)
-        };
-        let expected_reuse = algorithm == Some("sha256") && !override_cache;
-        let first = run(false).await?;
-        assert_eq!(
-            artifact_requests.load(Ordering::SeqCst),
-            if expected_reuse { 1 } else { 2 }
-        );
-        let before = artifact_requests.load(Ordering::SeqCst);
-        assert_eq!(run(true).await?, first);
-        assert!(artifact_requests.load(Ordering::SeqCst) > before);
-        let before = artifact_requests.load(Ordering::SeqCst);
-        generation.store(1, Ordering::SeqCst);
-        assert_eq!(run(false).await?, first);
-        assert!(artifact_requests.load(Ordering::SeqCst) > before);
+        Ok(Self {
+            _server: server,
+            index,
+            generation,
+            artifact_requests,
+        })
     }
+}
+
+/// Verified SHA-256 archives supply metadata until refresh or an index hash change.
+#[tokio::test]
+async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let fixture = CachedWheelMetadataFixture::new(&context, Some("sha256")).await?;
+    uv_snapshot!(context.filters(), context.pip_install().args(["--no-deps", "build-tag==1.0.0", "--default-index"]).arg(&fixture.index), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0
+    "#);
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 1);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--default-index"]).arg(&fixture.index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 1);
+    let before = fixture.artifact_requests.load(Ordering::SeqCst);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--refresh", "--default-index"]).arg(&fixture.index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert!(fixture.artifact_requests.load(Ordering::SeqCst) > before);
+    let before = fixture.artifact_requests.load(Ordering::SeqCst);
+    fixture.generation.store(1, Ordering::SeqCst);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--default-index"]).arg(&fixture.index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert!(fixture.artifact_requests.load(Ordering::SeqCst) > before);
+    Ok(())
+}
+
+/// MD5 identities cannot authorize metadata reuse from an installed wheel archive.
+#[tokio::test]
+async fn resolution_fetches_metadata_for_md5_cached_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let fixture = CachedWheelMetadataFixture::new(&context, Some("md5")).await?;
+    uv_snapshot!(context.filters(), context.pip_install().args(["--no-deps", "build-tag==1.0.0", "--default-index"]).arg(&fixture.index), @r#"
+exit_code: 0 (success)
+----- stderr -----
+Resolved 1 package in [TIME]
+Prepared 1 package in [TIME]
+Installed 1 package in [TIME]
+ + build-tag==1.0.0
+"#);
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 1);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--default-index"]).arg(&fixture.index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+/// An index without hashes requires metadata from the origin.
+#[tokio::test]
+async fn resolution_fetches_metadata_for_unhashed_cached_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let fixture = CachedWheelMetadataFixture::new(&context, None).await?;
+    uv_snapshot!(context.filters(), context.pip_install().args(["--no-deps", "build-tag==1.0.0", "--default-index"]).arg(&fixture.index), @r#"
+exit_code: 0 (success)
+----- stderr -----
+Resolved 1 package in [TIME]
+Prepared 1 package in [TIME]
+Installed 1 package in [TIME]
+ + build-tag==1.0.0
+"#);
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 1);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--default-index"]).arg(&fixture.index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+/// Configured file-cache policy requires revalidation even with a strong wheel identity.
+#[tokio::test]
+async fn resolution_fetches_metadata_for_configured_file_cache_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let fixture = CachedWheelMetadataFixture::new(&context, Some("sha256")).await?;
+    let config = context.temp_dir.child("cache-control.toml");
+    config.write_str(&formatdoc! {r#"
+        [[index]]
+        url = "{index}"
+        default = true
+        cache-control = {{ files = "max-age=0" }}
+    "#, index = fixture.index})?;
+    uv_snapshot!(context.filters(), context.pip_install().args(["--no-deps", "build-tag==1.0.0", "--config-file"]).arg(config.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0
+    "#);
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 1);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--config-file"]).arg(config.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 2);
     Ok(())
 }
 
