@@ -1533,7 +1533,6 @@ pub struct PythonListSettings {
 
 impl PythonListSettings {
     /// Resolve the [`PythonListSettings`] from the CLI and filesystem configuration.
-    #[expect(clippy::needless_pass_by_value)]
     pub fn resolve(
         args: PythonListArgs,
         filesystem: Option<FilesystemOptions>,

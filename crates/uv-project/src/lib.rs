@@ -76,8 +76,7 @@ use uv_workspace::{ProjectEnvironmentSelection, RequiresPythonSources, Workspace
 use crate::install_target::{InstallTarget, PackageSelection};
 use crate::python::{
     CompatibleProjectPython, ProjectPythonRequest, PythonRequestSource, PythonRequirementConflicts,
-    PythonRequirementSource, find_requires_python, format_requires_python_sources,
-    validate_python_requirement,
+    find_requires_python, format_requires_python_sources,
 };
 use uv_cli_output::format::{capitalize, conjunction};
 use uv_cli_output::printer::Printer;
@@ -316,7 +315,7 @@ pub enum ProjectError {
     Lock(#[from] uv_lock::LockError),
 
     #[error(transparent)]
-    Operation(#[from] uv_operations::error::Error),
+    Operation(#[from] Box<uv_operations::error::Error>),
 
     #[error(transparent)]
     Interpreter(#[from] uv_python_interpreter::InterpreterError),
@@ -365,6 +364,12 @@ pub enum ProjectError {
 
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
+}
+
+impl From<uv_operations::error::Error> for ProjectError {
+    fn from(error: uv_operations::error::Error) -> Self {
+        Self::Operation(Box::new(error))
+    }
 }
 
 impl From<ScriptRequirementsError> for ProjectError {
@@ -703,14 +708,11 @@ impl ScriptInterpreter {
         cache: &Cache,
         printer: Printer,
     ) -> Result<Self, ProjectError> {
-        // For now, we assume that scripts are never evaluated in the context of a workspace.
-        let workspace = None;
-
         let ScriptPython {
             source,
             python_request,
             requires_python,
-        } = ScriptPython::from_request(python_request, workspace, script, config_discovery).await?;
+        } = ScriptPython::from_request(python_request, script, config_discovery).await?;
 
         if let Some(environment) = Self::discover_existing(script, active, cache) {
             match check_environment_compatibility(
@@ -719,9 +721,7 @@ impl ScriptInterpreter {
                 python_request.as_ref(),
                 python_preference,
                 python_arch,
-                requires_python
-                    .as_ref()
-                    .map(|(requires_python, _)| requires_python),
+                requires_python.as_ref(),
                 cache,
             ) {
                 Ok(()) => return Ok(Self::Environment(environment)),
@@ -755,31 +755,10 @@ impl ScriptInterpreter {
         .await?
         .into_interpreter();
 
-        if let Err(err) = match requires_python {
-            Some((requires_python, RequiresPythonSource::Project)) => {
-                let sources = workspace
-                    .and_then(|workspace| {
-                        workspace
-                            .requires_python(&DependencyGroupsWithDefaults::none())
-                            .ok()
-                    })
-                    .unwrap_or_default();
-                validate_python_requirement(
-                    &interpreter,
-                    &requires_python,
-                    &source,
-                    &PythonRequirementSource::Workspace {
-                        sources,
-                        multiple_members: workspace
-                            .is_some_and(|workspace| workspace.packages().len() > 1),
-                    },
-                )
-            }
-            Some((requires_python, RequiresPythonSource::Script)) => {
+        if let Some(requires_python) = requires_python
+            && let Err(err) =
                 validate_script_requires_python(&interpreter, &requires_python, &source)
-            }
-            None => Ok(()),
-        } {
+        {
             warn_user!("{err}");
         }
 
@@ -1512,15 +1491,6 @@ pub async fn lock_project_environment(
     .await
 }
 
-/// The source of a `Requires-Python` specifier.
-#[derive(Debug, Clone)]
-enum RequiresPythonSource {
-    /// From the PEP 723 inline script metadata.
-    Script,
-    /// From a `pyproject.toml` in a workspace.
-    Project,
-}
-
 /// The resolved Python request and requirement for a [`Pep723Script`]
 #[derive(Debug, Clone)]
 struct ScriptPython {
@@ -1528,18 +1498,16 @@ struct ScriptPython {
     source: PythonRequestSource,
     /// The resolved Python request, computed by considering (1) any explicit request from the user
     /// via `--python`, (2) any implicit request from the user via `.python-version`, (3) any
-    /// `Requires-Python` specifier in the script metadata, and (4) any `Requires-Python` specifier
-    /// in the `pyproject.toml`.
+    /// `Requires-Python` specifier in the script metadata.
     python_request: Option<PythonRequest>,
-    /// The resolved Python requirement for the script and its source.
-    requires_python: Option<(RequiresPython, RequiresPythonSource)>,
+    /// The resolved Python requirement for the script.
+    requires_python: Option<RequiresPython>,
 }
 
 impl ScriptPython {
     /// Determine the [`ScriptPython`] for the current [`Pep723Script`].
     async fn from_request(
         python_request: Option<PythonRequest>,
-        workspace: Option<&Workspace>,
         script: Pep723ItemRef<'_>,
         config_discovery: ConfigDiscovery,
     ) -> Result<Self, ProjectError> {
@@ -1549,12 +1517,6 @@ impl ScriptPython {
             .as_ref()
             .map(|specifiers| RequiresPython::from_specifiers(specifiers.clone()));
 
-        let workspace_requires_python = workspace
-            .map(|workspace| find_requires_python(workspace, &DependencyGroupsWithDefaults::none()))
-            .transpose()?
-            .flatten();
-
-        let workspace_root = workspace.map(Workspace::install_path);
         let project_dir = script.path().and_then(Path::parent).unwrap_or(&**CWD);
 
         let (source, python_request) = if let Some(request) = python_request {
@@ -1562,26 +1524,12 @@ impl ScriptPython {
             (PythonRequestSource::UserRequest, Some(request))
         } else if let Some(file) = PythonVersionFile::discover(
             project_dir,
-            &VersionFileDiscoveryOptions::default()
-                .with_stop_discovery_at(workspace_root.map(PathBuf::as_ref))
-                .with_config_discovery(config_discovery),
+            &VersionFileDiscoveryOptions::default().with_config_discovery(config_discovery),
         )
         .await?
         .filter(|file| {
             // Ignore version files that are incompatible with the script's `requires-python`
             match (file.version(), script_requires_python.as_ref()) {
-                (Some(request), Some(requires_python)) => {
-                    request.intersects_specifiers(requires_python.specifiers())
-                }
-                _ => true,
-            }
-        })
-        .filter(|file| {
-            // Ignore global version files that are incompatible with the workspace `requires-python`
-            if !file.is_global() {
-                return true;
-            }
-            match (file.version(), workspace_requires_python.as_ref()) {
                 (Some(request), Some(requires_python)) => {
                     request.intersects_specifiers(requires_python.specifiers())
                 }
@@ -1601,21 +1549,10 @@ impl ScriptPython {
             ));
             (PythonRequestSource::RequiresPython, Some(request))
         } else {
-            // (4) `requires-python` from workspace `pyproject.toml`
-            let request = workspace_requires_python
-                .as_ref()
-                .and_then(|requires_python| {
-                    PythonRequest::from_specifiers(requires_python.specifiers())
-                });
-            (PythonRequestSource::RequiresPython, request)
+            (PythonRequestSource::RequiresPython, None)
         };
 
-        let requires_python = if let Some(requires_python) = script_requires_python {
-            Some((requires_python, RequiresPythonSource::Script))
-        } else {
-            workspace_requires_python
-                .map(|requires_python| (requires_python, RequiresPythonSource::Project))
-        };
+        let requires_python = script_requires_python;
 
         if let Some(python_request) = python_request.as_ref() {
             debug!(

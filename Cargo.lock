@@ -7464,7 +7464,6 @@ name = "uv-operations"
 version = "0.0.92"
 dependencies = [
  "anyhow",
- "astral-version-ranges",
  "fs-err",
  "insta",
  "itertools 0.14.0",
@@ -7472,7 +7471,6 @@ dependencies = [
  "owo-colors",
  "rkyv",
  "rustc-hash",
- "serde_json",
  "thiserror",
  "tokio",
  "toml",
