@@ -855,7 +855,10 @@ pub async fn install(
                         hash_strategy.clone(),
                         Modifications::Exact,
                         Constraints::from_specifications(receipt_build_constraints.iter().cloned()),
-                        (&settings).into(),
+                        uv_settings::InstallerSettingsRef {
+                            compile_bytecode: false,
+                            ..(&settings).into()
+                        },
                         &client_builder,
                         &preflight.state,
                         Box::new(DefaultInstallLogger),
@@ -941,7 +944,10 @@ pub async fn install(
                                 Constraints::from_specifications(
                                     receipt_build_constraints.iter().cloned(),
                                 ),
-                                (&settings).into(),
+                                uv_settings::InstallerSettingsRef {
+                                    compile_bytecode: false,
+                                    ..(&settings).into()
+                                },
                                 &client_builder,
                                 &preflight.state,
                                 Box::new(DefaultInstallLogger),
@@ -1135,7 +1141,10 @@ pub async fn install(
                 hash_strategy.clone(),
                 Modifications::Exact,
                 Constraints::from_specifications(receipt_build_constraints.iter().cloned()),
-                (&settings).into(),
+                uv_settings::InstallerSettingsRef {
+                    compile_bytecode: false,
+                    ..(&settings).into()
+                },
                 &client_builder,
                 &preflight.state,
                 Box::new(DefaultInstallLogger),

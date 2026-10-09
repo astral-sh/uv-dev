@@ -7948,3 +7948,125 @@ fn tool_install_with_build_hashes() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn tool_install_preflight_rejects_case_aliases() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    bin.create_dir_all()?;
+    let probe = bin.child("Case-Probe");
+    probe.write_binary(b"")?;
+    let case_insensitive = bin.child("case-probe").exists();
+    fs_err::remove_file(probe.path())?;
+    if !case_insensitive {
+        return Ok(());
+    }
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "prospective-case-collision"
+        [root]
+        requires = ["tool"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.first.versions."1.0.0"]
+        sdist = false
+        entry_points = ["Foo"]
+        [packages.second.versions."1.0.0"]
+        sdist = false
+        entry_points = ["foo"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/tool/uv-receipt.toml");
+    uv_snapshot!(context.filters(), context.tool_install().arg("tool").args(["--with-executables-from", "first,second"])
+        .arg("--default-index").arg(server.index_url()).env(EnvVars::PATH, bin.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Packages `first` and `second` provide the same executable: foo
+    ");
+    assert_eq!(context.read("tools/tool/uv-receipt.toml"), receipt);
+    uv_snapshot!(context.filters(), Command::new(bin.child(format!("tool{}", std::env::consts::EXE_SUFFIX)).path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from tool!
+    ");
+    Ok(())
+}
+
+#[test]
+fn tool_install_preflight_allows_distinct_case_names() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix()
+        .with_filtered_compiled_file_count();
+    let bin = context.temp_dir.child("bin");
+    bin.create_dir_all()?;
+    let probe = bin.child("Case-Probe");
+    probe.write_binary(b"")?;
+    let case_insensitive = bin.child("case-probe").exists();
+    fs_err::remove_file(probe.path())?;
+    if case_insensitive {
+        return Ok(());
+    }
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "prospective-case-collision"
+        [root]
+        requires = ["tool"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.first.versions."1.0.0"]
+        sdist = false
+        entry_points = ["Foo"]
+        [packages.second.versions."1.0.0"]
+        sdist = false
+        entry_points = ["foo"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tool_install().arg("tool").args(["--with-executables-from", "first,second", "--compile-bytecode"])
+        .arg("--default-index").arg(server.index_url()).env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Installed 2 packages in [TIME]
+    Bytecode compiled [COUNT] files in [TIME]
+     + first==1.0.0
+     + second==1.0.0
+    Installed 1 executable from `first`: Foo
+    Installed 1 executable from `second`: foo
+    Installed 1 executable: tool
+    "#);
+    uv_snapshot!(context.filters(), Command::new(bin.child(format!("Foo{}", std::env::consts::EXE_SUFFIX)).path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from first!
+    ");
+    uv_snapshot!(context.filters(), Command::new(bin.child(format!("foo{}", std::env::consts::EXE_SUFFIX)).path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from second!
+    ");
+    Ok(())
+}

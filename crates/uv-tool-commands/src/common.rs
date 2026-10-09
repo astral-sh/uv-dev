@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, Bound},
+    collections::{BTreeMap, BTreeSet, Bound, HashMap, HashSet},
     ffi::OsString,
     fmt::Write,
     io,
@@ -783,15 +783,65 @@ fn check_tool_entrypoint_targets(
     targets: Vec<(PackageName, PathBuf)>,
     existing_tool: &Tool,
 ) -> anyhow::Result<()> {
-    let existing_paths = existing_tool
-        .entrypoints()
-        .iter()
-        .map(|entrypoint| entrypoint.install_path.as_path())
-        .collect::<BTreeSet<_>>();
-    let mut owners = BTreeMap::new();
+    let Some((_, target)) = targets.first() else {
+        return Ok(());
+    };
+    let executable_directory = target
+        .parent()
+        .context("Executable destination has no parent")?;
+    fs_err::create_dir_all(executable_directory)?;
+    // Probe complete filenames on the destination filesystem, including its Unicode and case rules.
+    let probes = tempfile::tempdir_in(executable_directory)?;
+    #[cfg(target_os = "linux")]
+    {
+        // WSL 1 does not inherit this per-directory attribute when creating a child directory.
+        let mut value = [0_u8; 4];
+        match rustix::fs::getxattr(
+            executable_directory,
+            "system.wsl_case_sensitive",
+            &mut value[..],
+        ) {
+            Ok(length) => rustix::fs::setxattr(
+                probes.path(),
+                "system.wsl_case_sensitive",
+                &value[..length],
+                rustix::fs::XattrFlags::empty(),
+            )?,
+            Err(rustix::io::Errno::NODATA | rustix::io::Errno::NOTSUP) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let probe = |filename: &std::ffi::OsStr| -> io::Result<same_file::Handle> {
+        let path = probes.path().join(filename);
+        match fs_err::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        same_file::Handle::from_path(path)
+    };
+    let mut existing_paths = HashSet::new();
+    for entrypoint in existing_tool.entrypoints() {
+        if let Some(parent) = entrypoint.install_path.parent()
+            && uv_fs::is_same_file_allow_missing(parent, executable_directory) == Some(true)
+            && let Some(filename) = entrypoint.install_path.file_name()
+        {
+            existing_paths.insert(probe(filename)?);
+        }
+    }
+    let mut owners = HashMap::new();
     let mut conflicts = BTreeSet::new();
     for (package, target) in targets {
-        if let Some(previous) = owners.insert(target.clone(), package.clone())
+        let filename = target
+            .file_name()
+            .context("Executable destination has no filename")?;
+        let destination = probe(filename)?;
+        let owned = existing_paths.contains(&destination);
+        if let Some(previous) = owners.insert(destination, package.clone())
             && previous != package
         {
             let executable = target
@@ -803,7 +853,7 @@ fn check_tool_entrypoint_targets(
             );
         }
         if target.exists()
-            && !existing_paths.contains(target.as_path())
+            && !owned
             && let Some(filename) = target.file_name()
         {
             conflicts.insert(filename.to_string_lossy().into_owned());
