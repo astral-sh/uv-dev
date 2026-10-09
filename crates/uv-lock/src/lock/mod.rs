@@ -2476,6 +2476,7 @@ impl Lock {
     pub fn from_resolution(
         resolution: &ResolverOutput,
         manifest: ResolverManifest,
+        conflicts: Conflicts,
         root: &Path,
         supported_environments: Vec<MarkerTree>,
         index_locations: &IndexLocations,
@@ -2531,6 +2532,17 @@ impl Lock {
 
             let mut package =
                 Package::from_annotated_dist(dist, fork_markers, root, index_locations)?;
+            if package.id.source.is_immutable()
+                && conflicts
+                    .iter()
+                    .flat_map(ConflictSet::iter)
+                    .any(|item| item.package() == package.name() && item.extra().is_some())
+            {
+                package.declared_extras = dist
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| metadata.provides_extra.clone());
+            }
             // Git declarations can introduce direct sources needed by offline freshness checks.
             if metadata_free
                 && matches!(package.id.source, Source::Git(..))
@@ -2644,7 +2656,7 @@ impl Lock {
             requires_python,
             options,
             manifest,
-            Conflicts::empty(),
+            conflicts,
             supported_environments,
             vec![],
             fork_markers,
@@ -2818,22 +2830,6 @@ impl Lock {
             manifest,
         };
         Ok(lock)
-    }
-
-    /// Record the conflicting groups that were used to generate this lock.
-    #[must_use]
-    pub fn with_conflicts(mut self, conflicts: Conflicts) -> Self {
-        for package in &mut self.packages {
-            if !conflicts
-                .iter()
-                .flat_map(ConflictSet::iter)
-                .any(|item| item.package() == package.name() && item.extra().is_some())
-            {
-                package.declared_extras = None;
-            }
-        }
-        self.conflicts = conflicts;
-        self
     }
 
     /// Whether immutable conflict participants record their declared extras, including empty sets.
@@ -6685,14 +6681,6 @@ impl Package {
                 root,
             )?
         };
-        let declared_extras = if id.source.is_immutable() {
-            annotated_dist
-                .metadata
-                .as_ref()
-                .map(|metadata| metadata.provides_extra.clone())
-        } else {
-            None
-        };
         Ok(Self {
             id,
             sdist,
@@ -6700,7 +6688,7 @@ impl Package {
             fork_markers,
             dependencies: vec![],
             optional_dependencies: BTreeMap::default(),
-            declared_extras,
+            declared_extras: None,
             dependency_groups: BTreeMap::default(),
             default_groups: None,
             group_requires_python: BTreeMap::new(),
