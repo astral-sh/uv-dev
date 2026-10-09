@@ -882,9 +882,11 @@ async fn do_lock(
                         lock_supported_environments.as_markers(),
                         packages,
                         &requirements,
+                        &constraints,
                         &dependency_groups,
                         &overrides,
                         &excludes,
+                        dependency_metadata,
                         &database,
                     )
                     .await?,
