@@ -16,9 +16,7 @@ use fs_err::{File, read};
 use fs_err::{read_to_string, remove_file, write};
 #[cfg(feature = "test-python-managed")]
 use http::StatusCode;
-#[cfg(feature = "test-universal")]
-use indoc::formatdoc;
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 #[cfg(feature = "test-universal")]
 use regex::Regex;
 use sha2::{Digest, Sha256, Sha512};
@@ -20995,5 +20993,76 @@ async fn include_build_dependencies_validates_source_url_hashes() -> Result<()> 
     "#);
     marker.assert(predicates::path::missing());
     server.verify().await;
+    Ok(())
+}
+
+/// A backend selected by the combined resolution can introduce new constrained dependencies.
+#[test]
+fn include_build_dependencies_constraints_follow_selected_backend() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "evolving-build-dependency-closure"
+        [root]
+        requires = ["backend"]
+        [expected]
+        satisfiable = true
+        [packages.backend.versions."1.0.0"]
+        sdist = false
+        requires = ["helper>=1"]
+        [packages.backend.versions."2.0.0"]
+        sdist = false
+        [packages.helper.versions."1.0.0"]
+        sdist = false
+        [packages.helper.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = ["backend>=1"]
+        build-backend = "custom"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("project/custom.py")
+        .write_str(indoc! {r"
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+    "})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project")?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("backend==1")?;
+    context
+        .temp_dir
+        .child("build-constraints.txt")
+        .write_str("helper==1")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies",
+        "--constraint", "constraints.txt", "--build-constraint", "build-constraints.txt",
+        "--no-header", "--no-annotate",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    backend==1.0.0
+    helper==1.0.0
+    ./project
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Resolved 3 packages in [TIME]
+    Resolved 3 packages in [TIME]
+    ");
     Ok(())
 }

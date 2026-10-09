@@ -149,13 +149,6 @@ impl IsBuildBackendError for BuildDispatchError {
     }
 }
 
-/// Requirements discovered for a source and constraints that restrict their resolution.
-#[derive(Debug, Default)]
-pub struct DiscoveredBuildRequirements {
-    pub requirements: Vec<Requirement>,
-    pub constraints: Vec<Requirement>,
-}
-
 /// The main implementation of [`BuildContext`], used by the CLI, see [`BuildContext`]
 /// documentation.
 #[derive(Clone)]
@@ -187,7 +180,7 @@ pub struct BuildDispatch<'a> {
     concurrency: Concurrency,
     preview: Preview,
     tar_backend: TarBackend,
-    build_requirements: Option<Arc<Mutex<DiscoveredBuildRequirements>>>,
+    build_requirements: Option<Arc<Mutex<Vec<Requirement>>>>,
 }
 
 impl<'a> BuildDispatch<'a> {
@@ -256,8 +249,8 @@ impl<'a> BuildDispatch<'a> {
         &self,
         source: &SourceDist,
         hashes: MetadataHashPolicy<'_>,
-    ) -> Result<DiscoveredBuildRequirements, uv_distribution::Error> {
-        let requirements = Arc::new(Mutex::new(DiscoveredBuildRequirements::default()));
+    ) -> Result<Vec<Requirement>, uv_distribution::Error> {
+        let requirements = Arc::new(Mutex::new(Vec::new()));
         let dispatch = Self {
             build_requirements: Some(requirements.clone()),
             source_build_context: SourceBuildContext::new(
@@ -480,17 +473,10 @@ impl BuildContext for BuildDispatch<'_> {
             }
         })?);
         if let Some(build_requirements) = &self.build_requirements {
-            let mut build_requirements = build_requirements.lock().await;
             build_requirements
-                .requirements
+                .lock()
+                .await
                 .extend(requirements.iter().cloned());
-            build_requirements.constraints.extend(
-                resolution
-                    .distributions()
-                    .filter_map(|distribution| self.constraints.get(distribution.name()))
-                    .flatten()
-                    .cloned(),
-            );
         }
         Ok(ResolvedRequirements::new(resolution, hasher))
     }
@@ -718,25 +704,7 @@ impl BuildContext for BuildDispatch<'_> {
                         .await?,
                 );
             }
-            let mut build_requirements = build_requirements.lock().await;
-            build_requirements.constraints.extend(
-                requirements
-                    .iter()
-                    .filter(|requirement| {
-                        requirement.evaluate_markers(Some(self.interpreter.markers()), &[])
-                    })
-                    .flat_map(|requirement| {
-                        self.constraints
-                            .get(&requirement.name)
-                            .into_iter()
-                            .flatten()
-                            .map(move |constraint| Requirement {
-                                marker: constraint.marker.and(requirement.marker),
-                                ..constraint.clone()
-                            })
-                    }),
-            );
-            build_requirements.requirements.extend(requirements);
+            build_requirements.lock().await.extend(requirements);
         }
         Ok(builder)
     }
