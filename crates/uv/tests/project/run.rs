@@ -14,7 +14,7 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
+use uv_test::{TestContext, packse::PackseServer, site_packages_path, uv_snapshot, venv_bin_path};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -603,14 +603,14 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
         .next()
         .context("second script did not report its installed dependency")?;
 
-    let first_configuration = fs_err::read_to_string(Path::new(first_root).join("pyvenv.cfg"))?;
-    let second_configuration = fs_err::read_to_string(Path::new(second_root).join("pyvenv.cfg"))?;
+    let first_configuration = context.read(Path::new(first_root).join("pyvenv.cfg"));
+    let second_configuration = context.read(Path::new(second_root).join("pyvenv.cfg"));
     let first_base = shared_base(&first_configuration)
         .context("first script environment did not identify its shared base")?;
     let second_base = shared_base(&second_configuration)
         .context("second script environment did not identify its shared base")?;
 
-    let shared_configuration = fs_err::read_to_string(Path::new(first_base).join("pyvenv.cfg"))?;
+    let shared_configuration = context.read(Path::new(first_base).join("pyvenv.cfg"));
 
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(first_configuration, @"
@@ -643,26 +643,52 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
         immutable = true
         ");
 
-        insta::assert_json_snapshot!(json!({
-            "first_environment": first_root,
-            "second_environment": second_root,
-            "shared_base": first_base,
-            "shared_dependency": first_import,
-            "environments_are_distinct": first_root != second_root,
-            "shared_bases_are_identical": first_base == second_base,
-            "dependency_paths_are_identical": first_import == second_import,
-        }), @r#"
-        {
-          "dependency_paths_are_identical": true,
-          "environments_are_distinct": true,
-          "first_environment": "[CACHE_DIR]/environments-v2/shared-first-[HASH]",
-          "second_environment": "[CACHE_DIR]/environments-v2/shared-second-[HASH]",
-          "shared_base": "[CACHE_DIR]/archive-v0/[HASH]",
-          "shared_bases_are_identical": true,
-          "shared_dependency": "[CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py"
-        }
-        "#);
+
     });
+
+    assert_ne!(first_root, second_root);
+    assert_eq!(first_base, second_base);
+    assert_eq!(first_import, second_import);
+
+    let overlay_path =
+        site_packages_path(Path::new(first_root), "python3.12").join("_uv_ephemeral_overlay.pth");
+    let original_contents = context.read(&overlay_path);
+    let original_time = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+    filetime::set_file_mtime(&overlay_path, original_time)?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "first.py"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-first-[HASH]
+    [CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    assert_eq!(context.read(&overlay_path), original_contents);
+    assert_eq!(
+        filetime::FileTime::from_last_modification_time(&fs_err::metadata(&overlay_path)?),
+        original_time
+    );
+
+    // Installed overlay packages take precedence over the immutable shared dependency set.
+    context
+        .pip_install()
+        .arg("--python")
+        .arg(venv_bin_path(first_root).join(format!("python{}", std::env::consts::EXE_SUFFIX)))
+        .arg("iniconfig==1.1.1")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--with", "iniconfig<2", "first.py"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-first-[HASH]
+    [CACHE_DIR]/environments-v2/shared-first-[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
 
     Ok(())
 }
@@ -8347,5 +8373,56 @@ fn run_cached_environment_configuration_is_stable() -> Result<()> {
         .assert()
         .success();
     assert_eq!(fs_err::read_to_string(path)?, contents);
+    Ok(())
+}
+
+/// Shared script dependencies satisfy `--with` and remain preferences when extra packages are needed.
+#[test]
+fn run_pep723_shared_script_with_constraints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig<2"]
+        # ///
+        from importlib.metadata import version
+        print(version("iniconfig"))
+    "#})?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--with", "iniconfig", "script.py"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.1.1
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==1.1.1
+    "#);
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--with", ".", "script.py"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.1.1
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + example==1.0.0 (from file://[TEMP_DIR]/)
+     + iniconfig==1.1.1
+    "#);
     Ok(())
 }

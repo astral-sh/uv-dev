@@ -73,9 +73,12 @@ impl SitePackages {
         interpreter: &Interpreter,
         package_names: Option<&FxHashSet<&PackageName>>,
     ) -> Result<Self> {
-        let mut distributions: Vec<Option<InstalledDist>> = Vec::new();
-        let mut by_name: FxHashMap<PackageName, Vec<usize>> = FxHashMap::default();
-        let mut by_url: FxHashMap<DisplaySafeUrl, Vec<usize>> = FxHashMap::default();
+        let mut index = Self {
+            interpreter: interpreter.clone(),
+            distributions: Vec::new(),
+            by_name: FxHashMap::default(),
+            by_url: FxHashMap::default(),
+        };
 
         for site_packages in interpreter.site_packages() {
             // Read the site-packages directory.
@@ -129,30 +132,35 @@ impl SitePackages {
                     continue;
                 }
 
-                let idx = distributions.len();
-
-                // Index the distribution by name.
-                by_name
-                    .entry(dist_info.name().clone())
-                    .or_default()
-                    .push(idx);
-
-                // Index the distribution by URL.
-                if let InstalledDistKind::Url(dist) = &dist_info.kind {
-                    by_url.entry(dist.url.clone()).or_default().push(idx);
-                }
-
-                // Add the distribution to the database.
-                distributions.push(Some(dist_info));
+                index.insert(dist_info);
             }
         }
 
-        Ok(Self {
-            interpreter: interpreter.clone(),
-            distributions,
-            by_name,
-            by_url,
-        })
+        Ok(index)
+    }
+
+    /// Include packages from a parent environment unless this environment shadows their name.
+    #[must_use]
+    pub fn with_fallback(mut self, fallback: Self) -> Self {
+        let primary = self.by_name.keys().cloned().collect::<FxHashSet<_>>();
+        for distribution in fallback {
+            if !primary.contains(distribution.name()) {
+                self.insert(distribution);
+            }
+        }
+        self
+    }
+
+    fn insert(&mut self, distribution: InstalledDist) {
+        let index = self.distributions.len();
+        self.by_name
+            .entry(distribution.name().clone())
+            .or_default()
+            .push(index);
+        if let InstalledDistKind::Url(dist) = &distribution.kind {
+            self.by_url.entry(dist.url.clone()).or_default().push(index);
+        }
+        self.distributions.push(Some(distribution));
     }
 
     /// Returns the [`Interpreter`] used to install the packages.

@@ -184,6 +184,7 @@ pub async fn run(
 
     // Determine whether the command to execute is a PEP 723 script.
     let temp_dir;
+    let mut shared_interpreter = None;
     let script_interpreter = if let Some(script) = script {
         match &script {
             Pep723Item::Script(script) => {
@@ -487,6 +488,7 @@ pub async fn run(
                                 shared_environment.interpreter(),
                             )?;
                             set_parent_environment(&environment, shared_environment.root())?;
+                            shared_interpreter = Some(shared_environment.into_interpreter());
                             Some(environment.into_interpreter())
                         }
                         Err(EnvironmentError::Resolve(err)) => {
@@ -990,6 +992,11 @@ pub async fn run(
 
     // If necessary, create an environment for the ephemeral requirements or command.
     let base_site_packages = SitePackages::from_interpreter(&base_interpreter)?;
+    let base_site_packages = if let Some(shared_interpreter) = &shared_interpreter {
+        base_site_packages.with_fallback(SitePackages::from_interpreter(shared_interpreter)?)
+    } else {
+        base_site_packages
+    };
     let requirements_env = match spec {
         None => None,
         Some(spec)
@@ -1325,7 +1332,13 @@ fn set_overlay(environment: &PythonEnvironment, contents: &str) -> anyhow::Resul
         .next()
         .context("Failed to find `site-packages` directory for environment")?;
     let overlay_path = site_packages.join("_uv_ephemeral_overlay.pth");
-    fs_err::write(overlay_path, contents)?;
+    match fs_err::read(&overlay_path) {
+        Ok(current) if current == contents.as_bytes() => return Ok(()),
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    uv_fs::write_atomic_sync(overlay_path, contents)?;
     Ok(())
 }
 

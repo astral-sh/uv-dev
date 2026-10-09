@@ -374,6 +374,11 @@ mod tests {
         CycloneDX 1.5 JSON format. This describes the locked dependencies in a format that can be
         consumed by software inventory and security tools.
 
+        ### `shared-script-environments` {#shared-script-environments}
+
+        Shares content-addressed dependency environments between PEP 723 scripts while retaining
+        a distinct, mutable virtual environment for each script.
+
         ### `special-conda-env-names` {#special-conda-env-names}
 
         Conda environments named `base` or `root` are classified using their paths, like other named
