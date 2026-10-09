@@ -7,7 +7,7 @@
         "title": "Prune temporary build environments in `uv cache prune`",
         "url": "https://github.com/astral-sh/uv/pull/22171",
         "state": "merged",
-        "reason": "Merged before this report on 2026-10-07. The final implementation deletes every entry in builds-v0; its test uses an inactive synthetic environment. This directly explains the prune exposure but does not cover surviving backends."
+        "reason": "Merged on 2026-10-07 to resolve astral-sh/uv#22167. The final implementation removes every builds-v0 entry without checking child-process lifetime, extending the reported exposure to prune. Its test covers an abandoned directory, not a surviving backend."
       },
       {
         "kind": "issue",
@@ -15,15 +15,7 @@
         "title": "uv build leaves a temporary build environment after Ctrl+C",
         "url": "https://github.com/astral-sh/uv/issues/22167",
         "state": "closed",
-        "reason": "Closed by astral-sh/uv#22171. It concerns environments retained after uv and its backend stop. The new report concerns deletion while a backend remains alive."
-      },
-      {
-        "kind": "pull_request",
-        "number": 20116,
-        "title": "Add automatic pruning of unreferenced cache archives",
-        "url": "https://github.com/astral-sh/uv/pull/20116",
-        "state": "open",
-        "reason": "Proposes per-entry locks and protection for runtime symlink dependencies while allowing pruning. Closely related design work, but its process-owned claims do not establish safety after parent death or parallel-build cancellation."
+        "reason": "The precursor reports leftover build environments after both uv and its backend stop. Closed by astral-sh/uv#22171. The new issue concerns deleting environments while their users remain alive, so it is not a duplicate of this cleanup request."
       },
       {
         "kind": "issue",
@@ -31,15 +23,7 @@
         "title": "uv cache prune removes files from a running process executed with `uvx`",
         "url": "https://github.com/astral-sh/uv/issues/11694",
         "state": "closed",
-        "reason": "Historical instance of cleanup deleting a live process's environment and breaking imports. A maintainer closed it because uv held a cache lock. The new cases expose lifetime boundaries that closure did not address."
-      },
-      {
-        "kind": "pull_request",
-        "number": 15888,
-        "title": "Make `uv cache clean` parallel process safe",
-        "url": "https://github.com/astral-sh/uv/pull/15888",
-        "state": "merged",
-        "reason": "Introduced shared cache locks for uv operations and exclusive locks for cleanup, fixing astral-sh/uv#15704. This protection relies on a surviving lock owner rather than tracking backend descendants."
+        "reason": "Historical report of the same harmful outcome: pruning a live tool environment breaks subsequent imports. A maintainer closed it in November 2025 because uv now held a cache lock. The new parent-death and build-cancellation cases expose a lifetime gap beyond that protection."
       },
       {
         "kind": "pull_request",
@@ -47,7 +31,15 @@
         "title": "Retain the cache lock and temporary caches during `uv run` and `uvx`",
         "url": "https://github.com/astral-sh/uv/pull/15990",
         "state": "merged",
-        "reason": "Fixed premature disposal of temporary execution environments and retained locks while run/tool commands wait. A close ownership precedent, but it does not implement PEP 517 cancellation shutdown or retention after uv dies."
+        "reason": "The September 2025 fix retains cache resources throughout command execution, following the shared-lock introduction in astral-sh/uv#15888. It explains the protection behind closing astral-sh/uv#11694, but does not provide ownership that survives uv termination or canceled build futures."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20116,
+        "title": "Add automatic pruning of unreferenced cache archives",
+        "url": "https://github.com/astral-sh/uv/pull/20116",
+        "state": "open",
+        "reason": "Proposes releasing the global lock while protecting running environments and their cache symlinks with per-entry locks. Its description explicitly releases claims on process death; it does not establish retention for surviving descendants or cancellation of PEP 517 builds. Related design work, not a confirmed fix or duplicate."
       },
       {
         "kind": "issue",
@@ -55,13 +47,13 @@
         "title": "Fine-grained cache locking",
         "url": "https://github.com/astral-sh/uv/issues/19321",
         "state": "open",
-        "reason": "Tracks reducing lock contention and discusses cache-resident environments and runtime symlink dependencies, pointing to astral-sh/uv#20116. It does not track deletion after parent death or parallel-build cancellation."
+        "reason": "Canonical discussion for reducing cache-lock contention, linked by maintainers from astral-sh/uv#19317. Comments examine long-lived commands, external environments, cache-backed environments, and symlink dependencies. It addresses maintenance while uv remains alive, rather than the new ownership failures after termination or cancellation."
       }
     ],
-    "search_scope": "Searched open and closed issues separately for cleanup after SIGKILL or parent death; ENOENT and builds-v0; parallel-build failure, cancellation, orphan processes and subprocess cleanup; detached descendants; and runtime workspace separation, environments outside the cache, lifetime and fine-grained locking. Broadened beyond reported platforms and versions. Searched PRs across states for cache prune, cache lock, build cancel and kill_on_drop. PR text searches returned no hits even for known matches, so supplemented them by filtering all 592 open PRs and 600 recently updated all-state PRs, then inspecting historical references, comments and reviews. Ruled out astral-sh/uv#13270 (dotted wheel-tag reference bug), astral-sh/uv#22276 (overlapping --clear output/source paths), astral-sh/uv#18962 (unused-cache cleanup and global environment management), and astral-sh/uv#21367 / astral-sh/uv#20090 (incremental-build environment reuse) as duplicates. Followed astral-sh/uv#17211 to its replacement, astral-sh/uv#20116."
+    "search_scope": "Used authenticated gh to search open/closed issues with literal terms including cache clean, cache prune, builds-v0, ENOENT, SIGKILL, parent, parallel build, cancellation, and 0.12.23; conceptual searches covered running-process deletion, orphaned backends, detached descendants, runtime storage, temporary environments outside the cache, and fine-grained locking. REST search was rate-limited and PR search returned unusable results, so also retrieved all 12,901 open/closed/merged PR titles and filtered for cleanup, pruning, locking, cancellation, subprocesses, signals, and temporary environments, then inspected candidate bodies, comments, reviews, and referenced discussions. Historical fixes included astral-sh/uv#15888, astral-sh/uv#15990, and astral-sh/uv#13017. Ruled out astral-sh/uv#22387 as a duplicate: it fixes deletion of the lock file during concurrent cleanup, not surviving-child ownership. Also distinguished astral-sh/uv#18962 (orphan cleanup/global venv management), astral-sh/uv#12003 (external symlink installations), and astral-sh/uv#3095 (exec-based command launching)."
   },
   "type": "bug",
-  "type_reason": "Deleting an environment still needed by a live backend is incorrect behavior despite the architectural framing. Source confirms cache-resident build workspaces and unconditional builds-v0 pruning; separate temporary-directory and child lifetimes also support investigating cancellation. Existing discussions cover stopped-backend leftovers, protection while uv remains alive, or lock contention. No canonical duplicate was found. Historical fixes do not establish that these parent-death or cancellation cases previously worked, so a regression is not confirmed.",
-  "summary": "astral-sh/uv#22171 and astral-sh/uv#22167 explain the pruning change; astral-sh/uv#20116 and astral-sh/uv#19321 cover related locking design. The historical fixes do not establish protection for surviving backends. The README update could not be saved because the requested destination and temporary directories are read-only.",
-  "draft_response": "Build workspaces currently live in builds-v0, and astral-sh/uv#22171 makes pruning remove its entries. The cache lock protects them while uv holds it; releasing that lock does not establish that a surviving backend has exited. Removing files that backend still needs is a correctness issue.\n\nPlease attach the minimal backend fixtures and exact commands for the parent-only kill and parallel-build failure, including the uv revision for the latter. Those cases are needed to verify the affected paths and add regression coverage. Moving execution workspaces outside the cache needs design review alongside astral-sh/uv#20116; per-entry locks alone do not establish that descendants have stopped."
+  "type_reason": "Deleting a live backend's environment is incorrect behavior, even though the report proposes an architectural solution. Source inspection confirms cache-resident temporary build environments, unconditional pruning, and build futures whose cancellation can drop their workspace without awaiting child shutdown. The historical locking fix behind astral-sh/uv#11694 does not cover descendants outliving uv; no open duplicate for these lifetime failures was found. This is not recurrence of the abandoned-directory leak fixed by astral-sh/uv#22171: cache clean already exhibits the reported failure on 0.12.23, while that PR adds the prune exposure.",
+  "summary": "astral-sh/uv#22171 adds the relevant build-directory pruning; astral-sh/uv#11694 and astral-sh/uv#15990 document earlier protection for running environments. astral-sh/uv#20116 and astral-sh/uv#19321 discuss related locking designs. None establishes safe workspace retention after uv dies or parallel builds are canceled.",
+  "draft_response": "Your report exposes a lifetime-safety gap: build workspaces live in the cache, but its lock protects them only while uv holds it. astral-sh/uv#22171 adds these directories to pruning; the earlier locking fixes do not establish that surviving children have stopped. astral-sh/uv#20116 addresses pruning around running commands but is not a confirmed fix for these cases.\n\nPlease attach the minimal PEP 517 fixtures and commands for the parent-only SIGKILL and parallel-build failure reproductions for regression coverage. Separating runtime storage from the cache remains a design proposal, including how to retain workspaces when descendant lifetime is uncertain."
 }
