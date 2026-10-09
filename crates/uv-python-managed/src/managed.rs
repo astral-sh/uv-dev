@@ -510,8 +510,23 @@ impl ManagedPythonInstallation {
         PythonInstallationMinorVersionKey::ref_cast(&self.key)
     }
 
+    /// Finalize runtime files for the published destination of this installation.
+    ///
+    /// Files can still be in a staging directory. Dylib patch failures remain warnings because
+    /// the interpreter is usable without linking native extensions against its library.
+    pub fn finalize(&self, destination: &Path) -> Result<(), Error> {
+        self.ensure_externally_managed()?;
+        self.ensure_sysconfig_patched_at(destination)?;
+        self.ensure_canonical_executables()?;
+        self.ensure_build_file()?;
+        if let Err(error) = self.ensure_dylib_patched_at(destination) {
+            error.warn_user(self);
+        }
+        Ok(())
+    }
+
     /// Ensure the environment contains the canonical Python executable names.
-    pub fn ensure_canonical_executables(&self) -> Result<(), Error> {
+    fn ensure_canonical_executables(&self) -> Result<(), Error> {
         let python = self.executable(false);
 
         let canonical_names = &["python"];
@@ -558,7 +573,7 @@ impl ManagedPythonInstallation {
 
     /// Ensure the environment is marked as externally managed with the
     /// standard `EXTERNALLY-MANAGED` file.
-    pub fn ensure_externally_managed(&self) -> Result<(), Error> {
+    fn ensure_externally_managed(&self) -> Result<(), Error> {
         if self.key.os().is_emscripten() {
             // Emscripten's stdlib is a zip file so we can't put an
             // EXTERNALLY-MANAGED inside.
@@ -586,13 +601,8 @@ impl ManagedPythonInstallation {
         Ok(())
     }
 
-    /// Ensure that the `sysconfig` data is patched to match the installation path.
-    pub fn ensure_sysconfig_patched(&self) -> Result<(), Error> {
-        self.ensure_sysconfig_patched_at(self.path())
-    }
-
     /// Patch files in this installation to refer to their final destination.
-    pub(crate) fn ensure_sysconfig_patched_at(&self, destination: &Path) -> Result<(), Error> {
+    fn ensure_sysconfig_patched_at(&self, destination: &Path) -> Result<(), Error> {
         if cfg!(unix) && !self.key.os().is_windows() {
             if self.key.os().is_emscripten() {
                 // Emscripten's stdlib is a zip file so we can't update the
@@ -623,10 +633,7 @@ impl ManagedPythonInstallation {
     }
 
     /// Patch the staged library using its final published install name.
-    pub(crate) fn ensure_dylib_patched_at(
-        &self,
-        destination: &Path,
-    ) -> Result<(), macos_dylib::Error> {
+    fn ensure_dylib_patched_at(&self, destination: &Path) -> Result<(), macos_dylib::Error> {
         if cfg!(target_os = "macos") {
             if self.key().os().is_like_darwin() {
                 if self.implementation() == ImplementationName::CPython {
@@ -649,7 +656,7 @@ impl ManagedPythonInstallation {
     }
 
     /// Ensure the build version is written to a BUILD file in the installation directory.
-    pub fn ensure_build_file(&self) -> Result<(), Error> {
+    fn ensure_build_file(&self) -> Result<(), Error> {
         if let Some(ref build) = self.build {
             let build_file = self.path.join("BUILD");
             fs::write(&build_file, build.as_ref())?;

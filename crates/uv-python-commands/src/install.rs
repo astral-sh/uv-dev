@@ -677,13 +677,7 @@ async fn perform_install(
     // `AlreadyAvailable` and pre-existing (`satisfied`) installations still need
     // finalization here.
     for installation in not_finalized.iter().chain(satisfied.iter().copied()) {
-        installation.ensure_externally_managed()?;
-        installation.ensure_sysconfig_patched()?;
-        installation.ensure_canonical_executables()?;
-        installation.ensure_build_file()?;
-        if let Err(e) = installation.ensure_dylib_patched() {
-            e.warn_user(installation);
-        }
+        installation.finalize(installation.path())?;
     }
 
     for installation in &installations {
