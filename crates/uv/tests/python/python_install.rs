@@ -6,7 +6,7 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
 };
 
-use std::{env, path::Path, process::Command};
+use std::{env, path::Path, process::Command, time::SystemTime};
 
 use anyhow::Context;
 use assert_cmd::assert::OutputAssertExt;
@@ -21,6 +21,7 @@ use tracing::debug;
 use uv_test::assert_link_target;
 use uv_test::{LATEST_PYTHON_3_12, assert_path_missing, uv_snapshot};
 
+use uv_cache::CacheBucket;
 use uv_fs::Simplified;
 use uv_platform::Platform;
 use uv_python_managed::{downloads::ManagedPythonDownloadList, platform_key_from_env};
@@ -4495,9 +4496,27 @@ async fn python_install_ndjson_head_failure_redacts_signed_url() -> anyhow::Resu
             r#"{"version":"3.99.1","artifacts":[]}"#,
             "application/x-ndjson",
         ))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
+    uv_snapshot!(context.filters(), context.python_install().args(["3.99", "--reinstall"])
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/versions.ndjson?X-Amz-Signature=secret-signature&safe=value", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No download found for request: cpython-3.99-[PLATFORM]
+    ");
+    let metadata_path = context
+        .cache_files(CacheBucket::Python)?
+        .into_iter()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "python-build-standalone.meta.json")
+        })
+        .context("cached catalog metadata exists")?;
+    let mut metadata: serde_json::Value = serde_json::from_str(&context.read(&metadata_path))?;
+    metadata["checked_at"] = serde_json::to_value(SystemTime::UNIX_EPOCH)?;
+    fs_err::write(&metadata_path, serde_json::to_vec(&metadata)?)?;
     uv_snapshot!(context.filters(), context.python_install().args(["3.99", "--reinstall"])
         .env(EnvVars::RUST_LOG, "uv_python_managed::downloads=debug")
         .arg("--python-downloads-json-url")
