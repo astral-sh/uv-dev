@@ -239,14 +239,24 @@ fn replace_windows_binary(source: &Path, target: &Path) -> Result<()> {
 }
 
 /// Copy a complete distribution before replacing any installed executable.
-fn install_binaries(source: &Path, destination: &Path) -> Result<()> {
+fn install_binaries(executable: &Path, destination: &Path) -> Result<()> {
+    let source = executable
+        .parent()
+        .context("Executable has no parent directory")?;
+    let uv_name = format!("uv{}", std::env::consts::EXE_SUFFIX);
+    anyhow::ensure!(
+        uv_fs::is_same_file_allow_missing(&source.join(&uv_name), executable) == Some(true),
+        "Cannot install from `{}`: `{uv_name}` does not identify the running executable `{}`",
+        source.display(),
+        executable.display()
+    );
     #[cfg(windows)]
     cleanup_previous_installations(destination);
     let staged = tempfile::tempdir_in(destination)?;
     for name in executable_names() {
         let source = source.join(name);
         anyhow::ensure!(
-            fs_err::symlink_metadata(&source)?.is_file(),
+            fs_err::metadata(&source)?.is_file(),
             "Expected a regular executable at `{}`",
             source.display()
         );
@@ -257,7 +267,7 @@ fn install_binaries(source: &Path, destination: &Path) -> Result<()> {
         let source = staged.path().join(name);
         let target = destination.join(name);
         #[cfg(windows)]
-        if uv_fs::is_same_file_allow_missing(&std::env::current_exe()?, &target) == Some(true) {
+        if uv_fs::is_same_file_allow_missing(executable, &target) == Some(true) {
             self_replace::self_replace(&source)?;
             continue;
         }
@@ -302,10 +312,7 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
             .ok()
             .map(|(_, receipt)| receipt.source)
     };
-    let source = executable
-        .parent()
-        .context("Executable has no parent directory")?;
-    install_binaries(source, &destination)?;
+    install_binaries(&executable, &destination)?;
     let modify_path = !unmanaged
         && !args.no_modify_path
         && std::env::var_os("INSTALLER_NO_MODIFY_PATH").is_none();

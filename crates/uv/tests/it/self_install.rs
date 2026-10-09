@@ -298,3 +298,69 @@ fn reinstalls_from_running_windowed_launcher() -> Result<()> {
     assert_eq!(receipt["provider"]["source"], "uv");
     Ok(())
 }
+
+/// A versioned executable must not install different unsuffixed binaries beside it.
+#[cfg(unix)]
+#[test]
+fn rejects_different_adjacent_distribution() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let source = context.temp_dir.child("source");
+    source.create_dir_all()?;
+    let executable = source.child("uv@current");
+    fs_err::copy(uv_test::get_bin!(), executable.path())?;
+    source.child("uv").write_str("different uv")?;
+    source.child("uvx").write_str("different uvx")?;
+    let destination = context.temp_dir.child("destination");
+    destination.child("uv").write_str("installed uv")?;
+    destination.child("uvx").write_str("installed uvx")?;
+    uv_snapshot!(context.filters(), context.external_command(executable.path()).args([
+        "self", "install", "--preview-features", "self-management", "--no-modify-path", "--install-dir",
+    ]).arg(destination.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot install from `[TEMP_DIR]/source`: `uv` does not identify the running executable `[TEMP_DIR]/source/uv@current`
+    ");
+    assert_eq!(context.read("destination/uv"), "installed uv");
+    assert_eq!(context.read("destination/uvx"), "installed uvx");
+    destination
+        .child(".uv-receipt.json")
+        .assert(predicates::path::missing());
+    Ok(())
+}
+
+/// Hard links to the running binary and symlinked sibling launchers identify one distribution.
+#[cfg(unix)]
+#[test]
+fn installs_linked_running_distribution() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filter((r"uv [0-9]+\.[0-9]+\.[0-9]+[^ ]*", "uv [VERSION]"))
+        .with_filter((r"\([a-z0-9_]+-[a-z0-9_-]+\)", "([TARGET])"));
+    let source = context.temp_dir.child("source");
+    source.create_dir_all()?;
+    let executable = source.child("uv@current");
+    let built = uv_test::get_bin!();
+    fs_err::copy(&built, executable.path())?;
+    fs_err::hard_link(executable.path(), source.child("uv").path())?;
+    fs_err::os::unix::fs::symlink(
+        built.parent().context("binary directory")?.join("uvx"),
+        source.child("uvx").path(),
+    )?;
+    let destination = context.temp_dir.child("destination");
+    uv_snapshot!(context.filters(), context.external_command(executable.path()).args([
+        "self", "install", "--preview-features", "self-management", "--no-modify-path", "--install-dir",
+    ]).arg(destination.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed uv [VERSION] to [TEMP_DIR]/destination
+    ");
+    uv_snapshot!(context.filters(), context.external_command(destination.child("uv").path()).arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    uv [VERSION] ([TARGET])
+    ");
+    destination.child("uvx").assert(predicates::path::is_file());
+    let receipt: serde_json::Value =
+        serde_json::from_str(&context.read("destination/.uv-receipt.json"))?;
+    assert_eq!(receipt["version"], env!("CARGO_PKG_VERSION"));
+    Ok(())
+}
