@@ -18,12 +18,14 @@ use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
 use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults, ExcludeDependency};
-use uv_distribution_types::{Index, MinimumLibcVersion, Requirement, RequirementSource};
+use uv_distribution_types::{
+    Index, MinimumLibcVersion, Requirement, RequirementSource, RequiresPython,
+};
 use uv_fs::{CWD, Simplified, normalize_path};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
 use uv_once_map::OnceMap;
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion, VerbatimUrl};
+use uv_pep508::{MarkerTree, VerbatimUrl};
 use uv_pypi_types::{ConflictError, Conflicts, SupportedEnvironments, VerbatimParsedUrl};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
@@ -700,13 +702,8 @@ impl Workspace {
             .project
             .as_ref()
             .and_then(|project| project.requires_python.as_ref())
-            .into_iter()
-            .flat_map(|specifiers| specifiers.iter())
-            .fold(MarkerTree::TRUE, |marker, specifier| {
-                marker.and(MarkerTree::expression(MarkerExpression::Version {
-                    key: MarkerValueVersion::PythonFullVersion,
-                    specifier: specifier.clone(),
-                }))
+            .map_or(MarkerTree::TRUE, |specifiers| {
+                RequiresPython::from_specifiers(specifiers.clone()).to_exact_marker_tree()
             })
     }
 

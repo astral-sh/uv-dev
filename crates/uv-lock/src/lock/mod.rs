@@ -50,8 +50,7 @@ use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{
-    MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueVersion, Scheme, VerbatimUrl,
-    VerbatimUrlError, split_scheme,
+    MarkerEnvironment, MarkerTree, Scheme, VerbatimUrl, VerbatimUrlError, split_scheme,
 };
 use uv_platform_tags::{
     AbiTag, IncompatibleTag, LanguageTag, PlatformTag, TagCompatibility, TagPriority, Tags,
@@ -2509,14 +2508,7 @@ impl Lock {
                 .then(|| dist.metadata.as_ref()?.requires_python.as_ref())
                 .flatten()
                 .map(|specifiers| {
-                    specifiers
-                        .iter()
-                        .fold(MarkerTree::TRUE, |marker, specifier| {
-                            marker.and(MarkerTree::expression(MarkerExpression::Version {
-                                key: MarkerValueVersion::PythonFullVersion,
-                                specifier: specifier.clone(),
-                            }))
-                        })
+                    RequiresPython::from_specifiers(specifiers.clone()).to_exact_marker_tree()
                 });
             // If there are multiple distributions for the same package, include the markers of all
             // forks that included the current distribution.
