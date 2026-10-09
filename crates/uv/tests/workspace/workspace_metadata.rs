@@ -3434,20 +3434,19 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
 #[cfg(all(target_os = "linux", feature = "test-python"))]
 #[test]
 fn workspace_metadata_script_active_without_base_executable() -> Result<()> {
-    use std::process::Command;
-
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
-    let python = &context.python_versions[0].1;
-    let base = Command::new(python)
+    let base = context
+        .python_command()
         .args(["-c", "import sys; print(sys.base_prefix)"])
         .output()?
         .assert()
         .success();
     let base = String::from_utf8(base.get_output().stdout.clone())?;
     let active = context.temp_dir.child("active");
-    Command::new(python)
+    context
+        .python_command()
         .args(["-m", "venv", "--copies", "--without-pip"])
         .arg(active.path())
         .assert()
@@ -3479,31 +3478,10 @@ fn workspace_metadata_script_active_without_base_executable() -> Result<()> {
         # dependencies = []
         # ///
     "#})?;
-    let output = context
-        .workspace_metadata()
-        .args([
-            "--script",
-            "script.py",
-            "--active",
-            "--offline",
-            "--no-cache",
-        ])
-        .env(EnvVars::VIRTUAL_ENV, active.path())
-        .output()?
-        .assert()
-        .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
-    insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(metadata["environment"], @r#"
-        {
-          "python": {
-            "implementation": "cpython",
-            "path": "[TEMP_DIR]/active/[BIN]/[PYTHON]",
-            "version": "3.12.[X]"
-          },
-          "root": "[TEMP_DIR]/active"
-        }
-        "#);
-    });
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .args(["--script", "script.py", "--active", "--offline", "--no-cache", "--quiet", "--quiet"])
+        .env(EnvVars::VIRTUAL_ENV, active.path()), @"
+    exit_code: 0 (success)
+    ");
     Ok(())
 }
