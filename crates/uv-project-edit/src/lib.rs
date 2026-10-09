@@ -1164,7 +1164,7 @@ impl PyProjectTomlMut {
     fn remove_sources(&mut self, names: &[PackageName]) -> Result<(), Error> {
         let mut unused = names.iter().cloned().collect::<FxHashSet<_>>();
 
-        let mut retain_used = |dependencies: &Array| {
+        for (_, dependencies) in self.dependency_arrays() {
             for requirement in dependencies
                 .iter()
                 .filter_map(Value::as_str)
@@ -1172,44 +1172,6 @@ impl PyProjectTomlMut {
             {
                 unused.remove(&requirement.name);
             }
-        };
-
-        if let Some(project) = self.doc.get("project").and_then(Item::as_table) {
-            if let Some(dependencies) = project.get("dependencies").and_then(Item::as_array) {
-                retain_used(dependencies);
-            }
-            if let Some(extras) = project
-                .get("optional-dependencies")
-                .and_then(Item::as_table)
-            {
-                for (extra, dependencies) in extras {
-                    if ExtraName::from_str(extra).is_ok()
-                        && let Some(dependencies) = dependencies.as_array()
-                    {
-                        retain_used(dependencies);
-                    }
-                }
-            }
-        }
-        if let Some(groups) = self.doc.get("dependency-groups").and_then(Item::as_table) {
-            for (group, dependencies) in groups {
-                if GroupName::from_str(group).is_ok()
-                    && let Some(dependencies) = dependencies.as_array()
-                {
-                    retain_used(dependencies);
-                }
-            }
-        }
-        if let Some(dev_dependencies) = self
-            .doc
-            .get("tool")
-            .and_then(Item::as_table)
-            .and_then(|tool| tool.get("uv"))
-            .and_then(Item::as_table)
-            .and_then(|uv| uv.get("dev-dependencies"))
-            .and_then(Item::as_array)
-        {
-            retain_used(dev_dependencies);
         }
 
         if unused.is_empty() {
@@ -1283,64 +1245,37 @@ impl PyProjectTomlMut {
             .is_some()
     }
 
-    /// Returns all the places in this `pyproject.toml` that contain a dependency with the given
-    /// name.
-    ///
-    /// This method searches `project.dependencies`, `tool.uv.dev-dependencies`, and
-    /// `tool.uv.optional-dependencies`.
-    pub fn find_dependency(
-        &self,
-        name: &PackageName,
-        marker: Option<&MarkerTree>,
-    ) -> Vec<DependencyType> {
-        let mut types = Vec::new();
-
-        if let Some(project) = self.doc.get("project").and_then(Item::as_table) {
-            // Check `project.dependencies`.
-            if let Some(dependencies) = project.get("dependencies").and_then(Item::as_array)
-                && !find_dependencies(name, marker, dependencies).is_empty()
-            {
-                types.push(DependencyType::Production);
-            }
-
-            // Check `project.optional-dependencies`.
-            if let Some(extras) = project
-                .get("optional-dependencies")
-                .and_then(Item::as_table)
-            {
-                for (extra, dependencies) in extras {
-                    let Some(dependencies) = dependencies.as_array() else {
-                        continue;
-                    };
-                    let Ok(extra) = ExtraName::from_str(extra) else {
-                        continue;
-                    };
-
-                    if !find_dependencies(name, marker, dependencies).is_empty() {
-                        types.push(DependencyType::Optional(extra));
-                    }
-                }
-            }
-        }
-
-        // Check `dependency-groups`.
-        if let Some(groups) = self.doc.get("dependency-groups").and_then(Item::as_table) {
-            for (group, dependencies) in groups {
-                let Some(dependencies) = dependencies.as_array() else {
-                    continue;
-                };
-                let Ok(group) = GroupName::from_str(group) else {
-                    continue;
-                };
-
-                if !find_dependencies(name, marker, dependencies).is_empty() {
-                    types.push(DependencyType::Group(group));
-                }
-            }
-        }
-
-        // Check `tool.uv.dev-dependencies`.
-        if let Some(dev_dependencies) = self
+    /// Iterate over supported dependency arrays with their validated scope names.
+    fn dependency_arrays(&self) -> impl Iterator<Item = (DependencyType, &Array)> {
+        let project = self.doc.get("project").and_then(Item::as_table);
+        let production = project
+            .and_then(|project| project.get("dependencies"))
+            .and_then(Item::as_array)
+            .map(|dependencies| (DependencyType::Production, dependencies));
+        let optional = project
+            .and_then(|project| project.get("optional-dependencies"))
+            .and_then(Item::as_table)
+            .into_iter()
+            .flat_map(|extras| extras.iter())
+            .filter_map(|(extra, dependencies)| {
+                Some((
+                    DependencyType::Optional(ExtraName::from_str(extra).ok()?),
+                    dependencies.as_array()?,
+                ))
+            });
+        let groups = self
+            .doc
+            .get("dependency-groups")
+            .and_then(Item::as_table)
+            .into_iter()
+            .flat_map(|groups| groups.iter())
+            .filter_map(|(group, dependencies)| {
+                Some((
+                    DependencyType::Group(GroupName::from_str(group).ok()?),
+                    dependencies.as_array()?,
+                ))
+            });
+        let dev = self
             .doc
             .get("tool")
             .and_then(Item::as_table)
@@ -1348,12 +1283,29 @@ impl PyProjectTomlMut {
             .and_then(Item::as_table)
             .and_then(|uv| uv.get("dev-dependencies"))
             .and_then(Item::as_array)
-            && !find_dependencies(name, marker, dev_dependencies).is_empty()
-        {
-            types.push(DependencyType::Dev);
-        }
+            .map(|dependencies| (DependencyType::Dev, dependencies));
+        production
+            .into_iter()
+            .chain(optional)
+            .chain(groups)
+            .chain(dev)
+    }
 
-        types
+    /// Returns all the places in this `pyproject.toml` that contain a dependency with the given
+    /// name.
+    ///
+    /// This method searches `project.dependencies`, `project.optional-dependencies`,
+    /// `dependency-groups`, and `tool.uv.dev-dependencies`.
+    pub fn find_dependency(
+        &self,
+        name: &PackageName,
+        marker: Option<&MarkerTree>,
+    ) -> Vec<DependencyType> {
+        self.dependency_arrays()
+            .filter_map(|(kind, dependencies)| {
+                (!find_dependencies(name, marker, dependencies).is_empty()).then_some(kind)
+            })
+            .collect()
     }
 
     pub fn version(&mut self) -> Result<Version, Error> {
