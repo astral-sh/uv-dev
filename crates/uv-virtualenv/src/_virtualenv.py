@@ -118,11 +118,4 @@ class _Finder:
         return module
 
 
-def patch():
-    """Install the distutils hook once, including across layered site directories."""
-    if not any(isinstance(finder, _Finder) for finder in sys.meta_path):
-        sys.meta_path.insert(0, _Finder())
-
-
-# Legacy .pth files import this module before processing later startup hooks.
-patch()
+sys.meta_path.insert(0, _Finder())
