@@ -16,6 +16,35 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
 
+/// A PATH separator in an ancestor remains visible in the path-join diagnostic.
+#[cfg(unix)]
+#[test]
+fn run_with_path_separator_in_working_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project:bad");
+    project.create_dir_all()?;
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run().current_dir(&project)
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--offline").arg("python").arg("-c").arg("pass"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    error: Failed to construct `PATH` for command: cannot include directory `[TEMP_DIR]/project:bad/.venv/bin`
+      cause: path segment contains separator `:`
+    "#);
+    Ok(())
+}
+
 #[test]
 fn run_with_python_version() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11", "3.9"]);

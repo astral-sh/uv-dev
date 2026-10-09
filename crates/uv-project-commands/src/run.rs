@@ -1327,7 +1327,7 @@ fn path_join_error_context(paths: impl IntoIterator<Item = PathBuf>) -> String {
     {
         format!(
             "Failed to construct `PATH` for command: cannot include directory `{}`",
-            path.user_display()
+            path.simplified_display()
         )
     } else {
         "Failed to construct `PATH` for command".to_string()
