@@ -430,3 +430,48 @@ impl Drop for LockedFile {
         }
     }
 }
+
+#[cfg(all(test, feature = "tokio"))]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::runtime::Builder;
+
+    use super::{LockedFile, LockedFileError, LockedFileMode};
+
+    #[test]
+    fn cancelled_waiter_releases_blocking_worker() -> Result<(), LockedFileError> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("resource.lock");
+        let holder = LockedFile::acquire_no_wait(&path, LockedFileMode::Exclusive, "holder")
+            .expect("the uncontended lock must be available");
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()?;
+
+        let (timed_out, worker_available) = runtime.block_on(async {
+            let timed_out = tokio::time::timeout(
+                Duration::from_millis(100),
+                LockedFile::acquire(&path, LockedFileMode::Exclusive, "waiter"),
+            )
+            .await
+            .is_err();
+            let worker_available =
+                tokio::time::timeout(Duration::from_secs(1), tokio::task::spawn_blocking(|| ()))
+                    .await
+                    .is_ok_and(|result| result.is_ok());
+            (timed_out, worker_available)
+        });
+
+        // Release the holder before shutdown so a failing blocking waiter cannot hang the test.
+        drop(holder);
+        runtime.shutdown_timeout(Duration::from_secs(1));
+        assert!(timed_out, "the conflicting acquisition must time out");
+        assert!(
+            worker_available,
+            "a cancelled waiter must release the worker"
+        );
+        Ok(())
+    }
+}
