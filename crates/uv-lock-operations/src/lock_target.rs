@@ -312,12 +312,12 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Return the `Requires-Python` bound for the [`LockTarget`].
-    pub fn requires_python(self) -> Result<Option<RequiresPython>, LockError> {
+    pub fn requires_python(self, sources: &NoSources) -> Result<Option<RequiresPython>, LockError> {
         match self {
             Self::Workspace(workspace) => {
                 // When locking, don't try to enforce requires-python bounds that appear on groups
                 let groups = DependencyGroupsWithDefaults::none();
-                Ok(find_requires_python(workspace, &groups)?)
+                Ok(find_requires_python(workspace, &groups, sources)?)
             }
             Self::Script(script) => Ok(script
                 .metadata

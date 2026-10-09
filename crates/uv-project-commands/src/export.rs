@@ -310,12 +310,7 @@ pub async fn export(
             None
         }
     };
-    let group_workspace = match (&source, &workspace_group) {
-        (ExportSource::Manifest(ExportTarget::Project(project)), Some(group)) => {
-            Some(group.scoped_workspace(project.workspace()))
-        }
-        _ => None,
-    };
+
     if let Some(group) = &workspace_group
         && (group.name.is_some())
         && package.is_empty()
@@ -325,6 +320,12 @@ pub async fn export(
             package.extend(group.members.iter().cloned());
         }
     }
+    let group_workspace = match (&source, &workspace_group) {
+        (ExportSource::Manifest(ExportTarget::Project(project)), Some(group)) => {
+            Some(group.scoped_workspace(project.workspace(), &selection_members))
+        }
+        _ => None,
+    };
 
     let resolved_lock = match &source {
         ExportSource::Lockfile { workspace, .. } => workspace.lock().clone(),
@@ -368,6 +369,7 @@ pub async fn export(
                                     .unwrap_or_else(|| project.workspace()),
                             ),
                             &interpreter_groups,
+                            &settings.sources,
                             project_dir,
                             config_discovery,
                         )

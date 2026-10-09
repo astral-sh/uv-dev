@@ -13,7 +13,7 @@ use uv_cache_key::{cache_digest, cache_name};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
-    ExtrasSpecification, Modifications, Reinstall, TargetTriple, Upgrade,
+    ExtrasSpecification, Modifications, NoSources, Reinstall, TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
@@ -833,6 +833,7 @@ impl ProjectEnvironment {
         target: ProjectEnvironmentTarget<'_>,
         frozen_target: Option<InstallTarget<'_>>,
         groups: &DependencyGroupsWithDefaults,
+        sources: &NoSources,
         python: Option<PythonRequest>,
         install_mirrors: &PythonInstallMirrors,
         client_builder: &BaseClientBuilder<'_>,
@@ -884,6 +885,7 @@ impl ProjectEnvironment {
                 python,
                 target.workspace(),
                 groups,
+                sources,
                 target.install_path(),
                 config_discovery,
             )

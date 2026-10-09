@@ -536,6 +536,7 @@ async fn lock_and_sync(
             python.as_deref().map(PythonRequest::parse),
             Some(project.workspace()),
             &groups,
+            &settings.resolver.sources,
             project_dir,
             config_discovery,
         )
@@ -563,6 +564,7 @@ async fn lock_and_sync(
             ProjectEnvironmentTarget::from(project.workspace()),
             None,
             &groups,
+            &settings.resolver.sources,
             python.as_deref().map(PythonRequest::parse),
             &install_mirrors,
             &client_builder,

@@ -128,6 +128,7 @@ pub async fn metadata(
                             python.as_deref().map(PythonRequest::parse),
                             Some(workspace),
                             &groups,
+                            &settings.sources,
                             project_dir,
                             config_discovery,
                         )
@@ -215,6 +216,7 @@ pub async fn metadata(
                     ProjectEnvironmentTarget::from(*workspace),
                     None,
                     &groups,
+                    &settings.sources,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
                     &client_builder,
@@ -256,6 +258,7 @@ pub async fn metadata(
                 },
                 Some(install_target),
                 &groups,
+                &settings.sources,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
                 &client_builder,

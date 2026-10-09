@@ -675,7 +675,7 @@ pub async fn run(
             }
             let group_workspace = workspace_group
                 .as_ref()
-                .map(|group| group.scoped_workspace(project.workspace()));
+                .map(|group| group.scoped_workspace(project.workspace(), &selection_members));
             let environment_workspace = group_workspace
                 .as_ref()
                 .unwrap_or_else(|| project.workspace());
@@ -720,6 +720,7 @@ pub async fn run(
                     python.as_deref().map(PythonRequest::parse),
                     Some(environment_workspace),
                     &groups,
+                    &settings.resolver.sources,
                     project_dir,
                     config_discovery,
                 )
@@ -759,6 +760,7 @@ pub async fn run(
                     ProjectEnvironmentTarget::from(environment_workspace),
                     None,
                     &groups,
+                    &settings.resolver.sources,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
                     &client_builder,

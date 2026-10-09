@@ -91,11 +91,6 @@ pub struct WorkspaceResolution {
 }
 
 impl Workspace {
-    /// Validate and resolve the named groups declared by the workspace root.
-    fn workspace_groups(&self) -> Result<Vec<ResolvedWorkspaceGroup>, WorkspaceError> {
-        self.workspace_groups_with_sources(&NoSources::None)
-    }
-
     /// Resolve groups using the source policy of the current operation.
     pub fn workspace_groups_with_sources(
         &self,
@@ -398,11 +393,12 @@ impl Workspace {
     /// Return the Python domain of a scoped or grouped workspace.
     pub fn workspace_group_requires_python(
         &self,
+        sources: &NoSources,
     ) -> Result<Option<RequiresPython>, WorkspaceError> {
         if let Some(requires_python) = self.resolution_requires_python() {
             return Ok(Some(requires_python.clone()));
         }
-        let groups = self.workspace_groups()?;
+        let groups = self.workspace_groups_with_sources(sources)?;
         Ok(RequiresPython::union(
             groups.iter().map(|group| &group.requires_python),
         ))

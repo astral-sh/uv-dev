@@ -2489,3 +2489,166 @@ fn workspace_groups_no_build_transitive_dynamic_metadata() -> Result<()> {
     insta::assert_snapshot!(context.read("child/metadata-hook-called"), @"called");
     Ok(())
 }
+
+/// Editing and tree discovery honor disabled workspace source overrides before choosing Python.
+#[test]
+fn workspace_groups_no_sources_editing_and_tree() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "workspace-group-no-sources-discovery"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.leaf.versions."1.0.0"]
+        sdist = false
+        [packages.extra-leaf.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = "<3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args([
+        "--package", "app", "--no-sources", "--no-sync", "extra-leaf",
+    ]).arg("--default-index").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.remove().args([
+        "--package", "app", "--no-sources", "--no-sync", "extra-leaf",
+    ]).arg("--default-index").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.tree().args([
+        "--no-sources", "--locked", "--package", "app",
+    ]).arg("--default-index").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    app v0.1.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A selected transitive member's default groups narrow the named context's interpreter domain.
+#[test]
+fn workspace_groups_selected_transitive_member_group_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "common"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [[tool.uv.workspace.groups]]
+        name = "common"
+        members = ["common"]
+        [tool.uv.sources]
+        common = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["common"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("common/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "common"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+        default-groups = ["test"]
+        [tool.uv.dependency-groups]
+        test = { requires-python = ">=3.13" }
+    "#})?;
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        context
+            .temp_dir
+            .child("wheels/leaf-1.0.0-py3-none-any.whl")
+            .path(),
+        "leaf",
+        "1.0.0",
+        "leaf-1.0.0",
+        "",
+        &[],
+    )?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--workspace-group", "main", "--package", "common",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--workspace-group", "main", "--package", "common",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    Ok(())
+}

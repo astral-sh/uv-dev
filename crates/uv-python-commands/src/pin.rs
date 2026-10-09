@@ -8,7 +8,7 @@ use uv_python_managed::downloads::ManagedPythonDownloadList;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::DependencyGroupsWithDefaults;
+use uv_configuration::{DependencyGroupsWithDefaults, NoSources};
 use uv_fs::Simplified;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_python_discovery::PythonInstallation;
@@ -347,7 +347,8 @@ fn assert_pin_compatible_with_project(pin: &Pin, virtual_project: &VirtualProjec
                 project_workspace.workspace().install_path().display()
             );
 
-            let requires_python = find_requires_python(project_workspace.workspace(), &groups)?;
+            let requires_python =
+                find_requires_python(project_workspace.workspace(), &groups, &NoSources::None)?;
             (requires_python, "project")
         }
         VirtualProject::NonProject(workspace) => {
@@ -355,7 +356,7 @@ fn assert_pin_compatible_with_project(pin: &Pin, virtual_project: &VirtualProjec
                 "Discovered virtual workspace at: {}",
                 workspace.install_path().display()
             );
-            let requires_python = find_requires_python(workspace, &groups)?;
+            let requires_python = find_requires_python(workspace, &groups, &NoSources::None)?;
             (requires_python, "workspace")
         }
     };

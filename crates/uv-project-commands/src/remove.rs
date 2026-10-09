@@ -247,6 +247,7 @@ pub async fn remove(
                     python.as_deref().map(PythonRequest::parse),
                     Some(project.workspace()),
                     &groups,
+                    &settings.resolver.sources,
                     project_dir,
                     config_discovery,
                 )
@@ -275,6 +276,7 @@ pub async fn remove(
                     ProjectEnvironmentTarget::from(project.workspace()),
                     None,
                     &groups,
+                    &settings.resolver.sources,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
                     &client_builder,

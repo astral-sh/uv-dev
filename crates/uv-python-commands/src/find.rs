@@ -4,7 +4,7 @@ use std::path::Path;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
+use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults, NoSources};
 use uv_errors::ErrorWithHints;
 use uv_fs::Simplified;
 use uv_python_discovery::ConfigDiscovery;
@@ -79,6 +79,7 @@ pub async fn find(
         request.map(|request| PythonRequest::parse(&request)),
         project.as_ref().map(VirtualProject::workspace),
         &groups,
+        &NoSources::None,
         project_dir,
         config_discovery,
     )

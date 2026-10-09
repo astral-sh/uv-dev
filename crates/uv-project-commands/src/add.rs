@@ -317,6 +317,7 @@ pub async fn add(
                 python.as_deref().map(PythonRequest::parse),
                 Some(project.workspace()),
                 &defaulted_groups,
+                &settings.resolver.sources,
                 project_dir,
                 config_discovery,
             )
@@ -348,6 +349,7 @@ pub async fn add(
                 ProjectEnvironmentTarget::from(project.workspace()),
                 None,
                 &defaulted_groups,
+                &settings.resolver.sources,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
                 &client_builder,

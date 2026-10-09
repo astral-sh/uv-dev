@@ -134,6 +134,7 @@ pub async fn audit(
                     None,
                     Some(workspace),
                     &groups,
+                    &settings.sources,
                     project_dir,
                     config_discovery,
                 )

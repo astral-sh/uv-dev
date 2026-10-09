@@ -154,6 +154,7 @@ pub(crate) async fn venv(
         python_request,
         project.as_ref().map(VirtualProject::workspace),
         &groups,
+        &NoSources::None,
         project_dir,
         config_discovery,
     )

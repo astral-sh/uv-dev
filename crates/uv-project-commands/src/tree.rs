@@ -151,6 +151,7 @@ pub async fn tree(
                     python.as_deref().map(PythonRequest::parse),
                     Some(workspace),
                     &groups,
+                    &settings.sources,
                     project_dir,
                     config_discovery,
                 )

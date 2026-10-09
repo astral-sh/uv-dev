@@ -10,7 +10,7 @@ use itertools::Itertools;
 use tracing::debug;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::DependencyGroupsWithDefaults;
+use uv_configuration::{DependencyGroupsWithDefaults, NoSources};
 use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
 use uv_pep440::TildeVersionSpecifier;
@@ -93,11 +93,12 @@ impl ProjectPythonRequest {
         python_request: Option<PythonRequest>,
         workspace: Option<&Workspace>,
         groups: &DependencyGroupsWithDefaults,
+        sources: &NoSources,
         project_dir: &Path,
         config_discovery: ConfigDiscovery,
     ) -> Result<Self, PythonSelectionError> {
         let requirement = workspace
-            .map(|workspace| find_workspace_python_requirement(workspace, groups))
+            .map(|workspace| find_workspace_python_requirement(workspace, groups, sources))
             .transpose()?
             .flatten();
 
@@ -246,9 +247,12 @@ impl ProjectPythonRequest {
 pub fn find_requires_python(
     workspace: &Workspace,
     groups: &DependencyGroupsWithDefaults,
+    sources: &NoSources,
 ) -> Result<Option<RequiresPython>, PythonSelectionError> {
-    Ok(find_workspace_python_requirement(workspace, groups)?
-        .map(|requirement| requirement.requires_python))
+    Ok(
+        find_workspace_python_requirement(workspace, groups, sources)?
+            .map(|requirement| requirement.requires_python),
+    )
 }
 
 /// Compute the workspace's Python requirement together with its contributing declarations.
@@ -257,9 +261,12 @@ pub fn find_requires_python(
 fn find_workspace_python_requirement(
     workspace: &Workspace,
     groups: &DependencyGroupsWithDefaults,
+    sources: &NoSources,
 ) -> Result<Option<ProjectPythonRequirement>, PythonSelectionError> {
     let requires_python = workspace.requires_python(groups)?;
-    if let Some(workspace_group_requires_python) = workspace.workspace_group_requires_python()? {
+    if let Some(workspace_group_requires_python) =
+        workspace.workspace_group_requires_python(sources)?
+    {
         let Some(requires_python_intersection) = RequiresPython::intersection(
             std::iter::once(workspace_group_requires_python.specifiers()).chain(
                 requires_python

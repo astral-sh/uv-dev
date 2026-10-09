@@ -133,10 +133,13 @@ impl From<ResolvedWorkspaceGroup> for CommandWorkspaceSelection {
 }
 
 impl CommandWorkspaceSelection {
-    pub(crate) fn scoped_workspace(&self, workspace: &Workspace) -> Workspace {
+    pub(crate) fn scoped_workspace(
+        &self,
+        workspace: &Workspace,
+        members: &BTreeSet<PackageName>,
+    ) -> Workspace {
         workspace.with_resolution(WorkspaceResolution {
-            roots: self
-                .members
+            roots: members
                 .iter()
                 .cloned()
                 .map(|name| (name, self.environments))
@@ -349,6 +352,7 @@ pub async fn lock(
                     python.as_deref().map(PythonRequest::parse),
                     Some(workspace),
                     &groups,
+                    &settings.sources,
                     project_dir,
                     config_discovery,
                 )

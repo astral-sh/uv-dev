@@ -192,12 +192,7 @@ pub async fn sync(
             None
         }
     };
-    let group_workspace = match (&target, &workspace_group) {
-        (SyncTarget::Manifest(SyncManifest::Project(project)), Some(group)) => {
-            Some(group.scoped_workspace(project.workspace()))
-        }
-        _ => None,
-    };
+
     if let Some(group) = &workspace_group
         && (group.name.is_some())
         && package.is_empty()
@@ -207,6 +202,12 @@ pub async fn sync(
             package.extend(group.members.iter().cloned());
         }
     }
+    let group_workspace = match (&target, &workspace_group) {
+        (SyncTarget::Manifest(SyncManifest::Project(project)), Some(group)) => {
+            Some(group.scoped_workspace(project.workspace(), &selection_members))
+        }
+        _ => None,
+    };
 
     // Read the frozen lock before selecting an environment, since the selected member's default
     // groups can affect the Python requirement. Manifest-free targets were read during discovery.
@@ -306,6 +307,7 @@ pub async fn sync(
                         identify_installation_target(&target, lock, all_packages, &package)
                     }),
                 &groups,
+                &settings.resolver.sources,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
                 &client_builder,
@@ -338,6 +340,7 @@ pub async fn sync(
                     &package,
                 )),
                 &groups,
+                &settings.resolver.sources,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
                 &client_builder,
