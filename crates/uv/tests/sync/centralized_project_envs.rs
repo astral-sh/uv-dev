@@ -5,6 +5,11 @@ use insta::assert_snapshot;
 use serde_json::json;
 use std::process::Command;
 
+#[cfg(windows)]
+use anyhow::Context;
+#[cfg(windows)]
+use fs_err::os::windows::fs::OpenOptionsExt;
+
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 #[cfg(unix)]
@@ -700,7 +705,8 @@ fn run_and_sync_link_failure_reporting() -> Result<()> {
             uv_snapshot!(context.filters(), command, @r#"
             exit_code: 0 (success)
             ----- stderr -----
-            warning: Failed to write the environment path: failed to rename file from [TEMP_DIR]/[TMP] to [VENV]/: Is a directory (os error 21)
+            warning: Failed to write the environment path
+              cause: failed to rename file from [TEMP_DIR]/[TMP] to [VENV]/: Is a directory (os error 21)
             Resolved 2 packages in [TIME]
             Checked 1 package in [TIME]
             "#);
@@ -773,13 +779,68 @@ fn sync_centralized_env_link_creation_failure_preserves_cached_target() -> Resul
         .arg("centralized-project-envs"), @r#"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Failed to write the environment path: Permission denied (os error 13) at path "[TEMP_DIR]/[TMP]"
+    warning: Failed to write the environment path
+      cause: Permission denied (os error 13) at path "[TEMP_DIR]/[TMP]"
     Resolved 1 package in [TIME]
     Checked in [TIME]
     "#);
 
     assert_eq!(target, fs_err::read_link(environment.path())?);
     assert!(target.join("pyvenv.cfg").is_file());
+    Ok(())
+}
+
+/// A readable path file can select the cached environment while denying replacement.
+#[cfg(windows)]
+#[test]
+fn sync_centralized_env_path_file_persist_failure_reports_cause() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_filtered_centralized_environment_hashes();
+    write_project(&context, ">=3.12", &[])?;
+    context
+        .sync()
+        .arg("--offline")
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .assert()
+        .success();
+
+    let environment = context.temp_dir.child(".venv");
+    let target = fs_err::read_link(environment.path())?;
+    let target_text = target.to_str().context("cache path must be UTF-8")?;
+    uv_fs::remove_symlink(environment.path())?;
+    environment.write_str(target_text)?;
+    let locked = fs_err::OpenOptions::new()
+        .read(true)
+        .share_mode(1) // FILE_SHARE_READ permits discovery but denies deletion and replacement.
+        .open(environment.path())?;
+
+    // Match the actual filesystem cause without depending on the Windows error wording.
+    let failure = uv_fs::tempfile_in(context.temp_dir.path())?
+        .persist(environment.path())
+        .expect_err("path file is open without delete sharing");
+    assert!(failure.error.raw_os_error().is_some());
+    let os_error = regex::escape(&failure.error.to_string());
+    drop(failure);
+    let mut filters = context.filters();
+    filters.insert(0, (&os_error, "[PERSIST OS ERROR]"));
+
+    uv_snapshot!(filters, context.sync()
+        .arg("--offline")
+        .arg("--preview-features")
+        .arg("centralized-project-envs"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Failed to write the environment path
+      cause: Failed to persist temporary file to `[VENV]/`
+      cause: [PERSIST OS ERROR]
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    assert_eq!(context.read(".venv"), target_text);
+    assert!(target.join("pyvenv.cfg").is_file());
+    drop(locked);
     Ok(())
 }
 
