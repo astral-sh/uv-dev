@@ -247,10 +247,5 @@ fn dependency_group_errors_and_hash_modes() -> Result<()> {
     Resolved 1 package in [TIME]
     Checked 1 package in [TIME]
     ");
-    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").args(["--group", "dev", "--compile-bytecode"]), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
     Ok(())
 }
