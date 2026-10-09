@@ -49033,13 +49033,13 @@ fn lock_local_python_script_override_dependency_change() -> Result<()> {
             "script.py",
             "--offline",
             "--preview-features",
-            "resolution-inputs",
+            "lock-without-metadata",
         ])
         .assert()
         .success();
     local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.12", ">=3.13"))?;
     uv_snapshot!(context.filters(), context.lock()
-        .args(["--script", "script.py", "--locked", "--offline", "--preview-features", "resolution-inputs"]), @r"
+        .args(["--script", "script.py", "--locked", "--offline", "--preview-features", "lock-without-metadata"]), @r"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
@@ -49261,6 +49261,7 @@ fn lock_local_python_configured_python_requirement() -> Result<()> {
     "#})?;
     context
         .lock()
+        .arg("--no-build")
         .arg("--index-url")
         .arg(server.index_url())
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
@@ -49268,7 +49269,7 @@ fn lock_local_python_configured_python_requirement() -> Result<()> {
         .success();
     uv_snapshot!(context.filters(), context.lock()
         .arg("--index-url").arg(server.index_url())
-        .args(["--check", "--offline", "--no-cache"])
+        .args(["--locked", "--no-build", "--offline", "--no-cache"])
         .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
     exit_code: 0 (success)
     ----- stderr -----
@@ -49322,6 +49323,7 @@ fn lock_local_python_configured_absent_python_requirement() -> Result<()> {
     "#})?;
     context
         .lock()
+        .arg("--no-build")
         .arg("--index-url")
         .arg(server.index_url())
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
@@ -49329,7 +49331,7 @@ fn lock_local_python_configured_absent_python_requirement() -> Result<()> {
         .success();
     uv_snapshot!(context.filters(), context.lock()
         .arg("--index-url").arg(server.index_url())
-        .args(["--check", "--offline", "--no-cache"])
+        .args(["--locked", "--no-build", "--offline", "--no-cache"])
         .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
     exit_code: 0 (success)
     ----- stderr -----

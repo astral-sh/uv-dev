@@ -6109,13 +6109,24 @@ impl Lock {
         package: &Package,
         database: &DistributionDatabase<'_, Context>,
     ) -> Result<Option<SourceTreeRequiresDist>, LockError> {
-        // Configured metadata takes precedence over every authored field, including an omitted
-        // Python bound. The full metadata path applies that override before reading or building.
-        if database
-            .dependency_metadata(&package.id.name, package.id.version.as_ref())
-            .is_some()
+        // Configured metadata is authoritative even when builds are disabled; obtaining it does
+        // not require selecting or preparing a source distribution.
+        if let Some(metadata) =
+            database.dependency_metadata(&package.id.name, package.id.version.as_ref())
         {
-            return Ok(None);
+            return Ok(Some(SourceTreeRequiresDist {
+                version: Some(metadata.version),
+                requires_python: metadata.requires_python,
+                metadata: RequiresDist {
+                    name: metadata.name,
+                    requires_dist: Box::into_iter(metadata.requires_dist)
+                        .map(Requirement::from)
+                        .collect(),
+                    provides_extra: metadata.provides_extra,
+                    dependency_groups: BTreeMap::new(),
+                    dynamic: metadata.dynamic,
+                },
+            }));
         }
         let parent = root.join(source_tree);
         let path = parent.join("pyproject.toml");
