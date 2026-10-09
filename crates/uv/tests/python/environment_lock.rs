@@ -106,6 +106,38 @@ async fn explicit_venv_replacement_waits_through_parent_alias() -> Result<()> {
 }
 
 #[tokio::test]
+async fn explicit_venv_replacement_waits_with_different_temporary_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.venv().assert().success();
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
+    let destination = fs_err::canonicalize(context.venv.path())?;
+    let marker = destination.join("owner");
+    fs_err::write(&marker, "owned")?;
+    let alternate_temporary_directory = context.root.child("alternate-tmp");
+    alternate_temporary_directory.create_dir_all()?;
+    let alternate_temporary_directory = fs_err::canonicalize(alternate_temporary_directory.path())?;
+    let guard = EnvironmentLock::acquire(std::slice::from_ref(&destination), &cache).await?;
+
+    let mut command = context.venv();
+    command
+        .arg(&destination)
+        .args(["--clear", "--no-project"])
+        .env("TMPDIR", &alternate_temporary_directory)
+        .env("TMP", &alternate_temporary_directory)
+        .env("TEMP", &alternate_temporary_directory);
+    let mut replacement = QueuedCommand::spawn(command)?;
+    replacement.wait_for_destination(&destination).await?;
+    assert!(marker.is_file());
+    assert!(replacement.child.try_wait()?.is_none());
+
+    drop(guard);
+    replacement.finish().await?;
+    assert!(!marker.exists());
+    assert!(destination.join("pyvenv.cfg").is_file());
+    Ok(())
+}
+
+#[tokio::test]
 async fn separate_workspaces_wait_for_shared_environment_destination() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
     let first = context.temp_dir.child("first");
