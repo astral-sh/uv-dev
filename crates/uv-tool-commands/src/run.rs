@@ -25,7 +25,7 @@ use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
     IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    RequirementSource, RequiresPython, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_errors::HintOrdering;
 use uv_installer::{BuildSettings, InstallationStrategy, SatisfiesResult, SitePackages};
@@ -1030,7 +1030,11 @@ async fn get_or_create_environment(
         client_builder,
     )
     .await?;
-    if let Some(requires_python) = spec.requires_python.as_ref()
+    let requires_python = spec
+        .requires_python
+        .clone()
+        .map(RequiresPython::from_specifiers);
+    if let Some(requires_python) = requires_python.as_ref()
         && !requires_python.contains(interpreter.python_version())
     {
         return Err(anyhow::anyhow!(
@@ -1108,7 +1112,10 @@ async fn get_or_create_environment(
                             .unwrap_or(&PythonRequest::Any)
                             .with_default_arch(python_arch.map(PythonArchitecture::into_inner)),
                         cache,
-                    )
+                    ) && requires_python.as_ref().is_none_or(|requires_python| {
+                        requires_python
+                            .contains(environment.environment().interpreter().python_version())
+                    })
                 });
 
             // Check if the installed packages meet the requirements.
@@ -1236,6 +1243,7 @@ async fn get_or_create_environment(
                 let Some(interpreter) = refine_interpreter(
                     &interpreter,
                     python_request.as_ref(),
+                    requires_python.as_ref(),
                     &err,
                     client_builder,
                     &reporter,

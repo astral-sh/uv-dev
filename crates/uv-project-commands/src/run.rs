@@ -55,6 +55,7 @@ use uv_python_discovery::VersionFileDiscoveryOptions;
 use uv_python_interpreter::{Interpreter, PyVenvConfiguration, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
+    PythonVariant, VersionRequest,
 };
 use uv_redacted::DisplaySafeUrl;
 use uv_requirements::{
@@ -873,7 +874,7 @@ pub async fn run(
                     .await?
                     .filter(|file| match (file.version(), requires_python.as_ref()) {
                         (Some(request), Some(requires_python)) => {
-                            request.intersects_requires_python(requires_python)
+                            request.intersects_specifiers(requires_python.specifiers())
                         }
                         _ => true,
                     })
@@ -882,7 +883,10 @@ pub async fn run(
                         spec.as_ref()
                             .and_then(|spec| spec.requires_python.as_ref())
                             .map(|requires_python| {
-                                PythonRequest::parse(&requires_python.to_string())
+                                PythonRequest::Version(VersionRequest::from_specifiers(
+                                    requires_python.clone(),
+                                    PythonVariant::default(),
+                                ))
                             })
                     })
                 };
@@ -936,7 +940,8 @@ pub async fn run(
     );
 
     if let Some(requires_python) = spec.as_ref().and_then(|spec| spec.requires_python.as_ref())
-        && !requires_python.contains(base_interpreter.python_version())
+        && !RequiresPython::from_specifiers(requires_python.clone())
+            .contains(base_interpreter.python_version())
     {
         bail!(
             "Python {} is incompatible with the `requires-python` value from `--with-requirements`: `{requires_python}`",

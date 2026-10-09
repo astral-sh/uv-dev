@@ -3126,12 +3126,9 @@ fn run_pep723_requirements_respects_requires_python() -> Result<()> {
         .arg("python")
         .arg("-c")
         .arg("import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     3.11
-
-    ----- stderr -----
     ");
 
     Ok(())
@@ -7923,5 +7920,25 @@ fn run_centralized_environment_path_file() -> Result<()> {
     ----- stderr -----
     warning: Using incompatible environment (`project-cp3.12.[X]-[HASH]`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.11`)
     "#);
+    Ok(())
+}
+
+#[test]
+fn run_pep723_requirements_empty_python_bound() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = ""
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "requirements.py", "python", "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12
+    ");
     Ok(())
 }

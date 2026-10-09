@@ -648,6 +648,7 @@ pub(super) fn tool_environment_spec<'lock>(
 pub(super) async fn refine_interpreter(
     interpreter: &Interpreter,
     python_request: Option<&PythonRequest>,
+    requires_python_bound: Option<&RequiresPython>,
     err: &ResolveError,
     client_builder: &BaseClientBuilder<'_>,
     reporter: &PythonDownloadReporter,
@@ -699,10 +700,23 @@ pub(super) async fn refine_interpreter(
         Bound::Unbounded => unreachable!("`requires-python` should never be unbounded"),
     };
 
+    let specifiers = VersionSpecifiers::from_iter(
+        [lower_bound, upper_bound].into_iter().chain(
+            requires_python_bound
+                .into_iter()
+                .flat_map(|requires_python| requires_python.specifiers().iter().cloned()),
+        ),
+    );
     let requires_python_request = PythonRequest::Version(VersionRequest::from_specifiers(
-        VersionSpecifiers::from_iter([lower_bound, upper_bound]),
+        specifiers,
         PythonVariant::default(),
     ));
+
+    if requires_python_bound.is_some_and(|requires_python| {
+        !requires_python_request.intersects_specifiers(requires_python.specifiers())
+    }) {
+        return Ok(None);
+    }
 
     debug!("Refining interpreter with: {requires_python_request}");
 

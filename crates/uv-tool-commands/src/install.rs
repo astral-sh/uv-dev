@@ -18,7 +18,7 @@ use uv_configuration::{
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirementSpecification,
+    RequirementSource, RequiresPython, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -383,7 +383,11 @@ pub async fn install(
     )
     .await?;
 
-    if let Some(requires_python) = spec.requires_python.as_ref()
+    let requires_python = spec
+        .requires_python
+        .clone()
+        .map(RequiresPython::from_specifiers);
+    if let Some(requires_python) = requires_python.as_ref()
         && !requires_python.contains(interpreter.python_version())
     {
         bail!(
@@ -527,7 +531,10 @@ pub async fn install(
         installed_tools
             .get_environment(package_name, &cache)?
             .filter(|environment| {
-                existing_environment_usable(
+                requires_python.as_ref().is_none_or(|requires_python| {
+                    requires_python
+                        .contains(environment.environment().interpreter().python_version())
+                }) && existing_environment_usable(
                     environment.environment(),
                     &interpreter,
                     package_name,
@@ -966,6 +973,7 @@ pub async fn install(
                         let Some(interpreter) = refine_interpreter(
                             &interpreter,
                             python_request.as_ref(),
+                            requires_python.as_ref(),
                             &err,
                             &client_builder,
                             &reporter,

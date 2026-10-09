@@ -38,7 +38,7 @@ use uv_python_discovery::PythonInstallation;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
-    PythonVersion, VersionRequest,
+    PythonVariant, PythonVersion, VersionRequest,
 };
 use uv_requirements::{
     GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
@@ -314,7 +314,10 @@ pub async fn pip_compile(
             // TODO(zanieb): We should consolidate `VersionRequest` and `PythonVersion`
             PythonRequest::Version(VersionRequest::from(version))
         } else if let Some(requires_python) = requires_python.as_ref() {
-            PythonRequest::parse(&requires_python.to_string())
+            PythonRequest::Version(VersionRequest::from_specifiers(
+                requires_python.clone(),
+                PythonVariant::default(),
+            ))
         } else {
             PythonRequest::default()
         };
@@ -340,12 +343,14 @@ pub async fn pip_compile(
         interpreter.sys_executable().user_display().cyan()
     );
 
+    let target_version = python_version
+        .as_ref()
+        .map_or(interpreter.python_version(), PythonVersion::version);
     if let Some(requires_python) = requires_python.as_ref()
-        && !requires_python.contains(interpreter.python_version())
+        && !RequiresPython::from_specifiers(requires_python.clone()).contains(target_version)
     {
         return Err(anyhow!(
-            "Python {} is incompatible with the PEP 723 `requires-python` value: `{requires_python}`",
-            interpreter.python_version()
+            "Python {target_version} is incompatible with the PEP 723 `requires-python` value: `{requires_python}`"
         ));
     }
 

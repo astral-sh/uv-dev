@@ -1,14 +1,18 @@
+use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 #[cfg(unix)]
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
@@ -3639,4 +3643,123 @@ async fn tool_run_latest_keyring_auth() {
      + executable-application==0.3.0
     Installed 1 executable: app
     ");
+}
+
+fn write_python_version_tool(wheels: &ChildPath, requires_python: Option<&str>) -> Result<()> {
+    let requires_python = requires_python.map(str::parse).transpose()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"bound-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        requires_python.as_ref(),
+        "py3-none-any",
+        &[
+            (
+                "bound_tool/cli.py",
+                "import sys\ndef main():\n    print(f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "bound_tool-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nbound-tool = bound_tool.cli:main\n",
+            ),
+        ],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    Ok(())
+}
+
+#[test]
+fn tool_pep723_requirements_reject_incompatible_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    write_python_version_tool(&wheels, None)?;
+    context
+        .tool_install()
+        .args([
+            "--python",
+            "3.12",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "bound-tool",
+        ])
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = "<3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run().args(["--with-requirements", "requirements.py", "--no-index", "--find-links", "wheels", "bound-tool"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.11
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + bound-tool==1.0.0
+    ");
+
+    context
+        .tool_install()
+        .args([
+            "--with-requirements",
+            "requirements.py",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "bound-tool",
+        ])
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), Command::new(bin.join(format!("bound-tool{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.11
+    ");
+    Ok(())
+}
+
+#[test]
+fn tool_pep723_requirements_bound_interpreter_refinement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_tool_dirs();
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    write_python_version_tool(&wheels, Some(">=3.12"))?;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = "<3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run().args(["--with-requirements", "requirements.py", "--no-index", "--find-links", "wheels", "bound-tool"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving tool dependencies
+      cause: Because bound-tool==1.0.0 requires Python >=3.12 and only bound-tool==1.0.0 is available, we can conclude that all versions of bound-tool cannot be used.
+             And because you require bound-tool, we can conclude that your requirements are unsatisfiable.
+    ");
+    uv_snapshot!(context.filters(), context.tool_install().args(["--with-requirements", "requirements.py", "--no-index", "--find-links", "wheels", "bound-tool"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because bound-tool==1.0.0 requires Python >=3.12 and only bound-tool==1.0.0 is available, we can conclude that all versions of bound-tool cannot be used.
+             And because you require bound-tool, we can conclude that your requirements are unsatisfiable.
+    ");
+    Ok(())
 }

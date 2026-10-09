@@ -19964,3 +19964,49 @@ fn overrides_preserve_alternative_optional_extras() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn compile_pep723_target_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = "<3.12"
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile().args(["--python", "3.12", "--python-version", "3.11", "--no-header", "--no-annotate", "requirements.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn compile_pep723_empty_python_bound() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = ""
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile().args(["--no-header", "--no-annotate", "requirements.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
