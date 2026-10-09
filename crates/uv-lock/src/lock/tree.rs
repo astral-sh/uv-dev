@@ -161,7 +161,11 @@ impl<'env> TreeDisplay<'env> {
                 .dependency_groups
                 .iter()
                 .filter_map(|(group, deps)| {
-                    if groups.contains(group) {
+                    if groups.contains(group)
+                        || lock.includes_workspace_group(dist.name(), group, |group| {
+                            groups.contains(group)
+                        })
+                    {
                         Some(deps.iter().map(move |dep| (group, dep)))
                     } else {
                         None
@@ -1311,7 +1315,15 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
         let groups = package
             .dependency_groups
             .keys()
-            .filter(|group| self.tree.groups.contains(group))
+            .filter(|group| {
+                self.tree.groups.contains(group)
+                    || self
+                        .tree
+                        .lock
+                        .includes_workspace_group(package.name(), group, |group| {
+                            self.tree.groups.contains(group)
+                        })
+            })
             .cloned()
             .collect::<Vec<_>>();
 

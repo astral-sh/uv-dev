@@ -246,6 +246,13 @@ fn write_manifest(writer: &mut LockWriter, manifest: &ResolverManifest) -> Resul
         }
     }
 
+    if !manifest.dependency_group_includes.is_empty() {
+        writer.table(&["manifest", "dependency-group-includes"])?;
+        for (group, includes) in &manifest.dependency_group_includes {
+            write_serialized_array(writer, group.as_ref(), includes)?;
+        }
+    }
+
     if !manifest.group_requires_python.is_empty() {
         writer.table(&["manifest", "group-requires-python"])?;
         for (group, metadata) in &manifest.group_requires_python {

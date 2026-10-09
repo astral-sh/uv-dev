@@ -428,6 +428,12 @@ impl ValidatedLock {
                 );
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::MismatchedWorkspaceGroupIncludes => {
+                debug!(
+                    "Resolving despite existing lockfile due to mismatched workspace group references"
+                );
+                Ok(Self::Preferable(lock))
+            }
             SatisfiesResult::MismatchedStaticMetadata(expected, actual) => {
                 debug!(
                     "Resolving despite existing lockfile due to mismatched static metadata:\n  Requested: {:?}\n  Existing: {:?}",

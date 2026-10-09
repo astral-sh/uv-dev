@@ -113,11 +113,17 @@ pub trait Installable<'lock> {
     /// A `None` package represents groups defined directly on a non-project workspace root.
     fn includes_group(
         &self,
-        _package: Option<&PackageName>,
+        package: Option<&PackageName>,
         group: &GroupName,
         groups: &DependencyGroupsWithDefaults,
     ) -> bool {
         groups.contains(group)
+            || package.is_some_and(|package| {
+                self.lock()
+                    .includes_workspace_group(package, group, |group| {
+                        self.includes_group(None, group, groups)
+                    })
+            })
     }
 
     /// Return the [`PackageName`] of the target, if available.
@@ -279,6 +285,30 @@ trait InstallableExt<'lock>: Installable<'lock> {
         let validate_conflicts = !include_manifest && has_conflicts;
         let mut dependencies_for_conflict_validation = vec![];
 
+        let included_group_roots = self
+            .lock()
+            .workspace_group_roots(|group| {
+                include_manifest && self.includes_group(None, group, groups)
+            })
+            .into_iter()
+            .filter(|name| {
+                !roots.iter().any(|root| root.name() == *name)
+                    && group_root.is_none_or(|root| root.name() != *name)
+            })
+            .map(|name| {
+                self.lock()
+                    .find_by_name(name)
+                    .map_err(|_| LockErrorKind::MultipleRootPackages { name: name.clone() })?
+                    .ok_or_else(|| {
+                        LockError::from(LockErrorKind::MissingRootPackage { name: name.clone() })
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let group_roots = || {
+            group_root
+                .into_iter()
+                .chain(included_group_roots.iter().copied())
+        };
         let root = petgraph.add_node(Node::Root);
 
         match selection_context {
@@ -324,7 +354,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 }
             }
 
-            for dist in roots.iter().copied().chain(group_root) {
+            for dist in roots.iter().copied().chain(group_roots()) {
                 for group in dist
                     .dependency_groups
                     .keys()
@@ -341,7 +371,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
             .iter()
             .copied()
             .map(|dist| (dist, InstallableRootKind::Production))
-            .chain(group_root.map(|dist| (dist, InstallableRootKind::DependencyGroups)))
+            .chain(group_roots().map(|dist| (dist, InstallableRootKind::DependencyGroups)))
         {
             // Add the workspace package to the graph.
             let package_index = self.lock().by_id[&dist.id];
