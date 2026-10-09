@@ -48835,6 +48835,9 @@ fn lock_required_environment_preserves_inactive_package_pin() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["platform-only; sys_platform == 'win32'"]
+        [tool.uv]
+        override-dependencies = ["z", "a"]
+        exclude-dependencies = ["z", "a"]
     "#})?;
     context
         .lock()
@@ -48845,8 +48848,8 @@ fn lock_required_environment_preserves_inactive_package_pin() -> Result<()> {
         .assert()
         .success();
     pyproject.write_str(&format!(
-        "{}\n[tool.uv]\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
-        fs_err::read_to_string(pyproject.path())?
+        "{}\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
     ))?;
     uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
         .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
@@ -49097,12 +49100,13 @@ fn lock_required_environment_overridden_manifest_root() -> Result<()> {
         [dependency-groups]
         dev = ["example<2"]
         [tool.uv]
-        override-dependencies = ["example==2"]
+        override-dependencies = ["example>=2"]
         [tool.uv.workspace]
         members = []
     "#})?;
     context
         .lock()
+        .args(["--upgrade-package", "example==2"])
         .arg("--index-url")
         .arg(server.index_url())
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)

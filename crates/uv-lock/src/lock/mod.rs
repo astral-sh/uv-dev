@@ -3924,12 +3924,14 @@ impl Lock {
     /// edges, wheel preference checks must conservatively consider every required environment.
     pub fn root_activation_is_current(
         &self,
+        root: &Path,
+        requires_python: &RequiresPython,
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         requirements: &[Requirement],
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
         overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
-    ) -> bool {
+    ) -> Result<bool, LockError> {
         type Activation = BTreeMap<(PackageName, Vec<ExtraName>), MarkerTree>;
         fn activation(
             requirements: impl IntoIterator<Item = (PackageName, Vec<ExtraName>, MarkerTree)>,
@@ -3954,11 +3956,26 @@ impl Lock {
                 )
             }))
         }
-        if !self.manifest.overrides.iter().eq(overrides)
-            || !self.manifest.excludes.iter().eq(excludes)
+        let normalizer = RequirementNormalizer::new(root, requires_python);
+        let filter = ManifestFilter::from_lock(self);
+        if normalizer.overrides(
+            overrides
+                .iter()
+                .filter(|entry| filter.includes_override(entry))
+                .cloned(),
+        )? != normalizer.overrides(self.manifest.overrides.iter().cloned())?
+            || NormalizedExcludes::from(
+                excludes
+                    .iter()
+                    .filter(|entry| filter.includes_exclusion(entry))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ) != NormalizedExcludes::from(
+                self.manifest.excludes.iter().cloned().collect::<Vec<_>>(),
+            )
             || packages.keys().ne(self.workspace_members.keys())
         {
-            return false;
+            return Ok(false);
         }
 
         if locked(
@@ -3971,15 +3988,15 @@ impl Lock {
                 .iter()
                 .chain(self.manifest.dependency_groups.values().flatten()),
         ) {
-            return false;
+            return Ok(false);
         }
 
         for (name, member) in packages {
             let Some(package) = self.find_by_name(name).ok().flatten() else {
-                return false;
+                return Ok(false);
             };
             let Some(project) = &member.pyproject_toml().project else {
-                return false;
+                return Ok(false);
             };
             let mut current = Vec::new();
             for requirement in project.dependencies.iter().flatten().chain(
@@ -3990,7 +4007,7 @@ impl Lock {
             ) {
                 let Ok(requirement) = uv_pep508::Requirement::<VerbatimUrl>::from_str(requirement)
                 else {
-                    return false;
+                    return Ok(false);
                 };
                 current.push((
                     requirement.name,
@@ -4001,7 +4018,7 @@ impl Lock {
             let Ok(groups) =
                 FlatDependencyGroups::from_pyproject_toml(member.root(), member.pyproject_toml())
             else {
-                return false;
+                return Ok(false);
             };
             for (_, group) in groups {
                 current.extend(group.requirements.into_iter().map(|requirement| {
@@ -4026,10 +4043,10 @@ impl Lock {
                     )
                 });
             if activation(current) != activation(previous) {
-                return false;
+                return Ok(false);
             }
         }
-        true
+        Ok(true)
     }
 
     /// Recover package reachability while retaining the activation markers of requested extras.

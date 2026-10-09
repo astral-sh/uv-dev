@@ -882,12 +882,14 @@ async fn do_lock(
                         lock_required_environments.as_markers(),
                         lock_required_environments.as_markers().is_empty()
                             || lock.root_activation_is_current(
+                                target.install_path(),
+                                &requires_python,
                                 packages,
                                 &requirements,
                                 &dependency_groups,
                                 &overrides,
                                 &excludes,
-                            ),
+                            )?,
                         minimum_libc_version,
                     )
                 })
