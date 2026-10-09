@@ -87,24 +87,7 @@ impl FlatDependencyGroups {
             selected_groups
         });
 
-        let includes_root_group = pyproject_toml
-            .dependency_groups
-            .as_ref()
-            .is_some_and(|groups| {
-                groups.into_iter().any(|(group, _)| {
-                    selected_groups
-                        .as_ref()
-                        .is_none_or(|selected_groups| selected_groups.contains(group))
-                        && pyproject_toml
-                            .workspace_group_includes(group)
-                            .any(|(package, _)| package.is_none())
-                })
-            });
-        let root = (path != workspace.install_path() && includes_root_group)
-            .then(|| {
-                Self::from_pyproject_toml(workspace.install_path(), workspace.pyproject_toml())
-            })
-            .transpose()?;
+        let mut root: Option<Self> = None;
 
         let mut packages: BTreeMap<PackageName, Self> = BTreeMap::new();
         if let Some(groups) = &pyproject_toml.dependency_groups {
@@ -139,6 +122,20 @@ impl FlatDependencyGroups {
 
                 for (package, included_group) in pyproject_toml.workspace_group_includes(group) {
                     let Some(package) = package else {
+                        if path != workspace.install_path()
+                            && root
+                                .as_ref()
+                                .is_none_or(|groups| groups.get(included_group).is_none())
+                        {
+                            let included = Self::from_workspace_with_parents(
+                                workspace.install_path(),
+                                workspace.pyproject_toml(),
+                                workspace,
+                                Some(included_group),
+                                parents,
+                            )?;
+                            root.get_or_insert_with(Self::default).0.extend(included.0);
+                        }
                         continue;
                     };
                     if packages

@@ -8771,3 +8771,248 @@ fn run_centralized_environment_path_file() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Root-group aliases compose with named member includes during locking and freshness checks.
+#[test]
+fn run_workspace_group_root_includes_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "root-member-groups"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["child", "tools"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+        [tool.uv.dependency-groups]
+        test = { requires-python = ">=3.12" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = ["lint"] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "include-group-workspace", "--package", "child", "--only-group", "dev", "--locked"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .args(["python", "-c", "import example; print(example.__version__)"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    ");
+    Ok(())
+}
+
+/// Disabled source overrides still permit groups to include ordinary requirements from members.
+#[test]
+fn run_workspace_group_includes_without_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "member-groups-without-sources"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["child", "tools", "absent"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--no-sources", "--no-header", "--group", "child/pyproject.toml:dev"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+        # via child (child/pyproject.toml:dev)
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--no-sources-package", "child", "--no-header", "--group", "child/pyproject.toml:dev"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+        # via child (child/pyproject.toml:dev)
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./child\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--no-sources", "--no-header", "requirements.in"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+        exit_code: 0 (success)
+        ----- stdout -----
+        ./child
+            # via -r requirements.in
+
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        ");
+    Ok(())
+}
+
+/// Conflict propagation follows group inclusion depth even when it exceeds the member count.
+#[test]
+fn run_workspace_group_deep_conflict_propagation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "deep-member-group-conflicts"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        [packages.example.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["a", "b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        g1 = []
+        g2 = ["example==1.0.0"]
+        other = ["example==2.0.0"]
+        [tool.uv]
+        conflicts = [[{ group = "g2" }, { group = "other" }]]
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = [{ package = "b", group = "g0" }] }
+        g1 = { include-workspace-groups = [{ package = "b", group = "g1" }] }
+    "#})?;
+    context
+        .temp_dir
+        .child("b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        g0 = []
+        g1 = []
+        [tool.uv.dependency-groups]
+        g0 = { include-workspace-groups = [{ package = "a", group = "g1" }] }
+        g1 = { include-workspace-groups = [{ package = "a", group = "g2" }] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    Ok(())
+}

@@ -68,7 +68,7 @@ use uv_resolver_types::{
 use uv_small_str::SmallString;
 use uv_types::{BuildContext, HashStrategy};
 use uv_warnings::warn_user_once;
-use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
+use uv_workspace::dependency_groups::DependencyGroupError;
 use uv_workspace::{Editability, WorkspaceMember};
 
 pub use crate::lock::deserialize::Error as CanonicalLockError;
@@ -2862,16 +2862,16 @@ impl Lock {
     }
 
     /// Record member group metadata, including Python requirements inherited from included groups.
+    #[must_use]
     pub fn with_member_group_metadata(
         mut self,
-        packages: &BTreeMap<PackageName, WorkspaceMember>,
-    ) -> Result<Self, LockError> {
-        let mut metadata = collect_member_group_metadata(packages)?;
+        mut metadata: BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>,
+    ) -> Self {
         for (name, index) in &self.workspace_members {
             self.packages[index.0].group_requires_python =
                 metadata.remove(name).unwrap_or_default();
         }
-        Ok(self)
+        self
     }
 
     /// Record dependency group metadata for a workspace root without a `[project]` table.
@@ -4211,6 +4211,7 @@ impl Lock {
         build_constraints: &Constraints,
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
         workspace_group_metadata: &BTreeMap<GroupName, GroupMetadata>,
+        member_group_metadata: &BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>,
         workspace_default_groups: Option<&DefaultGroups>,
         dependency_metadata: &DependencyMetadata,
         indexes: Option<&IndexLocations>,
@@ -4276,13 +4277,14 @@ impl Lock {
         }
 
         if let Some(actual) = self.member_group_metadata() {
-            let expected = collect_member_group_metadata(packages)?;
+            let expected = member_group_metadata;
             let actual = actual
                 .map(|(name, groups)| (name.clone(), groups.clone()))
                 .collect();
-            if expected != actual {
+            if *expected != actual {
                 return Ok(SatisfiesResult::MismatchedMemberGroupMetadata(
-                    expected, actual,
+                    expected.clone(),
+                    actual,
                 ));
             }
         }
@@ -6355,33 +6357,6 @@ fn nonstandard_member_default_groups(
 pub struct GroupMetadata {
     /// The effective Python requirement, including requirements from included groups.
     pub requires_python: Option<VersionSpecifiers>,
-}
-
-/// Collect metadata for each member's dependency groups.
-fn collect_member_group_metadata(
-    packages: &BTreeMap<PackageName, WorkspaceMember>,
-) -> Result<BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>, DependencyGroupError> {
-    let mut members = BTreeMap::new();
-    for (name, member) in packages {
-        let groups =
-            FlatDependencyGroups::from_pyproject_toml(member.root(), member.pyproject_toml())?
-                .into_iter()
-                .filter_map(|(group, flat)| {
-                    flat.requires_python.map(|requires_python| {
-                        (
-                            group,
-                            GroupMetadata {
-                                requires_python: Some(requires_python),
-                            },
-                        )
-                    })
-                })
-                .collect::<BTreeMap<_, _>>();
-        if !groups.is_empty() {
-            members.insert(name.clone(), groups);
-        }
-    }
-    Ok(members)
 }
 
 impl ResolverManifest {
