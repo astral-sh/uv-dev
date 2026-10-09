@@ -9948,6 +9948,31 @@ fn sync_ignores_inactive_platform_conflict() -> Result<()> {
     Checked in [TIME]
     ");
 
+    context
+        .lock()
+        .args([
+            "--upgrade",
+            "--preview-features",
+            "package-conflicts,lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "project", "--preview-features", "package-conflicts,lock-without-metadata",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "project", "--preview-features", "package-conflicts,lock-without-metadata",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+
     // Recorded overrides replace the original platform marker, including during frozen sync.
     let pyproject = context.temp_dir.child("pyproject.toml");
     pyproject.write_str(&context.read("pyproject.toml").replace(
@@ -9966,6 +9991,31 @@ fn sync_ignores_inactive_platform_conflict() -> Result<()> {
         .arg("--frozen")
         .arg("--package").arg("project")
         .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+
+    context
+        .lock()
+        .args([
+            "--upgrade",
+            "--preview-features",
+            "package-conflicts,lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "project", "--preview-features", "package-conflicts,lock-without-metadata",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "project", "--preview-features", "package-conflicts,lock-without-metadata",
+    ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}

@@ -9288,17 +9288,29 @@ impl Dependency {
     }
 
     /// Return the conditions under which the effective declarations request this dependency.
-    fn activation_marker(&self, requirements: Option<&[Requirement]>) -> MarkerTree {
-        let fallback = self.complexified_marker.pep508();
+    fn activation_marker(
+        &self,
+        requirements: Option<&[Requirement]>,
+        conflicts: &Conflicts,
+    ) -> MarkerTree {
+        let fallback = || {
+            let mut marker = self.complexified_marker;
+            marker.and(UniversalMarker::new(
+                MarkerTree::TRUE,
+                ConflictMarker::from_relevant_conflicts(conflicts, [marker]),
+            ));
+            // Remove incompatible branches before projecting away their conflict predicates.
+            marker.combined().without_extras()
+        };
         let Some(requirements) = requirements else {
-            return fallback;
+            return fallback();
         };
         let mut requirements = requirements
             .iter()
             .filter(|requirement| requirement.name == *self.package_name())
             .peekable();
         if requirements.peek().is_none() {
-            return fallback;
+            return fallback();
         }
         let mut marker = requirements
             .clone()
@@ -9315,7 +9327,7 @@ impl Dependency {
                 });
             marker = marker.and(extra_marker);
         }
-        marker.and(fallback)
+        marker.and(self.complexified_marker.pep508())
     }
 
     /// Returns the extras specified on this dependency.

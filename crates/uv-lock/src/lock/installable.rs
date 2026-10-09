@@ -147,7 +147,7 @@ pub trait Installable<'lock> {
                             .iter()
                             .any(|marker| marker.pep508().evaluate(marker_env.markers(), &[])))
                         && dependency
-                            .activation_marker(requirements)
+                            .activation_marker(requirements, lock.conflicts())
                             .evaluate(marker_env.markers(), &[])
                 })
             };
