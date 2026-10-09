@@ -5,7 +5,7 @@ use itertools::Either;
 use tracing::info_span;
 
 use uv_configuration::Upgrade;
-use uv_distribution_types::{IndexUrl, MinimumLibcVersion};
+use uv_distribution_types::{IndexUrl, MinimumLibcVersion, RequiresPython};
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
@@ -72,6 +72,7 @@ pub fn read_lock_requirements(
     lock: &Lock,
     install_path: &Path,
     upgrade: &Upgrade,
+    requires_python: &RequiresPython,
     required_environments: &[MarkerTree],
     minimum_libc_version: Option<MinimumLibcVersion>,
 ) -> Result<LockedRequirements, LockError> {
@@ -92,7 +93,7 @@ pub fn read_lock_requirements(
                 .map(|package| (package, MarkerTree::TRUE)),
         )
     } else {
-        Either::Right(lock.package_reachability(install_path)?)
+        Either::Right(lock.package_reachability(install_path, requires_python)?)
     };
     for (package, activation) in packages {
         // Skip the distribution if it's included in the upgrade strategy (either by explicit
