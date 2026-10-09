@@ -45,8 +45,14 @@ fn index_locations_equal(existing: &str, incoming: &IndexUrl, root_dir: &Path) -
     CanonicalUrl::new(existing.url().clone()) == CanonicalUrl::new(incoming.url().clone())
 }
 
-/// An index table and the parsed values used to match subsequent updates.
+/// An index table and its relative document position.
 struct IndexTable {
+    table: Table,
+    position: Option<isize>,
+}
+
+/// An index table and lookup values derived from its contents.
+struct ParsedIndexTable {
     table: Table,
     name: Option<String>,
     canonical_url: Option<CanonicalUrl>,
@@ -55,7 +61,7 @@ struct IndexTable {
     position: Option<isize>,
 }
 
-impl IndexTable {
+impl ParsedIndexTable {
     fn new(table: Table, root_dir: &Path, shift: isize) -> Self {
         let name = table
             .get("name")
@@ -108,30 +114,38 @@ impl IndexTables {
         };
 
         for table in tables {
-            indexes.push(IndexTable::new(table, root_dir, indexes.shift));
+            indexes.push(ParsedIndexTable::new(table, root_dir, indexes.shift));
         }
 
         indexes
     }
 
-    fn push(&mut self, table: IndexTable) {
+    fn push(&mut self, table: ParsedIndexTable) {
+        let ParsedIndexTable {
+            table,
+            name,
+            canonical_url,
+            default,
+            path,
+            position,
+        } = table;
         let id = self.tables.len();
-        if let Some(name) = &table.name {
-            self.names.entry(name.clone()).or_default().push(id);
+        if let Some(name) = name {
+            self.names.entry(name).or_default().push(id);
         }
-        if let Some(url) = &table.canonical_url {
-            self.urls.entry(url.clone()).or_default().push(id);
+        if let Some(url) = canonical_url {
+            self.urls.entry(url).or_default().push(id);
         }
-        if table.default {
+        if default {
             self.defaults.push(id);
         }
-        if table.path {
+        if path {
             self.paths.push(id);
         }
-        if let Some(position) = table.position {
+        if let Some(position) = position {
             *self.positions.entry(position).or_default() += 1;
         }
-        self.tables.push(Some(table));
+        self.tables.push(Some(IndexTable { table, position }));
     }
 
     fn remove(&mut self, id: usize) -> Option<IndexTable> {
@@ -209,7 +223,7 @@ impl IndexTables {
             table.set_position(Some(position));
         }
 
-        self.push(IndexTable::new(table, root_dir, self.shift));
+        self.push(ParsedIndexTable::new(table, root_dir, self.shift));
     }
 
     fn into_array(self) -> ArrayOfTables {
@@ -2529,10 +2543,23 @@ url = "https://other.example/simple" # replaced table
         batched.add_indexes(&references, Path::new("."))?;
 
         assert_eq!(batched.to_string(), individual.to_string());
-        let serialized = batched.to_string();
-        assert!(serialized.contains("# first table"));
-        assert!(!serialized.contains("# replaced table"));
-        assert!(serialized.contains("[tool.uv.sources]"));
+        assert_snapshot!(batched.to_string(), @r#"
+
+        [project]
+        name = "project"
+
+        [[tool.uv.index]]
+        name = "a"
+        url = "https://one.example/simple"
+
+        [[tool.uv.index]]
+        name = "b"
+        url = "https://two.example/simple" # first table
+        format = "flat"
+
+        [tool.uv.sources]
+        example = { index = "b" }
+        "#);
 
         Ok(())
     }
@@ -2555,6 +2582,18 @@ url = "https://other.example/simple" # replaced table
         batched.add_indexes(&references, Path::new("."))?;
 
         assert_eq!(batched.to_string(), individual.to_string());
+        assert_snapshot!(batched.to_string(), @r#"
+        [project]
+        name = "project"
+
+        [[tool.uv.index]]
+        name = "first"
+        url = "https://one.example/simple"
+
+        [[tool.uv.index]]
+        name = "second"
+        url = "https://two.example/simple"
+        "#);
 
         Ok(())
     }
@@ -2594,12 +2633,14 @@ default = true
         batched.add_indexes(&references, Path::new("."))?;
 
         assert_eq!(batched.to_string(), individual.to_string());
-        let serialized = batched.to_string();
-        assert!(serialized.contains("# retained table"));
-        assert!(!serialized.contains("# duplicate URL"));
-        assert!(!serialized.contains("# duplicate default"));
-        assert!(!serialized.contains("user:password"));
-        assert!(serialized.contains("format = \"flat\""));
+        assert_snapshot!(batched.to_string(), @r#"
+
+        [[tool.uv.index]]
+        name = "legacy"
+        url = "https://three.example/flat" # retained table
+        format = "flat"
+        default = true
+        "#);
 
         Ok(())
     }
@@ -2638,9 +2679,16 @@ url = "./alias/not-created" # missing child
         batched.add_indexes(&references, root.path())?;
 
         assert_eq!(batched.to_string(), individual.to_string());
-        let serialized = batched.to_string();
-        assert!(serialized.contains("# symlink"));
-        assert!(serialized.contains("# missing child"));
+        assert_snapshot!(batched.to_string(), @r#"
+
+        [[tool.uv.index]]
+        name = "missing"
+        url = "links/not-created" # missing child
+
+        [[tool.uv.index]]
+        name = "existing"
+        url = "links/simple" # symlink
+        "#);
 
         Ok(())
     }
