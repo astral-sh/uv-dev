@@ -7150,7 +7150,6 @@ fn tool_install_with_build_hashes() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn tool_install_migration_to_unwritable_directory_preserves_entrypoints() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let context = uv_test::test_context!("3.12").with_tool_dirs();
     let bin = context.temp_dir.child("bin");
     let wheel = context
@@ -7165,20 +7164,9 @@ fn tool_install_migration_to_unwritable_directory_preserves_entrypoints() -> Res
     let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
     let destination = context.temp_dir.child("read-only-bin");
     destination.create_dir_all()?;
-    fs_err::set_permissions(destination.path(), std::fs::Permissions::from_mode(0o555))?;
-    let (snapshot, _) = uv_test::run_and_format(
-        context
-            .tool_install()
-            .arg(&wheel)
-            .env(EnvVars::UV_TOOL_BIN_DIR, destination.path())
-            .env(EnvVars::PATH, bin.path()),
-        context.filters(),
-        "tool_install_migration_to_unwritable_directory_preserves_entrypoints",
-        None,
-        None,
-    );
-    fs_err::set_permissions(destination.path(), std::fs::Permissions::from_mode(0o755))?;
-    insta::assert_snapshot!(snapshot, @r#"
+    let _guard = uv_test::ReadOnlyDirectoryGuard::new(destination.path())?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&wheel)
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination.path()).env(EnvVars::PATH, bin.path()), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -7198,7 +7186,6 @@ fn tool_install_migration_to_unwritable_directory_preserves_entrypoints() -> Res
 #[test]
 #[cfg(unix)]
 fn tool_upgrade_migration_to_unwritable_directory_preserves_entrypoints() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let context = uv_test::test_context!("3.12").with_tool_dirs();
     let bin = context.temp_dir.child("bin");
     let wheel = context
@@ -7213,20 +7200,9 @@ fn tool_upgrade_migration_to_unwritable_directory_preserves_entrypoints() -> Res
     let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
     let destination = context.temp_dir.child("read-only-bin");
     destination.create_dir_all()?;
-    fs_err::set_permissions(destination.path(), std::fs::Permissions::from_mode(0o555))?;
-    let (snapshot, _) = uv_test::run_and_format(
-        context
-            .tool_upgrade()
-            .arg("simple-launcher")
-            .env(EnvVars::UV_TOOL_BIN_DIR, destination.path())
-            .env(EnvVars::PATH, bin.path()),
-        context.filters(),
-        "tool_upgrade_migration_to_unwritable_directory_preserves_entrypoints",
-        None,
-        None,
-    );
-    fs_err::set_permissions(destination.path(), std::fs::Permissions::from_mode(0o755))?;
-    insta::assert_snapshot!(snapshot, @r#"
+    let _guard = uv_test::ReadOnlyDirectoryGuard::new(destination.path())?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination.path()).env(EnvVars::PATH, bin.path()), @r#"
             exit_code: 1 (failure)
             ----- stderr -----
             error: Failed to upgrade simple-launcher

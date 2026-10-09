@@ -920,6 +920,11 @@ pub(super) fn finalize_tool_install(
                     .map(|entrypoint| entrypoint.install_path.as_path()),
                 previous_entrypoints,
             );
+            remove_entrypoint_paths(
+                previous_entrypoints
+                    .iter()
+                    .map(|entry| entry.install_path.as_path()),
+            );
             installed_tools.remove_environment(name)?;
 
             return Err(NoExecutablesError::Root {
@@ -969,6 +974,11 @@ pub(super) fn finalize_tool_install(
                     .iter()
                     .map(|entrypoint| entrypoint.install_path.as_path()),
                 previous_entrypoints,
+            );
+            remove_entrypoint_paths(
+                previous_entrypoints
+                    .iter()
+                    .map(|entry| entry.install_path.as_path()),
             );
             installed_tools.remove_environment(name)?;
 
