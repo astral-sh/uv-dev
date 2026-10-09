@@ -729,6 +729,30 @@ impl<'lock> InstallTarget<'lock> {
         self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<(), EnvironmentError> {
+        let lock = self.lock();
+        let roots = self
+            .roots()
+            .chain(self.group_root(groups))
+            .collect::<FxHashSet<_>>();
+        for package in lock.workspace_packages().filter(|package| {
+            roots.contains(package.name())
+                && lock.workspace_members().contains(package.name())
+                && !lock.members().contains(package.name())
+        }) {
+            for group in package
+                .dependency_groups()
+                .keys()
+                .chain(package.resolved_dependency_groups().keys())
+            {
+                if self.includes_group(Some(package.name()), group, groups) {
+                    return Err(EnvironmentError::UnresolvedWorkspaceGroup {
+                        package: package.name().clone(),
+                        group: group.clone(),
+                    });
+                }
+            }
+        }
+
         // If no groups were specified, short-circuit.
         if groups.explicit_names().next().is_none() {
             return Ok(());
