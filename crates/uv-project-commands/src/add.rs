@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
@@ -355,15 +355,7 @@ pub async fn add(
             let Some(install_path) = install_path else {
                 continue;
             };
-            let path = if install_path.is_absolute() {
-                install_path.to_path_buf()
-            } else {
-                project.root().join(install_path)
-            };
-            // Membership policy uses the declared path; canonicalization only identifies locks.
-            if workspace.unwrap_or_else(|| path.starts_with(project.workspace().install_path()))
-                && !project.workspace().includes(&path)?
-            {
+            if let Some(path) = workspace_member_path(&project, install_path, workspace)? {
                 members.push(path);
             }
         }
@@ -691,25 +683,10 @@ pub async fn add(
         // Check each requirement to see if it's a path dependency
         for requirement in &requirements {
             if let RequirementSource::Directory { install_path, .. } = &requirement.source {
-                let absolute_path = if install_path.is_absolute() {
-                    install_path.to_path_buf()
-                } else {
-                    project.root().join(install_path)
+                let Some(absolute_path) = workspace_member_path(&project, install_path, workspace)?
+                else {
+                    continue;
                 };
-
-                // Either `--workspace` was provided explicitly, or it was omitted but the path is
-                // within the workspace root.
-                let use_workspace = workspace.unwrap_or_else(|| {
-                    absolute_path.starts_with(project.workspace().install_path())
-                });
-                if !use_workspace {
-                    continue;
-                }
-
-                // If the project is already a member of the workspace, skip it.
-                if project.workspace().includes(&absolute_path)? {
-                    continue;
-                }
 
                 let relative_path = absolute_path
                     .strip_prefix(project.workspace().install_path())
@@ -917,6 +894,25 @@ pub async fn add(
                 .into())
         }
     }
+}
+
+/// Select a new member using its declared spelling; canonicalization only identifies locks.
+fn workspace_member_path(
+    project: &VirtualProject,
+    install_path: &Path,
+    workspace: Option<bool>,
+) -> Result<Option<PathBuf>> {
+    let path = if install_path.is_absolute() {
+        install_path.to_path_buf()
+    } else {
+        project.root().join(install_path)
+    };
+    if !workspace.unwrap_or_else(|| path.starts_with(project.workspace().install_path()))
+        || project.workspace().includes(&path)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(path))
 }
 
 fn standard_library_package(

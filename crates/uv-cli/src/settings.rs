@@ -154,9 +154,12 @@ pub fn metadata_target<'a>(
                     args.no_frozen,
                 ))
             .then(|| target(args.script.as_ref())),
-            ProjectCommand::Sync(args) => (!args.dry_run
-                && writable(args.locked, args.no_locked, args.frozen, args.no_frozen))
-            .then(|| target(args.script.as_ref())),
+            ProjectCommand::Sync(args) => {
+                (resolve_sync_dry_run(args.dry_run, args.check, args.no_check)
+                    .is_ok_and(|dry_run| !dry_run.enabled())
+                    && writable(args.locked, args.no_locked, args.frozen, args.no_frozen))
+                .then(|| target(args.script.as_ref()))
+            }
             ProjectCommand::Tree(args) => {
                 writable(args.locked, args.no_locked, args.frozen, args.no_frozen)
                     .then(|| target(args.script.as_ref()))
@@ -201,6 +204,15 @@ pub fn metadata_target<'a>(
         | Commands::GenerateShellCompletion(_)
         | Commands::Help(_) => None,
     }
+}
+
+/// Resolve both non-writing sync modes before selecting metadata admission or command settings.
+fn resolve_sync_dry_run(dry_run: bool, check: bool, no_check: bool) -> anyhow::Result<DryRun> {
+    Ok(if flag(check, no_check, "check")?.unwrap_or_default() {
+        DryRun::Check
+    } else {
+        DryRun::from_args(dry_run)
+    })
 }
 
 /// The default publish URL.
@@ -2017,12 +2029,7 @@ impl SyncSettings {
         let settings =
             resolve_resolver_installer_settings(installer, build, filesystem, &environment)?;
 
-        let check = flag(check, no_check, "check")?.unwrap_or_default();
-        let dry_run = if check {
-            DryRun::Check
-        } else {
-            DryRun::from_args(dry_run)
-        };
+        let dry_run = resolve_sync_dry_run(dry_run, check, no_check)?;
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);

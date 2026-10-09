@@ -1099,3 +1099,35 @@ async fn sync_dry_run_does_not_wait_for_metadata_writers() -> Result<()> {
     assert_eq!(fs_err::read(context.temp_dir.join("uv.lock"))?, before);
     Ok(())
 }
+
+#[tokio::test]
+async fn sync_check_does_not_wait_for_metadata_writers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let before = fs_err::read(context.temp_dir.join("uv.lock"))?;
+    let _guard = hold_metadata(context.temp_dir.path(), "workspace").await?;
+    let mut command = context.sync();
+    command
+        .args(["--check", "--offline"])
+        .env(EnvVars::UV_LOCK_TIMEOUT, "1");
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::from(command)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await??;
+    output.assert().success();
+    assert_eq!(fs_err::read(context.temp_dir.join("uv.lock"))?, before);
+    Ok(())
+}
