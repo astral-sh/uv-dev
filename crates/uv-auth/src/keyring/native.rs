@@ -499,15 +499,23 @@ fn legacy_lock_key(service_name: &str) -> String {
     }
 }
 
+/// Legacy identities that exceed platform limits could never have been stored.
+fn legacy_entry(service_name: &str, username: &str) -> Result<Option<uv_keyring::Entry>, Error> {
+    match uv_keyring::Entry::new(&format!("{SERVICE_PREFIX}{service_name}"), username) {
+        Ok(entry) => Ok(Some(entry)),
+        Err(uv_keyring::Error::TooLong(..)) => Ok(None),
+        Err(err) => Err(Error::Keyring(err)),
+    }
+}
+
 /// Fetch a legacy password from the system keyring.
 async fn system_fetch_legacy(
     guard: LegacyGuardRef<'_>,
     username: &str,
 ) -> Result<Option<String>, Error> {
-    let entry = uv_keyring::Entry::new(
-        &format!("{SERVICE_PREFIX}{}", guard.service_name()),
-        username,
-    )?;
+    let Some(entry) = legacy_entry(guard.service_name(), username)? else {
+        return Ok(None);
+    };
     match entry.get_password().await {
         Ok(password) => Ok(Some(password)),
         Err(uv_keyring::Error::NoEntry) => Ok(None),
@@ -520,8 +528,9 @@ async fn system_remove_legacy(
     guard: &Arc<LegacyWriteGuard>,
     username: &str,
 ) -> Result<bool, Error> {
-    let entry =
-        uv_keyring::Entry::new(&format!("{SERVICE_PREFIX}{}", guard.service_name), username)?;
+    let Some(entry) = legacy_entry(&guard.service_name, username)? else {
+        return Ok(false);
+    };
     match uv_keyring::with_operation_guard(Arc::clone(guard), entry.delete_credential()).await {
         Ok(()) => Ok(true),
         Err(uv_keyring::Error::NoEntry) => Ok(false),

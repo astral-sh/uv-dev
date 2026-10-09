@@ -223,3 +223,68 @@ async fn native_store_removes_credentials() -> Result<(), Box<dyn std::error::Er
     let _ = provider.remove(&url, "user").await;
     result
 }
+
+/// Hashed native targets support URLs that exceed the legacy Windows credential comment limit.
+#[tokio::test]
+async fn native_store_removes_long_service_url() -> Result<(), Box<dyn std::error::Error>> {
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let preview =
+        Preview::from_feature_names([&MaybePreviewFeature::Known(PreviewFeature::NativeAuth)]);
+    let provider = match AuthBackend::from_settings(preview).await? {
+        AuthBackend::System(provider) => provider,
+        AuthBackend::TextStore(..) => {
+            return Err(std::io::Error::other("expected native backend").into());
+        }
+    };
+    let url = DisplaySafeUrl::parse(&format!(
+        "https://native-long-{unique}.example.invalid/{}",
+        "x".repeat(200)
+    ))?;
+    let credentials = Credentials::basic(Some("long-url".to_owned()), Some("password".to_owned()));
+    let result = async {
+        provider.store(&url, &credentials).await?;
+        assert_eq!(
+            provider.fetch(&url, Some("long-url")).await?,
+            Some(credentials)
+        );
+        provider.remove(&url, "long-url").await?;
+        assert_eq!(provider.fetch(&url, Some("long-url")).await?, None);
+        Ok::<_, Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = provider.remove(&url, "long-url").await;
+    result
+}
+
+/// An unrepresentable exact legacy URL must not suppress a valid bare-host fallback.
+#[tokio::test]
+async fn native_long_url_uses_legacy_host_fallback() -> Result<(), Box<dyn std::error::Error>> {
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let preview =
+        Preview::from_feature_names([&MaybePreviewFeature::Known(PreviewFeature::NativeAuth)]);
+    let provider = match AuthBackend::from_settings(preview).await? {
+        AuthBackend::System(provider) => provider,
+        AuthBackend::TextStore(..) => {
+            return Err(std::io::Error::other("expected native backend").into());
+        }
+    };
+    let host = format!("native-long-fallback-{unique}.example.invalid");
+    let url = DisplaySafeUrl::parse(&format!("https://{host}/{}", "x".repeat(200)))?;
+    let realm = DisplaySafeUrl::parse(&format!("https://{host}/"))?;
+    let entry = uv_keyring::Entry::new(&format!("uv:{host}"), "legacy")?;
+    let result = async {
+        entry.set_password("legacy-password").await?;
+        assert_eq!(
+            provider.fetch(&url, Some("legacy")).await?,
+            Some(Credentials::basic(
+                Some("legacy".to_owned()),
+                Some("legacy-password".to_owned())
+            ))
+        );
+        Ok::<_, Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = entry.delete_credential().await;
+    let _ = provider.remove(&realm, "legacy").await;
+    result
+}

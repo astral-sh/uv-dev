@@ -1010,11 +1010,18 @@ impl AuthMiddleware {
             return Ok(store_credentials);
         }
 
-        if let Some(credentials) = self.cache().get_keyring_realm(realm, username.clone()) {
-            return Ok(Some(FetchedCredentials {
-                credentials,
-                cache_scope: CredentialsCacheScope::FetchOnly,
-            }));
+        let realm_fallback = || {
+            self.cache()
+                .get_keyring_realm(realm.clone(), username.clone())
+                .map(|credentials| FetchedCredentials {
+                    credentials,
+                    cache_scope: CredentialsCacheScope::FetchOnly,
+                })
+        };
+        if index.is_none()
+            && let Some(credentials) = realm_fallback()
+        {
+            return Ok(Some(credentials));
         }
 
         // The subprocess provider is slow, but its lookup target is realm- or index-scoped. Keep
@@ -1025,7 +1032,7 @@ impl AuthMiddleware {
             .register_or_wait(&keyring_key)
             .await
         {
-            return Ok(credentials);
+            return Ok(credentials.or_else(realm_fallback));
         }
 
         let keyring_credentials = match self.keyring {
@@ -1088,7 +1095,7 @@ impl AuthMiddleware {
         self.cache()
             .keyring_fetches
             .done(keyring_key, keyring_credentials.clone());
-        Ok(keyring_credentials)
+        Ok(keyring_credentials.or_else(realm_fallback))
     }
 }
 
@@ -2364,6 +2371,7 @@ mod tests {
             .with(
                 AuthMiddleware::new()
                     .with_cache(CredentialsCache::new())
+                    .with_text_store(Some(TextCredentialStore::default()))
                     .with_keyring(Some(KeyringProvider::dummy([
                         (base_url_1.clone(), username, password_1),
                         (base_url_2.clone(), username, password_2),

@@ -176,13 +176,13 @@ impl KeyringProvider {
                 .await?
                 .map(|fetched| fetched.credentials)),
             KeyringProviderBackend::Subprocess => {
-                let credentials = self.fetch_subprocess_with_fallback(url, username).await;
+                let credentials = self.fetch_with_fallback(url, username).await;
                 Ok(credentials
                     .map(|(username, password)| Credentials::basic(Some(username), Some(password))))
             }
             #[cfg(test)]
-            KeyringProviderBackend::Dummy(store) => {
-                let credentials = Self::fetch_dummy_with_fallback(store, url, username);
+            KeyringProviderBackend::Dummy(_) => {
+                let credentials = self.fetch_with_fallback(url, username).await;
                 Ok(credentials
                     .map(|(username, password)| Credentials::basic(Some(username), Some(password))))
             }
@@ -190,26 +190,44 @@ impl KeyringProvider {
     }
 
     /// Fetch subprocess credentials using the legacy URL, host, and scheme-host lookup order.
-    async fn fetch_subprocess_with_fallback(
+    async fn fetch_with_fallback(
         &self,
         url: &DisplaySafeUrl,
         username: Option<&str>,
     ) -> Option<(String, String)> {
         trace!("Checking keyring for URL `{url}`");
-        let mut credentials = self.fetch_subprocess(url.as_str(), username).await;
+        let mut credentials = self.fetch_service(url.as_str(), username).await;
         if credentials.is_some() {
             return credentials;
         }
 
         let host = legacy_host(url)?;
         trace!("Checking keyring for host `{host}`");
-        credentials = self.fetch_subprocess(&host, username).await;
+        credentials = self.fetch_service(&host, username).await;
         if credentials.is_none() && url.scheme() != "https" {
             let scheme_host = format!("{}://{host}", url.scheme());
             trace!("Checking keyring for scheme+host `{scheme_host}`");
-            credentials = self.fetch_subprocess(&scheme_host, username).await;
+            credentials = self.fetch_service(&scheme_host, username).await;
         }
         credentials
+    }
+
+    /// Look up one legacy service; all backends share the same fallback traversal.
+    async fn fetch_service(
+        &self,
+        service_name: &str,
+        username: Option<&str>,
+    ) -> Option<(String, String)> {
+        match &self.backend {
+            KeyringProviderBackend::Native => None,
+            KeyringProviderBackend::Subprocess => {
+                self.fetch_subprocess(service_name, username).await
+            }
+            #[cfg(test)]
+            KeyringProviderBackend::Dummy(store) => {
+                Self::fetch_dummy(store, service_name, username)
+            }
+        }
     }
 
     #[instrument(skip(self))]
@@ -285,25 +303,6 @@ impl KeyringProvider {
             }
             None
         }
-    }
-
-    #[cfg(test)]
-    fn fetch_dummy_with_fallback(
-        store: &[(String, &'static str, &'static str)],
-        url: &DisplaySafeUrl,
-        username: Option<&str>,
-    ) -> Option<(String, String)> {
-        let mut credentials = Self::fetch_dummy(store, url.as_str(), username);
-        if credentials.is_some() {
-            return credentials;
-        }
-
-        let host = legacy_host(url)?;
-        credentials = Self::fetch_dummy(store, &host, username);
-        if credentials.is_none() && url.scheme() != "https" {
-            credentials = Self::fetch_dummy(store, &format!("{}://{host}", url.scheme()), username);
-        }
-        credentials
     }
 
     #[cfg(test)]
