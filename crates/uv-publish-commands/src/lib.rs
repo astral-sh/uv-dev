@@ -431,7 +431,7 @@ async fn gather_credentials(
         }
     }
 
-    let credentials = Credentials::basic(username, password);
+    let credentials = Credentials::basic(username, password)?;
 
     Ok((publish_url, PublishingCredentials::Supplied(credentials)))
 }
@@ -477,7 +477,9 @@ mod tests {
             Printer::Quiet,
         )
         .await
-        .map(|(publish_url, credentials)| (publish_url, credentials.as_credentials().into_owned()))
+        .and_then(|(publish_url, credentials)| {
+            Ok((publish_url, credentials.as_credentials()?.into_owned()))
+        })
     }
 
     #[tokio::test]

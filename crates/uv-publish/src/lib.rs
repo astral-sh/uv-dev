@@ -12,9 +12,7 @@ use fs_err::tokio::File;
 use futures::TryStreamExt;
 use glob::{GlobError, PatternError, glob};
 use itertools::Itertools;
-use reqwest::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_TYPE, InvalidHeaderValue, LOCATION, ToStrError,
-};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, LOCATION, ToStrError};
 use reqwest::multipart::{Form, Part};
 use reqwest::{Body, Response, StatusCode};
 use reqwest_retry::RetryError;
@@ -29,7 +27,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{Level, debug, enabled, trace, warn};
 use url::Url;
 
-use uv_auth::{Credentials, Realm};
+use uv_auth::{Credentials, InvalidCredentialsError, Realm};
 use uv_cache::{Cache, Refresh};
 use uv_client::{
     BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, OwnedArchive,
@@ -52,6 +50,8 @@ use crate::trusted_publishing::{TrustedPublishingError, TrustedPublishingService
 
 #[derive(Error, Debug)]
 pub enum PublishError {
+    #[error(transparent)]
+    InvalidCredentials(#[from] InvalidCredentialsError),
     #[error("The publish path `{0}` is not a valid glob pattern")]
     Pattern(String, #[source] PatternError),
     /// [`GlobError`] is a wrapped io error.
@@ -99,9 +99,9 @@ pub enum PublishError {
 #[derive(Error, Debug)]
 pub enum PublishPrepareError {
     #[error(transparent)]
+    InvalidCredentials(#[from] InvalidCredentialsError),
+    #[error(transparent)]
     Io(#[from] io::Error),
-    #[error("Invalid authorization header")]
-    InvalidHeaderValue(#[from] InvalidHeaderValue),
     #[error("Failed to read metadata")]
     Metadata(#[from] uv_metadata::Error),
     #[error("Failed to read metadata")]
@@ -184,13 +184,13 @@ pub enum PublishingCredentials {
 
 impl PublishingCredentials {
     /// Return the HTTP credentials to use for uploads.
-    pub fn as_credentials(&self) -> Cow<'_, Credentials> {
+    pub fn as_credentials(&self) -> Result<Cow<'_, Credentials>, InvalidCredentialsError> {
         match self {
-            Self::Supplied(credentials) => Cow::Borrowed(credentials),
-            Self::TrustedPublishing(token) => Cow::Owned(Credentials::basic(
-                Some("__token__".to_string()),
-                Some(token.to_string()),
-            )),
+            Self::Supplied(credentials) => Ok(Cow::Borrowed(credentials)),
+            Self::TrustedPublishing(token) => {
+                Credentials::basic(Some("__token__".to_string()), Some(token.to_string()))
+                    .map(Cow::Owned)
+            }
         }
     }
 }
@@ -1275,7 +1275,7 @@ impl PublishSession<'_> {
         registry: &DisplaySafeUrl,
         reporter: Arc<impl Reporter>,
     ) -> Result<(RequestBuilder<'_>, usize), PublishPrepareError> {
-        let credentials = self.credentials.as_credentials();
+        let credentials = self.credentials.as_credentials()?;
         let mut form = Form::new();
         for (key, value) in form_metadata.iter() {
             form = form.text(*key, value.clone());
@@ -1326,17 +1326,12 @@ impl PublishSession<'_> {
                 "application/json;q=0.9, text/plain;q=0.8, text/html;q=0.7",
             );
 
-        match credentials.as_ref() {
-            Credentials::Basic { password, .. } => {
-                if password.is_some() {
-                    debug!("Using HTTP Basic authentication");
-                    request = request.header(AUTHORIZATION, credentials.to_header_value()?);
-                }
-            }
-            Credentials::Bearer { .. } => {
-                debug!("Using Bearer token authentication");
-                request = request.header(AUTHORIZATION, credentials.to_header_value()?);
-            }
+        if credentials.password().is_some() {
+            debug!("Using HTTP Basic authentication");
+            request = request.header(AUTHORIZATION, credentials.to_header_value()?);
+        } else if credentials.is_bearer() {
+            debug!("Using Bearer token authentication");
+            request = request.header(AUTHORIZATION, credentials.to_header_value()?);
         }
 
         Ok((request, idx))
@@ -1537,10 +1532,10 @@ mod tests {
     fn test_session(registry: DisplaySafeUrl, client: &BaseClient) -> PublishSession<'_> {
         PublishSession::new(
             registry,
-            PublishingCredentials::Supplied(Credentials::basic(
-                Some("ferris".to_string()),
-                Some("F3RR!S".to_string()),
-            )),
+            PublishingCredentials::Supplied(
+                Credentials::basic(Some("ferris".to_string()), Some("F3RR!S".to_string()))
+                    .expect("Valid credentials"),
+            ),
             client,
             client,
             client.retry_policy(),

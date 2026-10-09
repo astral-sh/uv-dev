@@ -11,9 +11,10 @@ use uv_once_map::OnceMap;
 use uv_redacted::DisplaySafeUrl;
 
 use crate::credentials::{Authentication, CredentialsFromUrlError, Username};
-use crate::{Credentials, Realm};
+use crate::{Credentials, InvalidCredentialsError, Realm};
 
 type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
+type FetchResult = Result<Option<Arc<Authentication>>, Arc<InvalidCredentialsError>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum FetchUrl {
@@ -37,7 +38,7 @@ pub struct CredentialsCache {
     /// A cache per realm and username
     realms: RwLock<FxHashMap<(Realm, Username), Arc<Authentication>>>,
     /// A cache tracking the result of realm or index URL fetches from external services
-    pub(crate) fetches: FxOnceMap<(FetchUrl, Username), Option<Arc<Authentication>>>,
+    pub(crate) fetches: FxOnceMap<(FetchUrl, Username), FetchResult>,
     /// A cache per URL, uses a trie for efficient prefix queries.
     urls: RwLock<UrlTrie<Arc<Authentication>>>,
 }
@@ -286,20 +287,23 @@ mod tests {
     use url::ParseError;
 
     use crate::Credentials;
-    use crate::credentials::Password;
 
     use super::*;
 
     #[test]
     fn test_trie() {
         let credentials1 =
-            Credentials::basic(Some("username1".to_string()), Some("password1".to_string()));
+            Credentials::basic(Some("username1".to_string()), Some("password1".to_string()))
+                .unwrap();
         let credentials2 =
-            Credentials::basic(Some("username2".to_string()), Some("password2".to_string()));
+            Credentials::basic(Some("username2".to_string()), Some("password2".to_string()))
+                .unwrap();
         let credentials3 =
-            Credentials::basic(Some("username3".to_string()), Some("password3".to_string()));
+            Credentials::basic(Some("username3".to_string()), Some("password3".to_string()))
+                .unwrap();
         let credentials4 =
-            Credentials::basic(Some("username4".to_string()), Some("password4".to_string()));
+            Credentials::basic(Some("username4".to_string()), Some("password4".to_string()))
+                .unwrap();
 
         let mut trie = UrlTrie::new();
         trie.insert(
@@ -358,7 +362,8 @@ mod tests {
         let mut trie = UrlTrie::new();
         let url = Url::parse("git+https:foo")?;
         let credentials =
-            Credentials::basic(Some("username".to_string()), Some("password".to_string()));
+            Credentials::basic(Some("username".to_string()), Some("password".to_string()))
+                .expect("hardcoded credentials are valid");
 
         assert_eq!(trie.get(&url), None);
         trie.insert(&url, credentials.clone());
@@ -377,11 +382,9 @@ mod tests {
     #[test]
     fn test_url_with_credentials() {
         let username = Username::new(Some(String::from("username")));
-        let password = Password::new(String::from("password"));
-        let credentials = Arc::new(Authentication::from(Credentials::Basic {
-            username: username.clone(),
-            password: Some(password),
-        }));
+        let credentials = Arc::new(Authentication::from(
+            Credentials::basic(Some("username".to_string()), Some("password".to_string())).unwrap(),
+        ));
         let cache = CredentialsCache::default();
         // Insert with URL with credentials and get with redacted URL.
         let url = DisplaySafeUrl::parse("https://username:password@example.com/foobar").unwrap();

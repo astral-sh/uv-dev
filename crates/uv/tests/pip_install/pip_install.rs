@@ -7378,6 +7378,23 @@ fn install_package_basic_auth_invalid_utf8() {
     ");
 }
 
+/// Reject a colon in a URL-provided username.
+#[test]
+fn install_package_basic_auth_username_with_colon() {
+    let context = uv_test::test_context!("3.12");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("anyio")
+        .arg("--index-url")
+        .arg("https://user%3Aname:password@example.com/simple")
+        .arg("--strict"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse credentials in index URL: https://user%3Aname:****@example.com/simple
+      cause: HTTP Basic Authentication username cannot contain a colon
+    ");
+}
+
 /// Install a package from an index that requires authentication
 #[tokio::test]
 async fn install_package_basic_auth_from_netrc_default() -> Result<()> {
@@ -7557,7 +7574,7 @@ async fn install_requirements_basic_auth_from_keyring_trailing_whitespace() {
 
     Mock::given(method("GET"))
         .and(path("/requirements.txt"))
-        .and(basic_auth("public", "heron \t"))
+        .and(basic_auth("public", "heron  "))
         .respond_with(ResponseTemplate::new(200).set_body_string(""))
         .expect(1)
         .mount(&server)
@@ -7588,7 +7605,7 @@ async fn install_requirements_basic_auth_from_keyring_trailing_whitespace() {
         .arg("subprocess")
         .env(
             EnvVars::KEYRING_TEST_CREDENTIALS,
-            format!(r#"{{"{}": {{"public": "heron \t"}}}}"#, server.address()),
+            format!(r#"{{"{}": {{"public": "heron  "}}}}"#, server.address()),
         )
         .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
     exit_code: 0 (success)
