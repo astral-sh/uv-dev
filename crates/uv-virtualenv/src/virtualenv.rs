@@ -74,25 +74,6 @@ fn validate_cfg_value(key: &str, value: &str) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::write_cfg;
-
-    #[test]
-    fn reject_cfg_newlines() {
-        for value in [
-            "safe\ninclude-system-site-packages = true",
-            "safe\rinclude-system-site-packages = true",
-        ] {
-            let mut buffer = Vec::new();
-            let error = write_cfg(&mut buffer, &[("prompt".to_string(), value.to_string())])
-                .expect_err("newlines must be rejected");
-            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-            assert!(buffer.is_empty());
-        }
-    }
-}
-
 /// Validated configuration assembled before any destination changes.
 pub(crate) struct Configuration {
     base_python: PathBuf,
@@ -1026,4 +1007,23 @@ fn copy_launcher_windows(
     }
 
     Err(Error::NotFound(base_python.user_display().to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_cfg;
+
+    #[test]
+    fn reject_cfg_newlines() {
+        for value in [
+            "safe\ninclude-system-site-packages = true",
+            "safe\rinclude-system-site-packages = true",
+        ] {
+            let mut buffer = Vec::new();
+            let error = write_cfg(&mut buffer, &[("prompt".to_string(), value.to_string())])
+                .expect_err("newlines must be rejected");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(buffer.is_empty());
+        }
+    }
 }
