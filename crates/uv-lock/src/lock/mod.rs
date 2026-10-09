@@ -4815,7 +4815,14 @@ impl Lock {
                 }
             }
 
-            // If the package is immutable, we don't need to validate it (or its dependencies).
+            // Immutable package metadata can still lead to mutable local dependencies.
+            for dependency in package.all_dependencies() {
+                if seen.insert(dependency.index) {
+                    queue.push_back(dependency.index);
+                }
+            }
+
+            // Immutable metadata needs no refresh; its descendants are validated separately.
             if package.id.source.is_immutable() {
                 continue;
             }
@@ -5142,7 +5149,7 @@ impl Lock {
                     .get(&dependency.index)
                     .zip(activated_extras.get(&dependency.package_id))
                     .is_some_and(|(validated, activated)| validated != activated);
-                if seen.insert(dependency.index) || needs_extra_validation {
+                if needs_extra_validation {
                     queue.push_back(dependency.index);
                 }
             }
@@ -6112,18 +6119,11 @@ impl Lock {
         // Configured metadata is authoritative even when builds are disabled; obtaining it does
         // not require selecting or preparing a source distribution.
         if let Some(metadata) = database.dependency_metadata(&package.id.name, None) {
+            let metadata = DistributionMetadata::from_dependency_metadata(metadata);
             return Ok(Some(SourceTreeRequiresDist {
-                version: Some(metadata.version),
-                requires_python: metadata.requires_python,
-                metadata: RequiresDist {
-                    name: metadata.name,
-                    requires_dist: Box::into_iter(metadata.requires_dist)
-                        .map(Requirement::from)
-                        .collect(),
-                    provides_extra: metadata.provides_extra,
-                    dependency_groups: BTreeMap::new(),
-                    dynamic: metadata.dynamic,
-                },
+                version: Some(metadata.version.clone()),
+                requires_python: metadata.requires_python.clone(),
+                metadata: metadata.into(),
             }));
         }
         let parent = root.join(source_tree);

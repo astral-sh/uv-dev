@@ -49425,3 +49425,74 @@ fn lock_local_python_dynamic_requirement_change() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Immutable registry metadata can lead to local overrides whose Python requirement changes.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_transitive_override_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "local-python-transitive-override"
+        [root]
+        requires = ["parent"]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["local"]
+        sdist = false
+        [packages.local.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    let url = Url::from_directory_path(context.temp_dir.child("local").path())
+        .map_err(|()| anyhow::anyhow!("invalid local directory"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv]
+        override-dependencies = ["local @ {url}"]
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+    local.write_str(
+        &context
+            .read("local/pyproject.toml")
+            .replace(">=3.12", ">=3.13"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==1.0.0 depends on Python>=3.13, we can conclude that local==1.0.0 cannot be used.
+             And because only local==1.0.0 is available, we can conclude that all versions of local cannot be used.
+             And because all versions of parent depend on local and your project depends on parent, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==1.0.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    "#);
+    Ok(())
+}

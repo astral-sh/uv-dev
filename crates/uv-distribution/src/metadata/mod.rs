@@ -86,7 +86,7 @@ impl Metadata {
     }
 
     /// Lower metadata selected from `tool.uv.dependency-metadata`.
-    pub(crate) fn from_dependency_metadata(metadata: ResolutionMetadata) -> Self {
+    pub fn from_dependency_metadata(metadata: ResolutionMetadata) -> Self {
         // Respect the relative/absolute path preference in user-provided metadata overrides.
         Self::from_resolution_metadata(metadata)
     }
