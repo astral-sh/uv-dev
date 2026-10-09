@@ -1,7 +1,7 @@
 use std::sync::{Arc, LazyLock};
 
 use anyhow::{anyhow, format_err};
-use http::{Extensions, StatusCode};
+use http::{Extensions, StatusCode, header::AUTHORIZATION};
 use reqwest::{Request, Response};
 use reqwest_middleware::{Error, Middleware, Next};
 use tokio::sync::Mutex;
@@ -337,6 +337,18 @@ impl Middleware for AuthMiddleware {
         extensions: &mut Extensions,
         next: Next<'_>,
     ) -> reqwest_middleware::Result<Response> {
+        let auth_policy = self.indexes.auth_policy_for(request.url());
+        if auth_policy == AuthPolicy::Never
+            && (!request.url().username().is_empty()
+                || request.url().password().is_some()
+                || request.headers().contains_key(AUTHORIZATION))
+        {
+            let url = DisplaySafeUrl::from_url(request.url().clone());
+            return Err(Error::Middleware(format_err!(
+                "Credentials are not allowed for `{url}` because authentication is disabled"
+            )));
+        }
+
         // Check for credentials attached to the request already
         let request_credentials = Credentials::from_request(&request)?.map(Authentication::from);
 
@@ -344,7 +356,6 @@ impl Middleware for AuthMiddleware {
         // to the headers so for display purposes we restore some information
         let url = tracing_url(&request, request_credentials.as_ref());
         let index = self.indexes.index_for(request.url());
-        let auth_policy = self.indexes.auth_policy_for(request.url());
         trace!("Handling request for `{url}` with authentication policy {auth_policy}");
 
         let credentials: Option<Arc<Authentication>> = if matches!(auth_policy, AuthPolicy::Never) {
@@ -2334,8 +2345,7 @@ mod tests {
         Ok(())
     }
 
-    /// With the "never" auth policy, requests should fail if
-    /// an endpoint requires authentication.
+    /// With the "never" auth policy, credentials attached to requests are rejected.
     #[test(tokio::test)]
     async fn test_auth_policy_never_with_credentials() -> Result<(), Error> {
         let username = "user";
@@ -2343,18 +2353,6 @@ mod tests {
 
         let server = start_test_server(username, password).await;
         let base_url = Url::parse(&server.uri())?;
-
-        Mock::given(method("GET"))
-            .and(path_regex("/*"))
-            .and(basic_auth(username, password))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(401))
-            .mount(&server)
-            .await;
 
         let indexes = indexes_for(&base_url, AuthPolicy::Never);
         let client = test_client_builder()
@@ -2365,19 +2363,55 @@ mod tests {
             )
             .build();
 
-        let mut url = base_url.clone();
+        let request_url = base_url.join("foo")?;
+        let mut url = request_url.clone();
         url.set_username(username).unwrap();
         url.set_password(Some(password)).unwrap();
 
-        assert_eq!(
+        for request in [
+            client.get(url.clone()).build()?,
             client
-                .get(format!("{}/foo", server.uri()))
-                .send()
-                .await?
-                .status(),
-            401,
-            "Requests should not be completed if credentials are required"
+                .get(request_url.clone())
+                .basic_auth(username, Some(password))
+                .build()?,
+            client
+                .get(request_url.clone())
+                .bearer_auth("token")
+                .build()?,
+            client
+                .get(request_url.clone())
+                .header(AUTHORIZATION, "Custom custom-secret")
+                .build()?,
+            client
+                .get(request_url.clone())
+                .header(AUTHORIZATION, "Basic invalid-base64")
+                .build()?,
+            client
+                .get(request_url.clone())
+                .header(AUTHORIZATION, "Basic dXNlcg==")
+                .build()?,
+        ] {
+            let error = client.execute(request).await.unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "Credentials are not allowed for `{request_url}` because authentication is disabled"
+                )
+            );
+        }
+
+        let error = client
+            .execute(Request::new(Method::GET, url))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Credentials are not allowed for `http://user:****@{}/foo` because authentication is disabled",
+                base_url.authority()
+            )
         );
+        assert!(server.received_requests().await.unwrap().is_empty());
 
         Ok(())
     }
