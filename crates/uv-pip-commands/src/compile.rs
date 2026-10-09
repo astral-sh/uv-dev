@@ -651,12 +651,14 @@ pub async fn pip_compile(
 
     if include_build_dependencies {
         let mut requirements_by_source = FxHashMap::default();
+        let mut build_packages_by_source = FxHashMap::default();
         let mut previous_requirements = (FxHashSet::default(), FxHashSet::default());
         let mut requirement_states = Vec::new();
 
         loop {
             let mut active_requirements = Vec::new();
             let mut active_seen = FxHashSet::default();
+            let mut active_build_packages = FxHashSet::default();
             for distribution in resolution.distributions() {
                 let ResolvedDist::Installable { dist, .. } = distribution else {
                     continue;
@@ -679,6 +681,21 @@ pub async fn pip_compile(
                     requirements_by_source.insert(id.clone(), discovered);
                 }
                 if let Some(build_requirements) = requirements_by_source.get(&id) {
+                    // A constrained dependency can disappear after backend backtracking. Retain
+                    // candidate package names for this source so its constraint remains available.
+                    // Unselected source releases do not contribute their remembered packages.
+                    let packages = build_packages_by_source
+                        .entry(id)
+                        .or_insert_with(FxHashSet::default);
+                    let active = build_requirements
+                        .iter()
+                        .filter(|requirement| {
+                            requirement.evaluate_markers(Some(interpreter.markers()), &[])
+                        })
+                        .collect::<Vec<_>>();
+                    packages.extend(resolution.dependency_closure(active.iter().copied()));
+                    packages.extend(active.iter().map(|requirement| requirement.name.clone()));
+                    active_build_packages.extend(packages.iter().cloned());
                     active_requirements.extend(
                         build_requirements
                             .iter()
@@ -688,23 +705,9 @@ pub async fn pip_compile(
                     );
                 }
             }
-            let active_build_requirements = active_seen
-                .iter()
-                .filter(|requirement| {
-                    requirement.evaluate_markers(Some(interpreter.markers()), &[])
-                })
-                .collect::<Vec<_>>();
-            let mut build_packages =
-                resolution.dependency_closure(active_build_requirements.iter().copied());
-            // Newly discovered roots may not be present in the current resolution yet.
-            build_packages.extend(
-                active_build_requirements
-                    .iter()
-                    .map(|requirement| requirement.name.clone()),
-            );
             let active_constraints = build_constraints
                 .specifications()
-                .filter(|constraint| build_packages.contains(&constraint.requirement.name))
+                .filter(|constraint| active_build_packages.contains(&constraint.requirement.name))
                 .cloned()
                 .collect::<Vec<_>>();
             let constraints_seen = active_constraints

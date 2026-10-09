@@ -21193,3 +21193,73 @@ fn include_build_dependencies_holds_source_lock() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Candidate build constraints survive backtracking without constraining unrelated runtime roots.
+#[test]
+fn include_build_dependencies_retains_constraints_after_backtracking() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "build-constraints-survive-backtracking"
+        [root]
+        requires = ["backend", "runtime-only"]
+        [expected]
+        satisfiable = true
+        [packages.backend.versions."1.0.0"]
+        sdist = false
+        [packages.backend.versions."2.0.0"]
+        sdist = false
+        requires = ["helper>=2"]
+        [packages.helper.versions."1.0.0"]
+        sdist = false
+        [packages.helper.versions."2.0.0"]
+        sdist = false
+        [packages.runtime-only.versions."1.0.0"]
+        sdist = false
+        [packages.runtime-only.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = ["backend>=1"]
+        build-backend = "custom"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("project/custom.py")
+        .write_str(indoc! {r"
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+    "})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project\nruntime-only>=2\n")?;
+    context
+        .temp_dir
+        .child("build-constraints.txt")
+        .write_str("helper==1\nruntime-only==1\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies",
+        "--build-constraint", "build-constraints.txt", "--no-header", "--no-annotate",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    backend==1.0.0
+    ./project
+    runtime-only==2.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Resolved 4 packages in [TIME]
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
