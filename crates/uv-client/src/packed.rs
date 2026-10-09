@@ -33,6 +33,13 @@ pub(crate) struct PackedArchive {
     size: u64,
 }
 
+/// A packed pointer can identify an older archive even when its HTTP policy requires refresh.
+pub(crate) enum PackedArchiveRead {
+    Missing,
+    Stale(HashDigest),
+    Fresh(PackedArchive, Box<CachePolicy>),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Metadata {
     hash: HashDigest,
@@ -471,7 +478,7 @@ impl PackedArchiveEntry {
         &self,
         request: &Request,
         cache_control: &CacheControl,
-    ) -> Result<Option<(PackedArchive, Box<CachePolicy>)>, crate::Error> {
+    ) -> Result<PackedArchiveRead, crate::Error> {
         self.read_http_inner(request, cache_control)
             .await
             .map_err(packed_error)
@@ -481,35 +488,47 @@ impl PackedArchiveEntry {
         &self,
         request: &Request,
         cache_control: &CacheControl,
-    ) -> Result<Option<(PackedArchive, Box<CachePolicy>)>> {
+    ) -> Result<PackedArchiveRead> {
         if request.method() != Method::GET {
-            return Ok(None);
+            return Ok(PackedArchiveRead::Missing);
         }
         let allow_stale = matches!(cache_control, CacheControl::AllowStale);
-        if !allow_stale
+        let must_revalidate = !allow_stale
             && (matches!(cache_control, CacheControl::MustRevalidate)
-                || self.cache.freshness(&self.entry, Some(&self.name), None)? == Freshness::Stale)
-        {
-            return Ok(None);
-        }
+                || self.cache.freshness(&self.entry, Some(&self.name), None)? == Freshness::Stale);
         let bytes = match fs_err::tokio::read(self.entry.path()).await {
             Ok(bytes) => bytes,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(PackedArchiveRead::Missing);
+            }
             Err(err) => return Err(err.into()),
         };
-        let cached = match DataWithCachePolicy::from_reader(std::io::Cursor::new(bytes)) {
+        let cached = match DataWithCachePolicy::from_reader(bytes.as_slice()) {
             Ok(cached) => cached,
             Err(err) => {
                 warn!(
                     "Ignoring broken packed archive metadata for {}: {err}",
                     self.url
                 );
-                return Ok(None);
+                return Ok(PackedArchiveRead::Missing);
             }
         };
+        let metadata: Metadata = match rmp_serde::from_slice(cached.data()) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                warn!(
+                    "Ignoring broken packed archive metadata for {}: {err}",
+                    self.url
+                );
+                return Ok(PackedArchiveRead::Missing);
+            }
+        };
+        if must_revalidate {
+            return Ok(PackedArchiveRead::Stale(metadata.hash));
+        }
         if allow_stale {
             if !cached.cache_policy().matches_stale_request(request) {
-                return Ok(None);
+                return Ok(PackedArchiveRead::Stale(metadata.hash));
             }
         } else {
             let mut request = request
@@ -519,25 +538,38 @@ impl PackedArchiveEntry {
                 cached.cache_policy().before_request(&mut request),
                 BeforeRequest::Fresh
             ) {
-                return Ok(None);
+                return Ok(PackedArchiveRead::Stale(metadata.hash));
             }
         }
-        let metadata: Metadata = match rmp_serde::from_slice(cached.data()) {
-            Ok(metadata) => metadata,
-            Err(err) => {
-                warn!(
-                    "Ignoring broken packed archive metadata for {}: {err}",
-                    self.url
-                );
-                return Ok(None);
-            }
-        };
         let Some(archive) = self.read(&metadata, None, None).await? else {
-            return Ok(None);
+            return Ok(PackedArchiveRead::Stale(metadata.hash));
         };
         let policy = rkyv::deserialize::<CachePolicy, rkyv::rancor::Error>(cached.cache_policy())
             .context("Could not deserialize packed archive cache policy")?;
-        Ok(Some((archive, Box::new(policy))))
+        Ok(PackedArchiveRead::Fresh(archive, Box::new(policy)))
+    }
+
+    /// Drop an older archive pointer after its metadata is refreshed elsewhere.
+    /// A concurrently published archive with different bytes retains its pointer.
+    pub(crate) async fn invalidate(&self, hash: &HashDigest) -> Result<(), crate::Error> {
+        let lock_entry = CacheEntry::from_path(self.entry.path().with_extension("lock"));
+        let _lock = lock_entry.lock().await.map_err(ErrorKind::CacheLock)?;
+        let bytes = match fs_err::tokio::read(self.entry.path()).await {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(ErrorKind::Io(err).into()),
+        };
+        if let Ok(cached) = DataWithCachePolicy::from_reader(bytes.as_slice())
+            && let Ok(metadata) = rmp_serde::from_slice::<Metadata>(cached.data())
+            && &metadata.hash == hash
+        {
+            match fs_err::tokio::remove_file(self.entry.path()).await {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(ErrorKind::Io(err).into()),
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn response(
@@ -545,7 +577,9 @@ impl PackedArchiveEntry {
         request: &Request,
         cache_control: &CacheControl,
     ) -> Result<Option<(Response, Box<CachePolicy>)>> {
-        let Some((archive, policy)) = self.read_http(request, cache_control).await? else {
+        let PackedArchiveRead::Fresh(archive, policy) =
+            self.read_http(request, cache_control).await?
+        else {
             return Ok(None);
         };
         let response = http::Response::builder()
