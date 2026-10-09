@@ -24,7 +24,6 @@ uv-distribution-types = { workspace = true }
 uv-fs = { workspace = true }
 uv-installer = { workspace = true }
 uv-lock = { workspace = true }
-uv-lock-command = { workspace = true }
 uv-normalize = { workspace = true }
 uv-operations = { workspace = true }
 uv-preview = { workspace = true }
