@@ -778,3 +778,130 @@ fn lock_json_invalid_direct_metadata() -> Result<()> {
     assert!(!context.temp_dir.child("uv.lock").exists());
     Ok(())
 }
+
+/// Registry resolution reports an offline cache miss through the resolver's hint.
+#[test]
+fn lock_check_json_offline_registry() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--check", "--output-format", "json", "--preview-features", "json-output",
+        "--offline", "--no-cache", "--upgrade-package", "a",
+    ]).arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/uv.lock",
+      "status": "indeterminate",
+      "action": "check",
+      "dry_run": false,
+      "error": {
+        "code": "offline_cache_miss",
+        "message": "Because a was not found in the cache and your project depends on a, we can conclude that your project's requirements are unsatisfiable.",
+        "hints": [
+          "Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache."
+        ]
+      }
+    }
+
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a was not found in the cache and your project depends on a, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    "#);
+    Ok(())
+}
+
+/// Source-mode changes remain visible in both sides of a requirement mismatch.
+#[test]
+fn lock_check_json_script_editable_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["child"]
+        # [tool.uv.sources]
+        # child = { path = "child", editable = true }
+        # ///
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--script", "script.py", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let lock = context.read("script.py.lock");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["child"]
+        # [tool.uv.sources]
+        # child = { path = "child", editable = false }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--script", "script.py", "--check", "--output-format", "json",
+        "--preview-features", "json-output", "--offline",
+    ]), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/script.py.lock",
+      "status": "stale",
+      "action": "check",
+      "dry_run": false,
+      "reason": {
+        "code": "requirements_changed",
+        "expected": [
+          "child @ file://[TEMP_DIR]/child (editable: false) (virtual: false)"
+        ],
+        "actual": [
+          "child @ file://[TEMP_DIR]/child (editable: true) (virtual: false)"
+        ]
+      }
+    }
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    "#);
+    assert_eq!(context.read("script.py.lock"), lock);
+    Ok(())
+}

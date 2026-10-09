@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use uv_configuration::{ExcludeNewerChange, ExcludeNewerPackageChange};
-use uv_distribution_types::NameRequirementSpecification;
+use uv_distribution_types::{NameRequirementSpecification, Requirement};
 use uv_lock::SatisfiesResult;
 use uv_normalize::PackageName;
 
@@ -30,6 +30,7 @@ pub struct LockValidationReason {
 #[derive(Debug)]
 pub enum LockValidationValues {
     Strings(Vec<String>),
+    Requirements(Vec<Requirement>),
     BuildConstraints(Vec<NameRequirementSpecification>),
 }
 
@@ -62,6 +63,20 @@ impl LockValidationReason {
         ));
         self.actual = Some(LockValidationValues::Strings(
             actual.into_iter().map(|value| value.to_string()).collect(),
+        ));
+        self
+    }
+
+    fn requirements<'a>(
+        mut self,
+        expected: impl IntoIterator<Item = &'a Requirement>,
+        actual: impl IntoIterator<Item = &'a Requirement>,
+    ) -> Self {
+        self.expected = Some(LockValidationValues::Requirements(
+            expected.into_iter().cloned().collect(),
+        ));
+        self.actual = Some(LockValidationValues::Requirements(
+            actual.into_iter().cloned().collect(),
         ));
         self
     }
@@ -115,10 +130,12 @@ impl LockValidationReason {
                     .values(current, [locked])
             }
             SatisfiesResult::MismatchedRequirements(expected, actual) => {
-                Self::new(LockValidationReasonCode::RequirementsChanged).values(expected, actual)
+                Self::new(LockValidationReasonCode::RequirementsChanged)
+                    .requirements(expected, actual)
             }
             SatisfiesResult::MismatchedConstraints(expected, actual) => {
-                Self::new(LockValidationReasonCode::ConstraintsChanged).values(expected, actual)
+                Self::new(LockValidationReasonCode::ConstraintsChanged)
+                    .requirements(expected, actual)
             }
             SatisfiesResult::MismatchedOverrides(..) => {
                 Self::new(LockValidationReasonCode::OverridesChanged)
@@ -154,7 +171,7 @@ impl LockValidationReason {
             SatisfiesResult::MismatchedPackageRequirements(package, _, expected, actual) => {
                 Self::new(LockValidationReasonCode::PackageRequirementsChanged)
                     .package(package)
-                    .values(expected, actual)
+                    .requirements(expected, actual)
             }
             SatisfiesResult::MismatchedPackageDependencies(package, ..) => {
                 Self::new(LockValidationReasonCode::PackageDependenciesChanged).package(package)

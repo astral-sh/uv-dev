@@ -1,7 +1,7 @@
 //! Machine-readable results for `uv lock`.
 
 use std::error::Error;
-use std::fmt::Display;
+use std::fmt::{Display, Write as _};
 use std::path::Path;
 
 use anstream::adapter::strip_str;
@@ -10,7 +10,7 @@ use serde::Serialize;
 use uv_client::{ErrorKind as ClientErrorKind, WrappedReqwestError};
 use uv_command_support::ExitStatus;
 use uv_configuration::DryRun;
-use uv_distribution_types::Name;
+use uv_distribution_types::{Name, RequirementSource};
 use uv_fs::PortablePathBuf;
 use uv_lock_operations::{
     LockError, LockMode, LockReporter, LockResult, LockValidationError, LockValidationReason,
@@ -250,7 +250,7 @@ pub(super) struct LockReason {
 }
 
 impl LockReason {
-    pub(super) fn new(code: ReasonCode) -> Self {
+    fn new(code: ReasonCode) -> Self {
         Self {
             code,
             package: None,
@@ -276,6 +276,26 @@ impl From<LockValidationReason> for LockReason {
 fn render_values(values: LockValidationValues) -> Vec<String> {
     match values {
         LockValidationValues::Strings(values) => values,
+        LockValidationValues::Requirements(requirements) => requirements
+            .into_iter()
+            .map(|requirement| {
+                let mut value = requirement.to_string();
+                if let RequirementSource::Directory {
+                    editable,
+                    r#virtual,
+                    ..
+                } = requirement.source
+                {
+                    if let Some(editable) = editable {
+                        let _ = write!(value, " (editable: {editable})");
+                    }
+                    if let Some(r#virtual) = r#virtual {
+                        let _ = write!(value, " (virtual: {virtual})");
+                    }
+                }
+                value
+            })
+            .collect(),
         LockValidationValues::BuildConstraints(constraints) => constraints
             .into_iter()
             .map(|constraint| {
@@ -449,6 +469,9 @@ impl ErrorReport {
     fn resolver_hints(&mut self, error: &NoSolutionError) {
         self.hints = error.resolution_hints().map(plain).collect();
         for hint in error.resolution_hints() {
+            if let PubGrubHint::Offline = hint {
+                self.code = ErrorCode::OfflineCacheMiss;
+            }
             if let PubGrubHint::UnauthorizedIndex { .. } = hint {
                 self.code = ErrorCode::Authentication;
                 self.http_status = Some(401);
