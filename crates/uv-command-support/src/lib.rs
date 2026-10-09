@@ -1,8 +1,7 @@
 //! Output and process primitives shared by uv command implementations.
 
 use std::borrow::Cow;
-use std::fs::Metadata;
-use std::io::stdout;
+use std::io::{self, stdout};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -125,35 +124,47 @@ impl<'a> OutputWriter<'a> {
         if let Some(output_file) = self.output_file {
             let stream = anstream::adapter::strip_bytes(&self.buffer).into_vec();
 
+            // Resolve each link relative to its containing directory, retaining the links when
+            // atomically replacing the final target. A missing final target can be created.
+            let mut target = Cow::Borrowed(output_file);
+            for depth in 0..=256 {
+                let metadata = match fs_err::symlink_metadata(&*target) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                    Err(error) => return Err(error),
+                };
+                if !metadata.is_symlink() {
+                    break;
+                }
+                if depth == 256 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "Too many symbolic links in output path `{}`",
+                            output_file.display()
+                        ),
+                    ));
+                }
+                let link = fs_err::read_link(&*target)?;
+                target = Cow::Owned(target.parent().unwrap_or(Path::new("")).join(link));
+            }
+
             // Devices and pipes must be opened directly: an atomic rename would replace them
-            // with a regular file. Follow symlinks when checking the destination's file type.
-            let metadata = fs_err::symlink_metadata(output_file);
-            let is_symlink = metadata.as_ref().is_ok_and(Metadata::is_symlink);
-            let metadata = if is_symlink {
-                fs_err::metadata(output_file)
-            } else {
-                metadata
-            };
-            match metadata {
+            // with a regular file.
+            match fs_err::symlink_metadata(&*target) {
                 Ok(metadata) if !metadata.is_file() => {
-                    return fs_err::tokio::write(output_file, &stream).await;
+                    return fs_err::tokio::write(target, &stream).await;
                 }
                 Ok(_) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
 
             if let Some(parent_dir) = output_file.parent() {
                 fs_err::create_dir_all(parent_dir)?;
             }
 
-            // If the output file is an existing symlink, write to the destination instead.
-            let output_file = if is_symlink {
-                Cow::Owned(output_file.with_file_name(fs_err::read_link(output_file)?))
-            } else {
-                Cow::Borrowed(output_file)
-            };
-            uv_fs::write_atomic(output_file, &stream).await?;
+            uv_fs::write_atomic(target, &stream).await?;
         }
         Ok(())
     }
