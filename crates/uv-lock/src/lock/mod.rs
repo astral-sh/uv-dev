@@ -78,7 +78,7 @@ pub use crate::lock::export::{
     Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, PythonReport, cyclonedx_json,
 };
 use crate::lock::inputs::ManifestFilter;
-pub use crate::lock::installable::{Installable, InstallableRootKind};
+pub use crate::lock::installable::Installable;
 pub use crate::lock::map::PackageMap;
 pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
@@ -7354,7 +7354,7 @@ impl Package {
     }
 
     /// Returns the dependencies of the package.
-    pub fn dependencies(&self) -> &[Dependency] {
+    fn dependencies(&self) -> &[Dependency] {
         &self.dependencies
     }
 
@@ -7384,6 +7384,11 @@ impl Package {
         root: &Path,
         requires_python: &RequiresPython,
     ) -> Result<Option<Vec<Requirement>>, LockError> {
+        // Scoped overrides need the resolved version; dynamic sources omit it from the lock.
+        // Their resolved edges retain the policy applied during resolution.
+        if self.id.version.is_none() && modifiers.has_scoped_package(&self.id.name) {
+            return Ok(None);
+        }
         let requirements = match context {
             DependencyContext::Group(group) => self.metadata.dependency_groups.get(group),
             DependencyContext::Production | DependencyContext::Extra(_) => {

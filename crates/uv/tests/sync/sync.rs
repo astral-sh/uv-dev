@@ -10253,6 +10253,95 @@ fn sync_registry_dependency_activates_workspace_conflict() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn sync_detects_dynamic_scoped_override_conflict() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "dynamic-scoped-conflict"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.bridge.versions."1.0.0"]
+        requires = ["child"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        dynamic = ["version"]
+        requires-python = ">=3.12"
+        dependencies = ["bridge; sys_platform == '{inactive_platform}'"]
+
+        [build-system]
+        requires = []
+        backend-path = ["."]
+        build-backend = "build_backend"
+
+        [tool.uv]
+        conflicts = [[{{ package = "project" }}, {{ package = "child" }}]]
+        override-dependencies = [
+            "child",
+            {{ package = {{ name = "project", version = "0.1.0" }}, dependencies = ["bridge"] }},
+        ]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+    "#})?;
+    context
+        .temp_dir
+        .child("build_backend.py")
+        .write_str(&formatdoc! {r#"
+        from pathlib import Path
+
+        def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
+            metadata = Path(metadata_directory) / "project-0.1.0.dist-info"
+            metadata.mkdir()
+            metadata.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.2\nName: project\nVersion: 0.1.0\n"
+                "Requires-Dist: bridge; sys_platform == '{inactive_platform}'\n"
+            )
+            return metadata.name
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "project", "--no-install-project", "--preview-features", "package-conflicts", "--index",
+    ]).arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "project", "--no-install-project", "--preview-features", "package-conflicts", "--offline",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    Ok(())
+}
+
 /// Scoped overrides can add an empty conflicting extra to an otherwise dependency-free root.
 #[test]
 fn sync_scoped_override_adds_conflicting_empty_extra() -> Result<()> {

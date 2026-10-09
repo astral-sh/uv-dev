@@ -143,7 +143,7 @@ impl ExtrasSpecificationInner {
     }
 
     /// Returns `true` if the specification includes the given extra.
-    pub fn contains(&self, extra: &ExtraName) -> bool {
+    fn contains(&self, extra: &ExtraName) -> bool {
         // exclude always trumps include
         !self.exclude.contains(extra) && self.include.contains(extra)
     }

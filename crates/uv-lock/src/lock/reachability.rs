@@ -9,9 +9,10 @@ use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use uv_normalize::{ExtraName, GroupName};
 use uv_pep508::MarkerTree;
-use uv_pypi_types::ConflictItem;
-use uv_resolver_types::graph_ops::Reachable;
+use uv_pypi_types::{ConflictItem, ConflictSet};
+use uv_resolver_types::graph_ops::{Reachable, marker_reachability};
 use uv_resolver_types::universal_marker::resolve_activated_extras;
+use uv_resolver_types::{ConflictMarker, UniversalMarker};
 
 use crate::lock::PackageIndex;
 use crate::{Lock, Package};
@@ -95,11 +96,85 @@ impl<'lock> ConflictRequests<'lock> {
         );
     }
 
+    /// Resolve globally certain extra requests before evaluating guards on sibling paths.
+    /// Symbolic cycles stay local; every successful pass removes at least one pending item.
+    fn global_conflicts(
+        &self,
+        known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
+    ) -> FxHashMap<ConflictItem, MarkerTree> {
+        let graph = self.graph.map(
+            |_, _| (),
+            |index, edge| {
+                let mut marker = UniversalMarker::from_combined(*edge.marker());
+                // A request activates its extra on this edge. Ancestor guards still determine which
+                // resolved package version can make the request.
+                if let Some((_, target)) = self.graph.edge_endpoints(index)
+                    && let Node::Package(package, Some(extra)) = &self.graph[target]
+                {
+                    marker.assume_conflict_item(&ConflictItem::from((
+                        package.name().clone(),
+                        extra.clone(),
+                    )));
+                }
+                marker.combined()
+            },
+        );
+        let reachability = marker_reachability(&graph, &[]);
+        let mut pending = FxHashMap::<ConflictItem, MarkerTree>::default();
+        for ((index, extra), node) in &self.nodes {
+            let Some(extra) = extra else {
+                continue;
+            };
+            let package = self.lock.package(*index);
+            if !self.lock.conflicts().contains(package.name(), extra) {
+                continue;
+            }
+            let marker = reachability.get(node).copied().unwrap_or(MarkerTree::FALSE);
+            pending
+                .entry(ConflictItem::from((package.name().clone(), extra.clone())))
+                .and_modify(|current| *current = current.or(marker))
+                .or_insert(marker);
+        }
+        let mut resolved = known_conflicts.clone();
+        for item in self.lock.conflicts().iter().flat_map(ConflictSet::iter) {
+            if !pending.contains_key(item) {
+                resolved.entry(item.clone()).or_insert(MarkerTree::FALSE);
+            }
+        }
+        while !pending.is_empty() {
+            let mut substitutions = resolved.clone();
+            for item in pending.keys() {
+                substitutions.entry(item.clone()).or_insert_with(|| {
+                    UniversalMarker::new(MarkerTree::TRUE, ConflictMarker::from_conflict_item(item))
+                        .combined()
+                });
+            }
+            let remaining = pending.len();
+            pending.retain(|item, marker| {
+                let marker =
+                    resolve_activated_extras(*marker, Some(item.package()), &substitutions);
+                if UniversalMarker::from_combined(marker).has_conflict_marker() {
+                    return true;
+                }
+                resolved
+                    .entry(item.clone())
+                    .and_modify(|current| *current = current.or(marker))
+                    .or_insert(marker);
+                false
+            });
+            if pending.len() == remaining {
+                break;
+            }
+        }
+        resolved
+    }
+
     pub(super) fn finish(
         self,
         known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
     ) -> impl Iterator<Item = (PackageIndex, Option<ExtraName>, MarkerTree)> {
-        let reachability = conflict_marker_reachability(&self.graph, &[], known_conflicts);
+        let known_conflicts = self.global_conflicts(known_conflicts);
+        let reachability = conflict_marker_reachability(&self.graph, &[], &known_conflicts);
         self.nodes
             .into_iter()
             .filter_map(move |((index, extra), node)| {

@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
-use either::Either;
 use uv_configuration::{DependencyGroupsWithDefaults, ExtrasSpecification};
 use uv_pep508::MarkerTree;
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 
+use crate::lock::installable::InstallableRootKind;
 use crate::lock::reachability::ConflictRequests;
 use crate::lock::{DependencyContext, LockErrorKind};
-use crate::{Installable, InstallableRootKind, LockError, implicit_constraints_marker};
+use crate::{Installable, LockError, implicit_constraints_marker};
 
 /// Return the conditions under which selected packages, extras, and groups are requested.
 ///
@@ -133,26 +133,16 @@ pub fn activated_conflicts<'lock>(
     }
     while let Some((index, extra, parent)) = requests.queue.pop_front() {
         let package = lock.package(index);
+        let context = extra
+            .as_ref()
+            .map_or(DependencyContext::Production, DependencyContext::Extra);
         let requirements = package.dependency_requirements(
-            extra
-                .as_ref()
-                .map_or(DependencyContext::Production, DependencyContext::Extra),
+            context,
             &modifiers,
             target.install_path(),
             lock.requires_python(),
         )?;
-        let dependencies = if let Some(extra) = &extra {
-            Either::Left(
-                package
-                    .optional_dependencies
-                    .get(extra)
-                    .into_iter()
-                    .flatten(),
-            )
-        } else {
-            Either::Right(package.dependencies.iter())
-        };
-        for dependency in dependencies {
+        for dependency in context.dependencies(package) {
             let (marker, extras) =
                 dependency.activation(requirements.as_deref(), target.install_path())?;
             requests.push(parent, dependency.index, None, marker);
