@@ -17,6 +17,54 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
 
 #[test]
+fn run_profile_rejects_before_environment_preparation() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.15"
+        dependencies = ["missing-profile-dependency"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.run().args([
+        "--offline", "--profile", "python", "-c", "pass",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--profile` only supports Python scripts and modules; use `uv run --profile script.py` or `uv run --profile -m module`
+    ");
+    assert!(!context.venv.exists());
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
+#[test]
+fn run_profile_preview_warning() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("main.py").write_str("pass\n")?;
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-project", "--profile", "main.py",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: `uv run --profile` is experimental and may change without warning. Pass `--preview-features run-profile` to disable this warning.
+    error: `--profile` requires CPython 3.15 or later; use `--python` to select a compatible interpreter
+    "#);
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-project", "--profile", "--preview-features", "run-profile", "main.py",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--profile` requires CPython 3.15 or later; use `--python` to select a compatible interpreter
+    "#);
+    Ok(())
+}
+
+#[cfg(feature = "test-python-managed")]
+#[test]
 fn run_profile_rejects_unsupported_targets() -> Result<()> {
     let context = uv_test::test_context!("3.14");
     context
@@ -49,7 +97,7 @@ fn run_profile_rejects_unsupported_targets() -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
 #[test]
 fn run_profile_script_and_module() -> Result<()> {
     let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"

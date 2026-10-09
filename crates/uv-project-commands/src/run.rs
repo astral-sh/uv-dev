@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::env::VarError;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write;
 use std::io;
 use std::io::Read;
@@ -44,7 +44,7 @@ use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -127,8 +127,17 @@ pub async fn run(
     malware_settings: MalwareCheckSettings,
     #[cfg(unix)] run_rlimit_nofile: Option<u32>,
 ) -> anyhow::Result<ExitStatus> {
-    if profile.is_some() && command.is_none() {
-        bail!("`--profile` requires a Python script or module");
+    if profile.is_some() {
+        let command = command
+            .as_ref()
+            .context("`--profile` requires a Python script or module")?;
+        command.profile_target()?;
+        if !preview.is_enabled(PreviewFeature::RunProfile) {
+            warn_user!(
+                "`uv run --profile` is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+                PreviewFeature::RunProfile
+            );
+        }
     }
     // Check if max recursion depth was exceeded. This most commonly happens
     // for scripts with a shebang line like `#!/usr/bin/env -S uv run`, so try
@@ -1438,6 +1447,11 @@ pub enum RunCommand {
     Empty,
 }
 
+enum ProfileTarget<'command> {
+    Script(&'command Path, &'command [OsString]),
+    Module(&'command OsStr, &'command [OsString]),
+}
+
 /// A parsed `uv run` target before any remote script has been downloaded.
 #[derive(Debug)]
 pub enum ParsedRunCommand {
@@ -1658,12 +1672,32 @@ impl ParsedRunCommand {
 }
 
 impl RunCommand {
+    /// Validate target eligibility without preparing an environment or selecting Python.
+    fn profile_target(&self) -> anyhow::Result<ProfileTarget<'_>> {
+        match self {
+            Self::PythonScript(target, args) => Ok(ProfileTarget::Script(target, args)),
+            Self::PythonRemote(script, args) => Ok(ProfileTarget::Script(script.path(), args)),
+            Self::PythonModule(module, args) => Ok(ProfileTarget::Module(module, args)),
+            Self::Python(_)
+            | Self::PythonGuiScript(..)
+            | Self::PythonPackage(..)
+            | Self::PythonZipapp(..)
+            | Self::PythonStdin(..)
+            | Self::PythonGuiStdin(..)
+            | Self::External(..)
+            | Self::Empty => bail!(
+                "`--profile` only supports Python scripts and modules; use `uv run --profile script.py` or `uv run --profile -m module`"
+            ),
+        }
+    }
+
     /// Run a Python target under the selected interpreter's sampling profiler.
     fn as_profiled_command(
         &self,
         interpreter: &Interpreter,
         output: &Path,
     ) -> anyhow::Result<Command> {
+        let target = self.profile_target()?;
         if interpreter.implementation_name() != "cpython" || interpreter.python_tuple() < (3, 15) {
             bail!(
                 "`--profile` requires CPython 3.15 or later; use `--python` to select a compatible interpreter"
@@ -1673,27 +1707,12 @@ impl RunCommand {
         let mut process = Command::new(interpreter.sys_executable());
         process.args(["-m", "profiling.sampling", "run", "--flamegraph", "-o"]);
         process.arg(output);
-        match self {
-            Self::PythonScript(target, args) => {
+        match target {
+            ProfileTarget::Script(target, args) => {
                 process.arg("--").arg(target).args(args);
             }
-            Self::PythonRemote(script, args) => {
-                process.arg("--").arg(script.path()).args(args);
-            }
-            Self::PythonModule(module, args) => {
+            ProfileTarget::Module(module, args) => {
                 process.args(["-m", "--"]).arg(module).args(args);
-            }
-            Self::Python(_)
-            | Self::PythonGuiScript(..)
-            | Self::PythonPackage(..)
-            | Self::PythonZipapp(..)
-            | Self::PythonStdin(..)
-            | Self::PythonGuiStdin(..)
-            | Self::External(..)
-            | Self::Empty => {
-                bail!(
-                    "`--profile` only supports Python scripts and modules; use `uv run --profile script.py` or `uv run --profile -m module`"
-                );
             }
         }
         Ok(process)
