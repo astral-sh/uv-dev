@@ -7,7 +7,6 @@ use anyhow::Context;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{
     assert::PathAssert,
-    fixture::ChildPath,
     prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
 };
 use indoc::indoc;
@@ -20,7 +19,7 @@ use uv_platform::Platform;
 use uv_test::archive::write_tar_gz;
 #[cfg(unix)]
 use uv_test::assert_link_target;
-use uv_test::{LATEST_PYTHON_3_12, TestContext, assert_path_missing, uv_snapshot};
+use uv_test::{LATEST_PYTHON_3_12, assert_path_missing, uv_snapshot};
 
 use uv_fs::Simplified;
 use uv_python_managed::platform_key_from_env;
@@ -2532,7 +2531,8 @@ fn python_install_prerelease_specific() {
     ");
 }
 
-fn rejected_python_archive() -> anyhow::Result<(TestContext, ChildPath)> {
+#[test]
+fn python_install_cached_checksum_failure_evicts_archive() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .without_python_download_cache()
         .with_managed_python_dirs()
@@ -2557,20 +2557,15 @@ fn rejected_python_archive() -> anyhow::Result<(TestContext, ChildPath)> {
         .write_str(&metadata.to_string())?;
     let cache = context.temp_dir.child("python-cache");
     cache.create_dir_all()?;
-    let archive = cache.child("000000000-python.tar.gz");
+    let cache_filename = "000000000-python.tar.gz";
+    let archive = cache.child(cache_filename);
     write_tar_gz(
         fs_err::File::create(archive.path())?,
         &[("python/bin/python3", b"inert interpreter")],
     )?;
-    Ok((context, archive))
-}
-
-#[test]
-fn python_install_cached_checksum_failure_evicts_archive() -> anyhow::Result<()> {
-    let (context, archive) = rejected_python_archive()?;
     uv_snapshot!(context.filters(), context.python_install()
         .args(["3.12.0", "--offline", "--python-downloads-json-url", "downloads.json"])
-        .env(EnvVars::UV_PYTHON_CACHE_DIR, archive.parent().context("archive parent")?), @r#"
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, cache.path()), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to install cpython-3.12.0-[PLATFORM]
@@ -2589,13 +2584,40 @@ fn python_install_cached_checksum_failure_evicts_archive() -> anyhow::Result<()>
 #[cfg(unix)]
 #[test]
 fn python_install_cached_checksum_error_survives_cleanup_failure() -> anyhow::Result<()> {
-    let (context, archive) = rejected_python_archive()?;
-    let cache = archive.parent().context("archive parent")?;
-    let cache_filename = "000000000-python.tar.gz".to_string();
+    let context = uv_test::test_context_with_versions!(&[])
+        .without_python_download_cache()
+        .with_managed_python_dirs()
+        .with_filtered_python_keys();
+    let platform = Platform::from_env()?;
+    let metadata = json!({
+        "cpython": {
+            "name": "cpython",
+            "arch": {"family": platform.arch.family().to_string(), "variant": null},
+            "os": platform.os.to_string(),
+            "libc": platform.libc.to_string(),
+            "major": 3, "minor": 12, "patch": 0,
+            "prerelease": null,
+            "url": "https://example.com/python.tar.gz",
+            "sha256": "0".repeat(64),
+            "variant": null,
+        }
+    });
+    context
+        .temp_dir
+        .child("downloads.json")
+        .write_str(&metadata.to_string())?;
+    let cache = context.temp_dir.child("python-cache");
+    cache.create_dir_all()?;
+    let cache_filename = "000000000-python.tar.gz";
+    let archive = cache.child(cache_filename);
+    write_tar_gz(
+        fs_err::File::create(archive.path())?,
+        &[("python/bin/python3", b"inert interpreter")],
+    )?;
     fs_err::create_dir(cache.join(format!(".{}.lock", cache_digest(&cache_filename))))?;
     uv_snapshot!(context.filters(), context.python_install()
         .args(["3.12.0", "--offline", "--python-downloads-json-url", "downloads.json"])
-        .env(EnvVars::UV_PYTHON_CACHE_DIR, cache), @r#"
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, cache.path()), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     warning: Failed to remove rejected Python archive `python-cache/000000000-python.tar.gz`: failed to open file `[TEMP_DIR]/python-cache/.da193ae85eb1703b.lock`: Is a directory (os error 21)
