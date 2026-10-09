@@ -1071,7 +1071,7 @@ async fn lock_config_settings_change_cached_metadata_dependencies() -> Result<()
     let provenance = WalkDir::new(context.cache_dir.path())
         .into_iter()
         .filter_map(Result::ok)
-        .find(|entry| entry.file_name() == uv_cache::METADATA_CONFIG_SETTINGS)
+        .find(|entry| entry.file_name() == uv_cache::METADATA_WITH_SETTINGS)
         .expect("source metadata settings are cached")
         .into_path();
     let cached_settings = fs_err::read(&provenance)?;
@@ -11397,7 +11397,7 @@ fn lock_relative_transitive_poetry_paths() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -21,6 +21,16 @@
+        @@ -22,6 +22,16 @@
          name = "parent"
          version = "0.1.0"
          source = { editable = "../parent" }
@@ -11452,7 +11452,7 @@ fn lock_relative_transitive_poetry_paths() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -10,12 +10,12 @@
+        @@ -11,12 +11,12 @@
          [[package]]
          name = "absolute-child"
          version = "0.1.0"
@@ -11467,7 +11467,7 @@ fn lock_relative_transitive_poetry_paths() -> Result<()> {
 
          [[package]]
          name = "parent"
-        @@ -37,14 +37,8 @@
+        @@ -38,14 +38,8 @@
          version = "0.1.0"
          source = { virtual = "." }
          dependencies = [

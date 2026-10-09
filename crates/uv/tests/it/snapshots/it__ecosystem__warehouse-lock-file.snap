@@ -7,6 +7,7 @@ revision = 5
 requires-python = "==3.11.*"
 
 [options]
+config-settings-provenance = 1
 config-settings-digest = "0d4fc07bab5d3219"
 config-settings-packages = ["pyqrcode"]
 exclude-newer = "2026-06-30T00:00:00Z"

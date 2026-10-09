@@ -23,7 +23,7 @@ use url::Url;
 
 use uv_auth::CredentialsCache;
 use uv_cache::{
-    Cache, CacheBucket, CacheEntry, CacheShard, METADATA_CONFIG_SETTINGS, Removal, WheelCache,
+    Cache, CacheBucket, CacheEntry, CacheShard, METADATA_WITH_SETTINGS, Removal, WheelCache,
 };
 use uv_cache_info::CacheInfo;
 use uv_client::{
@@ -3727,43 +3727,34 @@ impl CachedMetadata {
         cache_entry: &CacheEntry,
         config_settings: &ConfigSettings,
     ) -> Result<Option<Self>, Error> {
-        let settings_entry = cache_entry.shard().entry(METADATA_CONFIG_SETTINGS);
-        let settings = match fs::read(settings_entry.path()).await {
-            Ok(settings) => rmp_serde::from_slice::<ConfigSettings>(&settings)?,
+        let entry = cache_entry.with_file(METADATA_WITH_SETTINGS);
+        let (metadata, settings) = match fs::read(entry.path()).await {
+            Ok(record) => rmp_serde::from_slice::<(ResolutionMetadata, ConfigSettings)>(&record)?,
             // Legacy metadata has no trustworthy settings provenance.
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(Error::CacheRead(err)),
         };
-        if &settings != config_settings {
-            return Ok(None);
-        }
-        match fs::read(&cache_entry.path()).await {
-            Ok(cached) => Ok(Some(Self(rmp_serde::from_slice(&cached)?))),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(Error::CacheRead(err)),
-        }
+        Ok((&settings == config_settings).then_some(Self(metadata)))
     }
 
-    /// Publish metadata and its producing settings while holding the source revision lock.
+    /// Atomically publish metadata together with the settings that produced it.
     async fn write(
         cache_entry: &CacheEntry,
         metadata: &ResolutionMetadata,
         config_settings: &ConfigSettings,
     ) -> Result<(), Error> {
-        let settings_entry = cache_entry.shard().entry(METADATA_CONFIG_SETTINGS);
-        // Invalidate the old provenance first. A failed write must not pair new metadata
-        // with the settings from an earlier successful build.
-        match fs::remove_file(settings_entry.path()).await {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(Error::CacheWrite(err)),
-        }
+        // Keep the legacy metadata file available to cache inspection and older uv versions.
+        // Readers use the versioned record, so concurrent legacy writes cannot change its inputs.
         write_atomic(cache_entry.path(), rmp_serde::to_vec(metadata)?)
             .await
             .map_err(Error::CacheWrite)?;
-        write_atomic(settings_entry.path(), rmp_serde::to_vec(config_settings)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        let entry = cache_entry.with_file(METADATA_WITH_SETTINGS);
+        write_atomic(
+            entry.path(),
+            rmp_serde::to_vec(&(metadata, config_settings))?,
+        )
+        .await
+        .map_err(Error::CacheWrite)?;
         Ok(())
     }
 
@@ -3790,4 +3781,74 @@ fn read_wheel_metadata(
     let dist_info = read_archive_metadata(filename, reader)
         .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
     Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use uv_cache::CacheEntry;
+    use uv_distribution_types::ConfigSettings;
+    use uv_pypi_types::ResolutionMetadata;
+
+    use super::{CachedMetadata, METADATA};
+
+    #[tokio::test]
+    async fn cached_metadata_keeps_settings_bound_across_legacy_writes()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let entry = CacheEntry::new(directory.path(), METADATA);
+        let settings: ConfigSettings = serde_json::from_str(r#"{"dependency":"1.0.0"}"#)?;
+        let metadata = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0\nRequires-Dist: dep==1.0.0\n",
+        )?;
+        CachedMetadata::write(&entry, &metadata, &settings).await?;
+
+        // An older uv can replace the unversioned file without knowing about the new record.
+        let other = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0\nRequires-Dist: dep==2.0.0\n",
+        )?;
+        fs_err::write(entry.path(), rmp_serde::to_vec(&other)?)?;
+        let restored = CachedMetadata::read(&entry, &settings)
+            .await?
+            .expect("matching metadata");
+        assert_eq!(restored.0.requires_dist[0].to_string(), "dep==1.0.0");
+        let other_settings: ConfigSettings = serde_json::from_str(r#"{"dependency":"2.0.0"}"#)?;
+        assert!(
+            CachedMetadata::read(&entry, &other_settings)
+                .await?
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_metadata_writes_keep_settings_bound() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let entry = CacheEntry::new(directory.path(), METADATA);
+        let first_settings: ConfigSettings = serde_json::from_str(r#"{"dependency":"1.0.0"}"#)?;
+        let first = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0\nRequires-Dist: dep==1.0.0\n",
+        )?;
+        let second_settings: ConfigSettings = serde_json::from_str(r#"{"dependency":"2.0.0"}"#)?;
+        let second = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0\nRequires-Dist: dep==2.0.0\n",
+        )?;
+        let (first_write, second_write) = tokio::join!(
+            CachedMetadata::write(&entry, &first, &first_settings),
+            CachedMetadata::write(&entry, &second, &second_settings),
+        );
+        first_write?;
+        second_write?;
+        let first = CachedMetadata::read(&entry, &first_settings).await?;
+        let second = CachedMetadata::read(&entry, &second_settings).await?;
+        assert_ne!(first.is_some(), second.is_some());
+        if let Some(metadata) = first {
+            assert_eq!(metadata.0.requires_dist[0].to_string(), "dep==1.0.0");
+        }
+        if let Some(metadata) = second {
+            assert_eq!(metadata.0.requires_dist[0].to_string(), "dep==2.0.0");
+        }
+        Ok(())
+    }
 }

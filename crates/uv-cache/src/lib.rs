@@ -35,8 +35,8 @@ mod wheel;
 /// Must be kept in-sync with the version in [`CacheBucket::to_str`].
 pub const ARCHIVE_VERSION: u8 = 0;
 
-/// Settings used to produce a source distribution's cached metadata.
-pub const METADATA_CONFIG_SETTINGS: &str = "metadata-config-settings.msgpack";
+/// An atomic cache record containing source metadata and its producing settings.
+pub const METADATA_WITH_SETTINGS: &str = "metadata-with-settings-v1.msgpack";
 
 /// Error locking a cache entry or shard
 #[derive(Debug, thiserror::Error)]
@@ -802,7 +802,7 @@ impl Cache {
 
                         // Retain resolved metadata and the settings that produced it.
                         if path.file_name().is_some_and(|file_name| {
-                            file_name == "metadata.msgpack" || file_name == METADATA_CONFIG_SETTINGS
+                            file_name == "metadata.msgpack" || file_name == METADATA_WITH_SETTINGS
                         }) {
                             continue;
                         }
