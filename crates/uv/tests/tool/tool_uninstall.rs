@@ -1,6 +1,9 @@
 #[cfg(unix)]
 use fs_err::os::unix::fs::symlink;
+#[cfg(windows)]
+use std::collections::BTreeMap;
 #[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 use anyhow::Result;
@@ -10,6 +13,10 @@ use url::Url;
 
 use uv_static::EnvVars;
 
+#[cfg(unix)]
+use uv_test::ReadOnlyDirectoryGuard;
+#[cfg(windows)]
+use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -59,8 +66,9 @@ fn tool_uninstall() {
 
 #[test]
 fn tool_uninstall_preserves_replaced_executable() {
-    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
-    let tool_dir = context.temp_dir.child("tools");
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
     let launcher = context
         .workspace_root
@@ -73,13 +81,7 @@ fn tool_uninstall_preserves_replaced_executable() {
         Url::from_file_path(&launcher).expect("Failed to convert launcher path to file URL")
     );
 
-    context
-        .tool_install()
-        .arg(&launcher)
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
-        .assert()
-        .success();
+    context.tool_install().arg(&launcher).assert().success();
 
     context
         .tool_install()
@@ -87,14 +89,10 @@ fn tool_uninstall_preserves_replaced_executable() {
         .arg("--with-executables-from")
         .arg(&launcher_requirement)
         .arg("--force")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Removed environment for `simple-launcher`
@@ -106,9 +104,7 @@ fn tool_uninstall_preserves_replaced_executable() {
             .exists()
     );
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("basic-app")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("basic-app"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 2 executables: basic-app, simple_launcher
@@ -118,8 +114,9 @@ fn tool_uninstall_preserves_replaced_executable() {
 /// A stale original receipt must not retain a launcher owned by the replacement being removed.
 #[test]
 fn tool_uninstall_removes_replacement_before_stale_owner() {
-    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
-    let tool_dir = context.temp_dir.child("tools");
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
     let launcher = context
         .workspace_root
@@ -132,13 +129,7 @@ fn tool_uninstall_removes_replacement_before_stale_owner() {
         Url::from_file_path(&launcher).expect("Failed to convert launcher path to file URL")
     );
 
-    context
-        .tool_install()
-        .arg(&launcher)
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
-        .assert()
-        .success();
+    context.tool_install().arg(&launcher).assert().success();
 
     context
         .tool_install()
@@ -146,14 +137,10 @@ fn tool_uninstall_removes_replacement_before_stale_owner() {
         .arg("--with-executables-from")
         .arg(&launcher_requirement)
         .arg("--force")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("basic-app")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("basic-app"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 2 executables: basic-app, simple_launcher
@@ -168,29 +155,23 @@ fn tool_uninstall_removes_replacement_before_stale_owner() {
 
 #[test]
 fn tool_uninstall_validates_other_tools_before_removing_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
     let launcher = context
         .workspace_root
         .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
 
-    context
-        .tool_install()
-        .arg(&launcher)
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
-        .assert()
-        .success();
+    context.tool_install().arg(&launcher).assert().success();
 
     tool_dir.child("babel").create_dir_all()?;
     tool_dir
         .child("babel/uv-receipt.toml")
         .write_binary(&[0xff])?;
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @r#"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: failed to read from file `[TEMP_DIR]/tools/babel/uv-receipt.toml`: stream did not contain valid UTF-8
@@ -341,6 +322,107 @@ fn tool_uninstall_preserves_replacement_with_symlinked_bin_directory() -> Result
     exit_code: 0 (success)
     ----- stdout -----
     Hi from the simple launcher!
+    ");
+    Ok(())
+}
+
+/// Permission errors must not turn a retained executable into an unclaimed destination.
+#[test]
+#[cfg(unix)]
+fn tool_uninstall_preserves_replacement_when_ownership_is_unreadable() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let requirement = format!(
+        "simple-launcher @ {}",
+        Url::from_file_path(&launcher).expect("launcher file URL")
+    );
+    context.tool_install().arg(&launcher).assert().success();
+    context
+        .tool_install()
+        .arg(&app)
+        .arg("--with-executables-from")
+        .arg(requirement)
+        .arg("--force")
+        .assert()
+        .success();
+    let protected = tools.child("basic-app/bin");
+    {
+        let _restore = ReadOnlyDirectoryGuard::new(protected.path())?;
+        let mut permissions = fs_err::metadata(&protected)?.permissions();
+        permissions.set_mode(0o000);
+        fs_err::set_permissions(&protected, permissions)?;
+        uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher"), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        error: failed to canonicalize path `[TEMP_DIR]/bin/simple_launcher`: Permission denied (os error 13)
+        ");
+        assert!(tools.child("simple-launcher").exists());
+        assert!(tools.child("basic-app").exists());
+    }
+    uv_snapshot!(context.filters(), Command::new(bin.child("simple_launcher").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+    Ok(())
+}
+
+/// Different Windows filename casing can identify the same copied executable.
+#[test]
+#[cfg(windows)]
+fn tool_uninstall_preserves_replacement_with_different_filename_case() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let (filename, wheel) = generate_wheel(
+        &"first".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["shared-tool".to_owned()],
+    );
+    let first = context.temp_dir.child(filename);
+    first.write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["Shared-Tool".to_owned()],
+    );
+    let second = context.temp_dir.child(filename);
+    second.write_binary(&wheel)?;
+    context.tool_install().arg(first.path()).assert().success();
+    context
+        .tool_install()
+        .arg(second.path())
+        .arg("--force")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("first"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed environment for `first`
+    ");
+    assert!(context.temp_dir.child("tools/second").exists());
+    uv_snapshot!(context.filters(), Command::new(bin.child("shared-tool.exe").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from second!
     ");
     Ok(())
 }

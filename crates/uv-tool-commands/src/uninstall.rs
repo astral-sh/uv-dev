@@ -232,10 +232,11 @@ async fn uninstall_tool(
                 continue;
             }
             #[cfg(unix)]
-            if !fs_err::canonicalize(&entrypoint.install_path)
-                .is_ok_and(|target| target.starts_with(&tool_directory))
-            {
-                continue;
+            match fs_err::canonicalize(&entrypoint.install_path) {
+                Ok(target) if target.starts_with(&tool_directory) => {}
+                Ok(_) => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
             }
 
             #[cfg(windows)]
@@ -298,6 +299,13 @@ async fn uninstall_tool(
 
 /// Identify the destination directory without following the executable's own symlink.
 fn executable_destination(path: &Path) -> io::Result<PathBuf> {
+    // Windows launchers are regular files; canonicalization also normalizes filename casing.
+    #[cfg(windows)]
+    match fs_err::canonicalize(path) {
+        Ok(destination) => return Ok(destination),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     let (Some(parent), Some(filename)) = (path.parent(), path.file_name()) else {
         return Ok(path.to_path_buf());
     };
