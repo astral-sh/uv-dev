@@ -5750,14 +5750,18 @@ fn remove_subset_frozen_ignores_invalid_lock() -> Result<()> {
         .child("uv.lock")
         .write_str("invalid lock")?;
 
-    context
-        .remove()
-        .args(["candidate", "--frozen"])
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.remove().args(["candidate", "--frozen"]), @"
+    exit_code: 0 (success)
+    ");
 
     assert_eq!(context.read("uv.lock"), "invalid lock");
-    assert!(!context.read("pyproject.toml").contains("candidate"));
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
 
     Ok(())
 }
