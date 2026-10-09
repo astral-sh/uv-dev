@@ -550,6 +550,12 @@ async fn write_versions_cache(
     meta: &VersionsCacheMeta,
 ) -> Result<(), Error> {
     fs_err::tokio::create_dir_all(content_entry.dir()).await?;
+    // Interrupted publication must not pair new bytes with old ETags or freshness timestamps.
+    if let Err(err) = fs_err::tokio::remove_file(meta_entry.path()).await
+        && err.kind() != io::ErrorKind::NotFound
+    {
+        return Err(err.into());
+    }
     write_atomic(content_entry.path(), content).await?;
     write_versions_cache_meta(meta_entry, meta).await?;
     Ok(())
@@ -3160,6 +3166,48 @@ mod tests {
         assert_eq!(contents, refreshed);
         assert_eq!(get_requests.load(Ordering::SeqCst), 1);
         server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_cache_metadata_write_cannot_reuse_old_validators() -> anyhow::Result<()> {
+        let cache = Cache::temp()?.init().await?;
+        let url = DisplaySafeUrl::parse("https://example.com/versions.ndjson")?;
+        let shard = versions_cache_shard(&cache, &url);
+        let (content_entry, meta_entry) = versions_cache_entries(&shard);
+        let old = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
+        let new = b"{\"version\":\"3.14.2\",\"artifacts\":[]}\n";
+        assert_eq!(old.len(), new.len());
+        let metadata = VersionsCacheMeta {
+            content_length: old.len() as u64,
+            etag: Some("old-etag".to_owned()),
+            checked_at: SystemTime::now(),
+        };
+        write_versions_cache(&content_entry, &meta_entry, old, &metadata).await?;
+        assert!(
+            read_versions_cache(&content_entry, &meta_entry)
+                .await
+                .is_some()
+        );
+
+        // A timestamp before the epoch makes metadata serialization fail after body publication.
+        let invalid = VersionsCacheMeta {
+            etag: Some("new-etag".to_owned()),
+            checked_at: SystemTime::UNIX_EPOCH - Duration::from_secs(1),
+            ..metadata
+        };
+        assert!(
+            write_versions_cache(&content_entry, &meta_entry, new, &invalid)
+                .await
+                .is_err()
+        );
+        assert_eq!(fs_err::tokio::read(content_entry.path()).await?, new);
+        assert!(
+            read_versions_cache(&content_entry, &meta_entry)
+                .await
+                .is_none()
+        );
+        assert!(!meta_entry.path().try_exists()?);
+        Ok(())
     }
 
     #[tokio::test]
