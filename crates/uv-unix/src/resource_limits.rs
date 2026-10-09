@@ -233,9 +233,6 @@ pub enum OpenFileLimitError {
     #[error("soft limit ({current}) already meets the target ({target})")]
     AlreadySufficient { current: u64, target: u64 },
 
-    #[error("requested open file limit ({target}) exceeds the hard limit ({hard})")]
-    ExceedsHardLimit { target: u64, hard: rlim_t },
-
     #[error("failed to set open file limit from {current} to {target}: {}", source.desc())]
     SetLimitFailed {
         current: u64,

@@ -1410,14 +1410,20 @@ impl EnvVars {
     pub const UV_RUN_RLIMIT_AS: &'static str = "UV_RUN_RLIMIT_AS";
 
     /// Sets the soft core-file size limit, in bytes, for commands executed by `uv run`.
+    ///
+    /// Only supported on Unix.
     #[attr_added_in("next release")]
     pub const UV_RUN_RLIMIT_CORE: &'static str = "UV_RUN_RLIMIT_CORE";
 
     /// Sets the soft CPU-time limit, in seconds, for commands executed by `uv run`.
+    ///
+    /// Only supported on Unix.
     #[attr_added_in("next release")]
     pub const UV_RUN_RLIMIT_CPU: &'static str = "UV_RUN_RLIMIT_CPU";
 
     /// Sets the soft file-size limit, in bytes, for commands executed by `uv run`.
+    ///
+    /// Only supported on Unix.
     #[attr_added_in("next release")]
     pub const UV_RUN_RLIMIT_FSIZE: &'static str = "UV_RUN_RLIMIT_FSIZE";
 
