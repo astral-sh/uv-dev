@@ -1492,7 +1492,7 @@ impl VersionRequest {
     }
 
     /// Return the [`PythonVariant`] of the request, if any.
-    pub(crate) fn variant(&self) -> Option<PythonVariant> {
+    pub fn variant(&self) -> Option<PythonVariant> {
         match self {
             Self::Any => None,
             Self::Default => Some(PythonVariant::Default),

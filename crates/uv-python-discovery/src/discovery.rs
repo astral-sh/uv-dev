@@ -14,6 +14,8 @@ use uv_client::BaseClientBuilder;
 use uv_fs::Simplified;
 use uv_fs::which::is_executable;
 use uv_platform::Platform;
+#[cfg(windows)]
+use uv_python_types::PythonVariant;
 use uv_python_types::{
     EnvironmentPreference, PythonPreference, PythonRequest, PythonRequestError, PythonSource,
     VersionRequest,
