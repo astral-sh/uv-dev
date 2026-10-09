@@ -491,6 +491,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         yield_decisions: bool,
         mut remaining_steps: Option<&mut usize>,
     ) -> Result<ForkOutcome, ResolveError> {
+        // Each invocation can receive new preferences or newly fetched index metadata. Revalidate
+        // earlier selections lazily when their next candidate is selected.
+        state.selected_versions.start_resume();
         let start = if let Some(start) = state.started_at {
             start
         } else {

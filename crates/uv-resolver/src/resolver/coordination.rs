@@ -586,9 +586,6 @@ pub(super) fn solve<InstalledPackages: InstalledPackagesProvider>(
         } = fork;
         let preferences =
             ForkPreferences::shared(&resolver.preferences, &ledger, &observations.observations);
-        // Sibling decisions and newly fetched index metadata are revalidated lazily for each
-        // package when its next candidate is selected.
-        state.selected_versions.start_resume();
         let yield_decisions = !live.is_empty() || !completed.is_empty();
         if !yield_decisions {
             // No other owner can observe intermediate decisions until this fork splits or ends.
@@ -1260,7 +1257,7 @@ fn solve_trial<InstalledPackages: InstalledPackagesProvider>(
     let mut pending = vec![state];
     let mut completed = Vec::new();
     let mut observations = external.clone();
-    while let Some(mut state) = pending.pop() {
+    while let Some(state) = pending.pop() {
         if !sources_fixed_by_manifest(resolver, &state) {
             debug!("Abandoned coordinated backtracking without fixed manifest source policy");
             return None;
@@ -1270,7 +1267,6 @@ fn solve_trial<InstalledPackages: InstalledPackagesProvider>(
             return None;
         }
         let preferences = preferences_for(resolver, &state, &observations);
-        state.selected_versions.clear();
         match resolver.solve_fork(
             state,
             ForkPreferences::fixed(&preferences),
