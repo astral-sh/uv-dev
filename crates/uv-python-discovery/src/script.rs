@@ -252,6 +252,7 @@ impl ScriptInterpreter {
             match check_environment_compatibility(
                 &environment,
                 EnvironmentKind::Script,
+                EnvironmentPreference::Any,
                 python_request.as_ref(),
                 python_preference,
                 python_arch,
@@ -347,6 +348,7 @@ pub enum EnvironmentIncompatibilityError {
 pub fn check_environment_compatibility(
     environment: &PythonEnvironment,
     kind: EnvironmentKind,
+    environment_preference: EnvironmentPreference,
     python_request: Option<&PythonRequest>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
@@ -365,7 +367,23 @@ pub fn check_environment_compatibility(
         .or_else(|| python_arch.map(|_| &PythonRequest::Any))
         .map(|request| request.with_default_arch(python_arch.map(PythonArchitecture::into_inner)));
     if let Some(request) = python_request {
-        if environment.interpreter().matches_request(&request, cache) {
+        let matches = if matches!(request.as_ref(), PythonRequest::ExecutableName(_)) {
+            PythonInstallation::find_existing(
+                &request,
+                environment_preference,
+                python_preference,
+                python_arch,
+                cache,
+            )
+            .is_ok_and(|selected| {
+                environment
+                    .interpreter()
+                    .matches_resolved_interpreter(selected.interpreter())
+            })
+        } else {
+            environment.interpreter().matches_request(&request, cache)
+        };
+        if matches {
             debug!("The {kind} environment's Python version satisfies the request: `{request}`");
         } else {
             return Err(EnvironmentIncompatibilityError::PythonRequest(

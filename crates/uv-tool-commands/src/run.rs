@@ -1093,6 +1093,15 @@ async fn get_or_create_environment(
             let existing_environment = installed_tools
                 .get_environment(&requirement.name, cache)?
                 .filter(|environment| {
+                    if matches!(
+                        python_request.as_ref(),
+                        Some(PythonRequest::ExecutableName(_))
+                    ) {
+                        return environment
+                            .environment()
+                            .interpreter()
+                            .matches_resolved_interpreter(&interpreter);
+                    }
                     environment.environment().interpreter().matches_request(
                         &python_request
                             .as_ref()
