@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use either::Either;
 use itertools::Itertools;
@@ -392,12 +392,15 @@ fn validate_requested_conflicts<'lock>(
         if kind == InstallableRootKind::Production && groups.prod() {
             known_conflicts.insert(ConflictItem::from(name.clone()), root_marker);
             requests.push(requests.root, index, None, root_marker);
-            for extra in extras.extra_names(
-                package
-                    .optional_dependencies
-                    .keys()
-                    .chain(package.metadata.provides_extra.iter()),
-            ) {
+            for extra in extras
+                .extra_names(
+                    package
+                        .optional_dependencies
+                        .keys()
+                        .chain(package.metadata.provides_extra.iter()),
+                )
+                .collect::<BTreeSet<_>>()
+            {
                 known_conflicts.insert(
                     ConflictItem::from((name.clone(), extra.clone())),
                     root_marker,
