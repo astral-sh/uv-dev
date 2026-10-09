@@ -1335,6 +1335,7 @@ fn run_pep723_requirements_source_policy_all() -> Result<()> {
     Ok(())
 }
 
+/// Run a PEP 723-compatible script with `tool.uv` constraints.
 #[test]
 fn run_pep723_script_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12");
