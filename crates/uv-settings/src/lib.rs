@@ -56,6 +56,7 @@ pub struct ToolInstallOptions {
     options: ResolverInstallerOptions,
     cli_environment: ResolverInstallerOptions,
     filesystem: ResolverInstallerOptions,
+    discover_project: bool,
 }
 
 impl std::fmt::Debug for ToolInstallOptions {
@@ -70,11 +71,13 @@ impl ToolInstallOptions {
         options: ResolverInstallerOptions,
         cli_environment: ResolverInstallerOptions,
         filesystem: ResolverInstallerOptions,
+        discover_project: bool,
     ) -> Self {
         Self {
             options,
             cli_environment,
             filesystem,
+            discover_project,
         }
     }
 
@@ -85,6 +88,9 @@ impl ToolInstallOptions {
 
     /// Resolve options using CLI/environment, source-project, then user/system precedence.
     pub fn for_project(&self, project_root: &Path) -> Result<ResolverInstallerOptions, Error> {
+        if !self.discover_project {
+            return Ok(self.options.clone());
+        }
         let project = FilesystemOptions::find(project_root)?
             .map(FilesystemOptions::into_options)
             .map(|options| ResolverInstallerOptions::from(options.top_level))
