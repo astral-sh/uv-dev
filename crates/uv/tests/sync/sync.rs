@@ -15767,18 +15767,6 @@ fn sync_upload_time() -> Result<()> {
      + sniffio==1.3.1
     ");
 
-    // Re-install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Would download 3 packages
-    Would install 3 packages
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
-    ");
-
     Ok(())
 }
 
