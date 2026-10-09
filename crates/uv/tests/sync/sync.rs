@@ -227,7 +227,7 @@ fn explicit_workspace_roots_python_dependency_groups() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `root-b`'s `tool.uv.dependency-groups.typing.requires-python`).
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from `root-b:typing` in `uv.lock`).
     ");
     uv_snapshot!(context.filters(), context.sync()
         .arg("--frozen").arg("--package").arg("root-b")
@@ -235,7 +235,7 @@ fn explicit_workspace_roots_python_dependency_groups() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `root-b`'s `tool.uv.dependency-groups.typing.requires-python`).
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from `root-b:typing` in `uv.lock`).
     ");
     uv_snapshot!(context.filters(), context.sync()
         .arg("--frozen").arg("--package").arg("root-b")

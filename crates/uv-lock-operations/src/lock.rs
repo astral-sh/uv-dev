@@ -992,6 +992,11 @@ async fn do_lock(
                 dependency_groups,
                 dependency_metadata.values().cloned(),
             )
+            .with_workspace_members(
+                root_markers
+                    .as_ref()
+                    .map(|_| packages.keys().cloned().collect()),
+            )
             .relative_to(target.install_path())?;
 
             let previous = existing_lock.map(ValidatedLock::into_lock);

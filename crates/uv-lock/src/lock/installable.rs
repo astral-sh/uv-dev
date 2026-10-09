@@ -237,7 +237,7 @@ pub trait Installable<'lock> {
         if install_options.include_package(
             package.as_install_target(),
             self.project_name(),
-            self.lock().members(),
+            self.lock().workspace_members(),
         ) {
             self.installable_node(package, tags, marker_env, build_options)
         } else {

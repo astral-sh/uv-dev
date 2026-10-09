@@ -13,7 +13,7 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::DependencyGroupsWithDefaults;
 use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
-use uv_pep440::TildeVersionSpecifier;
+use uv_pep440::{TildeVersionSpecifier, VersionSpecifiers};
 use uv_python_interpreter::{Interpreter, RequestedInterpreter};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
@@ -329,6 +329,7 @@ fn find_workspace_python_requirement_for_roots(
                 .map(|(source, specifiers)| (source.clone(), specifiers.clone()))
                 .collect::<RequiresPythonSources>();
             if root_requires.is_empty() {
+                ranges.push(RequiresPython::from_specifiers(VersionSpecifiers::empty()));
                 continue;
             }
             let Some(requires_python) = RequiresPython::intersection(

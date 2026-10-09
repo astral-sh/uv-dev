@@ -222,6 +222,10 @@ impl ValidatedLock {
         }
 
         if let Some(root_markers) = root_markers {
+            if lock.workspace_members().iter().ne(packages.keys()) {
+                debug!("Resolving despite existing lockfile due to change in workspace membership");
+                return Ok(Self::Versions(lock));
+            }
             for (name, expected) in root_markers {
                 let Some(package) = lock.find_by_name(name).ok().flatten() else {
                     return Ok(Self::Versions(lock));

@@ -985,6 +985,32 @@ impl Workspace {
                     });
             requires.extend(group_requires);
         }
+        // A selected member inherits explicitly requested groups absent from its own manifest.
+        let mut selected = self.packages().iter().filter(|(name, _)| includes(name));
+        if let Some((name, member)) = selected.next()
+            && selected.next().is_none()
+            && let Some(root) = self.pyproject_toml().project.as_ref()
+            && root.name != *name
+        {
+            let member_groups =
+                FlatDependencyGroups::from_pyproject_toml(member.root(), member.pyproject_toml())?;
+            let root_groups = FlatDependencyGroups::from_pyproject_toml(
+                self.install_path(),
+                self.pyproject_toml(),
+            )?;
+            for (group, metadata) in root_groups {
+                if groups.contains(&group)
+                    && !groups.contains_because_default(&group)
+                    && member_groups.get(&group).is_none()
+                    && let Some(requires_python) = metadata.requires_python
+                {
+                    requires.insert(
+                        RequiresPythonDeclaration::Member(root.name.clone(), Some(group)),
+                        requires_python,
+                    );
+                }
+            }
+        }
         for (group, flat_group) in self.workspace_dependency_groups()? {
             if groups.contains(&group)
                 && let Some(requires_python) = flat_group.requires_python

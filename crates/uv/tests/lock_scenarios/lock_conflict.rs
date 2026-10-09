@@ -551,7 +551,7 @@ fn explicit_root_python_environment_selection() -> Result<()> {
     ");
     assert_snapshot!(context.read("uv.lock"), @r#"
     version = 1
-    revision = 3
+    revision = 5
     requires-python = ">=3.12, <3.14"
     resolution-markers = [
         "python_full_version >= '3.13'",
@@ -593,7 +593,7 @@ fn explicit_root_python_environment_selection() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `root-b`'s `project.requires-python`).
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from `root-b` in `uv.lock`).
     ");
     uv_snapshot!(context.filters(), context.run()
         .arg("--frozen").arg("--package").arg("root-b")
@@ -636,9 +636,7 @@ fn explicit_root_python_environment_selection() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Removed virtual environment at: .venv
-    Creating virtual environment at: .venv
-    error: The current Python version (3.12.[X]) is not supported by locked workspace member `root-b`
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from `root-b` in `uv.lock`).
     ");
     Ok(())
 }
