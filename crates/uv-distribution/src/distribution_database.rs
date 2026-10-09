@@ -782,12 +782,20 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<Archive, Error> {
-        // Sometimes we can promote the size hint to a trusted effective size.
-        let authority = self
-            .client
-            .unmanaged
-            .checksum_authority_record(index.map_or(&url, IndexUrl::url), dist)
-            .await?;
+        // Authority verification already spools the complete archive, so extract that file directly.
+        if self.client.unmanaged.has_checksum_authority() {
+            return self
+                .download_wheel(
+                    url,
+                    index,
+                    filename,
+                    progress_size_hint,
+                    wheel_entry,
+                    dist,
+                    hashes,
+                )
+                .await;
+        }
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => {
                 progress_size_hint
@@ -810,13 +818,6 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     hashes
                 };
 
-                let response = if let Some(authority) = &authority {
-                    authority
-                        .verify_response(response, self.build_context.cache().root())
-                        .await?
-                } else {
-                    response
-                };
                 let progress_size_hint = progress_size_hint.or_else(|| content_length(&response));
 
                 let progress = self.reporter.as_ref().map(|reporter| {
@@ -946,7 +947,6 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // If the archive is missing the required hashes or size, or has since been removed, force a refresh.
         let archive = Some(archive)
             .filter(|archive| archive.has_digests(hashes))
-            .filter(|archive| matches_authority(authority.as_ref(), archive.hashes(), archive.size))
             .filter(|archive| archive.exists(self.build_context.cache()))
             .filter(|archive| expected_size.is_none() || archive.size.is_some());
 
@@ -1119,7 +1119,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
     /// The caller is responsible for obtaining a lock on the wheel cache.
     async fn download_wheel_response(
         &self,
-        mut response: reqwest::Response,
+        response: reqwest::Response,
         url: &DisplaySafeUrl,
         authority: Option<&VerifiedRecord>,
         retry_state: &mut RetryState,
@@ -1136,11 +1136,6 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             hashes
         };
 
-        if let Some(authority) = authority {
-            response = authority
-                .verify_response(response, self.build_context.cache().root())
-                .await?;
-        }
         let progress_size_hint = progress_size_hint.or_else(|| content_length(&response));
         let mut download_size = content_length(&response).or(expected_size);
 
@@ -1153,20 +1148,45 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         let algorithms = http_hash_algorithms(hashes);
 
-        // Download the wheel to a temporary file.
-        let temp_file =
-            tempfile::tempfile_in(self.build_context.cache().root()).map_err(Error::CacheWrite)?;
-        let mut writer = tokio::io::BufWriter::new(fs_err::tokio::File::from_std(
-            // It's an unnamed file on Linux so that's the best approximation.
-            fs_err::File::from_parts(temp_file, self.build_context.cache().root()),
-        ));
-
-        // States for the download loop below.
         let mut hashers = algorithms.into_iter().map(Hasher::from).collect::<Vec<_>>();
-        // The total number of bytes retrieved, accumulated over individual requests.
-        // Note that this is *not* the same as the number of bytes actually written
-        // to the temporary file, since a copy from the response to the file can fail.
-        let mut bytes_retrieved = 0;
+        let (file, mut response, mut bytes_retrieved) = if let Some(authority) = authority {
+            if let (Some(expected), Some(actual)) = (expected_size, content_length(&response))
+                && expected != actual
+            {
+                return Err(Error::MismatchedContentLength {
+                    distribution: dist.to_string(),
+                    expected,
+                    actual,
+                });
+            }
+            let verified = authority
+                .verify_response(response, self.build_context.cache().root(), |bytes| {
+                    if let Some((reporter, progress)) = progress {
+                        reporter.on_download_progress(progress, bytes);
+                    }
+                })
+                .await?;
+            let (_, mut file) = verified.into_parts();
+            // Index and user-supplied hashes remain independent checks. Hash the verified file
+            // without copying it or reporting its bytes as another network transfer.
+            let mut reader = uv_extract::hash::HashReader::new(&mut file, &mut hashers);
+            reader.finish().await.map_err(Error::HashExhaustion)?;
+            let bytes_retrieved = reader.bytes_read();
+            (file, None, bytes_retrieved)
+        } else {
+            let temp_file = tempfile::tempfile_in(self.build_context.cache().root())
+                .map_err(Error::CacheWrite)?;
+            (
+                fs_err::tokio::File::from_std(fs_err::File::from_parts(
+                    temp_file,
+                    self.build_context.cache().root(),
+                )),
+                Some(response),
+                0,
+            )
+        };
+        let mut writer = tokio::io::BufWriter::new(file);
+
         // The most recent range request's starting offset.
         let mut resumed_at = None;
         // The `Content-Range` that the download was last resumed at.
@@ -1177,11 +1197,12 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         //
         // Errors returned from this loop reach the outer retry classifier, which may restart
         // the full download.
-        loop {
+        while let Some(current_response) = response.take() {
             // Reject conflicting full-response lengths before reading the body. A range response's
             // Content-Length describes only that range, so it cannot be compared to the wheel size.
-            if response.status() == reqwest::StatusCode::OK
-                && let (Some(expected), Some(actual)) = (expected_size, content_length(&response))
+            if current_response.status() == reqwest::StatusCode::OK
+                && let (Some(expected), Some(actual)) =
+                    (expected_size, content_length(&current_response))
                 && expected != actual
             {
                 return Err(Error::MismatchedContentLength {
@@ -1193,16 +1214,17 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
             // Check whether the response indicates range request support. A `206 Partial Content`
             // implies range support while an `Accept-Ranges: bytes` header explicitly advertises it.
-            let supports_range_requests = response.status() == reqwest::StatusCode::PARTIAL_CONTENT
-                || response
+            let supports_range_requests = current_response.status()
+                == reqwest::StatusCode::PARTIAL_CONTENT
+                || current_response
                     .headers()
                     .get(reqwest::header::ACCEPT_RANGES)
                     .is_some_and(|value| value == "bytes");
 
             // A server can advertise range requests but ignore one. In that case, the
             // response is a complete download and must replace the partial bytes.
-            let replaces_partial_download =
-                resumed_at.is_some() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT;
+            let replaces_partial_download = resumed_at.is_some()
+                && current_response.status() != reqwest::StatusCode::PARTIAL_CONTENT;
             if replaces_partial_download {
                 writer
                     .get_mut()
@@ -1220,7 +1242,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 bytes_retrieved = 0;
             }
 
-            let reader = response
+            let reader = current_response
                 .bytes_stream()
                 .map_err(|err| self.handle_response_errors(err))
                 .into_async_read();
@@ -1361,7 +1383,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 None
             };
 
-            response = resumed_response;
+            response = Some(resumed_response);
             resumed_at = Some(offset);
         }
 

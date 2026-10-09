@@ -41,6 +41,7 @@ fn show_settings_returns_before_running_commands() {
     exit_code: 0 (success)
     ----- stdout -----
     GlobalSettings {
+        checksum_authority: None,
         required_version: None,
         quiet: 0,
         verbose: 0,

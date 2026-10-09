@@ -8,9 +8,10 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use ring::signature::Ed25519KeyPair;
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use url::Url;
 use uv_checksum_authority::{
     ArtifactId, AuthorityPublicKey, ChecksumAuthority, ChecksumRecord, Error, Sha256Digest,
@@ -552,43 +553,156 @@ async fn archive_partial_response() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn rejects_malformed_queries() -> Result<()> {
-    let service = AuthorityService::new(Catalog::default(), &key(7)?)?;
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let endpoint = format!("http://{}", listener.local_addr()?);
-    let (shutdown, stopped) = oneshot::channel();
-    let server = tokio::spawn(service.serve(listener, async {
-        let _ = stopped.await;
-    }));
-    let client = reqwest::Client::new();
-    for query in [
-        "source=https://pypi.org/simple&filename=a.whl&filename=b.whl",
-        "source=https://pypi.org/simple&filename=../a.whl",
-        "source=https://pypi.org/simple/&filename=a.whl",
-        "source=https://pypi.org/simple&filename=a.whl&extra=1",
-        "source=https://pypi.org/simple",
-    ] {
-        let response = client
-            .get(format!("{endpoint}/v1/checksum?{query}"))
-            .send()
-            .await?;
-        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+struct TestService {
+    endpoint: String,
+    server: JoinHandle<Result<()>>,
+}
+
+impl TestService {
+    async fn start() -> Result<Self> {
+        let service = AuthorityService::new(Catalog::default(), &key(7)?)?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}", listener.local_addr()?);
+        let server = tokio::spawn(service.serve(listener, std::future::pending()));
+        Ok(Self { endpoint, server })
     }
-    let response = client
-        .get(format!(
-            "{endpoint}/v1/checksum?source={}",
-            "a".repeat(8500)
-        ))
-        .send()
-        .await?;
+}
+
+impl Drop for TestService {
+    fn drop(&mut self) {
+        self.server.abort();
+    }
+}
+
+#[tokio::test]
+async fn rejects_duplicate_filename_query() -> Result<()> {
+    let service = TestService::start().await?;
+    let response = reqwest::get(format!(
+        "{}/v1/checksum?source=https://pypi.org/simple&filename=a.whl&filename=b.whl",
+        service.endpoint
+    ))
+    .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_filename_path_query() -> Result<()> {
+    let service = TestService::start().await?;
+    let response = reqwest::get(format!(
+        "{}/v1/checksum?source=https://pypi.org/simple&filename=../a.whl",
+        service.endpoint
+    ))
+    .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_noncanonical_source_query() -> Result<()> {
+    let service = TestService::start().await?;
+    let response = reqwest::get(format!(
+        "{}/v1/checksum?source=https://pypi.org/simple/&filename=a.whl",
+        service.endpoint
+    ))
+    .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_unknown_query_parameter() -> Result<()> {
+    let service = TestService::start().await?;
+    let response = reqwest::get(format!(
+        "{}/v1/checksum?source=https://pypi.org/simple&filename=a.whl&extra=1",
+        service.endpoint
+    ))
+    .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_missing_filename_query() -> Result<()> {
+    let service = TestService::start().await?;
+    let response = reqwest::get(format!(
+        "{}/v1/checksum?source=https://pypi.org/simple",
+        service.endpoint
+    ))
+    .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_oversized_query() -> Result<()> {
+    let service = TestService::start().await?;
+    let response = reqwest::get(format!(
+        "{}/v1/checksum?source={}",
+        service.endpoint,
+        "a".repeat(8500)
+    ))
+    .await?;
     assert_eq!(response.status(), reqwest::StatusCode::URI_TOO_LONG);
-    let response = client.get(format!("{endpoint}/health")).send().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn serves_health_response() -> Result<()> {
+    let service = TestService::start().await?;
+    let response = reqwest::get(format!("{}/health", service.endpoint)).await?;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     insta::assert_snapshot!(response.text().await?, @"ok");
-    shutdown
-        .send(())
-        .map_err(|()| anyhow!("server exited early"))?;
+    Ok(())
+}
+
+/// Transfer progress is delivered before the server sends the remaining archive bytes.
+#[tokio::test]
+async fn verified_archive_reports_transfer_and_remains_seekable() -> Result<()> {
+    let record = record()?;
+    let signing_key = key(7)?;
+    let verified = SignedRecord::sign(&record, &signing_key)?.verify(
+        record.artifact(),
+        &AuthorityPublicKey::from_signing_key(&signing_key),
+    )?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}", listener.local_addr()?);
+    let (received_first_chunk, first_chunk_received) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nX-Archive: trusted\r\n\r\n8\r\ntrusted \r\n").await?;
+        first_chunk_received.await?;
+        stream.write_all(b"7\r\narchive\r\n0\r\n\r\n").await?;
+        Ok::<_, anyhow::Error>(())
+    });
+    let response = reqwest::get(endpoint).await?;
+    let temporary = assert_fs::TempDir::new()?;
+    let mut first_chunk = Some(received_first_chunk);
+    let mut progress = Vec::new();
+    let archive = tokio::time::timeout(
+        Duration::from_secs(5),
+        verified.verify_response(response, temporary.path(), |bytes| {
+            progress.push(bytes);
+            if let Some(received) = first_chunk.take() {
+                let _ = received.send(());
+            }
+        }),
+    )
+    .await??;
     server.await??;
+    insta::assert_debug_snapshot!(progress, @"
+    [
+        8,
+        7,
+    ]
+    ");
+    let (parts, mut file) = archive.into_parts();
+    assert_eq!(parts.headers["x-archive"], "trusted");
+    assert_eq!(file.stream_position().await?, 0);
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).await?;
+    insta::assert_snapshot!(contents, @"trusted archive");
+    file.rewind().await?;
+    assert_eq!(file.stream_position().await?, 0);
     Ok(())
 }

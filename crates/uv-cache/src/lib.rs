@@ -797,7 +797,7 @@ impl Cache {
                             .file_name()
                             .to_string_lossy()
                             .starts_with("authority-")
-                            && child.path().join("metadata.msgpack").is_file()
+                            && child.path().is_dir()
                     });
                     if !entry.path().join("metadata.msgpack").exists() && !authority_revision {
                         continue;
@@ -815,10 +815,14 @@ impl Cache {
                             continue;
                         }
 
-                        // Visit nested build settings shards separately so their metadata survives.
+                        // Visit authority namespaces and their build-settings shards separately.
                         if entry.file_name() != "src"
                             && entry.file_type()?.is_dir()
-                            && path.join("metadata.msgpack").exists()
+                            && (path.join("metadata.msgpack").exists()
+                                || entry
+                                    .file_name()
+                                    .to_string_lossy()
+                                    .starts_with("authority-"))
                         {
                             continue;
                         }

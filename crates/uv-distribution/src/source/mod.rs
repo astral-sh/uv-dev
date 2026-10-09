@@ -51,7 +51,7 @@ use uv_workspace::pyproject::ToolUvSources;
 
 use crate::distribution_database::ManagedClient;
 use crate::error::Error;
-use crate::hash::{matches_authority, sha256_file};
+use crate::hash::matches_authority;
 use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata};
 use crate::source::authority::{
     authority_build_shard, authority_wheel_target, read_authority_receipt, write_authority_receipt,
@@ -450,14 +450,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             }
         };
 
-        if client.unmanaged.has_checksum_authority() {
-            let digest = if let Some(digest) = built_wheel_metadata.authority_digest.take() {
-                digest
-            } else {
-                sha256_file(&built_wheel_metadata.path)
-                    .await
-                    .map_err(Error::CacheRead)?
-            };
+        if let Some(digest) = built_wheel_metadata.authority_digest.take() {
             built_wheel_metadata.target = authority_wheel_target(
                 &built_wheel_metadata.target,
                 &built_wheel_metadata.filename,
@@ -2940,8 +2933,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<(Vec<HashDigest>, u64), Error> {
         let response = if let Some(authority) = authority {
             authority
-                .verify_response(response, self.build_context.cache().root())
+                .verify_response(response, self.build_context.cache().root(), |_| {})
                 .await?
+                .into_response()
         } else {
             response
         };

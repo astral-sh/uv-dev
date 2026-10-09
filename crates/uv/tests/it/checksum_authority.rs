@@ -6,7 +6,7 @@ use std::str::FromStr;
 use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-use indoc::formatdoc;
+use indoc::{formatdoc, indoc};
 use ring::signature::Ed25519KeyPair;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -948,7 +948,7 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
         .mount_as_scoped(&server)
         .await;
     let authority = Authority::start(vec![record(&index_url, filename, &bytes)?]).await?;
-    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install().args(["--config-settings", "authority=true"])
         .arg("--index-url")
         .arg(&index_url)
         .arg("checksum-example")), @"
@@ -975,7 +975,7 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
         .args(["cache", "prune", "--ci"])
         .assert()
         .success();
-    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install().args(["--config-settings", "authority=true"])
         .arg("--index-url")
         .arg(&index_url)
         .arg("checksum-example")), @"
@@ -1011,7 +1011,7 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
         })
         .expect("authority-built wheel");
     fs_err::write(built_wheel.path(), b"incomplete build")?;
-    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install().args(["--config-settings", "authority=true"])
         .arg("--index-url")
         .arg(&index_url)
         .arg("checksum-example")), @"
@@ -1041,7 +1041,7 @@ async fn checksum_authority_reuses_source_revision() -> Result<()> {
         .success();
 
     let unknown = Authority::start(vec![]).await?;
-    uv_snapshot!(context.filters(), unknown.configure(context.pip_install()
+    uv_snapshot!(context.filters(), unknown.configure(context.pip_install().args(["--config-settings", "authority=true"])
         .arg("--index-url")
         .arg(&index_url)
         .arg("checksum-example")), @"
@@ -1247,5 +1247,128 @@ async fn checksum_authority_retains_source_lock_through_extraction() -> Result<(
         "the source shard must stay locked while extraction is pending"
     );
     context.assert_command("import checksum_example").success();
+    Ok(())
+}
+
+/// Exempt local sources retain the ordinary built-wheel cache layout.
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_reuses_exempt_local_build_without_building() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "checksum-example"
+        version = "1.0.0"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            with Path(__file__).with_name("builds").open("a") as file:
+                file.write("built\n")
+            Path(wheel_directory, {WHEEL:?}).write_bytes(bytes.fromhex({wheel:?}))
+            return {WHEEL:?}
+    "#, wheel = hex::encode(wheel()?)})?;
+    let url = Url::from_directory_path(project.path())
+        .map_err(|()| anyhow!("invalid local source URL"))?;
+    let (parent_name, parent_bytes) = generate_wheel(
+        &"authority-parent".parse()?,
+        &"1.0.0".parse()?,
+        &[format!("checksum-example @ {url}").parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let parent = context.temp_dir.child(parent_name);
+    parent.write_binary(&parent_bytes)?;
+    let authority = Authority::start(vec![]).await?;
+    authority
+        .configure(context.pip_install().arg(parent.path()))
+        .assert()
+        .success();
+    context
+        .pip_uninstall()
+        .args(["checksum-example", "authority-parent"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+        .arg(parent.path()).arg("--no-build")), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + authority-parent==1.0.0 (from file://[TEMP_DIR]/authority_parent-1.0.0-py3-none-any.whl)
+     + checksum-example==1.0.0 (from file://[TEMP_DIR]/project)
+    "#);
+    insta::assert_snapshot!(context.read("project/builds"), @"built");
+    context.assert_command("import importlib.metadata; assert importlib.metadata.version('checksum-example') == '1.0.0'").success();
+    Ok(())
+}
+
+/// A cached HTTP source wheel is reauthorized without permitting a replacement build.
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_reauthorizes_cached_source_without_building() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "checksum_example-1.0.0.tar.gz";
+    let marker = context.temp_dir.child("builds");
+    let backend = formatdoc! {r#"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            with Path({marker:?}).open("a") as file:
+                file.write("built\n")
+            Path(wheel_directory, {WHEEL:?}).write_bytes(bytes.fromhex({wheel:?}))
+            return {WHEEL:?}
+    "#, marker = marker.path().to_string_lossy(), wheel = hex::encode(wheel()?)};
+    let mut bytes = Vec::new();
+    write_tar_gz(
+        &mut bytes,
+        &[
+            (
+                "checksum_example-1.0.0/pyproject.toml",
+                "[build-system]\nrequires = []\nbuild-backend = 'backend'\nbackend-path = ['.']\n[project]\nname = 'checksum-example'\nversion = '1.0.0'\n",
+            ),
+            ("checksum_example-1.0.0/backend.py", &backend),
+        ],
+    )?;
+    index(&server, filename, &bytes, false).await;
+    let url = format!("{}/files/{filename}", server.uri());
+    let authority = Authority::start(vec![record(&url, filename, &bytes)?]).await?;
+    authority
+        .configure(context.pip_install().arg(&url).arg("--no-deps"))
+        .assert()
+        .success();
+    context
+        .pip_uninstall()
+        .arg("checksum-example")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+        .arg(&url).args(["--no-deps", "--no-build"])), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + checksum-example==1.0.0 (from http://[LOCALHOST]/files/checksum_example-1.0.0.tar.gz)
+    "#);
+    context
+        .pip_uninstall()
+        .arg("checksum-example")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+        .arg(&url).args(["--no-deps", "--no-build", "--config-settings", "changed=true"])), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to download and build `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0.tar.gz`
+      cause: Building source distributions is disabled
+    "#);
+    insta::assert_snapshot!(context.read("builds"), @"built");
     Ok(())
 }
