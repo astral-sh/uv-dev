@@ -163,7 +163,7 @@ pub async fn sync_from_lock(
     let marker_env = resolution_markers(None, python_platform, venv.interpreter());
 
     // Validate that the set of requested extras and development groups are compatible.
-    detect_conflicts(&target, extras, groups, Some(&marker_env))?;
+    detect_conflicts(&target, extras, groups, &requires_python, Some(&marker_env))?;
 
     // Validate that the set of requested extras and development groups are defined in the lockfile.
     target.validate_extras(extras)?;

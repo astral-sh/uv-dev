@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::env;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -584,9 +585,16 @@ async fn render_export<'output>(
         }
     });
 
+    let requires_python = match format {
+        ExportFormat::PylockToml => Cow::Owned(target.python_requirement(groups)?.requires_python),
+        ExportFormat::RequirementsTxt | ExportFormat::CycloneDX1_5 => {
+            Cow::Borrowed(lock.requires_python())
+        }
+    };
+
     // Skip conflict detection for CycloneDX exports, as SBOMs are meant to document all dependencies including conflicts.
     if !matches!(format, ExportFormat::CycloneDX1_5) {
-        detect_conflicts(&target, extras, groups, None)?;
+        detect_conflicts(&target, extras, groups, &requires_python, None)?;
     }
 
     // If the user is exporting to PEP 751, ensure the filename matches the specification.
@@ -678,11 +686,10 @@ async fn render_export<'output>(
                 .as_deref()
                 .and_then(Path::parent)
                 .unwrap_or(&CWD);
-            let requires_python = target.python_requirement(groups)?.requires_python;
             let mut export = PylockToml::from_lock(
                 &target,
                 output_dir,
-                requires_python,
+                requires_python.into_owned(),
                 prune,
                 extras,
                 groups,
