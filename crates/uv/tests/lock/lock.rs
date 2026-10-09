@@ -49242,3 +49242,64 @@ fn lock_workspace_group_include_selected_member_scope() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Imported requirements use the source mapping of the member that declares them.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_group_include_uses_member_workspace_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["tools", "lib"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["lib"]
+        [tool.uv.sources]
+        lib = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("lib/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "lib"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--locked", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tools v0.1.0
+    └── lib v0.1.0 (group: test)
+    lib v0.1.0
+    ");
+    Ok(())
+}
