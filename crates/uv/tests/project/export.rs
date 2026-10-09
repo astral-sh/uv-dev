@@ -10402,6 +10402,144 @@ fn requirements_txt_transitive_extra_conflict_registry_forks() -> Result<()> {
     Ok(())
 }
 
+/// Retained Git declarations distinguish missing extras from declared empty extras in frozen locks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_legacy_git_conflict_declarations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[missing]"]
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "child", extra = "missing" }, { group = "dev" }]]
+
+        [tool.uv.sources]
+        child = { git = "https://example.com/child.git" }
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "child", extra = "missing" },
+            { package = "project", group = "dev" },
+        ]]
+
+        [[package]]
+        name = "child"
+        version = "1.0.0"
+        source = { git = "https://example.com/child.git#0000000000000000000000000000000000000000" }
+        [package.metadata]
+        provides-extras = ["available"]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "child" }]
+        [package.dev-dependencies]
+        dev = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    child @ git+https://example.com/child.git@0000000000000000000000000000000000000000
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "child"
+    version = "1.0.0"
+    vcs = { type = "git", url = "https://example.com/child.git", commit-id = "0000000000000000000000000000000000000000" }
+    "#);
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("missing", "available"),
+    )?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&context.read("uv.lock").replace("missing", "available"))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record whether the declared extras of `child` were requested
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+
+    // A retained optional section keeps incoming labels intact during legacy deserialization.
+    context.temp_dir.child("uv.lock").write_str(
+        &context.read("uv.lock").replace(
+            "[package.metadata]\nprovides-extras = [\"available\"]",
+            "[package.optional-dependencies]\navailable = []\n\n[package.metadata]\nprovides-extras = [\"available\"]",
+        ),
+    )?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    child @ git+https://example.com/child.git@0000000000000000000000000000000000000000
+    ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&context.read("uv.lock").replace(
+            "dependencies = [{ name = \"child\" }]",
+            "dependencies = [{ name = \"child\", extra = [\"available\"] }]",
+        ))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `available` and group `dev` are incompatible with the declared conflicts: {`child[available]`, `project:dev`}
+    ");
+
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&context.read("uv.lock").replace(
+            "[package.metadata]\nprovides-extras = [\"available\"]\n",
+            "",
+        ))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `child`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+    Ok(())
+}
+
 /// Group dependencies activate workspace projects under the requesting group's marker.
 #[cfg(feature = "test-universal")]
 #[test]

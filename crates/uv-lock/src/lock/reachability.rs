@@ -14,7 +14,7 @@ use uv_resolver_types::graph_ops::{Reachable, marker_reachability};
 use uv_resolver_types::universal_marker::resolve_activated_extras;
 use uv_resolver_types::{ConflictMarker, UniversalMarker};
 
-use crate::lock::{LockErrorKind, PackageIndex};
+use crate::lock::PackageIndex;
 use crate::{Lock, LockError, Package};
 
 /// A request graph retains conflict guards until package and extra activation is known.
@@ -224,11 +224,8 @@ impl<'lock> ConflictRequests<'lock> {
                 let package = lock.package(index);
                 // Legacy serialization can erase an empty extra and its incoming request, so
                 // reachable production nodes also need declaration evidence.
-                if !package.has_conflict_extra_metadata(lock.conflicts()) {
-                    return Some(Err(LockErrorKind::MissingExtraMetadata {
-                        package: package.name().clone(),
-                    }
-                    .into()));
+                if let Err(err) = package.validate_conflict_extra_metadata(lock.conflicts()) {
+                    return Some(Err(err));
                 }
                 Some(Ok((index, extra, marker)))
             })
