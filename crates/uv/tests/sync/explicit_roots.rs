@@ -1927,6 +1927,7 @@ fn explicit_roots_transitive_registry_workspace_source() -> Result<()> {
 }
 
 /// Selecting a root extra does not request the same extra on a bare transitive member.
+#[cfg(feature = "test-universal")]
 #[test]
 fn explicit_roots_conflicting_extras_follow_selected_roots() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -2036,6 +2037,7 @@ fn explicit_roots_conflicting_extras_follow_selected_roots() -> Result<()> {
 }
 
 /// Group selections apply to installation roots rather than their transitive workspace members.
+#[cfg(feature = "test-universal")]
 #[test]
 fn explicit_roots_conflicting_groups_follow_selected_roots() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -2145,6 +2147,7 @@ fn explicit_roots_conflicting_groups_follow_selected_roots() -> Result<()> {
 }
 
 /// A selected member inherits explicitly requested workspace-root groups for conflict checks.
+#[cfg(feature = "test-universal")]
 #[test]
 fn explicit_roots_conflicting_groups_include_inherited_root() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -2244,6 +2247,298 @@ fn explicit_roots_conflicting_groups_include_inherited_root() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Groups `check` and `member-check` are incompatible with the conflicts: {`app:check`, `shared:member-check`}
+    ");
+    Ok(())
+}
+
+/// Resolved members from unselected groups do not activate project conflicts.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_project_conflicts_follow_selected_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "shared"]
+        roots = ["app"]
+        [tool.uv.sources]
+        shared = { workspace = true }
+        [tool.uv]
+        conflicts = [[{ package = "app" }, { package = "shared" }]]
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = ["shared"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/src/shared/__init__.py")
+        .touch()?;
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--preview-features",
+            "package-conflicts",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--no-default-groups", "--package", "app",
+        "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--no-default-groups",
+        "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--no-default-groups", "--no-header", "--no-hashes", "--no-annotate",
+        "--preview-features", "package-conflicts",
+    ]), @"exit_code: 0 (success)");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--group", "dev",
+        "--preview-features", "package-conflicts",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+        "--preview-features", "package-conflicts",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    "#);
+    Ok(())
+}
+
+/// Transitive project conflicts follow the selected locked version through registry dependencies.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_project_conflicts_follow_locked_dependency_identity() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "explicit-roots-project-conflict-identity"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.bridge.versions."1.0.0"]
+        requires = ["shared"]
+        sdist = false
+        [packages.bridge.versions."2.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12");
+    let index = server.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "shared"]
+        roots = ["app"]
+        [tool.uv]
+        conflicts = [
+            [{{ package = "app" }}, {{ package = "shared" }}],
+            [{{ package = "app", extra = "legacy" }}, {{ package = "app", extra = "modern" }}],
+        ]
+        [[tool.uv.index]]
+        url = "{index}"
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        legacy = ["bridge<2"]
+        modern = ["bridge>=2"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--preview-features", "package-conflicts"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--extra", "legacy", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--extra", "legacy", "--no-header", "--no-hashes", "--no-annotate",
+        "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--extra", "modern", "--no-header", "--no-hashes", "--no-annotate",
+        "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--extra", "modern", "--preview-features", "package-conflicts",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + bridge==2.0.0
+    "#);
+    Ok(())
+}
+
+/// Selected manifest groups apply global overrides before traversing their locked dependencies.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_project_conflicts_include_manifest_group_overrides() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "explicit-roots-manifest-group-conflict"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.bridge.versions."1.0.0"]
+        sdist = false
+        [packages.bridge.versions."2.0.0"]
+        requires = ["shared"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12");
+    let index = server.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [dependency-groups]
+        dev = ["bridge<2"]
+        [tool.uv.workspace]
+        members = ["app", "shared"]
+        roots = ["app"]
+        [tool.uv]
+        override-dependencies = ["bridge==2"]
+        conflicts = [[{{ package = "app" }}, {{ package = "shared" }}]]
+        [[tool.uv.index]]
+        url = "{index}"
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--preview-features", "package-conflicts"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--no-default-groups", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--no-default-groups", "--no-header", "--no-hashes", "--no-annotate",
+        "--preview-features", "package-conflicts",
+    ]), @"exit_code: 0 (success)");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--group", "dev", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+        "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `app` and package `shared` are incompatible with the declared conflicts: {app, shared}
     ");
     Ok(())
 }
