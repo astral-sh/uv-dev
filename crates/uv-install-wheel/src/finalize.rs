@@ -238,7 +238,7 @@ impl FileDigest {
 
 fn replace_script(
     path: &Path,
-    reader: &mut impl Read,
+    mut reader: impl Read,
     permissions: Permissions,
 ) -> Result<FileDigest, Error> {
     let parent = path
@@ -246,7 +246,9 @@ fn replace_script(
         .ok_or_else(|| Error::BrokenVenv(format!("Script has no parent: {}", path.display())))?;
     let mut temporary = uv_fs::tempfile_in(parent)?;
     temporary.as_file().set_permissions(permissions)?;
-    let (size, hash) = copy_and_hash(reader, &mut temporary)?;
+    let (size, hash) = copy_and_hash(&mut reader, &mut temporary)?;
+    // Windows cannot replace the destination while the streamed input still holds it open.
+    drop(reader);
     persist_with_retry_sync(temporary, path)?;
     Ok(FileDigest { size, hash })
 }
@@ -275,7 +277,7 @@ fn finalize_launcher(
     }
     Ok(Some(replace_script(
         path,
-        &mut new.as_slice(),
+        new.as_slice(),
         metadata.permissions(),
     )?))
 }
@@ -313,7 +315,7 @@ fn finalize_prefix(
             let permissions = file.metadata()?.permissions();
             return Ok(Some(replace_script(
                 path,
-                &mut new.as_bytes().chain(file),
+                new.as_bytes().chain(file),
                 permissions,
             )?));
         }
