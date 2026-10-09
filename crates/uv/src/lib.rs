@@ -561,7 +561,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
     // Configure the `Printer`, which controls user-facing output in the CLI.
     let printer = Printer::new(globals.quiet, globals.verbose, globals.no_progress);
-    let printer = if jsonl_output {
+    let printer = if jsonl_output && !globals.no_progress {
         printer.with_jsonl_progress()
     } else {
         printer
