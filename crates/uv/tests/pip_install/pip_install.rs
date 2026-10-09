@@ -16271,9 +16271,9 @@ fn pep_751_constraint() -> Result<()> {
 
         [[packages]]
         name = "idna"
-        version = "3.6"
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+        version = "3.3"
+        sdist = { url = "https://files.pythonhosted.org/packages/62/08/e3fc7c8161090f742f504f40b1bccbfc544d4a4e09eb774bf40aafce5436/idna-3.3.tar.gz", upload-time = 2021-10-12T23:33:41.312Z, size = 286689, hashes = { sha256 = "9d643ff0a55b762d5cdb124b8eaa99c66322e2157b69160bc32796e824360e6d" } }
+        wheels = [{ url = "https://files.pythonhosted.org/packages/04/a2/d918dcd22354d8958fe113e1a3630137e0fc8b44859ade3063982eacd2a4/idna-3.3-py3-none-any.whl", upload-time = 2021-10-12T23:33:38.02Z, size = 61160, hashes = { sha256 = "84d9dd047ffa80596e0f246e2eab0b391788b0503584e8945f2368256d2735ff" } }]
 
         [[packages]]
         name = "sniffio"
@@ -16294,7 +16294,7 @@ fn pep_751_constraint() -> Result<()> {
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
-     + idna==3.6
+     + idna==3.3
      + sniffio==1.3.1
     "
     );

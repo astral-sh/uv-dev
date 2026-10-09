@@ -125,6 +125,12 @@ pub async fn read_requirements_with_pylock_constraints(
             pylock
                 .to_constraints()
                 .into_iter()
+                .map(|requirement| match input {
+                    RequirementsInput::Local(path) => {
+                        requirement.with_origin(RequirementOrigin::File(path.clone()))
+                    }
+                    RequirementsInput::Remote(_) | RequirementsInput::Stdin => requirement,
+                })
                 .map(NameRequirementSpecification::from),
         );
     }
