@@ -34,6 +34,9 @@ pub enum EnvironmentError {
     #[error("PEP 723 scripts do not support dependency groups, but group `{0}` was specified")]
     MissingGroupScript(GroupName),
 
+    #[error("Dependencies for workspace member `{0}` were not resolved for this selection")]
+    UnresolvedWorkspacePackage(PackageName),
+
     #[error("Extra `{extra}` for workspace member `{package}` was not resolved for this selection")]
     UnresolvedWorkspaceExtra {
         package: PackageName,
@@ -230,6 +233,7 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::MissingGroupProject(..)
             | EnvironmentError::MissingGroupProjects(..)
             | EnvironmentError::MissingGroupScript(..)
+            | EnvironmentError::UnresolvedWorkspacePackage(..)
             | EnvironmentError::UnresolvedWorkspaceGroup { .. }
             | EnvironmentError::UnresolvedWorkspaceExtra { .. }
             | EnvironmentError::MissingWorkspaceMemberPython(..)
@@ -277,6 +281,9 @@ impl From<EnvironmentError> for UvError {
 impl uv_errors::Hinted for EnvironmentError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
+            Self::UnresolvedWorkspacePackage(package) => format!(
+                "Add `{package}` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependencies."
+            ).into(),
             Self::UnresolvedWorkspaceExtra { package, .. } => format!(
                 "Add `{package}` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies."
             ).into(),
