@@ -755,7 +755,7 @@ impl<'lock> InstallTarget<'lock> {
         groups: &DependencyGroupsWithDefaults,
         marker_environment: Option<&ResolverMarkerEnvironment>,
     ) -> Result<(), EnvironmentError> {
-        if !groups.prod() && extras.is_empty() {
+        if !groups.prod() {
             return Ok(());
         }
         let lock = self.lock();

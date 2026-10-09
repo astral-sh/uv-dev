@@ -13,6 +13,82 @@ use uv_pep508::{
 };
 use uv_platform_tags::{AbiTag, CPythonAbiVariants, LanguageTag};
 
+/// Return the satisfiable Python ranges of a marker that constrains Python versions.
+///
+/// A satisfiable marker without Python constraints returns `None`. An unsatisfiable marker
+/// returns an empty range, while a Python disjunction may cover the full version range.
+pub fn python_version_ranges(marker: MarkerTree) -> Option<Ranges<Version>> {
+    fn python_versions(
+        tree: MarkerTree,
+        cache: &mut FxHashMap<MarkerTree, Ranges<Version>>,
+        has_python: &mut bool,
+    ) -> Ranges<Version> {
+        if let Some(range) = cache.get(&tree) {
+            return range.clone();
+        }
+        let range = match tree.kind() {
+            MarkerTreeKind::True => Ranges::full(),
+            MarkerTreeKind::False => Ranges::empty(),
+            MarkerTreeKind::Version(marker) => {
+                marker
+                    .edges()
+                    .fold(Ranges::empty(), |range, (edge, child)| {
+                        let child = python_versions(child, cache, has_python);
+                        range.union(&match marker.key() {
+                            CanonicalMarkerValueVersion::PythonFullVersion => {
+                                *has_python = true;
+                                edge.intersection(&child)
+                            }
+                            CanonicalMarkerValueVersion::ImplementationVersion => child,
+                        })
+                    })
+            }
+            MarkerTreeKind::VersionString(marker) => {
+                marker.edges().fold(Ranges::empty(), |range, (_, child)| {
+                    range.union(&python_versions(child, cache, has_python))
+                })
+            }
+            MarkerTreeKind::String(marker) => marker
+                .children()
+                .fold(Ranges::empty(), |range, (_, child)| {
+                    range.union(&python_versions(child, cache, has_python))
+                }),
+            MarkerTreeKind::In(marker) => marker
+                .children()
+                .fold(Ranges::empty(), |range, (_, child)| {
+                    range.union(&python_versions(child, cache, has_python))
+                }),
+            MarkerTreeKind::Contains(marker) => marker
+                .children()
+                .fold(Ranges::empty(), |range, (_, child)| {
+                    range.union(&python_versions(child, cache, has_python))
+                }),
+            MarkerTreeKind::Extra(marker) => marker
+                .children()
+                .fold(Ranges::empty(), |range, (_, child)| {
+                    range.union(&python_versions(child, cache, has_python))
+                }),
+            MarkerTreeKind::List(marker) => marker
+                .children()
+                .fold(Ranges::empty(), |range, (_, child)| {
+                    range.union(&python_versions(child, cache, has_python))
+                }),
+        };
+        cache.insert(tree, range.clone());
+        range
+    }
+
+    if marker.is_true() {
+        return None;
+    }
+    if marker.is_false() {
+        return Some(Ranges::empty());
+    }
+    let mut has_python = false;
+    let range = python_versions(marker, &mut FxHashMap::default(), &mut has_python);
+    (has_python || range.is_empty()).then_some(range)
+}
+
 /// The `Requires-Python` requirement specifier.
 ///
 /// See: <https://packaging.python.org/en/latest/guides/dropping-older-python-versions/>
@@ -63,65 +139,7 @@ impl RequiresPython {
 
     /// Project a marker onto the Python versions for which it can be satisfied.
     pub fn from_marker_tree(marker: MarkerTree) -> Option<Self> {
-        fn python_versions(
-            tree: MarkerTree,
-            cache: &mut FxHashMap<MarkerTree, Ranges<Version>>,
-        ) -> Ranges<Version> {
-            if let Some(range) = cache.get(&tree) {
-                return range.clone();
-            }
-            let range = match tree.kind() {
-                MarkerTreeKind::True => Ranges::full(),
-                MarkerTreeKind::False => Ranges::empty(),
-                MarkerTreeKind::Version(marker) => {
-                    marker
-                        .edges()
-                        .fold(Ranges::empty(), |range, (edge, child)| {
-                            let child = python_versions(child, cache);
-                            range.union(&match marker.key() {
-                                CanonicalMarkerValueVersion::PythonFullVersion => {
-                                    edge.intersection(&child)
-                                }
-                                CanonicalMarkerValueVersion::ImplementationVersion => child,
-                            })
-                        })
-                }
-                MarkerTreeKind::VersionString(marker) => {
-                    marker.edges().fold(Ranges::empty(), |range, (_, child)| {
-                        range.union(&python_versions(child, cache))
-                    })
-                }
-                MarkerTreeKind::String(marker) => marker
-                    .children()
-                    .fold(Ranges::empty(), |range, (_, child)| {
-                        range.union(&python_versions(child, cache))
-                    }),
-                MarkerTreeKind::In(marker) => marker
-                    .children()
-                    .fold(Ranges::empty(), |range, (_, child)| {
-                        range.union(&python_versions(child, cache))
-                    }),
-                MarkerTreeKind::Contains(marker) => marker
-                    .children()
-                    .fold(Ranges::empty(), |range, (_, child)| {
-                        range.union(&python_versions(child, cache))
-                    }),
-                MarkerTreeKind::Extra(marker) => marker
-                    .children()
-                    .fold(Ranges::empty(), |range, (_, child)| {
-                        range.union(&python_versions(child, cache))
-                    }),
-                MarkerTreeKind::List(marker) => marker
-                    .children()
-                    .fold(Ranges::empty(), |range, (_, child)| {
-                        range.union(&python_versions(child, cache))
-                    }),
-            };
-            cache.insert(tree, range.clone());
-            range
-        }
-
-        let range = python_versions(marker, &mut FxHashMap::default());
+        let range = python_version_ranges(marker).unwrap_or_else(Ranges::full);
         if range.is_empty() {
             return None;
         }

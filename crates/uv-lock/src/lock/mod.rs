@@ -4461,6 +4461,7 @@ impl Lock {
         root: &Path,
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         members: &[PackageName],
+        root_markers: Option<&BTreeMap<PackageName, MarkerTree>>,
         required_members: &BTreeMap<PackageName, Editability>,
         requirements: &[Requirement],
         constraints: &[Requirement],
@@ -4560,6 +4561,17 @@ impl Lock {
             ));
         }
 
+        // Roots outside the supported environment do not contribute a package to the graph.
+        let environment = implicit_constraints_marker(
+            self.requires_python.to_marker_tree(),
+            self.supported_environments(),
+        );
+        let excluded_root = |name: &PackageName| {
+            root_markers
+                .and_then(|markers| markers.get(name))
+                .is_some_and(|marker| marker.is_disjoint(environment))
+        };
+
         // Validate that the member sources have not changed (e.g., that they've switched from
         // virtual to non-virtual or vice versa).
         for (name, member) in packages {
@@ -4567,8 +4579,8 @@ impl Lock {
             // A discovered member that is neither a root nor in the locked graph has no source
             // to validate. Its source will be checked if a dependency makes it reachable.
             if source.is_none()
-                && !self.manifest.members.is_empty()
-                && !self.manifest.members.contains(name)
+                && (excluded_root(name)
+                    || (!self.manifest.members.is_empty() && !self.manifest.members.contains(name)))
             {
                 continue;
             }
@@ -4840,7 +4852,8 @@ impl Lock {
         // Traverse the configured roots and their dependencies. An omitted manifest member list
         // represents the implicit single-project root.
         for root_name in packages.keys().filter(|name| {
-            self.manifest.members.is_empty() || self.manifest.members.contains(*name)
+            !excluded_root(name)
+                && (self.manifest.members.is_empty() || self.manifest.members.contains(*name))
         }) {
             let root = self
                 .find_by_name(root_name)
