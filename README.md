@@ -6,31 +6,133 @@ Classification: bug
 
 ## Summary
 
-The reporter describes live PEP 517 backends losing their execution files. Killing only uv and then running plain `uv cache clean` removes a surviving backend's environment; its next write fails with `ENOENT`. A separate parallel-build failure reportedly drops another live backend's environment without any signal or cache-maintenance command.
+The reported loss of a live PEP 517 backend's environment is reproducible. Independently reconstructed, dependency-free fixtures on Linux x86_64 with uv 0.12.13 and CPython 3.12.3 demonstrated both reported failure modes:
 
-astral-sh/uv#22171 adds the relevant build-directory pruning; astral-sh/uv#11694 and astral-sh/uv#15990 document earlier protection for running environments. astral-sh/uv#20116 and astral-sh/uv#19321 discuss related locking designs. None establishes safe workspace retention after uv dies or parallel builds are canceled.
+- Killing only uv with `SIGKILL`, then running plain `uv cache clean`, removed the surviving backend's environment. Its subsequent write failed with `FileNotFoundError`, errno 2 (`ENOENT`), and a delayed import from that environment failed with `ModuleNotFoundError`.
+- Installing two local projects concurrently, with one backend intentionally failing after the other became ready, left the second backend alive after uv exited. Its environment had disappeared, and the same write and import failed. This scenario sent no signals and ran no cache-maintenance command.
+
+The prune case is version-specific: the installed uv 0.12.13 retained the live environment after parent-only termination, and both probes succeeded. The report's prune result used a newer PR revision associated with astral-sh/uv#22171; that binary was not executed here. The macOS versions in the report were also not rerun. These limits do not negate the two independently observed failures.
+
+Separating execution workspaces from evictable cache entries remains a proposed design. These experiments establish the observable lifetime problem, not a particular implementation or a complete solution for descendants.
 
 ## Reported conditions and requested behavior
 
 - **Parent termination and cleanup:** macOS 26.6.2 arm64, Python 3.14.7, uv 0.12.23; parent-only `SIGKILL`, followed by plain `uv cache clean`, while the backend remains alive.
-- **Pruning:** the reported reproduction used CI revision `013216c409a2ce74821f25d9d84ce0747a0301ba` of astral-sh/uv#22171. That is a PR revision, not a claimed released-version prune reproduction.
-- **Parallel cancellation:** one build fails while another backend still needs its environment. The issue provides the observed outcome but does not attach the fixtures or exact invocation.
-- **Storage and ownership proposal:** move execution sources, temporary environments, and reusable executable environments outside `UV_CACHE_DIR`; use an asynchronous owner for process shutdown, output collection, and workspace retention. Avoid runtime symlinks into evictable cache entries, create environments at their final paths, and retain uncertain legacy entries during migration.
-- **Descendants:** retain a workspace when descendant lifetime is unknown, including detached descendants with closed output pipes. This is an acceptance criterion, not a separately documented reproduction. Automatic crash recovery is explicitly outside the proposal's scope.
+- **Pruning:** CI revision `013216c409a2ce74821f25d9d84ce0747a0301ba` of astral-sh/uv#22171. This is a PR revision, not a claimed released-version prune reproduction.
+- **Parallel cancellation:** one build fails while another backend still needs its environment. The report does not provide its exact command or fixtures; the independent reproduction below uses `uv pip install` for two local projects.
+- **Expected behavior:** surviving backends retain usable execution files and imports after uv dies or another build fails. Retaining a detached descendant's workspace after its direct parent exits and its output pipes close is an additional requested acceptance criterion, not a separately demonstrated result here.
+- **Architecture proposal:** move execution sources, temporary environments, and reusable executable environments outside `UV_CACHE_DIR`; manage process shutdown, output collection, and workspace lifetime together; avoid runtime symlinks into evictable cache entries; create reusable environments at their final paths; conservatively retain entries when process lifetime is uncertain. Automatic crash recovery remains outside the proposal's scope.
 
-The issue supplies no implementation or Linux/Windows runtime validation. Its macOS reproduction results have not been independently rerun for this handoff.
-
-## Draft response
-
-Your report exposes a lifetime-safety gap: build workspaces live in the cache, but its lock protects them only while uv holds it. astral-sh/uv#22171 adds these directories to pruning; the earlier locking fixes do not establish that surviving children have stopped. astral-sh/uv#20116 addresses pruning around running commands but is not a confirmed fix for these cases.
-
-Please attach the minimal PEP 517 fixtures and commands for the parent-only SIGKILL and parallel-build failure reproductions for regression coverage. Separating runtime storage from the cache remains a design proposal, including how to retain workspaces when descendant lifetime is uncertain.
+No last-known-good version is supplied for the clean or parallel-cancellation cases. Their reproduction on 0.12.13 shows that these behaviors are not limited to the reported 0.12.23 release; it does not identify their first affected release.
 
 ## Classification
 
-Deleting a live backend's environment is incorrect behavior, even though the report proposes an architectural solution. Source inspection confirms cache-resident temporary build environments, unconditional pruning, and build futures whose cancellation can drop their workspace without awaiting child shutdown. The historical locking fix behind astral-sh/uv#11694 does not cover descendants outliving uv; no open duplicate for these lifetime failures was found. This is not recurrence of the abandoned-directory leak fixed by astral-sh/uv#22171: cache clean already exhibits the reported failure on 0.12.23, while that PR adds the prune exposure.
+Retain the bug classification for the live-backend lifetime problem, with architectural design work tracked separately. `uv cache clean` is documented to remove all cache entries; reproducing removal alone would not establish a defect. The additional evidence is that a still-executing backend loses an environment it was successfully using, including in a parallel-build failure without any user-requested cleanup. Whether and how uv guarantees retention after uncatchable parent termination remains a design decision.
 
-The correctness finding does not establish that the proposed architecture is the only acceptable fix. Keeping this issue open as a bug allows the lifetime failure to be tracked while storage layout, descendant retention, and migration receive separate design review.
+The evidence does not establish that moving all runtime storage outside the cache is the only acceptable fix. It also does not establish recurrence of the abandoned-directory leak fixed by astral-sh/uv#22171: that issue concerned retaining directories after their processes stopped, while this issue concerns deleting directories whose users remain alive.
+
+## Reproduction
+
+**Outcome: reproducible**, for parent-only termination followed by plain cache clean and for sibling-build failure. The reported newer prune behavior and detached-descendant criterion remain unvalidated at runtime.
+
+### Environment and isolation
+
+- Installed executable from `PATH`: `/opt/hostedtoolcache/uv/0.12.13/x86_64/uv`.
+- Version: `uv 0.12.13 (x86_64-unknown-linux-gnu)`.
+- Platform: Linux x86_64; interpreter: `/usr/bin/python3`, CPython 3.12.3.
+- Inspected checkout: `01b62808962d7abfe2d10f43d652f357d8038202`, whose uv manifest reports 0.13.0. The checkout was inspected, not built or executed.
+- Original reproduction root: `/tmp/uv-22338-repro.SDKgTZ`. Each scenario had its own cache, source projects, control files, output directory, and `TMPDIR`. Commands ran with an explicit environment, offline mode, disabled configuration discovery, and Python downloads disabled. No package downloads or external build backends were needed.
+- Retained artifacts beside this README: `reproduction/reproduce.py`, the three `*-report.json` files, and the corresponding `*-uv.log` files. The script is the exact harness executed for these observations.
+
+### Minimal fixtures and commands
+
+Each local project uses an in-tree PEP 517 backend and no build requirements. The slow project's `pyproject.toml` is:
+
+```toml
+[project]
+name = "slow_build"
+version = "0.1.0"
+
+[build-system]
+requires = []
+build-backend = "backend"
+backend-path = ["."]
+```
+
+The backend's `get_requires_for_build_wheel` returns `[]`. Its metadata hook writes static metadata so dependency resolution need not run a wheel build. In `build_wheel`, it successfully writes `before.txt` under `sys.prefix` and creates a tiny module, `lifetime_probe_dependency.py`, in that environment's `site-packages`. It then records its PID and `sys.prefix` outside the cache and waits for an external release file. On release, it tries `(Path(sys.prefix) / "after.txt").write_text(...)` and a first import of that module, records the results outside the cache, and exits. The module contains only `VALUE = 42`; this tests delayed access to environment files without downloading dependencies. The probe deliberately stops after measurement instead of producing a wheel. A 30-second backend deadline bounds waiting.
+
+For the parallel case, a second otherwise equivalent project named `fail_build` raises `RuntimeError("Intentional sibling build failure")` in `build_wheel` only after the slow backend has signaled readiness. This handshake ensures that the failing build overlaps a live sibling. These are ordinary local projects, with no workspace, dependency groups, workspace sources, or frozen execution involved.
+
+The following commands rerun the retained harness with the installed `uv` on `PATH`; each invocation creates its own named scenario directory under the fresh reproduction directory:
+
+```sh
+repro_dir=$(mktemp -d /tmp/uv-22338-rerun.XXXXXX)
+cp "$RUNNER_TEMP/issue-context/reproduction/reproduce.py" "$repro_dir/reproduce.py"
+python3 "$repro_dir/reproduce.py" clean
+python3 "$repro_dir/reproduce.py" parallel
+python3 "$repro_dir/reproduce.py" prune
+```
+
+The harness executes these core command sequences, with paths scoped to each scenario:
+
+```sh
+# Shared command environment, set explicitly by the harness:
+# UV_CACHE_DIR=<scenario>/cache
+# TMPDIR=<scenario>/tmp
+# UV_PYTHON_INSTALL_DIR=<scenario>/python
+# UV_PYTHON_DOWNLOADS=never UV_NO_CONFIG=1 UV_OFFLINE=1
+# UV_CONCURRENT_BUILDS=2 UV_NO_PROGRESS=1
+# PROBE_CONTROL=<scenario>/control
+
+# Parent-only termination and clean:
+uv build --wheel --python /usr/bin/python3 --out-dir <scenario>/dist <scenario>/slow_build
+# The harness starts uv asynchronously and waits for the backend's ready marker.
+UV_LOCK_TIMEOUT=1 uv cache clean
+# The preceding control times out while uv is alive; no --force is used.
+kill -KILL <uv-pid>
+# Wait for that uv process to exit, then:
+uv cache clean
+# Release the backend and read its recorded write/import results.
+
+# Sibling-build failure, using a separate cache and source fixtures:
+uv venv --python /usr/bin/python3 <scenario>/venv
+uv pip install --python <scenario>/venv/bin/python <scenario>/slow_build <scenario>/fail_build
+# Wait for uv to exit, release the surviving backend, and read its results.
+# No signals or cache-maintenance commands are issued in this scenario.
+
+# Prune comparison, using a separate cache and slow-build fixture:
+uv build --wheel --python /usr/bin/python3 --out-dir <scenario>/dist <scenario>/slow_build
+# Wait for backend readiness, kill only uv, and wait for uv to exit.
+kill -KILL <uv-pid>
+uv cache prune
+# Release the backend and read its results.
+```
+
+### Observed results
+
+| Scenario | uv / cleanup result | Surviving backend's environment | Delayed write and import |
+| --- | --- | --- | --- |
+| Plain clean while uv is alive, control | Exit 2 after the configured one-second lock timeout; reports cache in use | Still present | Backend remains paused until the subsequent parent-death test |
+| Parent-only `SIGKILL`, then plain clean | Parent exit `-9`; clean exit 0, `Removed 29 files (104.0KiB)` | Present after parent death, missing after clean | `FileNotFoundError`, errno 2, and `ModuleNotFoundError` |
+| Sibling build raises an error | `uv pip install` exits 1 with the intentional `backend.build_wheel` failure | Missing while slow backend remains alive | `FileNotFoundError`, errno 2, and `ModuleNotFoundError` |
+| Parent-only `SIGKILL`, then prune on uv 0.12.13 | Parent exit `-9`; prune exit 0, `No unused entries found` | Still present | Write succeeds; imported value is 42 |
+
+For both failures, the backend PID was still present after uv exited and the same backend subsequently wrote its result file outside the cache. Thus this is demonstrated execution after environment removal, not an inference from a directory listing or a PID check alone. Both environments were under `<cache>/builds-v0/.tmp...`. The parallel scenario did not run the live-lock control, cache clean, or cache prune.
+
+### Existing test coverage inspected
+
+Searches prioritized `crates/uv/tests/it/` and `crates/uv-client/tests/it/`, then followed this checkout's build and pip-install integration-test layout. The following setup and assertions were read:
+
+- `crates/uv/tests/build/cache_clean.rs::cache_timeout` holds an exclusive cache lock, runs clean with `UV_LOCK_TIMEOUT=1`, and snapshots the timeout error. This covers active-lock protection, not a backend surviving uv.
+- `crates/uv/tests/build/cache_clean.rs::clean_all` installs packages, then snapshots successful full-cache removal. `clean_force` additionally tests cleaning with an exclusive lock held when `--force` is supplied. Neither exercises orphaned backend access; the reproduced failure requires no `--force`.
+- `crates/uv/tests/build/cache_prune.rs::prune_temporary_build_environment` creates `builds-v0/.tmp123456/pyvenv.cfg` manually, snapshots its pruning, and asserts that the directory is gone. It covers an abandoned directory, with no live process.
+- `crates/uv/tests/build/build.rs::build_all_with_failure` defines a workspace with two successful builds and one failing setuptools build, runs `uv build --all --no-build-logs`, and asserts that the successful packages' distributions exist. It covers completion of the other workspace builds, not the early-failure behavior of parallel preparation in `uv pip install` or subsequent access by an orphaned backend.
+
+No matching live-backend retention test was found in the inspected areas. No repository tests were added or executed; these were standalone runtime experiments using the installed binary.
+
+### Validation limits
+
+The reporter's macOS 26.6.2 arm64 / Python 3.14.7 / uv 0.12.23 combination, the PR CI prune revision, Windows behavior, and detached descendants with closed output pipes were not run. The 0.12.13 prune success must not be presented as disproof of the newer prune report. The original reporter's fixtures would still help compare implementation details, but they are no longer essential to demonstrate the clean and parallel-build failures. No fix, release bisect, or proof of the proposed ownership architecture is claimed.
 
 ## Related
 
@@ -41,29 +143,30 @@ The correctness finding does not establish that the proposed architecture is the
 - astral-sh/uv#20116 (pull request, open) — Add automatic pruning of unreferenced cache archives. Proposes releasing the global lock while protecting running environments and their cache symlinks with per-entry locks. Its description explicitly releases claims on process death; it does not establish retention for surviving descendants or cancellation of PEP 517 builds. Related design work, not a confirmed fix or duplicate.
 - astral-sh/uv#19321 (issue, open) — Fine-grained cache locking. Canonical discussion for reducing cache-lock contention, linked by maintainers from astral-sh/uv#19317. Comments examine long-lived commands, external environments, cache-backed environments, and symlink dependencies. It addresses maintenance while uv remains alive, rather than the new ownership failures after termination or cancellation.
 
-## Supporting evidence
+Additional context retained from the prior issue investigation:
 
-Source inspected at checkout commit `01b62808962d7abfe2d10f43d652f357d8038202`:
+- astral-sh/uv#18962 concerns orphan cleanup and global virtual-environment management; it is related storage-lifecycle work rather than a demonstrated fix for a surviving PEP 517 backend.
+- astral-sh/uv#22387 fixes deletion of the cache lock file during concurrent cleanup. Preserving the lock file does not by itself retain execution files after their owning uv process dies; it should not be treated as a duplicate of these observed lifetime failures.
+- astral-sh/uv#15888 introduced shared/exclusive cache locking, followed by astral-sh/uv#15990 retaining those resources during command execution. These protect the uv lifetime; neither demonstrates retention after parent-only `SIGKILL`.
+- astral-sh/uv#19317 points to the canonical fine-grained locking discussion in astral-sh/uv#19321. The closed autoprune proposal astral-sh/uv#17211 leads to astral-sh/uv#20116. The age-based pruning prototype astral-sh/uv#21374 changes eviction policy while retaining the main lock, without establishing descendant ownership.
+- astral-sh/uv#12830, astral-sh/uv#13017, and astral-sh/uv#3095 provide signal-forwarding and process-launch context. The signal-forwarding fix excludes parent-only `SIGKILL`, so it does not establish a fixed-then-regressed guarantee here. astral-sh/uv#12003 concerns external symlink installations rather than this build-lifetime failure.
 
-- `crates/uv-cache/src/lib.rs:336`: `Cache::venv_dir` and `Cache::build_dir` allocate `TempDir` instances inside `builds-v0`.
-- `crates/uv-cache/src/lib.rs:531`, `crates/uv/src/commands/cache_clean.rs:33`, and `crates/uv/src/commands/cache_prune.rs:31`: normal operations hold a shared cache lock; clean/prune acquire an exclusive lock unless forced. This coordinates uv processes, not the lifetime of every descendant. No `--force` is needed in the reported parent-death case.
-- `crates/uv-cache/src/lib.rs:583` clears the cache contents. At line 750, prune iterates over every build-bucket entry and removes it without a child-liveness check. The final implementation therefore retains the relevant behavior even though the reporter tested an earlier PR revision.
-- `crates/uv-build-frontend/src/lib.rs:246` stores the temporary directory in `SourceBuild`. `PythonRunner::run_script` spawns a Tokio child at line 1301, drains its output at line 1341, and waits for the direct child at line 1355. It has no explicit cancellation shutdown owner or `kill_on_drop` configuration. Dropping a Tokio child handle does not terminate the process by default, while dropping the build's `TempDir` removes the environment.
-- `crates/uv-installer/src/preparer.rs:64` uses `FuturesUnordered` for parallel preparation; `Preparer::prepare` uses `try_collect` at line 100. An error can drop pending build futures. This supplies a source-backed cancellation path consistent with the reported second failure; the reporter's exact invocation remains needed for a targeted regression fixture.
-- `crates/uv/tests/build/cache_prune.rs:577` tests removal of a fabricated abandoned build directory. It does not exercise surviving children. The nearby `build_all_with_failure` test at `crates/uv/tests/build/build.rs:979` checks build outcomes, not continued workspace access by an orphaned backend.
+The issue/PR statuses and duplicate-search conclusions above are preserved from the existing handoff. This runtime pass did not repeat the GitHub search or make any changes on GitHub.
 
-Historical context: astral-sh/uv#15888 introduced shared/exclusive cache locking in September 2025, and astral-sh/uv#15990 retained the lock and temporary caches during command execution. A maintainer subsequently closed astral-sh/uv#11694 because the cache lock should prevent deletion of running environments. Those changes protect the uv lifetime; they do not demonstrate a previously working guarantee for orphaned descendants. astral-sh/uv#22171 merged on 2026-10-07 and closed the abandoned-environment report astral-sh/uv#22167. The plain-clean failure is reported on uv 0.12.23 from before that merge.
+## Supporting source evidence
 
-## Search coverage and exclusions
+Source inspected at checkout commit `01b62808962d7abfe2d10f43d652f357d8038202`; it is newer than the executed uv 0.12.13 binary:
 
-Used authenticated gh to search open/closed issues with literal terms including cache clean, cache prune, builds-v0, ENOENT, SIGKILL, parent, parallel build, cancellation, and 0.12.23; conceptual searches covered running-process deletion, orphaned backends, detached descendants, runtime storage, temporary environments outside the cache, and fine-grained locking. REST search was rate-limited and PR search returned unusable results, so also retrieved all 12,901 open/closed/merged PR titles and filtered for cleanup, pruning, locking, cancellation, subprocesses, signals, and temporary environments, then inspected candidate bodies, comments, reviews, and referenced discussions. Historical fixes included astral-sh/uv#15888, astral-sh/uv#15990, and astral-sh/uv#13017. Ruled out astral-sh/uv#22387 as a duplicate: it fixes deletion of the lock file during concurrent cleanup, not surviving-child ownership. Also distinguished astral-sh/uv#18962 (orphan cleanup/global venv management), astral-sh/uv#12003 (external symlink installations), and astral-sh/uv#3095 (exec-based command launching).
+- `crates/uv-cache/src/lib.rs:336`: `Cache::venv_dir` and `Cache::build_dir` allocate `TempDir` instances inside `builds-v0`. The runtime probes independently observed environments at these cache-relative paths.
+- `crates/uv-cache/src/lib.rs:531`, `crates/uv/src/commands/cache_clean.rs:33`, and `crates/uv/src/commands/cache_prune.rs:31`: shared/exclusive cache locking coordinates uv operations. The clean control demonstrated blocking while uv was alive and successful removal after only that parent was killed.
+- `crates/uv-cache/src/lib.rs:583` clears the cache contents. The newer prune implementation at line 750 iterates over all build-bucket entries and removes them without a child-liveness check. This is consistent with the report about astral-sh/uv#22171, but source inspection is not a runtime reproduction of the newer prune behavior.
+- `crates/uv-build-frontend/src/lib.rs:246` stores the temporary environment directory in `SourceBuild`. `PythonRunner::run_script` spawns a Tokio child at line 1301, drains its output, and waits for the direct child. No explicit cancellation shutdown owner or `kill_on_drop` configuration appears in the inspected path.
+- `crates/uv-installer/src/preparer.rs:64` uses `FuturesUnordered` for parallel preparation; `Preparer::prepare` uses `try_collect` at line 100. Dropping pending build futures after a sibling error is a source-backed explanation consistent with the observed pip-install result. The experiment establishes live-child access after removal; it did not instrument destructors or prove the exact internal cancellation path in uv 0.12.13.
 
-Candidate chains were followed through astral-sh/uv#19317 to astral-sh/uv#19321, through the closed autoprune proposal astral-sh/uv#17211 to astral-sh/uv#20116, and through signal-handling issue astral-sh/uv#12830 to astral-sh/uv#13017 and astral-sh/uv#3095. The signal-forwarding fix explicitly excludes parent-only `SIGKILL`; it is not evidence that this uncatchable-signal case was fixed and later regressed. The open age-based pruning prototype astral-sh/uv#21374 retains the main cache lock and changes eviction policy, without establishing descendant ownership.
+The current changelog and version metadata were inspected, but neither an older clean/parallel last-known-good release nor a runtime comparison with the reported PR binary was established. The existing handoff identifies astral-sh/uv#22171 as merged on 2026-10-07; that historical change is relevant specifically to the newer prune behavior.
 
-In particular, astral-sh/uv#22387 preserves the cache directory and lock file to fix an unlink/acquisition race between concurrently running uv commands. It does not retain execution files after their owning uv process has died, so it should not be used to close this report as a duplicate.
+## Next steps
 
-## Next steps and validation limits
+Use the retained fixtures as the basis for separate regression scenarios for parent-only termination plus clean and sibling-build failure. Exercise prune with a binary containing astral-sh/uv#22171, and add a distinct descendant-lifetime scenario. Assert delayed file access or imports as well as directory existence. Before implementation, decide when workspace ownership can safely end, how uncertain descendant lifetimes are handled, and how existing cache-resident execution entries are retained during migration.
 
-Request the minimal PEP 517 fixtures and exact commands for parent-only termination and sibling-build failure. Use separate regression scenarios for those failures and for detached descendants; verify delayed imports and writes as well as directory existence. Before implementation, decide how workspace ownership ends when descendant lifetime cannot be established and how existing cache-resident execution entries will be retained during migration.
-
-This handoff is based on source inspection and GitHub discussion history. No runtime reproduction, build, or test suite was executed, and no implementation or cross-platform fix is claimed.
+All reproduction files and caches were confined to temporary directories. The only handoff changes are this README and retained reproduction artifacts under the runner's temporary issue-context directory; no checkout files or GitHub state were modified.
