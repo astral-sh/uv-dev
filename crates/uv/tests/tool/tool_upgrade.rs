@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::env::consts::EXE_SUFFIX;
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Result, bail};
@@ -18,6 +19,180 @@ use uv_static::EnvVars;
 
 use uv_test::packse::{generate_wheel, generate_wheel_with_files};
 use uv_test::{uv_snapshot, venv_bin_path};
+
+fn write_staged_upgrade_wheel(
+    directory: &Path,
+    name: &str,
+    version: &str,
+    command: bool,
+) -> Result<()> {
+    let normalized = name.replace('-', "_");
+    let module = format!("{normalized}/cli.py");
+    let entrypoints = format!("{normalized}-{version}.dist-info/entry_points.txt");
+    let source = format!(
+        "import json, sys\ndef main():\n    print(json.dumps(dict(version='{version}', python=list(sys.version_info[:2]), root=sys.prefix, executable=sys.executable, source=main.__code__.co_filename)))\n"
+    );
+    let entrypoints_contents = format!("[console_scripts]\n{name} = {normalized}.cli:main\n");
+    let mut files = vec![(module.as_str(), source.as_str())];
+    if command {
+        files.push((entrypoints.as_str(), entrypoints_contents.as_str()));
+    }
+    let (filename, wheel) = generate_wheel_with_files(
+        &name.parse()?,
+        &version.parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &files,
+    );
+    fs_err::write(directory.join(filename), wheel)?;
+    Ok(())
+}
+
+#[test]
+fn tool_upgrade_python_retains_old_generation_until_commit() -> Result<()> {
+    check_staged_python_upgrade(false)
+}
+
+#[test]
+fn tool_upgrade_python_lock_retains_old_generation_until_commit() -> Result<()> {
+    check_staged_python_upgrade(true)
+}
+
+fn check_staged_python_upgrade(lock: bool) -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_tool_dirs();
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    write_staged_upgrade_wheel(wheels.path(), "staged-tool", "1.0.0", true)?;
+    let feature = if lock { "tool-install-locks" } else { "" };
+    context
+        .tool_install()
+        .args([
+            "staged-tool",
+            "--python",
+            "3.12",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(wheels.path())
+        .env(EnvVars::UV_PREVIEW_FEATURES, feature)
+        .assert()
+        .success();
+    let root = context.temp_dir.child("tools/staged-tool");
+    let command = context
+        .temp_dir
+        .child(format!("bin/staged-tool{EXE_SUFFIX}"));
+    let receipt = fs_err::read(root.join("uv-receipt.toml"))?;
+    let configuration = fs_err::read(root.join("pyvenv.cfg"))?;
+    let saved_lock = lock
+        .then(|| fs_err::read(root.join("uv.lock")))
+        .transpose()?;
+    let before = Command::new(command.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let before: serde_json::Value = serde_json::from_slice(&before)?;
+    assert_eq!(before["python"], json!([3, 12]));
+
+    // A resolved and installed replacement can still fail its final executable preflight.
+    write_staged_upgrade_wheel(wheels.path(), "staged-tool", "2.0.0", false)?;
+    context
+        .tool_upgrade()
+        .args(["staged-tool", "--python", "3.13", "--compile-bytecode"])
+        .env(EnvVars::UV_PREVIEW_FEATURES, feature)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No executables are provided"));
+    assert_eq!(fs_err::read(root.join("uv-receipt.toml"))?, receipt);
+    assert_eq!(fs_err::read(root.join("pyvenv.cfg"))?, configuration);
+    assert_eq!(
+        lock.then(|| fs_err::read(root.join("uv.lock")))
+            .transpose()?,
+        saved_lock
+    );
+    let restored = Command::new(command.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&restored)?,
+        before
+    );
+
+    write_staged_upgrade_wheel(wheels.path(), "staged-tool", "3.0.0", true)?;
+    context
+        .tool_upgrade()
+        .args(["staged-tool", "--python", "3.13", "--compile-bytecode"])
+        .env(EnvVars::UV_PREVIEW_FEATURES, feature)
+        .assert()
+        .success();
+    let after = Command::new(command.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let after: serde_json::Value = serde_json::from_slice(&after)?;
+    assert_eq!(after["version"], "3.0.0");
+    assert_eq!(after["python"], json!([3, 13]));
+    assert_eq!(
+        fs_err::canonicalize(after["root"].as_str().expect("root string"))?,
+        fs_err::canonicalize(root.path())?
+    );
+    for key in ["source", "executable"] {
+        let path = Path::new(after[key].as_str().expect("path string"));
+        assert!(path.starts_with(root.path()), "{key}: {path:?}");
+        assert!(!path.to_string_lossy().contains(".uv-tool-staging-"));
+    }
+    assert!(
+        fs_err::read_dir(context.temp_dir.join("tools"))?.all(|entry| entry.is_ok_and(|entry| {
+            !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".uv-tool-staging-")
+        }))
+    );
+    Ok(())
+}
+
+#[test]
+fn tool_upgrade_all_keeps_successful_replacements_when_another_tool_fails() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_tool_dirs();
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    for name in ["first-tool", "second-tool"] {
+        write_staged_upgrade_wheel(wheels.path(), name, "1.0.0", true)?;
+        context
+            .tool_install()
+            .args([name, "--python", "3.12", "--no-index", "--find-links"])
+            .arg(wheels.path())
+            .assert()
+            .success();
+        write_staged_upgrade_wheel(wheels.path(), name, "2.0.0", name == "first-tool")?;
+    }
+    context
+        .tool_upgrade()
+        .args(["--all", "--python", "3.13"])
+        .assert()
+        .failure();
+    for (name, version, python) in [("first-tool", "2.0.0", 13), ("second-tool", "1.0.0", 12)] {
+        let output = Command::new(context.temp_dir.join(format!("bin/{name}{EXE_SUFFIX}")))
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let output: serde_json::Value = serde_json::from_slice(&output)?;
+        assert_eq!(output["version"], version);
+        assert_eq!(output["python"], json!([3, python]));
+    }
+    Ok(())
+}
 
 #[test]
 fn tool_upgrade_empty() {
