@@ -9,9 +9,7 @@ use anyhow::anyhow;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 #[cfg(feature = "test-universal")]
-use async_zip::base::write::ZipFileWriter;
 #[cfg(feature = "test-universal")]
-use async_zip::{Compression, ZipEntryBuilder};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
@@ -28689,29 +28687,6 @@ async fn lock_unique_named_index() -> Result<()> {
     let server = MockServer::start().await;
     let metadata = "Metadata-Version: 2.3\nName: named-index-test\nVersion: 1.0.0\n";
     let wheel_path = "/files/named_index_test-1.0.0-py3-none-any.whl";
-    let mut writer = ZipFileWriter::new(Vec::new());
-    for (name, contents) in [
-        ("named_index_test-1.0.0.dist-info/METADATA", metadata),
-        (
-            "named_index_test-1.0.0.dist-info/WHEEL",
-            "Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-        ),
-        (
-            "named_index_test-1.0.0.dist-info/RECORD",
-            "named_index_test-1.0.0.dist-info/METADATA,,\nnamed_index_test-1.0.0.dist-info/WHEEL,,\nnamed_index_test-1.0.0.dist-info/RECORD,,\n",
-        ),
-    ] {
-        writer
-            .write_entry_whole(
-                ZipEntryBuilder::new(name.into(), Compression::Stored),
-                contents.as_bytes(),
-            )
-            .await?;
-    }
-    let wheel = writer.close().await?;
-    let wheel_size = wheel.len();
-    let wheel_digest = hex::encode(Sha256::digest(&wheel));
-
     for index in ["first", "second"] {
         Mock::given(method("GET"))
             .and(path(format!("/{index}/simple/named-index-test/")))
@@ -28726,8 +28701,7 @@ async fn lock_unique_named_index() -> Result<()> {
         "files": [{
             "filename": "named_index_test-1.0.0-py3-none-any.whl",
             "url": format!("{}{wheel_path}", server.uri()),
-            "hashes": { "sha256": wheel_digest },
-            "size": wheel_size,
+            "hashes": { "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
             "core-metadata": true,
             "upload-time": "2024-01-01T00:00:00Z",
         }],
@@ -28749,7 +28723,7 @@ async fn lock_unique_named_index() -> Result<()> {
         .await;
     Mock::given(method("GET"))
         .and(path(wheel_path))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .respond_with(ResponseTemplate::new(200))
         .expect(0)
         .mount(&server)
         .await;
@@ -28783,13 +28757,8 @@ async fn lock_unique_named_index() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
-    let wheel_size_filter = format!("size = {wheel_size}");
-    let mut filters = context.filters();
-    filters.push((&wheel_digest, "[HASH]"));
-    filters.push((&wheel_size_filter, "size = [SIZE]"));
-
     insta::with_settings!({
-        filters => filters,
+        filters => context.filters(),
     }, {
         assert_snapshot!(
             lock, @r#"
@@ -28805,7 +28774,7 @@ async fn lock_unique_named_index() -> Result<()> {
         version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/default/simple" }
         wheels = [
-            { url = "http://[LOCALHOST]/files/named_index_test-1.0.0-py3-none-any.whl", hash = "sha256:[HASH]", size = [SIZE], upload-time = "2024-01-01T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/named_index_test-1.0.0-py3-none-any.whl", hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", upload-time = "2024-01-01T00:00:00Z" },
         ]
 
         [[package]]
