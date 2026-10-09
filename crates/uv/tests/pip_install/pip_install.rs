@@ -9421,6 +9421,61 @@ fn require_hashes_missing_dependency() -> Result<()> {
     "
     );
 
+    // A directive in the input remains visible when resolution finds an unpinned dependency.
+    requirements_txt.write_str(indoc! {r"
+        --require-hashes
+        werkzeug==3.0.0 --hash=sha256:cbb2600f7eabe51dbc0502f58be0b3e1b96b893b05695ea2b35b43d4de2d9962
+    "})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `markupsafe`
+
+    hint: `--require-hashes` was enabled in `requirements.txt`
+    ");
+
+    Ok(())
+}
+
+/// Nested constraint includes retain the hashes that satisfy their required-hash policy.
+#[test]
+fn require_hashes_nested_constraint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        -c constraints.txt
+        anyio==4.0.0
+    "})?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("-c nested/hashes.txt")?;
+    context
+        .temp_dir
+        .child("nested/hashes.txt")
+        .write_str(indoc! {r"
+        --require-hashes
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    "})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--no-deps"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + anyio==4.0.0
+    ");
+
     Ok(())
 }
 

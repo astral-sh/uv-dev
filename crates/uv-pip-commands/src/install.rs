@@ -38,7 +38,7 @@ use uv_python_types::{
 use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
 use uv_resolver::{
     DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
-    ResolutionMode, ResolverEnvironment,
+    ResolutionMode, ResolveError, ResolverEnvironment,
 };
 use uv_settings::PythonInstallMirrors;
 use uv_torch::{AmdGpuArchitecture, TorchMode, TorchStrategy};
@@ -416,7 +416,7 @@ pub async fn pip_install(
             Some(&marker_env),
             hash_checking,
         )
-        .map_err(|err| err.with_require_hashes_source(require_hashes))?
+        .map_err(|err| err.with_require_hashes_source(require_hashes.clone()))?
     } else {
         HashStrategy::default()
     };
@@ -596,7 +596,14 @@ pub async fn pip_install(
         .await
         {
             Ok((graph, hasher)) => (Resolution::from(graph), hasher),
-            Err(err) => {
+            Err(mut err) => {
+                if let uv_resolve_operations::Error::Resolve(ResolveError::UnhashedPackage(
+                    _,
+                    origin,
+                )) = &mut err
+                {
+                    *origin = require_hashes.map(Box::new);
+                }
                 return Err(UvError::from(err).into());
             }
         };

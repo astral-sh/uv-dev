@@ -108,9 +108,9 @@ enum RequirementsTxtStatement {
 /// A [Requirement] with additional metadata from the `requirements.txt`, currently only hashes but in
 /// the future also editable and similar information.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct RequirementEntry {
+pub struct RequirementEntry<T = RequirementsTxtRequirement> {
     /// The actual PEP 508 requirement.
-    pub requirement: RequirementsTxtRequirement,
+    pub requirement: T,
     /// Hashes of the downloadable packages.
     pub hashes: Vec<String>,
 }
@@ -149,7 +149,7 @@ pub struct RequirementsTxt {
     /// The actual requirements with the hashes.
     pub requirements: Vec<RequirementEntry>,
     /// Constraints included with `-c`.
-    pub constraints: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+    pub constraints: Vec<RequirementEntry<uv_pep508::Requirement<VerbatimParsedUrl>>>,
     /// Editables with `-e`.
     pub editables: Vec<RequirementEntry>,
     /// The index URL, specified with `--index-url`.
@@ -470,7 +470,10 @@ impl RequirementsTxt {
                     for entry in sub_constraints.requirements {
                         match entry.requirement {
                             RequirementsTxtRequirement::Named(requirement) => {
-                                data.constraints.push(requirement);
+                                data.constraints.push(RequirementEntry {
+                                    requirement,
+                                    hashes: entry.hashes,
+                                });
                             }
                             RequirementsTxtRequirement::Unnamed(_) => {
                                 return Err(RequirementsTxtParserError::UnnamedConstraint {
@@ -3031,8 +3034,11 @@ mod test {
             .iter()
             .map(|entry| entry.requirement.to_string())
             .collect();
-        let constraints: BTreeSet<String> =
-            parsed.constraints.iter().map(ToString::to_string).collect();
+        let constraints: BTreeSet<String> = parsed
+            .constraints
+            .iter()
+            .map(|entry| entry.requirement.to_string())
+            .collect();
 
         assert_debug_snapshot!(requirements, @r#"
         {
