@@ -22,9 +22,8 @@ use uv_distribution::{
     DistributionDatabase, LoweredExtraBuildDependencies, StaticMetadataDatabase,
 };
 use uv_distribution_types::{
-    ConfigSettings, DependencyMetadata, HashCollection, IndexLocations, InstalledDist, Name,
-    NameRequirementSpecification, PackageConfigSettings, Requirement, RequiresPython, Resolution,
-    UnresolvedRequirement,
+    DependencyMetadata, HashCollection, IndexLocations, InstalledDist, Name,
+    NameRequirementSpecification, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
@@ -32,7 +31,7 @@ use uv_fs::replace_symlink;
 use uv_fs::{CWD, Simplified};
 use uv_git::GitResolver;
 use uv_installer::SitePackages;
-use uv_lock::{Installable, Lock, ResolverManifest, config_settings_digest};
+use uv_lock::{Installable, Lock, ResolverManifest};
 use uv_normalize::{DefaultExtras, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_preview::Preview;
@@ -337,8 +336,6 @@ impl ToolLock {
         resolution: &ResolverOutput,
         manifest: &ResolverManifest,
         index_locations: &IndexLocations,
-        config_setting: &ConfigSettings,
-        config_settings_package: &PackageConfigSettings,
     ) -> anyhow::Result<Self> {
         let manifest = manifest.clone().relative_to(root)?;
         let lock = Lock::from_resolution(
@@ -351,10 +348,7 @@ impl ToolLock {
         )?;
         Ok(Self {
             root: root.to_path_buf(),
-            lock: lock.with_config_settings_digest(config_settings_digest(
-                config_setting,
-                config_settings_package,
-            )),
+            lock,
         })
     }
 
@@ -526,8 +520,6 @@ impl ToolLock {
             .map(Override::Requirement)
             .collect::<Vec<_>>();
         let Self { root, lock } = self;
-        let config_settings_digest =
-            config_settings_digest(config_setting, config_settings_package);
         let validated = ValidatedLock::validate(
             lock,
             &root,
@@ -552,7 +544,8 @@ impl ToolLock {
             upgrade,
             Some(refresh),
             &options,
-            config_settings_digest.as_ref(),
+            config_setting,
+            config_settings_package,
             &hasher,
             state.index(),
             &database,

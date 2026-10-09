@@ -17,7 +17,7 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
-use uv_lock::{GroupMetadata, Lock, ResolverManifest, config_settings_digest};
+use uv_lock::{GroupMetadata, Lock, ResolverManifest};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
@@ -325,8 +325,6 @@ async fn do_lock(
         cuda_driver_version: _,
         amd_gpu_architecture: _,
     } = settings;
-
-    let config_settings_digest = config_settings_digest(config_setting, config_settings_package);
 
     // Collect the requirements, etc.
     let members = target.members();
@@ -800,7 +798,8 @@ async fn do_lock(
             upgrade,
             refresh,
             &options,
-            config_settings_digest.as_ref(),
+            config_setting,
+            config_settings_package,
             &hasher,
             state.index(),
             &database,
@@ -1019,8 +1018,7 @@ async fn do_lock(
             )
             .with_workspace_default_groups(workspace_default_groups)
             .with_member_group_metadata(packages)?
-            .with_workspace_group_metadata(workspace_group_metadata)
-            .with_config_settings_digest(config_settings_digest);
+            .with_workspace_group_metadata(workspace_group_metadata);
 
             let lock = if let Some(recorder) = recorder {
                 lock.prune_unused(recorder.take())

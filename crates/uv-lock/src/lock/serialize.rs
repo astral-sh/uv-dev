@@ -162,6 +162,12 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
     if let Some(digest) = &options.config_settings_digest {
         writer.key_value("config-settings-digest", digest)?;
     }
+    if !options.config_settings_packages.is_empty() {
+        writer.key_value(
+            "config-settings-packages",
+            serialize_value(&options.config_settings_packages)?,
+        )?;
+    }
 
     let exclude_newer = &options.exclude_newer;
     if let Some(global) = &exclude_newer.global {

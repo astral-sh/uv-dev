@@ -832,7 +832,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
                     return Ok(ArchiveMetadata {
-                        metadata: Metadata::from_metadata23(metadata.into()),
+                        metadata: Metadata::from_metadata23(metadata.into()).with_config_settings(
+                            self.config_settings_for(source.name()).into_owned(),
+                        ),
                         hashes: revision.into_hashes(),
                     });
                 }
@@ -902,7 +904,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 .map_err(Error::CacheWrite)?;
 
             return Ok(ArchiveMetadata {
-                metadata: Metadata::from_metadata23(metadata),
+                metadata: Metadata::from_metadata23(metadata)
+                    .with_config_settings(self.config_settings_for(source.name()).into_owned()),
                 hashes: revision.into_hashes(),
             });
         }
@@ -959,7 +962,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(ArchiveMetadata {
-            metadata: Metadata::from_metadata23(metadata),
+            metadata: Metadata::from_metadata23(metadata)
+                .with_config_settings(self.config_settings_for(source.name()).into_owned()),
             hashes: revision.into_hashes(),
         })
     }
@@ -1231,7 +1235,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
                     return Ok(ArchiveMetadata {
-                        metadata: Metadata::from_metadata23(metadata.into()),
+                        metadata: Metadata::from_metadata23(metadata.into()).with_config_settings(
+                            self.config_settings_for(source.name()).into_owned(),
+                        ),
                         hashes: revision.into_hashes(),
                     });
                 }
@@ -1276,7 +1282,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 .map_err(Error::CacheWrite)?;
 
             return Ok(ArchiveMetadata {
-                metadata: Metadata::from_metadata23(metadata),
+                metadata: Metadata::from_metadata23(metadata)
+                    .with_config_settings(self.config_settings_for(source.name()).into_owned()),
                 hashes: revision.into_hashes(),
             });
         }
@@ -1333,7 +1340,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(ArchiveMetadata {
-            metadata: Metadata::from_metadata23(metadata),
+            metadata: Metadata::from_metadata23(metadata)
+                .with_config_settings(self.config_settings_for(source.name()).into_owned()),
             hashes: revision.into_hashes(),
         })
     }
@@ -1597,7 +1605,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                             self.build_context.workspace_cache(),
                             credentials_cache,
                         )
-                        .await?,
+                        .await?
+                        .with_config_settings(self.config_settings_for(source.name()).into_owned()),
                     ));
                 }
                 debug!("Cached metadata does not match expected name and version for: {source}");
@@ -1649,7 +1658,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     self.build_context.workspace_cache(),
                     credentials_cache,
                 )
-                .await?,
+                .await?
+                .with_config_settings(self.config_settings_for(source.name()).into_owned()),
             ));
         }
 
@@ -1716,7 +1726,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.build_context.workspace_cache(),
                 credentials_cache,
             )
-            .await?,
+            .await?
+            .with_config_settings(self.config_settings_for(source.name()).into_owned()),
         ))
     }
 
@@ -2050,7 +2061,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
                     return Ok(ArchiveMetadata {
-                        metadata: Metadata::from_metadata23(metadata.into()),
+                        metadata: Metadata::from_metadata23(metadata.into()).with_config_settings(
+                            self.config_settings_for(source.name()).into_owned(),
+                        ),
                         hashes: revision.into_hashes(),
                     });
                 }
@@ -2087,7 +2100,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 .map_err(Error::CacheWrite)?;
 
             return Ok(ArchiveMetadata {
-                metadata: Metadata::from_metadata23(metadata),
+                metadata: Metadata::from_metadata23(metadata)
+                    .with_config_settings(self.config_settings_for(source.name()).into_owned()),
                 hashes: revision.into_hashes(),
             });
         }
@@ -2144,7 +2158,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(ArchiveMetadata {
-            metadata: Metadata::from_metadata23(metadata),
+            metadata: Metadata::from_metadata23(metadata)
+                .with_config_settings(self.config_settings_for(source.name()).into_owned()),
             hashes: revision.into_hashes(),
         })
     }
@@ -2445,7 +2460,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                                 self.build_context.workspace_cache(),
                                 credentials_cache,
                             )
-                            .await?,
+                            .await?
+                            .with_config_settings(
+                                self.config_settings_for(source.name()).into_owned(),
+                            ),
                         ));
                     }
                     debug!(
@@ -2502,7 +2520,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     self.build_context.workspace_cache(),
                     credentials_cache,
                 )
-                .await?,
+                .await?
+                .with_config_settings(self.config_settings_for(source.name()).into_owned()),
             ));
         }
 
@@ -2571,7 +2590,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.build_context.workspace_cache(),
                 credentials_cache,
             )
-            .await?,
+            .await?
+            .with_config_settings(self.config_settings_for(source.name()).into_owned()),
         ))
     }
 

@@ -104,7 +104,22 @@ pub fn config_settings_digest(
 ) -> Option<String> {
     (config_setting != &ConfigSettings::default()
         || config_settings_package != &PackageConfigSettings::default())
-        .then(|| cache_digest(&(config_setting, config_settings_package)))
+        .then(|| {
+            let serialized = serde_json::to_string(&(config_setting, config_settings_package))
+                .expect("config settings contain only string keys and values");
+            cache_digest(&serialized)
+        })
+}
+
+/// Digest only the settings consumed by selected source metadata.
+fn source_config_settings_digest(
+    settings: &BTreeMap<PackageName, ConfigSettings>,
+) -> Option<String> {
+    (!settings.is_empty()).then(|| {
+        let serialized = serde_json::to_string(settings)
+            .expect("config settings contain only string keys and values");
+        cache_digest(&serialized)
+    })
 }
 
 /// An error returned when parsing a lockfile.
@@ -2633,13 +2648,21 @@ impl Lock {
 
         let packages = packages.into_values().collect();
 
+        let config_settings = resolution
+            .base_dists()
+            .filter_map(|(_, dist)| {
+                let settings = dist.metadata.as_ref()?.config_settings.as_ref()?;
+                Some((dist.name.clone(), settings.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
         let options = ResolverOptions {
             resolution_mode: resolution.options.resolution_mode,
             prerelease: resolution.options.prerelease.clone(),
             fork_strategy: resolution.options.fork_strategy,
             minimum_libc_version: resolution.options.minimum_libc_version,
             exclude_newer: resolution.options.exclude_newer.clone(),
-            config_settings_digest: None,
+            config_settings_digest: source_config_settings_digest(&config_settings),
+            config_settings_packages: config_settings.into_keys().collect(),
         };
         // Canonicalize the top-level fork markers to match what is persisted in
         // `uv.lock`. In particular, conflict-only fork markers can serialize to
@@ -3151,16 +3174,32 @@ impl Lock {
         &self.options.exclude_newer
     }
 
-    /// Returns the digest of the build config settings used to generate this lock.
-    pub fn config_settings_digest(&self) -> Option<&str> {
-        self.options.config_settings_digest.as_deref()
-    }
-
-    /// Set the digest of the build config settings used to generate this lock.
-    #[must_use]
-    pub fn with_config_settings_digest(mut self, digest: Option<String>) -> Self {
-        self.options.config_settings_digest = digest;
-        self
+    /// Check settings consumed by selected source metadata.
+    pub fn satisfies_config_settings(
+        &self,
+        config_setting: &ConfigSettings,
+        config_settings_package: &PackageConfigSettings,
+    ) -> bool {
+        let digest = if self.options.config_settings_packages.is_empty() {
+            // Locks without source provenance use the conservative global comparison. A fresh
+            // resolution can establish that no backend consumed settings and retain the same lock.
+            config_settings_digest(config_setting, config_settings_package)
+        } else {
+            let settings = self
+                .options
+                .config_settings_packages
+                .iter()
+                .map(|name| {
+                    let settings = config_settings_package.get(name).map_or_else(
+                        || config_setting.clone(),
+                        |settings| settings.clone().merge(config_setting.clone()),
+                    );
+                    (name.clone(), settings)
+                })
+                .collect();
+            source_config_settings_digest(&settings)
+        };
+        self.options.config_settings_digest == digest
     }
 
     /// Returns the conflicting groups that were used to generate this lock.
@@ -6234,6 +6273,8 @@ struct ResolverOptions {
     exclude_newer: ExcludeNewer,
     /// The digest of the build config settings used to generate this lock.
     config_settings_digest: Option<String>,
+    /// Packages whose selected metadata consumed build settings.
+    config_settings_packages: Vec<PackageName>,
 }
 
 /// The serialized resolver options in the lockfile.
@@ -6257,6 +6298,9 @@ struct ResolverOptionsWire {
     /// The digest of the build config settings used to generate this lock.
     #[serde(default)]
     config_settings_digest: Option<String>,
+    /// Packages whose selected metadata consumed build settings.
+    #[serde(default)]
+    config_settings_packages: Vec<PackageName>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -6607,6 +6651,7 @@ impl TryFrom<LockWire> for Lock {
             minimum_libc_version: options_wire.minimum_libc_version,
             exclude_newer: options_wire.exclude_newer.into(),
             config_settings_digest: options_wire.config_settings_digest,
+            config_settings_packages: options_wire.config_settings_packages,
         };
         let lock = Self::new(
             wire.version,
@@ -10640,6 +10685,18 @@ mod tests {
             sys_platform: "darwin",
         })
         .expect("valid marker environment")
+    }
+
+    #[test]
+    fn config_settings_digest_preserves_map_boundaries() -> Result<(), Box<dyn Error>> {
+        let global: ConfigSettings = serde_json::from_str(r#"{"a":"b"}"#)?;
+        let packages: PackageConfigSettings = serde_json::from_str(r#"{"c":{"d":"e"}}"#)?;
+        let regrouped: PackageConfigSettings = serde_json::from_str(r#"{"a":{"b":"c","d":"e"}}"#)?;
+        assert_ne!(
+            config_settings_digest(&global, &packages),
+            config_settings_digest(&ConfigSettings::default(), &regrouped),
+        );
+        Ok(())
     }
 
     #[test]

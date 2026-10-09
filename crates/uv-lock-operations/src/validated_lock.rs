@@ -9,7 +9,10 @@ use uv_command_support::Printer;
 use uv_configuration::{Constraints, ExcludeDependency, Override, Upgrade};
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
-use uv_distribution_types::{DependencyMetadata, IndexLocations, Requirement, RequiresPython};
+use uv_distribution_types::{
+    ConfigSettings, DependencyMetadata, IndexLocations, PackageConfigSettings, Requirement,
+    RequiresPython,
+};
 use uv_lock::{GroupMetadata, Lock, SatisfiesResult};
 use uv_normalize::{DefaultGroups, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};
@@ -63,7 +66,8 @@ impl ValidatedLock {
         upgrade: &Upgrade,
         refresh: Option<&Refresh>,
         options: &Options,
-        config_settings_digest: Option<&String>,
+        config_setting: &ConfigSettings,
+        config_settings_package: &PackageConfigSettings,
         hasher: &HashStrategy,
         index: &InMemoryIndex,
         database: &DistributionDatabase<'_, BuildDispatch<'_>>,
@@ -151,11 +155,6 @@ impl ValidatedLock {
             return Ok(Self::Versions(lock));
         }
 
-        if lock.config_settings_digest() != config_settings_digest.map(String::as_str) {
-            debug!("Resolving despite existing lockfile due to change in build config settings");
-            return Ok(Self::Preferable(lock));
-        }
-
         // If the set of supported environments has changed, we have to perform a clean resolution.
         let expected = lock.simplified_supported_environments();
         let actual = environments
@@ -223,6 +222,11 @@ impl ValidatedLock {
             } else {
                 Ok(Self::Versions(lock))
             };
+        }
+
+        if !lock.satisfies_config_settings(config_setting, config_settings_package) {
+            debug!("Resolving despite existing lockfile due to change in build config settings");
+            return Ok(Self::Preferable(lock));
         }
 
         // If the pre-release mode has changed, we have to re-resolve, but can retain the existing
