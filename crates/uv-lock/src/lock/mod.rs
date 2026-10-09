@@ -4763,10 +4763,8 @@ impl Lock {
                     if marker.is_false() {
                         continue;
                     }
-                    if !marker.evaluate(markers, &[]) {
-                        continue;
-                    }
-
+                    // Local metadata must satisfy the entire locked Python range, including
+                    // requirements that are inactive for the interpreter performing this check.
                     let activated = activated_extras.entry(package.id.clone()).or_default();
                     let activation = UniversalMarker::from_combined(marker);
                     for extra in &requirement.extras {

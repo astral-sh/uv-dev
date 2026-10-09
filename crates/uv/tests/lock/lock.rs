@@ -48901,7 +48901,7 @@ fn lock_local_python_extra_activation_reuses_lock() -> Result<()> {
     Ok(())
 }
 
-/// Script manifest requirements seed local-package compatibility checks.
+/// Local script dependencies are validated even when inactive for the current interpreter.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_local_python_script_dependency_change() -> Result<()> {
@@ -48909,7 +48909,7 @@ fn lock_local_python_script_dependency_change() -> Result<()> {
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
         # requires-python = ">=3.12"
-        # dependencies = ["local"]
+        # dependencies = ["local; python_version >= '3.13'"]
         # [tool.uv.sources]
         # local = { path = "local" }
         # ///
@@ -48919,24 +48919,28 @@ fn lock_local_python_script_dependency_change() -> Result<()> {
         [project]
         name = "local"
         version = "0.1.0"
-        requires-python = ">=3.12"
+        requires-python = ">=3.13"
     "#})?;
     context
         .lock()
         .args(["--script", "script.py", "--offline"])
         .assert()
         .success();
-    local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.12", ">=3.13"))?;
+    local.write_str(
+        &context
+            .read("local/pyproject.toml")
+            .replace(">=3.13", ">=3.14"),
+    )?;
     uv_snapshot!(context.filters(), context.lock()
-        .args(["--script", "script.py", "--locked", "--offline"]), @r"
+        .args(["--script", "script.py", "--locked", "--offline"]), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==0.1.0 depends on Python>=3.13, we can conclude that local==0.1.0 cannot be used.
-             And because only local==0.1.0 is available and you require local, we can conclude that your requirements are unsatisfiable.
+    error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.13')
+      cause: Because only local{python_full_version >= '3.13'}==0.1.0 is available and the requested Python version (>=3.12) does not satisfy Python>=3.14, we can conclude that all versions of local{python_full_version >= '3.13'} cannot be used.
+             And because you require local{python_full_version >= '3.13'}, we can conclude that your requirements are unsatisfiable.
 
-    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==0.1.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
-    ");
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    "#);
     Ok(())
 }
 
