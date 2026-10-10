@@ -313,6 +313,25 @@ impl InstallationPlan {
     }
 }
 
+/// Uninstall distributions from an environment and report the changes.
+///
+/// The caller must hold the environment lock and select distributions installed in `venv`.
+pub async fn uninstall(
+    distributions: Vec<InstalledDist>,
+    venv: &PythonEnvironment,
+    logger: Box<dyn InstallLogger>,
+    printer: Printer,
+) -> Result<Changelog, Error> {
+    if distributions.is_empty() {
+        return Ok(Changelog::default());
+    }
+
+    uninstall_distributions(&distributions, venv, logger.as_ref(), printer).await?;
+    let changelog = Changelog::from_local(Vec::new(), distributions);
+    logger.on_complete(&changelog, printer, DryRun::Disabled)?;
+    Ok(changelog)
+}
+
 /// Install a set of requirements into the current environment.
 ///
 /// Returns a [`Changelog`] summarizing the changes made to the environment.
@@ -668,6 +687,56 @@ impl InstallPhase {
     }
 }
 
+/// Remove installed distributions with the same diagnostics as an installation plan.
+async fn uninstall_distributions(
+    distributions: &[InstalledDist],
+    venv: &PythonEnvironment,
+    logger: &dyn InstallLogger,
+    printer: Printer,
+) -> Result<(), Error> {
+    if distributions.is_empty() {
+        return Ok(());
+    }
+
+    let start = std::time::Instant::now();
+
+    let layout = venv.interpreter().layout();
+    for dist_info in distributions {
+        match uv_installer::uninstall(dist_info, &layout).await {
+            Ok(summary) => {
+                debug!(
+                    "Uninstalled {} ({} file{}, {} director{})",
+                    dist_info.name(),
+                    summary.file_count,
+                    if summary.file_count == 1 { "" } else { "s" },
+                    summary.dir_count,
+                    if summary.dir_count == 1 { "y" } else { "ies" },
+                );
+            }
+            Err(uv_installer::UninstallError::Uninstall(
+                uv_install_wheel::Error::MissingRecord(_),
+            )) => {
+                warn_user!(
+                    "Failed to uninstall package at `{}` due to missing `RECORD` file. Installation may result in an incomplete environment.",
+                    dist_info.install_path().user_display().cyan(),
+                );
+            }
+            Err(uv_installer::UninstallError::Uninstall(
+                uv_install_wheel::Error::MissingTopLevel(_),
+            )) => {
+                warn_user!(
+                    "Failed to uninstall package at `{}` due to missing `top_level.txt` file. Installation may result in an incomplete environment.",
+                    dist_info.install_path().user_display().cyan(),
+                );
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    logger.on_uninstall(distributions.len(), start, printer, DryRun::Disabled)?;
+    Ok(())
+}
+
 /// Execute a [`Plan`] to install distributions into a Python environment.
 async fn execute_plan(
     plan: Plan,
@@ -731,44 +800,7 @@ async fn execute_plan(
 
     // Remove any upgraded or extraneous installations.
     let uninstalls = extraneous.into_iter().chain(reinstalls).collect::<Vec<_>>();
-    if !uninstalls.is_empty() {
-        let start = std::time::Instant::now();
-
-        let layout = venv.interpreter().layout();
-        for dist_info in &uninstalls {
-            match uv_installer::uninstall(dist_info, &layout).await {
-                Ok(summary) => {
-                    debug!(
-                        "Uninstalled {} ({} file{}, {} director{})",
-                        dist_info.name(),
-                        summary.file_count,
-                        if summary.file_count == 1 { "" } else { "s" },
-                        summary.dir_count,
-                        if summary.dir_count == 1 { "y" } else { "ies" },
-                    );
-                }
-                Err(uv_installer::UninstallError::Uninstall(
-                    uv_install_wheel::Error::MissingRecord(_),
-                )) => {
-                    warn_user!(
-                        "Failed to uninstall package at `{}` due to missing `RECORD` file. Installation may result in an incomplete environment.",
-                        dist_info.install_path().user_display().cyan(),
-                    );
-                }
-                Err(uv_installer::UninstallError::Uninstall(
-                    uv_install_wheel::Error::MissingTopLevel(_),
-                )) => {
-                    warn_user!(
-                        "Failed to uninstall package at `{}` due to missing `top_level.txt` file. Installation may result in an incomplete environment.",
-                        dist_info.install_path().user_display().cyan(),
-                    );
-                }
-                Err(err) => return Err(err.into()),
-            }
-        }
-
-        logger.on_uninstall(uninstalls.len(), start, printer, DryRun::Disabled)?;
-    }
+    uninstall_distributions(&uninstalls, venv, logger, printer).await?;
 
     // Install the resolved distributions.
     let mut installs = wheels.into_iter().chain(cached).collect::<Vec<_>>();

@@ -43,6 +43,7 @@ pub(super) struct CollectedEnvironment {
 pub(super) async fn collect_environment(
     target: InstallTarget<'_>,
     venv: &PythonEnvironment,
+    parent: Option<&PythonEnvironment>,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     state: &UniversalState,
@@ -107,7 +108,7 @@ pub(super) async fn collect_environment(
         .await?;
     }
 
-    inspect_environment(venv, &package_ids.unwrap_or_default())
+    inspect_environment(venv, parent, &package_ids.unwrap_or_default())
 }
 
 /// Select the package IDs that can own modules in the target resolution.
@@ -147,12 +148,18 @@ fn selected_package_ids(
 /// Collect installed distributions and associate their modules with selected or unmanaged package IDs.
 fn inspect_environment(
     venv: &PythonEnvironment,
+    parent: Option<&PythonEnvironment>,
     package_ids: &BTreeMap<PackageName, String>,
 ) -> Result<CollectedEnvironment> {
     let site_packages = SitePackages::from_environment(venv)?;
+    let parent_site_packages = parent.map(SitePackages::from_environment).transpose()?;
     let mut packages = BTreeMap::new();
     let mut owners = BTreeMap::<ModuleName, BTreeSet<String>>::new();
-    for dist in site_packages {
+    for dist in site_packages.into_iter().chain(
+        parent_site_packages
+            .into_iter()
+            .flat_map(IntoIterator::into_iter),
+    ) {
         let selected_package_id = package_ids.get(dist.name());
         let package_id = selected_package_id
             .cloned()
