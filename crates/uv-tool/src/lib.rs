@@ -68,6 +68,12 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error(transparent)]
     LockedFile(#[from] LockedFileError),
+    #[error("Tools directory not found at `{}`", path.user_display())]
+    ToolsDirectoryNotFound {
+        path: PathBuf,
+        #[source]
+        source: LockedFileError,
+    },
     #[error("Failed to update `uv-receipt.toml` at `{0}`")]
     ReceiptWrite(PathBuf, #[source] Box<toml_edit::ser::Error>),
     #[error("Failed to read `uv-receipt.toml` at `{0}`")]
@@ -98,6 +104,7 @@ impl Error {
             Self::VirtualEnvError(uv_virtualenv::Error::Io(err)) => Some(err),
             Self::ReceiptWrite(_, _)
             | Self::ReceiptRead(_, _)
+            | Self::ToolsDirectoryNotFound { .. }
             | Self::VirtualEnvError(_)
             | Self::EntrypointRead(_)
             | Self::NoExecutableDirectory
@@ -207,13 +214,39 @@ impl InstalledTools {
     }
 
     /// Grab a file lock for the tools directory to prevent concurrent access across processes.
+    ///
+    /// Returns [`Error::ToolsDirectoryNotFound`] if the tools directory does not exist.
     pub async fn lock(&self) -> Result<LockedFile, Error> {
-        Ok(LockedFile::acquire(
+        match LockedFile::acquire(
             self.root.join(".lock"),
             LockedFileMode::Exclusive,
             self.root.user_display(),
         )
-        .await?)
+        .await
+        {
+            Ok(lock) => Ok(lock),
+            Err(source) => {
+                let missing_lockfile = match &source {
+                    LockedFileError::CreateTemporary(error)
+                    | LockedFileError::PersistTemporary { source: error, .. }
+                    | LockedFileError::Io(error) => error.kind() == io::ErrorKind::NotFound,
+                    LockedFileError::Lock { .. }
+                    | LockedFileError::Timeout { .. }
+                    | LockedFileError::JoinError(_) => false,
+                };
+                // A missing lockfile target does not imply that the tools directory is missing.
+                if missing_lockfile
+                    && matches!(fs::metadata(&self.root), Err(error) if error.kind() == io::ErrorKind::NotFound)
+                {
+                    Err(Error::ToolsDirectoryNotFound {
+                        path: self.root.clone(),
+                        source,
+                    })
+                } else {
+                    Err(source.into())
+                }
+            }
+        }
     }
 
     /// Add a receipt for a tool.
