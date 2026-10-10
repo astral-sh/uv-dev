@@ -77,7 +77,12 @@ pub async fn metadata(
         script
             .as_ref()
             .map_or(ScriptEnvironmentMode::Isolated, |script| {
-                ScriptEnvironmentMode::from_script(script.into(), active, preview)
+                ScriptEnvironmentMode::from_script(
+                    script.into(),
+                    active,
+                    Some(&settings.build_isolation),
+                    preview,
+                )
             })
     } else {
         ScriptEnvironmentMode::Isolated
