@@ -10,6 +10,13 @@ use uv_redacted::DisplaySafeUrl;
 
 use crate::{RegistryClient, WrappedReqwestError};
 
+/// The digest and byte count from the same complete read of a distribution file.
+#[derive(Debug)]
+pub struct FileHash {
+    pub digest: HashDigest,
+    pub size: u64,
+}
+
 /// An error while reading or downloading a distribution file to compute its hash.
 #[derive(Debug, thiserror::Error)]
 pub enum FileHashError {
@@ -27,17 +34,19 @@ pub enum FileHashError {
 
 impl RegistryClient {
     /// Read or download a file and compute its SHA-256 digest without extracting its contents.
-    pub async fn hash_file(&self, url: &DisplaySafeUrl) -> Result<HashDigest, FileHashError> {
+    pub async fn hash_file(&self, url: &DisplaySafeUrl) -> Result<FileHash, FileHashError> {
         let mut hashers = [Hasher::from(HashAlgorithm::Sha256)];
-        if url.scheme() == "file" {
+        let size = if url.scheme() == "file" {
             let path = url.to_file_path().map_err(|()| FileHashError::UrlToPath)?;
             let file = fs_err::tokio::File::open(&path)
                 .await
                 .map_err(|err| FileHashError::ReadFile(path.clone().into_boxed_path(), err))?;
-            HashReader::new(file, &mut hashers)
+            let mut reader = HashReader::new(file, &mut hashers);
+            reader
                 .finish()
                 .await
                 .map_err(|err| FileHashError::ReadFile(path.into_boxed_path(), err))?;
+            reader.bytes_read()
         } else {
             let response = self
                 .uncached_client(url)
@@ -62,12 +71,17 @@ impl RegistryClient {
                 .bytes_stream()
                 .map_err(std::io::Error::other)
                 .into_async_read();
-            HashReader::new(reader.compat(), &mut hashers)
+            let mut reader = HashReader::new(reader.compat(), &mut hashers);
+            reader
                 .finish()
                 .await
                 .map_err(|err| FileHashError::StreamFile(Box::new(url.clone()), err))?;
-        }
+            reader.bytes_read()
+        };
         let [hasher] = hashers;
-        Ok(HashDigest::from(hasher))
+        Ok(FileHash {
+            digest: HashDigest::from(hasher),
+            size,
+        })
     }
 }
