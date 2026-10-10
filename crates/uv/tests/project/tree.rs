@@ -9,9 +9,9 @@ use insta::{assert_json_snapshot, assert_snapshot};
 use url::Url;
 
 use uv_static::EnvVars;
-#[cfg(feature = "test-universal")]
-use uv_test::TestContext;
 use uv_test::uv_snapshot;
+#[cfg(feature = "test-universal")]
+use uv_test::{TestContext, packse::PackseServer};
 
 /// Trees require a lockfile with revision 5 or later.
 #[test]
@@ -278,6 +278,604 @@ fn nested_dependencies() -> Result<()> {
     // `uv tree` should update the lockfile
     let lock = context.read("uv.lock");
     assert!(!lock.is_empty());
+
+    Ok(())
+}
+
+/// Specifiers describe the immediate dependency edge, including repeated packages.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--show-version-specifiers")
+        .arg("--format").arg("json"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--show-version-specifiers` is not supported with `--format json`
+    ");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    for (name, version) in [
+        ("alpha", "1.0.0"),
+        ("beta", "2.0.0"),
+        ("shared", "2.5.0"),
+        ("leaf", "1.0.0"),
+    ] {
+        context
+            .temp_dir
+            .child(format!("packages/{name}/pyproject.toml"))
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "{version}"
+            requires-python = ">=3.12"
+        "#})?;
+    }
+
+    // Preserve the declarations explicitly to test rendering without source lowering or fetching.
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "alpha"
+        version = "1.0.0"
+        source = { virtual = "packages/alpha" }
+        dependencies = [{ name = "shared" }]
+
+        [package.metadata]
+        requires-dist = [{ name = "shared", specifier = ">=2,<4" }]
+
+        [[package]]
+        name = "beta"
+        version = "2.0.0"
+        source = { virtual = "packages/beta" }
+        dependencies = [{ name = "shared" }]
+
+        [package.metadata]
+        requires-dist = [{ name = "shared", specifier = ">=1,<3" }]
+
+        [[package]]
+        name = "leaf"
+        version = "1.0.0"
+        source = { virtual = "packages/leaf" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "alpha" }, { name = "beta" }]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "alpha", specifier = ">=1,<2" },
+            { name = "beta", specifier = ">=2,<3" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.5.0"
+        source = { virtual = "packages/shared" }
+        dependencies = [{ name = "leaf" }]
+
+        [package.metadata]
+        requires-dist = [{ name = "leaf", specifier = "!=1.1" }]
+    "#})?;
+
+    let lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--universal")
+        .arg("--package").arg("project")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    ├── alpha v1.0.0 [required: >=1, <2]
+    │   └── shared v2.5.0 [required: >=2, <4]
+    │       └── leaf v1.0.0 [required: !=1.1]
+    └── beta v2.0.0 [required: >=2, <3]
+        └── shared v2.5.0 [required: >=1, <3] (*)
+    (*) Package tree already displayed
+    ");
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--universal")
+        .arg("--invert")
+        .arg("--package").arg("leaf")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf v1.0.0
+    └── shared v2.5.0 [requires: leaf !=1.1]
+        ├── alpha v1.0.0 [requires: shared >=2, <4]
+        │   └── project v0.1.0 [requires: alpha >=1, <2]
+        └── beta v2.0.0 [requires: shared >=1, <3]
+            └── project v0.1.0 [requires: beta >=2, <3]
+    ");
+
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // The first path reaches `hidden` at the depth limit. The shorter path to `shared` is
+    // deduplicated, so `hidden` never expands and its missing metadata must not be fetched.
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "alpha"
+        version = "1.0.0"
+        source = { virtual = "packages/alpha" }
+        dependencies = [{ name = "shared" }]
+
+        [package.metadata]
+        requires-dist = [{ name = "shared", specifier = ">=2,<4" }]
+
+        [[package]]
+        name = "hidden"
+        version = "1.0.0"
+        source = { registry = "https://pypi.org/simple" }
+        dependencies = [{ name = "leaf" }]
+
+        [[package]]
+        name = "leaf"
+        version = "1.0.0"
+        source = { virtual = "packages/leaf" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "alpha" }, { name = "shared" }]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "alpha", specifier = ">=1,<2" },
+            { name = "shared", specifier = ">=2" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.5.0"
+        source = { virtual = "packages/shared" }
+        dependencies = [{ name = "hidden" }]
+
+        [package.metadata]
+        requires-dist = [{ name = "hidden", specifier = ">=1" }]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--universal")
+        .arg("--depth").arg("3")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    ├── alpha v1.0.0 [required: >=1, <2]
+    │   └── shared v2.5.0 [required: >=2, <4]
+    │       └── hidden v1.0.0 [required: >=1]
+    └── shared v2.5.0 [required: >=2] (*)
+    (*) Package tree already displayed
+    ");
+
+    Ok(())
+}
+
+/// Universal requirements retain their conditions instead of becoming one intersection.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_markers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "2.5.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "shared", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "shared", marker = "sys_platform == 'linux'", specifier = ">=1" },
+            { name = "shared", marker = "sys_platform == 'win32'", specifier = ">=2" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.5.0"
+        source = { virtual = "shared" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--universal")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── shared v2.5.0 [required: >=1; sys_platform == 'linux'] [required: >=2; sys_platform == 'win32']
+    ");
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--universal")
+        .arg("--invert")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared v2.5.0
+    └── project v0.1.0 [requires: shared >=1; sys_platform == 'linux'] [requires: shared >=2; sys_platform == 'win32']
+    ");
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--python-platform").arg("linux")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── shared v2.5.0 [required: >=1]
+    ");
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--python-platform").arg("windows")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── shared v2.5.0 [required: >=2]
+    ");
+
+    Ok(())
+}
+
+/// Production, optional, and group requirements have distinct attribution even for the same package.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_extras_and_groups() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+
+        [project.optional-dependencies]
+        feature = ["shared>=1,<2"]
+
+        [dependency-groups]
+        dev = ["shared>=0.5,<1.5"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "1.2.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "shared" }]
+
+        [package.optional-dependencies]
+        feature = [{ name = "shared" }]
+
+        [package.dev-dependencies]
+        dev = [{ name = "shared" }]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "shared" },
+            { name = "shared", marker = "extra == 'feature'", specifier = ">=1,<2" },
+        ]
+        provides-extras = ["feature"]
+
+        [package.metadata.requires-dev]
+        dev = [{ name = "shared", specifier = ">=0.5,<1.5" }]
+
+        [[package]]
+        name = "shared"
+        version = "1.2.0"
+        source = { virtual = "shared" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--universal")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    ├── shared v1.2.0 [required: *]
+    ├── shared v1.2.0 (extra: feature) [required: >=1, <2]
+    └── shared v1.2.0 (group: dev) [required: >=0.5, <1.5]
+    ");
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--universal")
+        .arg("--invert")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared v1.2.0
+    ├── project v0.1.0 [requires: shared *]
+    ├── project v0.1.0 (extra: feature) [requires: shared >=1, <2]
+    └── project v0.1.0 (group: dev) [requires: shared >=0.5, <1.5]
+    ");
+
+    Ok(())
+}
+
+/// Fetch missing registry metadata only for the requested annotations, without rewriting the lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_fetch_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-version-specifiers"
+
+        [root]
+        requires = ["parent"]
+
+        [expected]
+        satisfiable = true
+
+        [packages.parent.versions."1.0.0"]
+        requires = ["child>=1,<2", "unbounded"]
+        sdist = false
+
+        [packages.child.versions."1.5.0"]
+        sdist = false
+
+        [packages.unbounded.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent>=1"]
+
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let lock = context.read("uv.lock");
+
+    // Static metadata added after locking must not replace the locked artifact's requirements.
+    let pyproject = context.read("pyproject.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            "{pyproject}\n{}",
+            indoc! {r#"
+            [[tool.uv.dependency-metadata]]
+            name = "parent"
+            version = "1.0.0"
+            requires-dist = ["child>=9", "unbounded>=9"]
+        "#}
+        ))?;
+
+    let context = context.with_cache_dir("tree-cache");
+
+    // The plain tree needs neither the lock-time metadata cache nor registry access.
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--universal"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0
+        ├── child v1.5.0
+        └── unbounded v1.0.0
+    ");
+
+    // A separate cache makes the registry parent's specifiers unavailable until this invocation.
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--universal")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: >=1]
+        ├── child v1.5.0 [required: >=1, <2]
+        └── unbounded v1.0.0 [required: *]
+    ");
+
+    assert_eq!(context.read("uv.lock"), lock);
+
+    Ok(())
+}
+
+/// Overrides distinguish superseded declarations and added edges without changing group attribution.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_overrides() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child<2; sys_platform == 'win32'"]
+
+        [dependency-groups]
+        dev = ["added<3"]
+
+        [tool.uv]
+        override-dependencies = [
+            "child>=2; sys_platform == 'linux'",
+            { package = { name = "project", version = "0.1.0" }, dependencies = ["added>=2"] },
+        ]
+    "#})?;
+    for name in ["added", "child"] {
+        context
+            .temp_dir
+            .child(format!("{name}/pyproject.toml"))
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "2.0.0"
+            requires-python = ">=3.12"
+        "#})?;
+    }
+
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [manifest]
+        overrides = [
+            { package = { name = "project", version = "0.1.0" }, dependencies = [{ name = "added", specifier = ">=2" }] },
+            { name = "child", marker = "sys_platform == 'linux'", specifier = ">=2" },
+        ]
+
+        [[package]]
+        name = "added"
+        version = "2.0.0"
+        source = { virtual = "added" }
+
+        [[package]]
+        name = "child"
+        version = "2.0.0"
+        source = { virtual = "child" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "added" },
+            { name = "child", marker = "sys_platform == 'linux'" },
+        ]
+
+        [package.dev-dependencies]
+        dev = [{ name = "added" }]
+
+        [package.metadata]
+        requires-dist = [{ name = "child", marker = "sys_platform == 'win32'", specifier = "<2" }]
+
+        [package.metadata.requires-dev]
+        dev = [{ name = "added", specifier = "<3" }]
+    "#})?;
+
+    let lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--python-platform").arg("linux")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    ├── added v2.0.0 [added by override: >=2]
+    ├── child v2.0.0 [declared: <2; sys_platform == 'win32'] [overridden]
+    └── added v2.0.0 (group: dev) [required: <3]
+    ");
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--python-platform").arg("linux")
+        .arg("--invert")
+        .arg("--show-version-specifiers"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    added v2.0.0
+    ├── project v0.1.0 [added by override: added >=2]
+    └── project v0.1.0 (group: dev) [requires: added <3]
+    child v2.0.0
+    └── project v0.1.0 [declares: child <2; sys_platform == 'win32'] [overridden]
+    ");
+
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
@@ -5254,4 +5852,720 @@ fn json_tree_package_names(command: &mut Command) -> Result<Vec<String>> {
                 .map(ToOwned::to_owned)
         })
         .collect()
+}
+
+/// Excluded self references cannot activate extra constraints in the displayed declaration.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_excluded_self_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-excluded-self-extra"
+        [root]
+        requires = ["parent"]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child>=1", "parent[feature]"]
+        sdist = false
+        [packages.parent.versions."1.0.0".extras]
+        feature = ["child<2"]
+        [packages.child.versions."1.0.0"]
+        sdist = false
+        [packages.child.versions."3.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv]
+        exclude-dependencies = [
+            {{ package = {{ name = "parent", version = "1.0.0" }}, dependencies = ["parent"] }},
+        ]
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: *]
+        └── child v3.0.0 [required: >=1]
+    ");
+    Ok(())
+}
+
+/// Overrides of self references determine recursive-extra activation without changing declaration labels.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_overridden_self_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-overridden-self-extra"
+        [root]
+        requires = ["parent"]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child>=1", "parent[feature]"]
+        sdist = false
+        [packages.parent.versions."1.0.0".extras]
+        feature = ["child<2"]
+        [packages.child.versions."1.0.0"]
+        sdist = false
+        [packages.child.versions."3.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv]
+        override-dependencies = [
+            {{ package = {{ name = "parent", version = "1.0.0" }}, dependencies = ["parent==1"] }},
+        ]
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: *]
+        └── child v3.0.0 [required: >=1]
+    ");
+    Ok(())
+}
+
+/// An override can activate an optional child outside the marker on its original declaration.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_overridden_recursive_child_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-overridden-recursive-child-marker"
+        [root]
+        requires = ["parent[base]"]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        sdist = false
+        [packages.parent.versions."1.0.0".extras]
+        base = ["parent[feature]; sys_platform == 'linux'"]
+        feature = ["child<2; sys_platform == 'win32'"]
+        [packages.child.versions."3.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent[base]"]
+        [tool.uv]
+        override-dependencies = ["child>=3"]
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent[base] v1.0.0 [required: *]
+        └── child v3.0.0 (extra: base) [declared: <2; sys_platform == 'win32'] [overridden]
+    "#);
+    Ok(())
+}
+
+/// Scoped overrides use a resolved dynamic version even when declarations are already locked.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_dynamic_scoped_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-dynamic-scoped-override"
+        [root]
+        requires = ["child"]
+        [expected]
+        satisfiable = true
+        [packages.child.versions."1.0.0"]
+        sdist = false
+        [packages.child.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["provider"]
+        [tool.uv]
+        override-dependencies = [
+            {{ package = {{ name = "provider", version = "1.0.0" }}, dependencies = ["child==2"] }},
+        ]
+        [tool.uv.sources]
+        provider = {{ path = "provider" }}
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .temp_dir
+        .child("provider/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "provider"
+        dynamic = ["version"]
+        dependencies = ["child==1"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context
+        .temp_dir
+        .child("provider/backend.py")
+        .write_str(indoc! {r#"
+        from pathlib import Path
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = Path(metadata_directory, "provider-1.0.0.dist-info")
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text(
+                "Metadata-Version: 2.3\nName: provider\nVersion: 1.0.0\nRequires-Dist: child==1\n"
+            )
+            return dist_info.name
+    "#})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let provider = lock["package"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|package| package["name"].as_str() == Some("provider"))
+        .unwrap();
+    assert!(provider.get("version").is_none());
+    assert!(provider["metadata"].get("requires-dist").is_some());
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers", "--no-cache"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── provider [required: file://[TEMP_DIR]/provider]
+        └── child v2.0.0 [declared: ==1] [overridden]
+    ");
+    Ok(())
+}
+
+/// Reading first-party project metadata remains permitted when third-party builds are disabled.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_first_party_no_build() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child>=1"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv.sources]
+        child = { path = "child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--preview-features", "lock-without-metadata"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers", "--offline", "--no-build"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── child v1.0.0 [required: file://[TEMP_DIR]/child]
+    ");
+    Ok(())
+}
+
+/// A metadata build verifies locked build dependencies before executing their code.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn show_version_specifiers_verifies_build_dependency_hashes() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+    use uv_fs::PythonExt;
+    use uv_test::packse::generate_wheel_with_files;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    let context = uv_test::test_context!("3.12");
+    let sentinel = context.temp_dir.child("replacement-executed");
+    let (_, trusted) = generate_wheel_with_files(
+        &"review-dep".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("review_dep/payload.py", "pass\n")],
+    );
+    let (_, replacement) = generate_wheel_with_files(
+        &"review-dep".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "review_dep/payload.py",
+            &format!(
+                "from pathlib import Path\nPath({}).touch()\n",
+                sentinel.path().escape_for_python()
+            ),
+        )],
+    );
+    let trusted_hash = hex::encode(Sha256::digest(&trusted));
+    let replacement_hash = hex::encode(Sha256::digest(&replacement));
+    let context = context
+        .with_filter((trusted_hash.clone(), "[TRUSTED_HASH]"))
+        .with_filter((replacement_hash.clone(), "[REPLACEMENT_HASH]"));
+    let server = MockServer::start().await;
+    let index = format!("{}/simple", server.uri());
+    let wheel_url = format!("{}/files/review_dep-1.0.0-py3-none-any.whl", server.uri());
+    Mock::given(method("GET"))
+        .and(path("/simple/review-dep/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            formatdoc! {r#"
+            <a href="{wheel_url}#sha256={replacement_hash}">review_dep-1.0.0-py3-none-any.whl</a>
+        "#},
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/review_dep-1.0.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(replacement))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [project.optional-dependencies]
+        build = ["review-dep==1.0.0"]
+        [tool.uv.sources]
+        parent = {{ path = "parent" }}
+        [[tool.uv.index]]
+        url = "{index}"
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("parent/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "1.0.0"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = ["review-dep==1.0.0"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context
+        .temp_dir
+        .child("parent/backend.py")
+        .write_str(indoc! {r#"
+        from pathlib import Path
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            import review_dep.payload
+            dist_info = Path(metadata_directory, "parent-1.0.0.dist-info")
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text(
+                "Metadata-Version: 2.3\nName: parent\nVersion: 1.0.0\nRequires-Dist: child>=1\n"
+            )
+            return dist_info.name
+    "#})?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&formatdoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        [[package]]
+        name = "child"
+        version = "1.0.0"
+        source = {{ virtual = "child" }}
+        [[package]]
+        name = "parent"
+        version = "1.0.0"
+        source = {{ directory = "parent" }}
+        dependencies = [{{ name = "child" }}]
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ virtual = "." }}
+        dependencies = [{{ name = "parent" }}]
+        [package.optional-dependencies]
+        build = [{{ name = "review-dep" }}]
+        [[package]]
+        name = "review-dep"
+        version = "1.0.0"
+        source = {{ registry = "{index}" }}
+        wheels = [{{ url = "{wheel_url}", hash = "sha256:{trusted_hash}", size = {} }}]
+    "#, trusted.len()})?;
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to retrieve version specifiers for `parent`
+      cause: Failed to generate package metadata for `parent==1.0.0 @ directory+parent`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to download `review-dep==1.0.0`
+      cause: Hash mismatch for `review-dep==1.0.0`
+
+             Expected:
+               sha256:[TRUSTED_HASH]
+
+             Computed:
+               sha256:[REPLACEMENT_HASH]
+    ");
+    assert!(!sentinel.exists(), "unverified build dependency executed");
+    Ok(())
+}
+
+/// Frozen metadata retrieval restores direct-source credentials from the project manifest.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn show_version_specifiers_direct_source_credentials() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use uv_test::archive::write_tar_gz;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{basic_auth, method, path},
+    };
+
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let url = format!("{}/parent-1.0.0.tar.gz", server.uri());
+    let mut authenticated_url = Url::parse(&url)?;
+    authenticated_url.set_username("user").unwrap();
+    authenticated_url.set_password(Some("password")).unwrap();
+    let mut archive = Vec::new();
+    write_tar_gz(
+        &mut archive,
+        &[
+            (
+                "parent-1.0.0/pyproject.toml",
+                indoc! {r#"
+            [project]
+            name = "parent"
+            version = "1.0.0"
+            dependencies = ["child>=1"]
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#},
+            ),
+            (
+                "parent-1.0.0/backend.py",
+                indoc! {r#"
+            from pathlib import Path
+            def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+                dist_info = Path(metadata_directory, "parent-1.0.0.dist-info")
+                dist_info.mkdir()
+                (dist_info / "METADATA").write_text(
+                    "Metadata-Version: 2.3\nName: parent\nVersion: 1.0.0\nRequires-Dist: child>=1\n"
+                )
+                return dist_info.name
+        "#},
+            ),
+        ],
+    )?;
+    let digest = hex::encode(Sha256::digest(&archive));
+    Mock::given(method("GET"))
+        .and(path("/parent-1.0.0.tar.gz"))
+        .respond_with(ResponseTemplate::new(401).insert_header("www-authenticate", "Basic"))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/parent-1.0.0.tar.gz"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive))
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv.sources]
+        parent = {{ url = "{authenticated_url}" }}
+    "#})?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&formatdoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        [[package]]
+        name = "child"
+        version = "1.0.0"
+        source = {{ virtual = "child" }}
+        [[package]]
+        name = "parent"
+        version = "1.0.0"
+        source = {{ url = "{url}" }}
+        sdist = {{ hash = "sha256:{digest}" }}
+        dependencies = [{{ name = "child" }}]
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ virtual = "." }}
+        dependencies = [{{ name = "parent" }}]
+    "#})?;
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers", "--no-cache"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: http://user:****@[LOCALHOST]/parent-1.0.0.tar.gz]
+        └── child v1.0.0 [required: >=1]
+    ");
+    Ok(())
+}
+
+/// Local declarations use the lockfile root when tree discovery starts in another directory.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_local_source_from_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv.sources]
+        child = { path = "child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    let subdirectory = context.temp_dir.child("subdirectory");
+    subdirectory.create_dir_all()?;
+    context.lock().arg("--offline").assert().success();
+
+    uv_snapshot!(context.filters(), context.tree()
+        .current_dir(subdirectory.path())
+        .arg("--project").arg(context.temp_dir.path())
+        .args(["--frozen", "--universal", "--offline", "--show-version-specifiers"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── child v1.0.0 [required: file://[TEMP_DIR]/child]
+    ");
+    Ok(())
+}
+
+/// A child override cannot activate an optional declaration outside its recursive parent marker.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_overridden_recursive_activation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-overridden-recursive-activation"
+        [root]
+        requires = ["parent"]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child>=1", "parent[feature]; sys_platform == 'win32'"]
+        sdist = false
+        [packages.parent.versions."1.0.0".extras]
+        feature = ["child<2"]
+        [packages.child.versions."3.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv]
+        override-dependencies = ["child>=3"]
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--python-platform", "linux", "--show-version-specifiers"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: *]
+        └── child v3.0.0 [declared: >=1] [overridden]
+    "#);
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--python-platform", "windows", "--show-version-specifiers"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: *]
+        └── child v3.0.0 [declared: <2; sys_platform == 'win32'] [overridden] [declared: >=1] [overridden]
+    "#);
+    Ok(())
+}
+
+/// Static metadata ignored for a directory must not replace the declarations recorded in the lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_ignores_inapplicable_static_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-directory-static-metadata"
+        [root]
+        requires = ["child"]
+        [expected]
+        satisfiable = true
+        [packages.child.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("parent/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["child>=1"]
+    "#})?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv.sources]
+        parent = {{ path = "parent" }}
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "2.0.0"
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: file://[TEMP_DIR]/parent]
+        └── child v1.0.0 [required: >=1]
+    "#);
+    Ok(())
 }
