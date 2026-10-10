@@ -5,9 +5,13 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use fs_err::File;
+use rustc_hash::FxHashMap;
 use tracing::{instrument, trace};
+use walkdir::WalkDir;
 
 use uv_distribution_filename::WheelFilename;
+use uv_fs::Simplified;
+use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::{DirectUrl, Metadata10};
 
@@ -40,6 +44,118 @@ fn wheel_destination<'layout>(
         LibKind::Plat => &layout.scheme.platlib,
     };
     Ok((dist_info_prefix, site_packages))
+}
+
+/// Reject wheel files that would be moved to a destination already occupied by the wheel.
+fn validate_wheel_destinations(
+    layout: &Layout,
+    wheel: &Path,
+    dist_info_prefix: &str,
+    site_packages: &Path,
+    name: &PackageName,
+) -> Result<(), Error> {
+    let data_dir = format!("{dist_info_prefix}.data");
+    if !["purelib", "platlib", "data", "headers", "scripts"]
+        .iter()
+        .any(|scheme| wheel.join(&data_dir).join(scheme).is_dir())
+    {
+        return Ok(());
+    }
+    let site_packages =
+        fs_err::canonicalize(site_packages).unwrap_or_else(|_| site_packages.to_path_buf());
+    let mut destinations: FxHashMap<Vec<u8>, PathBuf> = FxHashMap::default();
+    let mut directories: FxHashMap<Vec<u8>, PathBuf> = FxHashMap::default();
+    let destination_key = |destination: &Path| {
+        if cfg!(any(windows, target_os = "macos")) {
+            destination
+                .simplified()
+                .to_string_lossy()
+                .to_lowercase()
+                .into_bytes()
+        } else {
+            destination.as_os_str().as_encoded_bytes().to_vec()
+        }
+    };
+    let mut insert_destination = |destination: PathBuf, source: &Path| {
+        let key = destination_key(&destination);
+        if let Some(previous) = destinations.get(&key) {
+            return Err(Error::InvalidWheel(format!(
+                "Wheel files `{}` and `{}` install to the same destination",
+                previous.portable_display(),
+                source.portable_display()
+            )));
+        }
+
+        if let Some(previous) = directories.get(&key) {
+            return Err(Error::InvalidWheel(format!(
+                "Wheel file `{}` requires the destination of `{}` to be a directory",
+                previous.portable_display(),
+                source.portable_display()
+            )));
+        }
+
+        for parent in destination.ancestors().skip(1) {
+            let key = destination_key(parent);
+            if let Some(previous) = destinations.get(&key) {
+                return Err(Error::InvalidWheel(format!(
+                    "Wheel file `{}` requires the destination of `{}` to be a directory",
+                    source.portable_display(),
+                    previous.portable_display()
+                )));
+            }
+            directories
+                .entry(key)
+                .or_insert_with(|| source.to_path_buf());
+        }
+
+        destinations.insert(key, source.to_path_buf());
+        Ok(())
+    };
+
+    for entry in WalkDir::new(wheel).min_depth(1) {
+        let entry = entry?;
+        if entry.file_type().is_dir() {
+            continue;
+        }
+        let source = entry.path().strip_prefix(wheel).map_err(|err| {
+            Error::InvalidWheel(format!("Wheel file path is not within the wheel: {err}"))
+        })?;
+        if source.starts_with(Path::new(&data_dir)) {
+            continue;
+        }
+        insert_destination(site_packages.join(source), source)?;
+    }
+
+    for (scheme, destination) in [
+        ("purelib", layout.scheme.purelib.clone()),
+        ("platlib", layout.scheme.platlib.clone()),
+        ("data", layout.scheme.data.clone()),
+        ("headers", layout.scheme.include.join(name.as_str())),
+        ("scripts", layout.scheme.scripts.clone()),
+    ] {
+        let source_root = wheel.join(&data_dir).join(scheme);
+        if !source_root.is_dir() {
+            continue;
+        }
+        let destination = fs_err::canonicalize(&destination).unwrap_or(destination);
+        for entry in WalkDir::new(&source_root).min_depth(1) {
+            let entry = entry?;
+            if entry.file_type().is_dir() {
+                continue;
+            }
+            let relative = entry.path().strip_prefix(&source_root).map_err(|err| {
+                Error::InvalidWheel(format!(
+                    "Wheel data file path is not within the `{scheme}` directory: {err}"
+                ))
+            })?;
+            let source = entry.path().strip_prefix(wheel).map_err(|err| {
+                Error::InvalidWheel(format!("Wheel file path is not within the wheel: {err}"))
+            })?;
+            insert_destination(destination.join(relative), source)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Install the given wheel to the given venv
@@ -81,6 +197,8 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
             return Err(Error::MismatchedVersion(version, filename.version.clone()));
         }
     }
+
+    validate_wheel_destinations(layout, wheel, &dist_info_prefix, site_packages, &name)?;
 
     // We're going step by step though
     // https://packaging.python.org/en/latest/specifications/binary-distribution-format/#installing-a-wheel-distribution-1-0-py32-none-any-whl
