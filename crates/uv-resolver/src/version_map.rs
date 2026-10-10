@@ -138,7 +138,7 @@ impl VersionMap {
         }
     }
 
-    /// Return the [`DistFile`] for the given version, if any.
+    /// Return the [`PrioritizedDist`] for the given version, if any.
     pub(crate) fn get(&self, version: &Version) -> Option<&PrioritizedDist> {
         match self.inner {
             VersionMapInner::Eager(ref eager) => eager.map.get(version),
@@ -186,8 +186,8 @@ impl VersionMap {
 
     /// Return an iterator over the versions and distributions.
     ///
-    /// Note that the value returned in this iterator is a [`VersionMapDist`],
-    /// which can be used to lazily request a [`CompatibleDist`]. This is
+    /// Note that the value returned in this iterator is a [`VersionMapDistHandle`],
+    /// which can be used to lazily request a [`PrioritizedDist`]. This is
     /// useful in cases where one can skip materializing a full distribution
     /// for each version.
     pub(crate) fn iter(
@@ -260,7 +260,7 @@ impl VersionMap {
         self.iter(range).filter(|(_, dist)| dist.is_included())
     }
 
-    /// Return the [`Hashes`] for the given version, if any.
+    /// Return the [`HashDigest`] values for the given version, if any.
     pub(crate) fn hashes(&self, version: &Version) -> Option<&[HashDigest]> {
         match self.inner {
             VersionMapInner::Eager(ref eager) => {
