@@ -42,7 +42,9 @@ use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
-use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{
+    LockError, LockMode, LockOperation, LockTarget, handle_missing_script_lockfile,
+};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
@@ -65,8 +67,8 @@ use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger}
 use uv_resolver::{DependencyMode, Preference};
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Metadata, Pep723Script};
 use uv_settings::{
-    FrozenSource, LockCheck, LockedSource, MalwareCheckSettings, PythonInstallMirrors,
-    ResolverInstallerSettings, ResolverSettings,
+    FrozenSource, LockCheck, MalwareCheckSettings, PythonInstallMirrors, ResolverInstallerSettings,
+    ResolverSettings,
 };
 use uv_shell::WindowsRunnable;
 use uv_static::EnvVars;
@@ -325,41 +327,7 @@ pub async fn run(
 
             Some(environment.into_interpreter())
         } else {
-            // If no lockfile is found, error for `--locked` and `--frozen` when provided
-            // via CLI. For environment variables, warn instead to avoid
-            // breaking users who set `UV_LOCKED=1` globally.
-            if let LockCheck::Enabled(lock_check) = lock_check {
-                match lock_check {
-                    LockedSource::Cli(_) => {
-                        bail!(
-                            "Unable to find lockfile for Python script, but `{lock_check}` was provided. To create a lockfile, run `{}`.",
-                            "uv lock --script".green(),
-                        );
-                    }
-                    LockedSource::Env => {
-                        warn_user!(
-                            "No lockfile found for Python script (ignoring `{lock_check}`); run `{}` to generate a lockfile",
-                            "uv lock --script".green(),
-                        );
-                    }
-                }
-            }
-            if let Some(frozen_source) = frozen {
-                match frozen_source {
-                    FrozenSource::Cli(_) => {
-                        bail!(
-                            "Unable to find lockfile for Python script, but `{frozen_source}` was provided. To create a lockfile, run `{}`.",
-                            "uv lock --script".green(),
-                        );
-                    }
-                    FrozenSource::Env => {
-                        warn_user!(
-                            "No lockfile found for Python script (ignoring `--frozen`); run `{}` to generate a lockfile",
-                            "uv lock --script".green(),
-                        );
-                    }
-                }
-            }
+            handle_missing_script_lockfile(lock_check, frozen)?;
 
             // Preserve constraints for `--with` even when the script omits `dependencies`.
             unlocked_build_constraints = script
