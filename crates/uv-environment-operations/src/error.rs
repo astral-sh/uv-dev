@@ -146,6 +146,9 @@ pub enum EnvironmentError {
     CacheInfo(#[from] uv_cache_info::CacheInfoError),
 
     #[error(transparent)]
+    Cache(#[from] uv_cache::Error),
+
+    #[error(transparent)]
     Io(#[from] std::io::Error),
 
     #[error(transparent)]
@@ -244,6 +247,7 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::ExtraBuildRequires(..)
             | EnvironmentError::Fmt(..)
             | EnvironmentError::CacheInfo(..)
+            | EnvironmentError::Cache(..)
             | EnvironmentError::Io(..)
             | EnvironmentError::RetryParsing(..)
             | EnvironmentError::Accelerator(..)
@@ -294,6 +298,7 @@ impl uv_errors::Hinted for EnvironmentError {
             | Self::ExtraBuildRequires(..)
             | Self::Fmt(..)
             | Self::CacheInfo(..)
+            | Self::Cache(..)
             | Self::Io(..)
             | Self::RetryParsing(..)
             | Self::Accelerator(..)
