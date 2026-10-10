@@ -242,6 +242,16 @@ pub(crate) async fn venv(
         None
     };
 
+    let prepared = uv_virtualenv::PreparedEnvironment::new(
+        interpreter,
+        prompt,
+        system_site_packages,
+        relocatable,
+        seed,
+        upgrade_policy,
+    )
+    .map_err(VenvError::Creation)?;
+
     let on_existing = match on_existing {
         OnExisting::Prompt | OnExisting::Remove(_) if centralized_workspace.is_some() => {
             // Centralized environments are managed by uv, so replace them without prompting.
@@ -267,17 +277,9 @@ pub(crate) async fn venv(
     };
 
     // Create the virtual environment.
-    let venv = uv_virtualenv::create_venv(
-        &path,
-        interpreter,
-        prompt,
-        system_site_packages,
-        on_existing,
-        relocatable,
-        seed,
-        upgrade_policy,
-    )
-    .map_err(VenvError::Creation)?;
+    let venv = prepared
+        .create(&path, on_existing)
+        .map_err(VenvError::Creation)?;
     venv.cache_virtualenv(system_site_packages, cache)?;
 
     // Install seed packages.

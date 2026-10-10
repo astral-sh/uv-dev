@@ -5,7 +5,7 @@ use std::env::consts::EXE_SUFFIX;
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use console::Term;
 use fs_err::File;
@@ -54,53 +54,199 @@ fn install_distutils_patch(interpreter: &Interpreter) -> bool {
 /// Very basic `.cfg` file format writer.
 fn write_cfg(f: &mut impl Write, data: &[(String, String)]) -> io::Result<()> {
     for (key, value) in data {
+        validate_cfg_value(key, value)?;
+    }
+
+    for (key, value) in data {
         writeln!(f, "{key} = {value}")?;
     }
     Ok(())
 }
 
-/// Create a [`VirtualEnvironment`] at the given location.
+/// Validate a key-value pair before writing it to `pyvenv.cfg`.
+fn validate_cfg_value(key: &str, value: &str) -> io::Result<()> {
+    if key.contains(['\r', '\n']) || value.contains(['\r', '\n']) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid `{key}` value in `pyvenv.cfg`: newlines are not supported"),
+        ));
+    }
+    Ok(())
+}
+
+/// Validated configuration assembled before any destination changes.
+pub(crate) struct Configuration {
+    base_python: PathBuf,
+    executable_target: PathBuf,
+    python_home: PathBuf,
+    using_minor_version_link: bool,
+    prompt: Option<String>,
+    relocatable: bool,
+    pyvenv_cfg_data: Vec<(String, String)>,
+}
+
+impl Configuration {
+    pub(crate) fn new(
+        interpreter: &Interpreter,
+        prompt: Prompt,
+        system_site_packages: bool,
+        relocatable: bool,
+        seed: Seed,
+        upgrade_policy: UpgradePolicy,
+    ) -> Result<Self, Error> {
+        // Determine the base Python executable; that is, the Python executable that should be
+        // considered the "base" for the virtual environment.
+        //
+        // For consistency with the standard library, rely on `sys._base_executable`, _unless_ we're
+        // using a uv-managed Python (in which case, we can do better for symlinked executables).
+        let base_python = cfg_select! {
+            unix => {
+                if interpreter.is_standalone() {
+                    interpreter.find_base_python()?
+                } else {
+                    interpreter.to_base_python()?
+                }
+            }
+            _ => { interpreter.to_base_python()? }
+        };
+
+        debug!(
+            "Using base executable for virtual environment: {}",
+            base_python.display()
+        );
+
+        // Resolve the current-directory prompt before any environment cleanup can remove it.
+        let prompt = match prompt {
+            Prompt::CurrentDirectoryName => CWD
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string()),
+            Prompt::Static(value) => Some(value),
+            Prompt::None => None,
+        };
+        if let Some(prompt) = prompt.as_deref() {
+            validate_cfg_value("prompt", prompt)?;
+        }
+        let minor_version_link =
+            PythonMinorVersionLink::from_interpreter(interpreter, upgrade_policy);
+        let using_minor_version_link = minor_version_link.is_some();
+        let executable_target = if let Some(minor_version_link) = minor_version_link {
+            let debug_symlink_term = if cfg!(windows) {
+                "junction"
+            } else {
+                "symlink directory"
+            };
+            debug!(
+                "Using {} `{}` instead of base Python path `{}`",
+                debug_symlink_term,
+                &minor_version_link.symlink_directory.display(),
+                &base_python.display()
+            );
+            minor_version_link.symlink_executable
+        } else {
+            base_python.clone()
+        };
+
+        // Per PEP 405, the Python `home` is the parent directory of the interpreter.
+        // For standalone interpreters, this `home` value will include a
+        // symlink directory on Unix or junction on Windows to enable transparent Python patch
+        // upgrades.
+        let python_home = executable_target
+            .parent()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "The Python interpreter needs to have a parent directory",
+                )
+            })?
+            .to_path_buf();
+        let python_home = python_home.as_path();
+
+        let mut pyvenv_cfg_data: Vec<(String, String)> = vec![
+            (
+                "home".to_string(),
+                python_home.simplified_display().to_string(),
+            ),
+            (
+                "implementation".to_string(),
+                interpreter
+                    .markers()
+                    .platform_python_implementation()
+                    .to_string(),
+            ),
+            ("uv".to_string(), version().to_string()),
+            (
+                "version_info".to_string(),
+                if using_minor_version_link {
+                    interpreter.python_minor_version().to_string()
+                } else {
+                    interpreter.markers().python_full_version().string.clone()
+                },
+            ),
+            (
+                "include-system-site-packages".to_string(),
+                if system_site_packages {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                },
+            ),
+        ];
+
+        if relocatable {
+            pyvenv_cfg_data.push(("relocatable".to_string(), "true".to_string()));
+        }
+
+        match seed {
+            Seed::Enabled => pyvenv_cfg_data.push(("seed".to_string(), "true".to_string())),
+            Seed::Disabled => {}
+        }
+
+        if let Some(prompt) = prompt.as_ref() {
+            pyvenv_cfg_data.push(("prompt".to_string(), prompt.clone()));
+        }
+
+        if cfg!(windows) && interpreter.markers().implementation_name() == "graalpy" {
+            pyvenv_cfg_data.push((
+                "venvlauncher_command".to_string(),
+                python_home
+                    .join("graalpy.exe")
+                    .simplified_display()
+                    .to_string(),
+            ));
+        }
+
+        for (key, value) in &pyvenv_cfg_data {
+            validate_cfg_value(key, value)?;
+        }
+        Ok(Self {
+            base_python,
+            executable_target,
+            python_home: python_home.to_path_buf(),
+            using_minor_version_link,
+            prompt,
+            relocatable,
+            pyvenv_cfg_data,
+        })
+    }
+}
+
+/// Create a [`VirtualEnvironment`] from checked configuration.
 pub(crate) fn create(
     location: &Path,
     interpreter: &Interpreter,
-    prompt: Prompt,
-    system_site_packages: bool,
+    configuration: Configuration,
     on_existing: OnExisting,
-    relocatable: bool,
-    seed: Seed,
-    upgrade_policy: UpgradePolicy,
 ) -> Result<VirtualEnvironment, Error> {
-    // Determine the base Python executable; that is, the Python executable that should be
-    // considered the "base" for the virtual environment.
-    //
-    // For consistency with the standard library, rely on `sys._base_executable`, _unless_ we're
-    // using a uv-managed Python (in which case, we can do better for symlinked executables).
-    let base_python = cfg_select! {
-        unix => {
-            if interpreter.is_standalone() {
-                interpreter.find_base_python()?
-            } else {
-                interpreter.to_base_python()?
-            }
-        }
-        _ => { interpreter.to_base_python()? }
-    };
-
-    debug!(
-        "Using base executable for virtual environment: {}",
-        base_python.display()
-    );
-
-    // Extract the prompt and compute the absolute path prior to validating the location; otherwise,
-    // we risk deleting (and recreating) the current working directory, which would cause the `CWD`
-    // queries to fail.
-    let prompt = match prompt {
-        Prompt::CurrentDirectoryName => CWD
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string()),
-        Prompt::Static(value) => Some(value),
-        Prompt::None => None,
-    };
+    let Configuration {
+        base_python,
+        executable_target,
+        python_home,
+        using_minor_version_link,
+        prompt,
+        relocatable,
+        pyvenv_cfg_data,
+    } = configuration;
+    let python_home = python_home.as_path();
     let absolute = std::path::absolute(location)?;
 
     // Validate the path before creating the virtual environment, since some filesystems, e.g.,
@@ -213,40 +359,6 @@ pub(crate) fn create(
 
     // Create a `.gitignore` file to ignore all files in the venv.
     fs_err::write(location.join(".gitignore"), "*")?;
-
-    let minor_version_link = PythonMinorVersionLink::from_interpreter(interpreter, upgrade_policy);
-    let using_minor_version_link = minor_version_link.is_some();
-    let executable_target = if let Some(minor_version_link) = minor_version_link {
-        let debug_symlink_term = if cfg!(windows) {
-            "junction"
-        } else {
-            "symlink directory"
-        };
-        debug!(
-            "Using {} `{}` instead of base Python path `{}`",
-            debug_symlink_term,
-            &minor_version_link.symlink_directory.display(),
-            &base_python.display()
-        );
-        minor_version_link.symlink_executable
-    } else {
-        base_python.clone()
-    };
-
-    // Per PEP 405, the Python `home` is the parent directory of the interpreter.
-    // For standalone interpreters, this `home` value will include a
-    // symlink directory on Unix or junction on Windows to enable transparent Python patch
-    // upgrades.
-    let python_home = executable_target
-        .parent()
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "The Python interpreter needs to have a parent directory",
-            )
-        })?
-        .to_path_buf();
-    let python_home = python_home.as_path();
 
     // Different names for the python interpreter
     fs_err::create_dir_all(&scripts)?;
@@ -529,60 +641,6 @@ pub(crate) fn create(
             .replace("{{ PATH_SEP }}", path_sep)
             .replace("{{ RELATIVE_SITE_PACKAGES }}", &relative_site_packages);
         fs_err::write(scripts.join(name), activator)?;
-    }
-
-    let mut pyvenv_cfg_data: Vec<(String, String)> = vec![
-        (
-            "home".to_string(),
-            python_home.simplified_display().to_string(),
-        ),
-        (
-            "implementation".to_string(),
-            interpreter
-                .markers()
-                .platform_python_implementation()
-                .to_string(),
-        ),
-        ("uv".to_string(), version().to_string()),
-        (
-            "version_info".to_string(),
-            if using_minor_version_link {
-                interpreter.python_minor_version().to_string()
-            } else {
-                interpreter.markers().python_full_version().string.clone()
-            },
-        ),
-        (
-            "include-system-site-packages".to_string(),
-            if system_site_packages {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            },
-        ),
-    ];
-
-    if relocatable {
-        pyvenv_cfg_data.push(("relocatable".to_string(), "true".to_string()));
-    }
-
-    match seed {
-        Seed::Enabled => pyvenv_cfg_data.push(("seed".to_string(), "true".to_string())),
-        Seed::Disabled => {}
-    }
-
-    if let Some(prompt) = prompt {
-        pyvenv_cfg_data.push(("prompt".to_string(), prompt));
-    }
-
-    if cfg!(windows) && interpreter.markers().implementation_name() == "graalpy" {
-        pyvenv_cfg_data.push((
-            "venvlauncher_command".to_string(),
-            python_home
-                .join("graalpy.exe")
-                .simplified_display()
-                .to_string(),
-        ));
     }
 
     let mut pyvenv_cfg = BufWriter::new(File::create(location.join("pyvenv.cfg"))?);
@@ -949,4 +1007,23 @@ fn copy_launcher_windows(
     }
 
     Err(Error::NotFound(base_python.user_display().to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_cfg;
+
+    #[test]
+    fn reject_cfg_newlines() {
+        for value in [
+            "safe\ninclude-system-site-packages = true",
+            "safe\rinclude-system-site-packages = true",
+        ] {
+            let mut buffer = Vec::new();
+            let error = write_cfg(&mut buffer, &[("prompt".to_string(), value.to_string())])
+                .expect_err("newlines must be rejected");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(buffer.is_empty());
+        }
+    }
 }
