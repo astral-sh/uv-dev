@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use uv_fs::Simplified;
 use uv_platform::{Arch, Os};
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
@@ -192,7 +193,27 @@ fn python_list_jsonl() -> Result<()> {
             r#""path":"[PYTHON-3.11]","symlink":null"#,
         ));
 
-    uv_snapshot!(context.filters(), context.python_list()
+    // Match JSON-escaped executable paths before the ordinary context path filters.
+    let mut filters = context
+        .python_versions
+        .iter()
+        .map(|(version, path)| {
+            Ok((
+                regex::escape(&serde_json::to_string(
+                    &path.simplified_display().to_string(),
+                )?),
+                format!("\"[PYTHON-{version}]\""),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    filters.extend(
+        context
+            .filters()
+            .into_iter()
+            .map(|(pattern, replacement)| (pattern.to_owned(), replacement.to_owned())),
+    );
+
+    uv_snapshot!(filters, context.python_list()
         .arg("cpython")
         .arg("--only-installed")
         .arg("--output-format").arg("jsonl")
@@ -202,7 +223,7 @@ fn python_list_jsonl() -> Result<()> {
     {"type":"result","data":[{"key":"cpython-3.12.[X]-[PLATFORM]","version":"3.12.[X]","version_parts":{"major":3,"minor":12,"patch":"[X]"},"path":"[PYTHON-3.12]","symlink":null,"url":null,"os":"[OS]","variant":"default","implementation":"cpython","arch":"[ARCH]","libc":"[LIBC]"},{"key":"cpython-3.11.[X]-[PLATFORM]","version":"3.11.[X]","version_parts":{"major":3,"minor":11,"patch":"[X]"},"path":"[PYTHON-3.11]","symlink":null,"url":null,"os":"[OS]","variant":"default","implementation":"cpython","arch":"[ARCH]","libc":"[LIBC]"}]}
     "#);
 
-    uv_snapshot!(context.filters(), context.python_list()
+    uv_snapshot!(filters, context.python_list()
         .arg("pypy")
         .arg("--only-installed")
         .arg("--output-format").arg("jsonl")

@@ -2142,7 +2142,7 @@ fn sync_jsonl_resolver_reporter_late_progress() -> Result<()> {
         (r"finished in [0-9.]+s", "finished in [TIME]"),
         (r"[0-9]+ filtered out", "[N] filtered out"),
     ], Command::new(env::current_exe()?)
-        .args(["--exact", "sync::sync_jsonl_resolver_reporter_late_progress", "--nocapture", "--color", "never"])
+        .args(["--exact", "sync::sync_jsonl_resolver_reporter_late_progress", "--nocapture", "--color", "never", "--test-threads", "2"])
         .env(WORKER, "1"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2163,8 +2163,7 @@ fn sync_jsonl_resolver_reporter_late_progress() -> Result<()> {
 async fn sync_jsonl_failed_preparation() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    let (filename, wheel) =
-        WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?).build();
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?).build();
     Mock::given(method("GET"))
         .and(path(format!("/{filename}")))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
@@ -2210,8 +2209,7 @@ async fn sync_jsonl_failed_preparation() -> Result<()> {
 #[test]
 fn sync_jsonl_failed_installation() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (filename, wheel) =
-        WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?).build();
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?).build();
     context.temp_dir.child(&filename).write_binary(&wheel)?;
     context
         .temp_dir
@@ -2401,15 +2399,8 @@ async fn sync_jsonl_download_counts_hash_drain() -> Result<()> {
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
     let server = MockServer::start().await;
-    let (filename, mut wheel) = generate_wheel_with_files(
-        &"jsonl-drain".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, mut wheel) =
+        WheelBuilder::new(&"jsonl-drain".parse()?, &"1.0.0".parse()?).build();
     wheel.resize(wheel.len() + 2 * 1024 * 1024, 0);
     let size = wheel.len();
     let hash = hex::encode(Sha256::digest(&wheel));
@@ -2673,7 +2664,7 @@ fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
         .to_owned();
     let context = context.with_filter((commit, "[COMMIT]"));
 
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     context
         .temp_dir
@@ -2766,7 +2757,7 @@ fn sync_jsonl_failed_git_checkout() -> Result<()> {
         ])
         .assert()
         .success();
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     context
         .temp_dir
@@ -20699,24 +20690,8 @@ async fn sync_jsonl_failed_metadata_build_terminates_operation() -> Result<()> {
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
     let server = MockServer::start().await;
-    let (wheel_name, wheel) = generate_wheel(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
-    let (_, invalid_wheel) = generate_wheel(
-        &"wrong-name".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (wheel_name, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?).build();
+    let (_, invalid_wheel) = WheelBuilder::new(&"wrong-name".parse()?, &"2.0.0".parse()?).build();
     let backend = formatdoc! {r#"
         from pathlib import Path
 

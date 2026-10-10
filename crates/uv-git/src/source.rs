@@ -229,5 +229,5 @@ impl Drop for CheckoutGuard<'_> {
             self.reporter
                 .on_checkout_failed(self.url, self.revision, self.id);
         }
-}
+    }
 }

@@ -21,7 +21,7 @@ pub trait Reporter: Send + Sync {
     fn on_checkout_complete(&self, url: &SafeUrl, rev: &str, id: usize);
 
     /// Callback to invoke when a repository checkout fails or is abandoned.
-    fn on_checkout_failed(&self, _url: &DisplaySafeUrl, _rev: &str, _id: usize) {}
+    fn on_checkout_failed(&self, _url: &SafeUrl, _rev: &str, _id: usize) {}
 
     /// Callback to invoke when a download is kicked off.
     fn on_download_start(&self, name: &PackageName, size: Option<u64>) -> usize;
@@ -133,7 +133,7 @@ impl uv_git::Reporter for Facade {
         self.reporter.on_checkout_complete(url, rev, id);
     }
 
-    fn on_checkout_failed(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+    fn on_checkout_failed(&self, url: &SafeUrl, rev: &str, id: usize) {
         self.reporter.on_checkout_failed(url, rev, id);
     }
 }
