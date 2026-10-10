@@ -19,6 +19,7 @@ use url::Url;
 
 use uv_cache::{ArchiveFileId, ArchiveId, Cache, CacheBucket, CacheEntry, WheelCache};
 use uv_cache_info::{CacheInfo, Timestamp};
+use uv_checksum_authority::VerifiedRecord;
 use uv_client::{
     CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, RegistryClient,
     RequestBuilder, RetryState,
@@ -37,7 +38,9 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_preview::PreviewFeature;
-use uv_pypi_types::{HashDigest, HashDigests, PyProjectToml, ResolutionMetadata};
+use uv_pypi_types::{
+    Digest, HashAlgorithm, HashDigest, HashDigests, PyProjectToml, ResolutionMetadata,
+};
 use uv_python_types::PythonVariant;
 use uv_redacted::DisplaySafeUrl;
 use uv_threads::initialize_rayon_once;
@@ -46,7 +49,7 @@ use uv_types::{BuildContext, BuildStack};
 use crate::archive::Archive;
 use crate::error::PythonVersion;
 use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
-use crate::hash::http_hash_algorithms;
+use crate::hash::{http_hash_algorithms, matches_authority};
 use crate::metadata::{ArchiveMetadata, Metadata};
 use crate::source::SourceDistributionBuilder;
 use crate::{Error, FirstPartyPackages, LocalWheel, Reporter, RequiresDist};
@@ -195,9 +198,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
     fn validate_hashes(
         dist: &BuiltDist,
         hashes: ArchiveHashPolicy<'_>,
-        hashers: Vec<Hasher>,
+        computed_hashes: impl IntoIterator<Item = HashDigest>,
     ) -> Result<HashDigests, Error> {
-        let computed_hashes: HashDigests = hashers.into_iter().map(HashDigest::from).collect();
+        let mut computed_hashes: HashDigests = computed_hashes.into_iter().collect();
+        computed_hashes.sort_unstable();
         if hashes.requires_validation() && !hashes.matches(computed_hashes.as_slice()) {
             return Err(Error::hash_mismatch(
                 dist.to_string(),
@@ -293,6 +297,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 // If the URL is a file URL, load the wheel directly.
                 if url.scheme() == "file" {
+                    if self.client.unmanaged.has_checksum_authority()
+                        && matches!(wheel.index.url().scheme(), "http" | "https")
+                    {
+                        return Err(Error::ChecksumAuthorityLocalArchive(url));
+                    }
                     let path = url
                         .to_file_path()
                         .map_err(|()| Error::NonFileUrl(url.clone()))?;
@@ -631,7 +640,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         // Fetch the entire wheel only when we need to compute a hash for resolution.
         // TODO(charlie): Request the hashes via a separate method, to reduce the coupling in this API.
-        if hash_policy == ArchiveHashPolicy::Generate {
+        if hash_policy == ArchiveHashPolicy::Generate
+            || self.client.unmanaged.has_checksum_authority()
+        {
             let wheel = self.get_wheel(dist, hash_policy).await?;
             // If the metadata was provided by the user directly, prefer it.
             let metadata = if let Some(metadata) =
@@ -774,7 +785,20 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<Archive, Error> {
-        // Sometimes we can promote the size hint to a trusted effective size.
+        // Authority verification already spools the complete archive, so extract that file directly.
+        if self.client.unmanaged.has_checksum_authority() {
+            return self
+                .download_wheel(
+                    url,
+                    index,
+                    filename,
+                    progress_size_hint,
+                    wheel_entry,
+                    dist,
+                    hashes,
+                )
+                .await;
+        }
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => {
                 progress_size_hint
@@ -849,7 +873,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     });
                 }
 
-                let computed_hashes = Self::validate_hashes(dist, hashes, hashers)?;
+                let computed_hashes =
+                    Self::validate_hashes(dist, hashes, hashers.into_iter().map(HashDigest::from))?;
 
                 // Before we make the wheel accessible by persisting it, ensure that the RECORD is
                 // valid.
@@ -970,6 +995,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<Archive, Error> {
         // Sometimes we can promote the size hint to a trusted effective size.
+        let authority = self
+            .client
+            .unmanaged
+            .checksum_authority_record(index.map_or(&url, IndexUrl::url), dist)
+            .await?;
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => {
                 progress_size_hint
@@ -990,6 +1020,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             self.download_wheel_response(
                 response,
                 &download_url,
+                authority.as_ref(),
                 retry_state,
                 filename,
                 progress_size_hint,
@@ -1054,6 +1085,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // If the archive is missing the required hashes or size, or has since been removed, force a refresh.
         let archive = Some(archive)
             .filter(|archive| archive.has_digests(hashes))
+            .filter(|archive| matches_authority(authority.as_ref(), archive.hashes(), archive.size))
             .filter(|archive| archive.exists(self.build_context.cache()))
             .filter(|archive| expected_size.is_none() || archive.size.is_some());
 
@@ -1091,8 +1123,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
     /// The caller is responsible for obtaining a lock on the wheel cache.
     async fn download_wheel_response(
         &self,
-        mut response: reqwest::Response,
+        response: reqwest::Response,
         url: &DisplaySafeUrl,
+        authority: Option<&VerifiedRecord>,
         retry_state: &mut RetryState,
         filename: &WheelFilename,
         progress_size_hint: Option<u64>,
@@ -1119,20 +1152,55 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         let algorithms = http_hash_algorithms(hashes);
 
-        // Download the wheel to a temporary file.
-        let temp_file =
-            tempfile::tempfile_in(self.build_context.cache().root()).map_err(Error::CacheWrite)?;
-        let mut writer = tokio::io::BufWriter::new(fs_err::tokio::File::from_std(
-            // It's an unnamed file on Linux so that's the best approximation.
-            fs_err::File::from_parts(temp_file, self.build_context.cache().root()),
-        ));
+        let mut hashers = algorithms
+            .into_iter()
+            .filter(|algorithm| authority.is_none() || *algorithm != HashAlgorithm::Sha256)
+            .map(Hasher::from)
+            .collect::<Vec<_>>();
+        let mut verified_digest = None;
+        let (file, mut response, mut bytes_retrieved) = if let Some(authority) = authority {
+            if let (Some(expected), Some(actual)) = (expected_size, content_length(&response))
+                && expected != actual
+            {
+                return Err(Error::MismatchedContentLength {
+                    distribution: dist.to_string(),
+                    expected,
+                    actual,
+                });
+            }
+            let verified = authority
+                .verify_response(response, self.build_context.cache().root(), |bytes| {
+                    if let Some((reporter, progress)) = progress {
+                        reporter.on_download_progress(progress, bytes);
+                    }
+                })
+                .await?;
+            let bytes_retrieved = verified.size();
+            verified_digest = Some(HashDigest::Sha256(Digest::from_bytes(
+                verified.sha256().into_bytes(),
+            )));
+            let (_, mut file) = verified.into_parts();
+            // Index and user-supplied policies independently compare the verified digest. Read
+            // the authenticated file again only when they require another hash algorithm.
+            if !hashers.is_empty() {
+                let mut reader = uv_extract::hash::HashReader::new(&mut file, &mut hashers);
+                reader.finish().await.map_err(Error::HashExhaustion)?;
+            }
+            (file, None, bytes_retrieved)
+        } else {
+            let temp_file = tempfile::tempfile_in(self.build_context.cache().root())
+                .map_err(Error::CacheWrite)?;
+            (
+                fs_err::tokio::File::from_std(fs_err::File::from_parts(
+                    temp_file,
+                    self.build_context.cache().root(),
+                )),
+                Some(response),
+                0,
+            )
+        };
+        let mut writer = tokio::io::BufWriter::new(file);
 
-        // States for the download loop below.
-        let mut hashers = algorithms.into_iter().map(Hasher::from).collect::<Vec<_>>();
-        // The total number of bytes retrieved, accumulated over individual requests.
-        // Note that this is *not* the same as the number of bytes actually written
-        // to the temporary file, since a copy from the response to the file can fail.
-        let mut bytes_retrieved = 0;
         // The most recent range request's starting offset.
         let mut resumed_at = None;
         // The `Content-Range` that the download was last resumed at.
@@ -1143,11 +1211,12 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         //
         // Errors returned from this loop reach the outer retry classifier, which may restart
         // the full download.
-        loop {
+        while let Some(current_response) = response.take() {
             // Reject conflicting full-response lengths before reading the body. A range response's
             // Content-Length describes only that range, so it cannot be compared to the wheel size.
-            if response.status() == reqwest::StatusCode::OK
-                && let (Some(expected), Some(actual)) = (expected_size, content_length(&response))
+            if current_response.status() == reqwest::StatusCode::OK
+                && let (Some(expected), Some(actual)) =
+                    (expected_size, content_length(&current_response))
                 && expected != actual
             {
                 return Err(Error::MismatchedContentLength {
@@ -1159,16 +1228,17 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
             // Check whether the response indicates range request support. A `206 Partial Content`
             // implies range support while an `Accept-Ranges: bytes` header explicitly advertises it.
-            let supports_range_requests = response.status() == reqwest::StatusCode::PARTIAL_CONTENT
-                || response
+            let supports_range_requests = current_response.status()
+                == reqwest::StatusCode::PARTIAL_CONTENT
+                || current_response
                     .headers()
                     .get(reqwest::header::ACCEPT_RANGES)
                     .is_some_and(|value| value == "bytes");
 
             // A server can advertise range requests but ignore one. In that case, the
             // response is a complete download and must replace the partial bytes.
-            let replaces_partial_download =
-                resumed_at.is_some() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT;
+            let replaces_partial_download = resumed_at.is_some()
+                && current_response.status() != reqwest::StatusCode::PARTIAL_CONTENT;
             if replaces_partial_download {
                 writer
                     .get_mut()
@@ -1186,7 +1256,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 bytes_retrieved = 0;
             }
 
-            let reader = response
+            let reader = current_response
                 .bytes_stream()
                 .map_err(|err| self.handle_response_errors(err))
                 .into_async_read();
@@ -1327,7 +1397,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 None
             };
 
-            response = resumed_response;
+            response = Some(resumed_response);
             resumed_at = Some(offset);
         }
 
@@ -1358,7 +1428,14 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let mut extracted = tokio::task::spawn_blocking(move || extractor.extract_seekable(file))
             .await?
             .map_err(|err| Error::Extract(filename.to_string(), err))?;
-        let computed_hashes = Self::validate_hashes(dist, hashes, hashers)?;
+        let computed_hashes = Self::validate_hashes(
+            dist,
+            hashes,
+            hashers
+                .into_iter()
+                .map(HashDigest::from)
+                .chain(verified_digest),
+        )?;
 
         // Before we make the wheel accessible by persisting it, ensure that the RECORD is
         // valid.
@@ -1485,7 +1562,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             // Exhaust the reader to compute the hash.
             hasher.finish().await.map_err(Error::HashExhaustion)?;
 
-            let computed_hashes = Self::validate_hashes(dist, hashes, hashers)?;
+            let computed_hashes =
+                Self::validate_hashes(dist, hashes, hashers.into_iter().map(HashDigest::from))?;
 
             // Before we make the wheel accessible by persisting it, ensure that the RECORD is
             // valid.

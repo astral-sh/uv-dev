@@ -5815,6 +5815,8 @@ dependencies = [
  "predicates",
  "regex",
  "reqwest",
+ "ring",
+ "rmp-serde",
  "self-replace",
  "serde",
  "serde_json",
@@ -5841,6 +5843,8 @@ dependencies = [
  "uv-cache",
  "uv-cache-info",
  "uv-cache-key",
+ "uv-checksum-authority",
+ "uv-checksum-authority-service",
  "uv-cli",
  "uv-client",
  "uv-command-support",
@@ -5848,6 +5852,7 @@ dependencies = [
  "uv-console",
  "uv-dispatch",
  "uv-distribution",
+ "uv-distribution-filename",
  "uv-distribution-types",
  "uv-environment-operations",
  "uv-errors",
@@ -6280,6 +6285,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-checksum-authority"
+version = "0.0.92"
+dependencies = [
+ "base64 0.22.1",
+ "fs-err",
+ "hex",
+ "http",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
+name = "uv-checksum-authority-service"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "assert_fs",
+ "base64 0.22.1",
+ "bytes",
+ "clap",
+ "fs-err",
+ "hex",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "insta",
+ "reqwest",
+ "ring",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+ "url",
+ "uv-checksum-authority",
+ "uv-test",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
 name = "uv-cli"
 version = "0.0.92"
 dependencies = [
@@ -6295,6 +6350,7 @@ dependencies = [
  "uv-audit",
  "uv-auth",
  "uv-cache",
+ "uv-checksum-authority",
  "uv-client",
  "uv-configuration",
  "uv-distribution-types",
@@ -6365,6 +6421,7 @@ dependencies = [
  "uv-auth",
  "uv-cache",
  "uv-cache-key",
+ "uv-checksum-authority",
  "uv-configuration",
  "uv-distribution-filename",
  "uv-distribution-types",
@@ -6590,6 +6647,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror",
  "tokio",
@@ -6600,6 +6658,7 @@ dependencies = [
  "uv-auth",
  "uv-cache",
  "uv-cache-info",
+ "uv-checksum-authority",
  "uv-client",
  "uv-configuration",
  "uv-distribution-filename",

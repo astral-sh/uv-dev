@@ -35,6 +35,9 @@ mod wheel;
 /// Must be kept in-sync with the version in [`CacheBucket::to_str`].
 pub const ARCHIVE_VERSION: u8 = 0;
 
+/// Sidecars authorizing cached build artifacts must survive CI cache pruning.
+pub const AUTHORITY_RECEIPT_SUFFIX: &str = ".authority.msgpack";
+
 /// Error locking a cache entry or shard
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -61,11 +64,6 @@ impl CacheEntry {
     /// Create a new [`CacheEntry`] from a path.
     pub fn from_path(path: impl Into<PathBuf>) -> Self {
         Self(path.into())
-    }
-
-    /// Return the cache entry's parent directory.
-    pub fn shard(&self) -> CacheShard {
-        CacheShard(self.dir().to_path_buf())
     }
 
     /// Convert the [`CacheEntry`] into a [`PathBuf`].
@@ -788,13 +786,39 @@ impl Cache {
                         continue;
                     }
 
-                    if !entry.path().join("metadata.msgpack").exists() {
+                    let entries = fs_err::read_dir(entry.path())?.collect::<Result<Vec<_>, _>>()?;
+                    // Authority namespaces live directly inside an HTTP source revision. Package
+                    // names in the enclosing index can also begin with `authority-`.
+                    let http_revision = entry
+                        .path()
+                        .parent()
+                        .is_some_and(|parent| parent.join("revision.http").is_file());
+                    let authority_revision = http_revision
+                        && entries.iter().any(|child| {
+                            child
+                                .file_name()
+                                .to_string_lossy()
+                                .starts_with("authority-")
+                                && child.path().is_dir()
+                        });
+                    let authority_namespace = entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("authority-")
+                        && entry
+                            .path()
+                            .parent()
+                            .and_then(Path::parent)
+                            .is_some_and(|parent| parent.join("revision.http").is_file());
+                    if !entry.path().join("metadata.msgpack").exists()
+                        && !authority_revision
+                        && !authority_namespace
+                    {
                         continue;
                     }
 
                     // Remove everything except the built wheel archive and the metadata.
-                    for entry in fs_err::read_dir(entry.path())? {
-                        let entry = entry?;
+                    for entry in entries {
                         let path = entry.path();
 
                         // Retain the resolved metadata (`metadata.msgpack`).
@@ -805,11 +829,23 @@ impl Cache {
                             continue;
                         }
 
-                        // Visit nested build settings shards separately so their metadata survives.
+                        // Visit authority namespaces and their build-settings shards separately.
                         if entry.file_name() != "src"
                             && entry.file_type()?.is_dir()
-                            && path.join("metadata.msgpack").exists()
+                            && (path.join("metadata.msgpack").exists()
+                                || (http_revision
+                                    && entry
+                                        .file_name()
+                                        .to_string_lossy()
+                                        .starts_with("authority-")))
                         {
+                            continue;
+                        }
+
+                        // Retain the receipts that authorize cached metadata and wheel archives.
+                        if path.file_name().is_some_and(|name| {
+                            name.to_string_lossy().ends_with(AUTHORITY_RECEIPT_SUFFIX)
+                        }) {
                             continue;
                         }
 

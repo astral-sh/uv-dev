@@ -1,5 +1,7 @@
 [bans]
 wildcards = "deny"
+# Non-published test services must use path-only dev-dependencies.
+allow-wildcard-paths = true
 
 # NOTE: Rust as a whole simply has too many split resolutions
 # for us to enforce a single version per crate. Maybe

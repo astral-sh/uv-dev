@@ -24,6 +24,7 @@ use url::Url;
 use uv_auth::{
     AuthMiddleware, Credentials, CredentialsCache, CredentialsFromUrlError, Indexes, RealmRef,
 };
+use uv_checksum_authority::ChecksumAuthority;
 use uv_configuration::ProxyUrlKind;
 use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, TrustedHost};
 use uv_distribution_types::IndexCredentialsError;
@@ -100,6 +101,7 @@ pub enum AuthIntegration {
 /// A builder for an [`BaseClient`].
 #[derive(Debug, Clone)]
 pub struct BaseClientBuilder<'a> {
+    checksum_authority: Option<ChecksumAuthority>,
     keyring: KeyringProviderType,
     preview: Preview,
     allow_insecure_host: Vec<TrustedHost>,
@@ -212,6 +214,7 @@ impl Debug for ExtraMiddleware {
 impl Default for BaseClientBuilder<'_> {
     fn default() -> Self {
         Self {
+            checksum_authority: None,
             keyring: KeyringProviderType::default(),
             preview: Preview::default(),
             allow_insecure_host: vec![],
@@ -244,6 +247,46 @@ impl Default for BaseClientBuilder<'_> {
 }
 
 impl<'a> BaseClientBuilder<'a> {
+    /// Set the experimental checksum authority for package distribution clients.
+    #[must_use]
+    pub fn checksum_authority(mut self, authority: Option<ChecksumAuthority>) -> Self {
+        self.checksum_authority = authority;
+        self
+    }
+
+    /// Whether remote archives require independent checksum verification.
+    pub fn has_checksum_authority(&self) -> bool {
+        self.checksum_authority.is_some()
+    }
+
+    pub(crate) fn build_checksum_authority(
+        &self,
+    ) -> Result<Option<ChecksumAuthority>, ClientBuildError> {
+        let Some(authority) = &self.checksum_authority else {
+            return Ok(None);
+        };
+        let security = if self
+            .allow_insecure_host
+            .iter()
+            .any(|host| host.matches(authority.endpoint()))
+        {
+            Security::Insecure
+        } else {
+            Security::Secure
+        };
+        let client = self.create_client_builder(
+            &format!("uv/{}", version()),
+            self.read_timeout,
+            self.connect_timeout,
+            self.custom_certificates
+                .as_ref()
+                .map(Certificates::to_reqwest_certs),
+            security,
+            RedirectPolicy::NoRedirect,
+        )?;
+        Ok(Some(authority.clone().with_client_builder(client)?))
+    }
+
     pub fn new(
         connectivity: Connectivity,
         system_certs: bool,
@@ -602,6 +645,27 @@ impl<'a> BaseClientBuilder<'a> {
         security: Security,
         redirect_policy: RedirectPolicy,
     ) -> Result<Client, ClientBuildError> {
+        self.create_client_builder(
+            user_agent,
+            read_timeout,
+            connect_timeout,
+            custom_certs,
+            security,
+            redirect_policy,
+        )?
+        .build()
+        .map_err(Into::into)
+    }
+
+    fn create_client_builder(
+        &self,
+        user_agent: &str,
+        read_timeout: Duration,
+        connect_timeout: Duration,
+        custom_certs: Option<Vec<Certificate>>,
+        security: Security,
+        redirect_policy: RedirectPolicy,
+    ) -> Result<ClientBuilder, ClientBuildError> {
         // Configure the builder.
         let client_builder = ClientBuilder::new()
             .http1_title_case_headers()
@@ -673,7 +737,7 @@ impl<'a> BaseClientBuilder<'a> {
             client_builder = client_builder.proxy(proxy);
         }
 
-        client_builder.build().map_err(Into::into)
+        Ok(client_builder)
     }
 
     fn apply_middleware(&self, client: Client) -> ClientWithMiddleware {
