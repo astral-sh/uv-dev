@@ -384,7 +384,7 @@ impl CandidateSelector {
                                 VersionChoiceKind::Preference,
                             )
                             .with_preference_id(preference_id);
-                            if self.allows_source_preference(&candidate, activation, env) {
+                            if self.allows_preference(&candidate, activation, env) {
                                 return Some(candidate);
                             }
                         }
@@ -394,7 +394,7 @@ impl CandidateSelector {
                 let candidate =
                     Candidate::new(package_name, version, file, VersionChoiceKind::Preference)
                         .with_preference_id(preference_id);
-                if self.allows_source_preference(&candidate, activation, env) {
+                if self.allows_preference(&candidate, activation, env) {
                     return Some(candidate);
                 }
             }
@@ -402,9 +402,9 @@ impl CandidateSelector {
         None
     }
 
-    /// Avoid building metadata for an input preference already known to need different wheels.
+    /// Avoid resolving an input preference already known to need different wheels.
     /// This skips the preference only; ordinary candidate selection may still choose its version.
-    fn allows_source_preference(
+    fn allows_preference(
         &self,
         candidate: &Candidate<'_>,
         activation: MarkerTree,
@@ -416,13 +416,22 @@ impl CandidateSelector {
         {
             return true;
         }
-        let Some(CompatibleDist::SourceDist { sdist, prioritized }) = candidate.compatible() else {
-            return true;
+        let (index, prioritized) = match candidate.compatible() {
+            Some(
+                CompatibleDist::SourceDist { sdist, prioritized }
+                | CompatibleDist::IncompatibleWheel {
+                    sdist, prioritized, ..
+                },
+            ) => (&sdist.index, prioritized),
+            Some(CompatibleDist::CompatibleWheel { wheel, prioritized }) => {
+                (&wheel.index, prioritized)
+            }
+            Some(CompatibleDist::InstalledDist(_)) | None => return true,
         };
         let Some(fork) = env.fork_markers() else {
             return true;
         };
-        let coverage = prioritized.wheel_markers(&sdist.index, self.minimum_libc_version);
+        let coverage = prioritized.wheel_markers(index, self.minimum_libc_version);
         !self.wheel_preference_environments.iter().any(|required| {
             let applicable = activation.and(fork).and(*required);
             !applicable.is_false() && coverage.is_disjoint(applicable)
