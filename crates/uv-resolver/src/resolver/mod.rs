@@ -89,8 +89,8 @@ use crate::yanks::AllowedYanks;
 use crate::{DependencyMode, Exclusions, FlatIndex, Options, ResolutionMode, VersionMap, marker};
 pub(crate) use provider::MetadataUnavailable;
 pub(crate) use resolution::{
-    Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, ResolvedFork,
-    SelectedDistribution,
+    Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, ResolutionSource,
+    ResolvedFork, SelectedDistribution,
 };
 use uv_configuration::ForkStrategy;
 
@@ -476,7 +476,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 for (package, version) in &resolution.nodes {
                                     preferences.insert(
                                         package.name.clone(),
-                                        package.index.clone(),
+                                        match &package.source {
+                                            ResolutionSource::Url(_) => None,
+                                            ResolutionSource::Registry(index) => index.clone(),
+                                        },
                                         marker,
                                         version.clone(),
                                         PreferenceSource::Resolver,
@@ -3085,25 +3088,19 @@ impl<'index> ForkState<'index> {
         self
     }
 
-    /// Returns the URL or index for a package and version.
-    ///
-    /// In practice, exactly one of the returned values will be `Some`.
-    fn source(
-        &self,
-        name: &PackageName,
-        version: &Version,
-    ) -> (Option<&VerbatimParsedUrl>, Option<&IndexUrl>) {
-        let url = self.fork_urls.get(name);
-        let index = url
-            .is_none()
-            .then(|| {
+    /// Return the selected source for a package and version.
+    fn source(&self, name: &PackageName, version: &Version) -> ResolutionSource {
+        if let Some(url) = self.fork_urls.get(name) {
+            ResolutionSource::Url(Box::new(url.clone()))
+        } else {
+            ResolutionSource::Registry(
                 self.pins
                     .get(name, version)
                     .expect("Every package should be pinned")
                     .index()
-            })
-            .flatten();
-        (url, index)
+                    .cloned(),
+            )
+        }
     }
 
     fn into_resolution(self) -> Resolution<'index> {
@@ -3197,25 +3194,23 @@ impl<'index> ForkState<'index> {
                     | PubGrubPackageInner::System(_) => continue,
                 };
                 let from = self_name.map(|name| {
-                    let (url, index) = self.source(name, self_version);
+                    let source = self.source(name, self_version);
                     ResolutionNode {
                         package: ResolutionPackage {
                             name: name.clone(),
                             kind: self_kind.clone(),
-                            url: url.cloned(),
-                            index: index.cloned(),
+                            source,
                         },
                         version: self_version.clone(),
                     }
                 });
 
-                let (url, index) = self.source(name, dependency_version);
+                let source = self.source(name, dependency_version);
                 let to = ResolutionNode {
                     package: ResolutionPackage {
                         name: name.clone(),
                         kind,
-                        url: url.cloned(),
-                        index: index.cloned(),
+                        source,
                     },
                     version: dependency_version.clone(),
                 };
@@ -3243,13 +3238,12 @@ impl<'index> ForkState<'index> {
                     marker: MarkerTree::TRUE,
                 } = &*self.pubgrub.package_store[package]
                 {
-                    let (url, index) = self.source(name, &version);
+                    let source = self.source(name, &version);
                     Some((
                         ResolutionPackage {
                             name: name.clone(),
                             kind: kind.clone(),
-                            url: url.cloned(),
-                            index: index.cloned(),
+                            source,
                         },
                         version,
                     ))
