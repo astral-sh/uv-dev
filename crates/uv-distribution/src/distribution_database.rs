@@ -268,6 +268,25 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         }
     }
 
+    /// Probe a selected [`SourceDist`]'s declared and backend build requirements.
+    ///
+    /// Runs backend requirement hooks even when static or cached metadata would otherwise bypass
+    /// build setup.
+    #[instrument(skip_all, fields(%source))]
+    pub async fn resolve_build_requirements(
+        &self,
+        source: &SourceDist,
+        hashes: MetadataHashPolicy<'_>,
+    ) -> Result<(), Error> {
+        let buildable_source = BuildableSource::Dist(source);
+        let policy = SourceBuildHashPolicy::new(&buildable_source, hashes);
+        self.builder
+            .resolve_build_requirements(source, policy.archive_policy(), &self.client)
+            .boxed_local()
+            .await?;
+        Ok(())
+    }
+
     /// Fetch a wheel from the cache or download it from the index.
     ///
     /// Applicable hash checks are enforced before newly fetched wheels are published to the cache.
@@ -708,30 +727,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             }
         }
 
-        let url_hashes = if let BuildableSource::Dist(SourceDist::DirectUrl(dist)) = source {
-            parse_url_hashes(&dist.url)
-        } else if let BuildableSource::Url(SourceUrl::Direct(url)) = source {
-            parse_url_hashes(url.url)
-        } else {
-            None
-        };
-
-        let build_hash_policy = match hashes.validation {
-            HashValidation::None => match hashes.collection {
-                HashCollection::None => ArchiveHashPolicy::None,
-                // If resolving metadata requires a build, validate any URL hash before executing
-                // the backend, even when the caller only requested hash collection.
-                HashCollection::Url | HashCollection::All => match url_hashes.as_ref() {
-                    Some(digests) => ArchiveHashPolicy::All(digests.as_slice()),
-                    None => ArchiveHashPolicy::Generate,
-                },
-            },
-            HashValidation::Any(_) | HashValidation::All(_) => hashes.validation.into(),
-        };
+        let policy = SourceBuildHashPolicy::new(source, hashes);
         let ArchiveMetadata { metadata, hashes } = self
             .builder
             .for_metadata(self.first_party_packages)
-            .download_and_build_metadata(source, build_hash_policy, &self.client)
+            .download_and_build_metadata(source, policy.archive_policy(), &self.client)
             .boxed_local()
             .await?;
 
@@ -1897,5 +1897,35 @@ impl PathArchivePointer {
     /// Return the [`BuildInfo`] from the pointer.
     pub fn to_build_info(&self) -> Option<BuildInfo> {
         None
+    }
+}
+
+/// URL fragment hashes must be validated before any source backend executes.
+struct SourceBuildHashPolicy<'a> {
+    hashes: MetadataHashPolicy<'a>,
+    url_hashes: Option<HashDigests>,
+}
+
+impl<'a> SourceBuildHashPolicy<'a> {
+    fn new(source: &BuildableSource<'_>, hashes: MetadataHashPolicy<'a>) -> Self {
+        let url_hashes = match source {
+            BuildableSource::Dist(SourceDist::DirectUrl(dist)) => parse_url_hashes(&dist.url),
+            BuildableSource::Url(SourceUrl::Direct(url)) => parse_url_hashes(url.url),
+            _ => None,
+        };
+        Self { hashes, url_hashes }
+    }
+
+    fn archive_policy(&self) -> ArchiveHashPolicy<'_> {
+        match self.hashes.validation {
+            HashValidation::None => match self.hashes.collection {
+                HashCollection::None => ArchiveHashPolicy::None,
+                HashCollection::Url | HashCollection::All => match self.url_hashes.as_ref() {
+                    Some(digests) => ArchiveHashPolicy::All(digests.as_slice()),
+                    None => ArchiveHashPolicy::Generate,
+                },
+            },
+            HashValidation::Any(_) | HashValidation::All(_) => self.hashes.validation.into(),
+        }
     }
 }

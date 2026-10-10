@@ -319,6 +319,11 @@ mod tests {
         build system, and a script entry point. This gives new applications an installable package
         structure without requiring `--package`.
 
+        ### `pip-build-dependencies` {#pip-build-dependencies}
+
+        The `--include-build-dependencies` option includes the build dependencies of source
+        distributions in `uv pip compile` requirements output.
+
         ### `project-directory-must-exist` {#project-directory-must-exist}
 
         The `--project` option rejects invalid paths instead of warning and continuing in the

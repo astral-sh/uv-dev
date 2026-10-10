@@ -86,7 +86,10 @@ use crate::resolver::system::SystemDependency;
 pub(crate) use crate::resolver::urls::Urls;
 use crate::universal_marker::UniversalMarker;
 use crate::yanks::AllowedYanks;
-use crate::{DependencyMode, Exclusions, FlatIndex, Options, ResolutionMode, VersionMap, marker};
+use crate::{
+    BuildDependencies, DependencyMode, Exclusions, FlatIndex, Options, ResolutionMode, VersionMap,
+    marker,
+};
 pub(crate) use provider::MetadataUnavailable;
 pub(crate) use resolution::{
     Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, ResolvedFork,
@@ -125,6 +128,8 @@ struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
     project: Option<PackageName>,
     requirements: Vec<Requirement>,
     constraints: Constraints,
+    build_dependencies: BuildDependencies,
+    build_constraints: Option<Constraints>,
     modifiers: DependencyModifiers,
     preferences: Preferences,
     git: GitResolver,
@@ -257,6 +262,18 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
             project: manifest.project,
             workspace_members: manifest.workspace_members.into_keys().collect(),
             requirements: manifest.requirements,
+            build_constraints: (!manifest.build_dependencies.requirements.is_empty()).then(|| {
+                Constraints::from_requirements(
+                    manifest.constraints.requirements().cloned().chain(
+                        manifest
+                            .build_dependencies
+                            .constraints
+                            .requirements()
+                            .cloned(),
+                    ),
+                )
+            }),
+            build_dependencies: manifest.build_dependencies,
             constraints: manifest
                 .constraints
                 .with_recorder(manifest.recorder.clone()),
@@ -433,7 +450,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 .pubgrub
                                 .partial_solution
                                 .extract_solution()
-                                .filter(|(p, _)| !state.pubgrub.package_store[*p].is_proxy())
+                                .filter(|(p, _)| {
+                                    let package = &state.pubgrub.package_store[*p];
+                                    !package.is_proxy() && !package.is_build()
+                                })
                                 .map(|(p, v)| format!("{}=={}", state.pubgrub.package_store[p], v))
                                 .join(", ")
                         );
@@ -494,7 +514,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 .pubgrub
                                 .partial_solution
                                 .undecided_packages()
-                                .filter(|(p, _)| !state.pubgrub.package_store[**p].is_proxy())
+                                .filter(|(p, _)| {
+                                    let package = &state.pubgrub.package_store[**p];
+                                    !package.is_proxy() && !package.is_build()
+                                })
                                 .map(|(p, _)| state.pubgrub.package_store[*p].to_string())
                                 .join(", ")
                         );
@@ -866,8 +889,13 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             resolutions,
             self.project.as_ref(),
             &self.workspace_members,
-            self.requirements.clone(),
+            self.requirements
+                .iter()
+                .chain(&self.build_dependencies.requirements)
+                .cloned()
+                .collect(),
             self.constraints.clone(),
+            self.build_dependencies.clone(),
             self.modifiers.clone(),
             &self.preferences,
             &self.hasher,
@@ -1802,8 +1830,51 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         python_requirement: &PythonRequirement,
         pubgrub: &State<UvDependencyProvider>,
     ) -> Result<Dependencies, ResolveError> {
+        let mut dependencies = self.get_dependencies_inner(
+            id,
+            package,
+            version,
+            pins,
+            env,
+            python_requirement,
+            pubgrub,
+        )?;
+        if package.is_build() {
+            match &mut dependencies {
+                Dependencies::Available(dependencies) | Dependencies::Unforkable(dependencies) => {
+                    for dependency in dependencies.iter_mut() {
+                        dependency.package = dependency.package.clone().for_build();
+                    }
+                    dependencies.push(PubGrubDependency {
+                        package: package.without_build(),
+                        version: Range::singleton(version.clone()),
+                        parent: None,
+                        source: DependencySource::Unspecified,
+                    });
+                }
+                Dependencies::Unavailable(_) | Dependencies::RequiresPython(_) => {}
+            }
+        }
+        Ok(dependencies)
+    }
+
+    fn get_dependencies_inner(
+        &self,
+        id: Id<PubGrubPackage>,
+        package: &PubGrubPackage,
+        version: &Version,
+        pins: &FilePins,
+        env: &ResolverEnvironment,
+        python_requirement: &PythonRequirement,
+        pubgrub: &State<UvDependencyProvider>,
+    ) -> Result<Dependencies, ResolveError> {
+        let constraints = if package.is_build() {
+            self.build_constraints.as_ref().unwrap_or(&self.constraints)
+        } else {
+            &self.constraints
+        };
         let expander =
-            RequirementExpander::new(&self.constraints, &self.modifiers, env, python_requirement);
+            RequirementExpander::new(constraints, &self.modifiers, env, python_requirement);
         let dependencies = match &**package {
             PubGrubPackageInner::Root(_) => {
                 let requirements = expander.expand(&self.requirements, RequirementContext::Root);
@@ -1814,6 +1885,33 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     None,
                     Some(package),
                 )
+                .and_then(|mut dependencies| {
+                    if !self.build_dependencies.requirements.is_empty() {
+                        let expander = RequirementExpander::new(
+                            self.build_constraints.as_ref().unwrap_or(&self.constraints),
+                            &self.modifiers,
+                            env,
+                            python_requirement,
+                        );
+                        dependencies.extend(
+                            PubGrubDependency::from_requirements(
+                                &self.conflicts,
+                                expander.expand(
+                                    &self.build_dependencies.requirements,
+                                    RequirementContext::Root,
+                                ),
+                                None,
+                                Some(package),
+                            )?
+                            .into_iter()
+                            .map(|mut dependency| {
+                                dependency.package = dependency.package.for_build();
+                                dependency
+                            }),
+                        );
+                    }
+                    Ok(dependencies)
+                })
             }
 
             PubGrubPackageInner::Package {
@@ -3144,6 +3242,9 @@ impl<'index> ForkState<'index> {
 
                 let self_package = &self.pubgrub.package_store[self_package];
                 let dependency_package = &self.pubgrub.package_store[dependency_package];
+                if self_package.is_build() {
+                    continue;
+                }
 
                 let (self_name, self_kind) = match &**self_package {
                     PubGrubPackageInner::Package {
@@ -3242,6 +3343,7 @@ impl<'index> ForkState<'index> {
                     kind,
                     marker: MarkerTree::TRUE,
                 } = &*self.pubgrub.package_store[package]
+                    && !self.pubgrub.package_store[package].is_build()
                 {
                     let (url, index) = self.source(name, &version);
                     Some((

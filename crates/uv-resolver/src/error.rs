@@ -508,14 +508,17 @@ impl NoSolutionError {
         self.cached.get_or_init(|| self.compute_report_and_hints())
     }
 
-    /// Given a [`DerivationTree`], collapse any [`External::FromDependencyOf`] incompatibilities
-    /// wrap an [`PubGrubPackageInner::Extra`] package.
+    /// Collapse transparent proxy edges and build-to-runtime version equality edges.
+    /// Real build dependencies and their conditional constraints remain in the explanation.
     pub(crate) fn collapse_proxies(derivation_tree: ErrorTree) -> ErrorTree {
         fn is_proxy(tree: &ErrorTree) -> bool {
             matches!(
                 tree,
-                DerivationTree::External(External::FromDependencyOf(package, ..))
+                DerivationTree::External(External::FromDependencyOf(package, _, dependency, _))
                     if package.is_proxy()
+                        || (package.is_build()
+                            && !dependency.is_build()
+                            && package.without_build() == *dependency)
             )
         }
 

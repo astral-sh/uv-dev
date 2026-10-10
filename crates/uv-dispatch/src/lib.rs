@@ -5,12 +5,14 @@
 use std::ffi::{OsStr, OsString};
 use std::future::{self, Future};
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
 use futures::FutureExt;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tracing::{debug, instrument, trace};
 
 use uv_build_backend::{Error as BuildBackendError, check_direct_build};
@@ -26,7 +28,7 @@ use uv_distribution::DistributionDatabase;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, ExtraBuildRequires, ExtraBuildVariables,
-    Identifier, IndexCapabilities, IndexLocations, IsBuildBackendError, Name,
+    Identifier, IndexCapabilities, IndexLocations, IsBuildBackendError, MetadataHashPolicy, Name,
     PackageConfigSettings, Requirement, Resolution, SourceDist, VersionOrUrlRef,
 };
 use uv_git::GitResolver;
@@ -36,8 +38,8 @@ use uv_pypi_types::Conflicts;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::LookaheadResolver;
 use uv_resolver::{
-    ExcludeNewer, FlatIndex, Flexibility, InMemoryIndex, Manifest, OptionsBuilder,
-    PythonRequirement, Resolver, ResolverEnvironment,
+    ExcludeNewer, FlatIndex, Flexibility, InMemoryIndex, Manifest, OptionsBuilder, Preference,
+    Preferences, PythonRequirement, Resolver, ResolverEnvironment,
 };
 use uv_static::TarBackend;
 use uv_types::{
@@ -147,6 +149,18 @@ impl IsBuildBackendError for BuildDispatchError {
     }
 }
 
+#[derive(Clone, Copy)]
+enum BuildRequirementMode {
+    Declared,
+    Backend,
+}
+
+#[derive(Clone)]
+struct BuildRequirementDiscovery {
+    mode: BuildRequirementMode,
+    requirements: Arc<Mutex<Vec<Requirement>>>,
+}
+
 /// The main implementation of [`BuildContext`], used by the CLI, see [`BuildContext`]
 /// documentation.
 #[derive(Clone)]
@@ -178,6 +192,8 @@ pub struct BuildDispatch<'a> {
     concurrency: Concurrency,
     preview: Preview,
     tar_backend: TarBackend,
+    build_requirements: Option<BuildRequirementDiscovery>,
+    build_preferences: Vec<Preference>,
 }
 
 impl<'a> BuildDispatch<'a> {
@@ -237,7 +253,80 @@ impl<'a> BuildDispatch<'a> {
             concurrency,
             preview,
             tar_backend: TarBackend::from_env(),
+            build_requirements: None,
+            build_preferences: Vec::new(),
         }
+    }
+
+    /// Read one source's declared requirements without installing or invoking its backend.
+    pub async fn discover_declared_build_requirements(
+        &self,
+        source: &SourceDist,
+        hashes: MetadataHashPolicy<'_>,
+    ) -> Result<Vec<Requirement>, uv_distribution::Error> {
+        self.discover_build_requirements_with_mode(
+            source,
+            hashes,
+            &Constraints::default(),
+            Vec::new(),
+            BuildRequirementMode::Declared,
+        )
+        .await
+    }
+
+    /// Discover one source's build requirements in a private capture scope.
+    pub async fn discover_build_requirements(
+        &self,
+        source: &SourceDist,
+        hashes: MetadataHashPolicy<'_>,
+        constraints: &Constraints,
+        preferences: Vec<Preference>,
+    ) -> Result<Vec<Requirement>, uv_distribution::Error> {
+        self.discover_build_requirements_with_mode(
+            source,
+            hashes,
+            constraints,
+            preferences,
+            BuildRequirementMode::Backend,
+        )
+        .await
+    }
+
+    async fn discover_build_requirements_with_mode(
+        &self,
+        source: &SourceDist,
+        hashes: MetadataHashPolicy<'_>,
+        constraints: &Constraints,
+        preferences: Vec<Preference>,
+        mode: BuildRequirementMode,
+    ) -> Result<Vec<Requirement>, uv_distribution::Error> {
+        let requirements = Arc::new(Mutex::new(Vec::new()));
+        let constraints = Constraints::from_specifications(
+            self.constraints
+                .specifications()
+                .cloned()
+                .chain(constraints.specifications().cloned()),
+        );
+        let dispatch = BuildDispatch {
+            constraints: &constraints,
+            build_preferences: preferences,
+            build_requirements: Some(BuildRequirementDiscovery {
+                mode,
+                requirements: requirements.clone(),
+            }),
+            source_build_context: SourceBuildContext::new(
+                self.concurrency.builds_semaphore.clone(),
+            ),
+            ..self.clone()
+        };
+        DistributionDatabase::new(
+            self.client,
+            &dispatch,
+            self.concurrency.downloads_semaphore.clone(),
+        )
+        .resolve_build_requirements(source, hashes)
+        .await?;
+        Ok(std::mem::take(&mut *requirements.lock().await))
     }
 
     /// Fork the dispatch with a different hash strategy.
@@ -409,6 +498,10 @@ impl BuildContext for BuildDispatch<'_> {
         .await?;
 
         let manifest = Manifest::simple(requirements.to_vec())
+            .with_preferences(Preferences::from_iter(
+                self.build_preferences.iter().cloned(),
+                &resolver_env,
+            ))
             .with_constraints(self.constraints.clone())
             .with_lookaheads(lookaheads);
 
@@ -444,6 +537,13 @@ impl BuildContext for BuildDispatch<'_> {
                 source,
             }
         })?);
+        if let Some(build_requirements) = &self.build_requirements {
+            build_requirements
+                .requirements
+                .lock()
+                .await
+                .extend(requirements.iter().cloned());
+        }
         Ok(ResolvedRequirements::new(resolution, hasher))
     }
 
@@ -655,7 +755,77 @@ impl BuildContext for BuildDispatch<'_> {
         )
         .boxed_local()
         .await?;
+        if let Some(build_requirements) = &self.build_requirements {
+            let mut requirements = builder.build_requirements().cloned().collect::<Vec<_>>();
+            // Shared environments skip the hook during setup; discovery still needs its inputs.
+            if builder.shared_environment().is_some() {
+                requirements.extend(
+                    builder
+                        .get_requires_for_build(
+                            self,
+                            install_path,
+                            sources.clone(),
+                            self.client.credentials_cache(),
+                        )
+                        .await?,
+                );
+            }
+            build_requirements
+                .requirements
+                .lock()
+                .await
+                .extend(requirements);
+        }
         Ok(builder)
+    }
+
+    async fn setup_build_requirements<'data>(
+        &'data self,
+        source: &'data Path,
+        subdirectory: Option<&'data Path>,
+        install_path: &'data Path,
+        stop_discovery_at: Option<&'data Path>,
+        version_id: Option<&'data str>,
+        dist: Option<&'data SourceDist>,
+        sources: &'data NoSources,
+        build_kind: BuildKind,
+        build_output: BuildOutput,
+        build_stack: BuildStack,
+    ) -> Result<(), uv_build_frontend::Error> {
+        if let Some(discovery) = &self.build_requirements {
+            match discovery.mode {
+                BuildRequirementMode::Declared => {
+                    let requirements = SourceBuild::declared_build_requirements(
+                        source,
+                        subdirectory,
+                        install_path,
+                        stop_discovery_at,
+                        dist.map(Name::name),
+                        self,
+                        sources,
+                        self.client.credentials_cache(),
+                    )
+                    .await?;
+                    discovery.requirements.lock().await.extend(requirements);
+                    return Ok(());
+                }
+                BuildRequirementMode::Backend => {}
+            }
+        }
+        self.setup_build(
+            source,
+            subdirectory,
+            install_path,
+            stop_discovery_at,
+            version_id,
+            dist,
+            sources,
+            build_kind,
+            build_output,
+            build_stack,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn direct_build<'data>(

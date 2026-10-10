@@ -259,6 +259,9 @@ pub enum PreviewFeature {
     /// supply a missing build dependency or, with `match-runtime = true`, ensure that a build
     /// dependency uses the same version as the project environment.
     ExtraBuildDependencies,
+    /// The `--include-build-dependencies` option includes the build dependencies of source
+    /// distributions in `uv pip compile` requirements output.
+    PipBuildDependencies,
     /// uv warns when multiple packages install conflicting Python modules into the same
     /// environment. These conflicts can cause imports to depend on installation order, even when
     /// the packages have different distribution names.

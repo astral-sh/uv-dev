@@ -35,10 +35,19 @@ pub struct ResolverOutput {
     pub requirements: Vec<Requirement>,
     /// The constraints that were used to build the graph.
     pub constraints: Constraints,
+    /// Build roots and their conditional constraints, retained for output annotations.
+    pub build_dependencies: BuildDependencies,
     /// The dependency modifiers that were used to build the graph.
     pub modifiers: DependencyModifiers,
     /// The options that were used to build the graph.
     pub options: Options,
+}
+
+/// Additional roots whose transitive closure is constrained independently of runtime usage.
+#[derive(Debug, Clone, Default)]
+pub struct BuildDependencies {
+    pub requirements: Vec<Requirement>,
+    pub constraints: Constraints,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +123,46 @@ impl ResolverOutput {
             })
     }
 
+    /// Return packages reachable from the given requirements, including their selected extras.
+    pub fn dependency_closure<'a>(
+        &self,
+        requirements: impl IntoIterator<Item = &'a Requirement>,
+    ) -> FxHashSet<PackageName> {
+        let requirements = requirements.into_iter().collect::<Vec<_>>();
+        let mut stack = self
+            .graph
+            .node_indices()
+            .filter(|&index| {
+                let ResolutionGraphNode::Dist(dist) = &self.graph[index] else {
+                    return false;
+                };
+                requirements.iter().any(|requirement| {
+                    requirement.name == dist.name
+                        && (dist.kind.is_base()
+                            || dist
+                                .kind
+                                .extra()
+                                .is_some_and(|extra| requirement.extras.contains(extra))
+                            || dist
+                                .kind
+                                .group()
+                                .is_some_and(|group| requirement.groups.contains(group)))
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut visited = FxHashSet::default();
+        let mut packages = FxHashSet::default();
+        while let Some(index) = stack.pop() {
+            if visited.insert(index) {
+                if let ResolutionGraphNode::Dist(dist) = &self.graph[index] {
+                    packages.insert(dist.name.clone());
+                }
+                stack.extend(self.graph.neighbors(index));
+            }
+        }
+        packages
+    }
+
     /// Return the number of distinct packages in the graph.
     pub fn len(&self) -> usize {
         self.base_dists().count()
@@ -122,6 +171,12 @@ impl ResolverOutput {
     /// Return `true` if there are no packages in the graph.
     pub fn is_empty(&self) -> bool {
         self.base_dists().next().is_none()
+    }
+
+    /// Return the selected distribution for each package in the resolution.
+    pub fn distributions(&self) -> impl Iterator<Item = &ResolvedDist> {
+        self.base_dists()
+            .map(|(_, distribution)| &distribution.dist)
     }
 
     /// Retain registry hashes only for artifacts permitted by package-specific build options.
