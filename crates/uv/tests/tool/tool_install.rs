@@ -9333,3 +9333,173 @@ fn tool_install_locked_git_index_sources_survive_cache_removal() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Index-bound build requirements retain their Git source across cache removal and reinstalls.
+#[cfg(feature = "test-git")]
+#[test]
+fn tool_install_locked_git_build_index_survives_cache_removal() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let repository = context.temp_dir.child("repository");
+    let bin = context.temp_dir.child("bin");
+    let path = tool_install_git_path(&bin);
+    let (build_name, build) = generate_wheel_with_files(
+        &"build-child".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    repository
+        .child(format!("simple/build-child/{build_name}"))
+        .write_binary(&build)?;
+    repository
+        .child("simple/build-child/index.html")
+        .write_str(&format!("<a href='{build_name}'>{build_name}</a>"))?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("foo/cli.py", "def main(): pass\n"),
+            (
+                "foo-0.1.0.dist-info/entry_points.txt",
+                "[console_scripts]\nfoo = foo.cli:main\n",
+            ),
+        ],
+    );
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.scripts]
+        foo = "foo.cli:main"
+        [tool.uv.extra-build-dependencies]
+        foo = ["build-child"]
+        [tool.uv.sources]
+        build-child = { index = "internal" }
+        [[tool.uv.index]]
+        name = "internal"
+        url = "./simple"
+        default = true
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    repository.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            import build_child
+            assert build_child.__version__ == '1.0.0'
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+    ", bytes=hex::encode(wheel)})?;
+    context
+        .lock()
+        .current_dir(repository.path())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+    let url =
+        Url::from_directory_path(repository.path()).map_err(|()| anyhow!("invalid Git source"))?;
+    let mut filters = context.filters();
+    filters.push((
+        r"file://[^\s]+/git-v1/checkouts/",
+        "file://[CACHE_DIR]/git-v1/checkouts/",
+    ));
+    filters.push((
+        r"git-v1/checkouts/[0-9a-f]+/[0-9a-f]+",
+        "git-v1/checkouts/[CHECKOUT]/[REV]",
+    ));
+    filters.push((r"[0-9a-f]{40}", "[COMMIT]"));
+    uv_snapshot!(filters, context.tool_install().arg(format!("git+{url}"))
+        .args(["--locked", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV])
+    Installed 1 executable: foo
+    "#);
+    insta::with_settings!({filters => filters.clone()}, {
+        assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
+    [tool]
+    requirements = [{ name = "foo", git = "file://[TEMP_DIR]/repository/" }]
+    extra-build-requires = { foo = [{ requirement = { name = "build-child", index = "file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/simple" }, match_runtime = false }] }
+    index-sources = [{ index = "file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/simple", source = { git = "file://[TEMP_DIR]/repository/?subdirectory=simple" } }]
+    entrypoints = [
+        { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
+    ]
+
+    [tool.options]
+    index = [{ name = "internal", url = "file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/simple", explicit = false, default = true, format = "simple", authenticate = "auto" }]
+    extra-build-dependencies = { foo = [{ requirement = "build-child", match-runtime = false }] }
+    "#);
+    });
+    let receipt = toml::from_str::<toml::Value>(&context.read("tools/foo/uv-receipt.toml"))?;
+    let index = receipt["tool"]["extra-build-requires"]["foo"][0]["requirement"]["index"]
+        .as_str()
+        .expect("build requirement index");
+    ChildPath::new(
+        Url::parse(index)?
+            .to_file_path()
+            .map_err(|()| anyhow!("invalid index URL"))?,
+    )
+    .assert(predicate::path::missing());
+    uv_snapshot!(filters, context.tool_upgrade()
+        .args(["foo", "--reinstall", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Reinstalled foo v0.1.0
+     - foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV])
+     + foo==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT])
+    Installed 1 executable: foo
+    "#);
+    uv_snapshot!(filters, context.tool_upgrade()
+        .args(["foo", "--reinstall", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified foo environment
+     ~ foo==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT])
+    Installed 1 executable: foo
+    "#);
+    Ok(())
+}

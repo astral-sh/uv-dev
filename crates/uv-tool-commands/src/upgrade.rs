@@ -289,7 +289,7 @@ async fn upgrade_tool(
     let tool_locks =
         preview.is_enabled(PreviewFeature::ToolInstallLocks) || ToolLock::read(&tool_dir).is_some();
     // Ensure the tool is installed.
-    let existing_tool_receipt = match installed_tools.get_tool_receipt(name) {
+    let mut existing_tool_receipt = match installed_tools.get_tool_receipt(name) {
         Ok(Some(receipt)) => receipt,
         Ok(None) => {
             let install_command = format!("uv tool install {name}");
@@ -356,7 +356,7 @@ async fn upgrade_tool(
     let state = PlatformState::default();
     let receipt_index_sources = restore_index_sources(
         &mut options,
-        existing_tool_receipt.index_sources(),
+        &mut existing_tool_receipt,
         &state,
         client_builder,
         cache,

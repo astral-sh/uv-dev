@@ -2002,3 +2002,25 @@ fn new_tool_index() -> PackseServer {
     .expect("new tool scenario should parse");
     PackseServer::from_scenario(&scenario)
 }
+
+/// Invalid index provenance is rejected when the receipt is loaded.
+#[test]
+fn tool_upgrade_rejects_non_git_index_provenance() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    context
+        .temp_dir
+        .child("tools/foo/uv-receipt.toml")
+        .write_str(indoc! {r#"
+        [tool]
+        requirements = [{ name = "foo", specifier = "==1.0.0" }]
+        index-sources = [{ index = "https://example.org/simple", source = { specifier = ">=1" } }]
+        entrypoints = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("foo"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade foo
+      cause: `foo` is missing a valid receipt; run `uv tool install --force foo` to reinstall
+    "#);
+    Ok(())
+}
