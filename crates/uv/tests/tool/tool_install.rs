@@ -3017,7 +3017,7 @@ fn tool_install_no_entrypoints() {
         .assert(predicate::path::missing());
 }
 
-/// Test that a failed tool installation removes entrypoints installed from additional packages.
+/// A tool without entrypoints must not leave dependency exports or replace another tool's commands.
 #[test]
 fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
     let context = uv_test::test_context!("3.12")
@@ -3052,7 +3052,6 @@ fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
      + packaging==24.0
      + pathspec==0.12.1
      + platformdirs==4.2.0
-    Installed 2 executables from `black`: black, blackd
     error: Failed to install entrypoints for `iniconfig`
     ");
 
@@ -3065,6 +3064,54 @@ fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
     bin_dir
         .child(format!("blackd{}", std::env::consts::EXE_SUFFIX))
         .assert(predicate::path::missing());
+
+    context
+        .tool_install()
+        .arg("black")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let receipt = tool_dir.child("black").child("uv-receipt.toml");
+    let receipt_contents = fs_err::read(receipt.path())?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("iniconfig")
+        .arg("--with-executables-from")
+        .arg("black")
+        .arg("--force")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    No executables are provided by package `iniconfig`; removing tool
+
+    ----- stderr -----
+    Resolved 7 packages in [TIME]
+    Installed 7 packages in [TIME]
+     + black==24.3.0
+     + click==8.1.7
+     + iniconfig==2.0.0
+     + mypy-extensions==1.0.0
+     + packaging==24.0
+     + pathspec==0.12.1
+     + platformdirs==4.2.0
+    error: Failed to install entrypoints for `iniconfig`
+    ");
+
+    tool_dir
+        .child("iniconfig")
+        .assert(predicate::path::missing());
+    assert_eq!(fs_err::read(receipt.path())?, receipt_contents);
+    bin_dir
+        .child(format!("blackd{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+    Command::new(
+        bin_dir
+            .child(format!("black{}", std::env::consts::EXE_SUFFIX))
+            .path(),
+    )
+    .arg("--version")
+    .assert()
+    .success();
 
     Ok(())
 }
