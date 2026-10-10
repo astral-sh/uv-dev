@@ -3995,6 +3995,7 @@ impl Lock {
         excludes: &[ExcludeDependency],
         dependency_metadata: &DependencyMetadata,
         index_locations: &IndexLocations,
+        modifiers: &DependencyModifiers,
         database: &DistributionDatabase<'_, Context>,
     ) -> Result<bool, LockError> {
         // Non-workspace mutable metadata is refreshed later during resolution. Its stored
@@ -4089,8 +4090,13 @@ impl Lock {
             else {
                 return Ok(false);
             };
-            // A package's version selects its scoped overrides and exclusions.
-            if current.version.is_none() || current.version.as_ref() != package.version() {
+            // An unknown dynamic version only affects activation when scoped rules need it.
+            if current
+                .version
+                .as_ref()
+                .is_some_and(|version| Some(version) != package.version())
+                || (current.version.is_none() && modifiers.has_scoped_package(name))
+            {
                 return Ok(false);
             }
             let current = current.metadata;
@@ -4186,6 +4192,11 @@ impl Lock {
                 .reduce(MarkerTree::or)
                 .unwrap_or(MarkerTree::TRUE),
         );
+        let modifiers = DependencyModifiers::new(
+            Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(self.manifest.excludes.iter().cloned()),
+        );
         if !self
             .root_activation_is_current(
                 root,
@@ -4199,6 +4210,7 @@ impl Lock {
                 excludes,
                 dependency_metadata,
                 index_locations,
+                &modifiers,
                 database,
             )
             .await?
@@ -4217,11 +4229,6 @@ impl Lock {
             requires_python.complexify_markers(self.requires_python.simplify_markers(marker))
         };
         let root_marker = current_scope.and(current_marker(self.fork_markers_union()));
-        let modifiers = DependencyModifiers::new(
-            Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
-                .map_err(LockErrorKind::InvalidScopedOverride)?,
-            Excludes::from_entries(self.manifest.excludes.iter().cloned()),
-        );
 
         for package in self.workspace_packages() {
             pending.push_back((package, None, root_marker));
