@@ -10,19 +10,57 @@ The reporter cannot update uv through Scoop because ESET Internet Security block
 
 Affected URL: https://github.com/astral-sh/uv/releases/download/0.13.0/uv-x86_64-pc-windows-msvc.zip
 
-Related vendor-support guidance and antivirus reports exist, but no exact ESET URL-blacklist duplicate was found. Windows signing predates the affected release.
+Related vendor-support guidance and antivirus reports exist, but no exact ESET URL-blacklist duplicate was found. Windows signing predates the affected release. Independent reproduction needs more information about the Windows/ESET setup and access to that environment; the available Linux runner cannot exercise ESET Internet Security’s URL filtering.
+
+## Reproduction
+
+**Outcome: `needs_more_information`.** The supplied log documents the reporter’s ESET interception, but no independent reproduction of the block was performed. Neither an ESET false positive nor a uv defect has been confirmed. Successful execution of uv on Linux would not test this report.
+
+### Reported operation and environment
+
+- Operation: update uv through Scoop. The exact command, Scoop version, bucket/manifest revision, and previously installed uv version are not supplied. The report does not show `uv self update` or a Python/project command.
+- Target: uv 0.13.0, archive `uv-x86_64-pc-windows-msvc.zip`, at the affected URL in the summary.
+- Platform: Windows, requesting the x64 MSVC artifact. The log’s application path names the Microsoft PowerShell 7.6.6.0 x64 package. The Windows edition/build and actual host architecture are not provided.
+- Protection: ESET Internet Security. At `2026/10/10 15:02:39`, the log records `阻止的 URL` (blocked URL) and `PUA 黑名单` (PUA blacklist). The unlabeled log fields do not reliably identify the ESET product or detection database version. Web/HTTPS filtering and potentially unwanted application settings are not supplied.
+- Expected: Scoop downloads the release archive and completes the update. Actual, as reported: ESET blocks the URL and the update cannot complete. This occurs during archive retrieval, before running the newly downloaded uv executable.
+- Python version and project configuration are absent, but are not needed to test this download-stage interception. No last known-good uv release under the same ESET settings is identified, so an upgrade regression is not established.
+
+### Local observations and scope
+
+Read-only environment checks used the installed uv executable on `PATH`:
+
+```console
+$ command -v uv
+/opt/hostedtoolcache/uv/0.12.13/x86_64/uv
+$ uv --version
+uv 0.12.13 (x86_64-unknown-linux-gnu)
+$ uname -srm
+Linux 6.17.0-1022-azure x86_64
+```
+
+Scoop and ESET scanner commands `ecls` and `esets_scan` are not on `PATH`, and `/opt/eset` is absent. PowerShell is available at `/usr/bin/pwsh`, but this is a Linux runner without the reported Windows/ESET setup. No Scoop update, archive download, antivirus scan, or installation/version comparison was attempted. A download without the relevant ESET filtering would not confirm or refute its classification. No reproduction fixture or cache was needed; no checkout files or existing user state were modified.
+
+Reviewed `CHANGELOG.md` for uv 0.13.0 and `changelogs/0.12.x.md` for uv 0.12.12. The release notes confirm that Windows signing predates the affected release; they do not establish ESET’s verdict on this URL or confirm the signature of the blocked archive. `docs/getting-started/installation.md` documents Scoop as a separate installation route. `crates/uv/src/commands/self_update.rs` implements uv’s standalone-installer update path, which is not the reported operation. There is no evidence-backed project, dependency-group, or uv command variant that can substitute for ESET URL filtering.
+
+### Existing test coverage
+
+Searched `crates/uv/tests/` and `crates/uv-client/tests/it/` for ESET, PUA, blacklist, antivirus, Authenticode, and Scoop; no matching coverage was found. Read the setup and assertions in `crates/uv/tests/it/self_update.rs`: `check_self_update` uses axoupdater to install/update uv and asserts that the resulting executable accepts `--version`; `self_update_offline_error` checks uv’s explicit offline error; the dry-run tests use mocked release metadata. These tests do not exercise Scoop or ESET’s URL blacklist and cannot validate this report. They were not run.
+
+### Information needed for a targeted reproduction
+
+Obtain the exact Scoop update command and sanitized terminal output, Scoop version and uv bucket/manifest revision, previously installed uv version, Windows version/architecture, and explicit ESET Internet Security product and detection database/module versions. Include the relevant web/HTTPS and PUA protection settings and a fresh detection log with field headings, timestamp/time zone, blocked URL, and detection name; omit personal identifiers and credentials.
+
+A meaningful reproduction must retry retrieval of the specified uv 0.13.0 archive through Scoop on a Windows machine with the matching ESET configuration, recording whether ESET emits the same URL/PUA event and prevents the update. If an older release is known to succeed under those same conditions, identify it for comparison. ESET’s support ticket and response can clarify whether its classification has changed or whether a uv-side action is warranted; no cause should be inferred from related antivirus reports alone.
 
 ## Draft response
 
-Your log shows ESET blocking the uv 0.13.0 download URL during the Scoop update. Please submit that URL and detection log to ESET for review as a suspected false positive, then share their support ticket ID and response here, as described in astral-sh/uv#20792. We have signed Windows release binaries since uv 0.12.12 (astral-sh/uv#10336), but signing does not guarantee that an antivirus vendor will allow a download.
+Your log shows ESET blocking the uv 0.13.0 download URL during the Scoop update. Please share the exact Scoop command and error, Windows and Scoop versions, and the ESET product/detection database versions and web/PUA protection settings, with personal information and credentials removed. Please also submit the URL and detection log to ESET for review as a suspected false positive, then share their support ticket ID and response here, as described in astral-sh/uv#20792. We have signed Windows release binaries since uv 0.12.12 (astral-sh/uv#10336), but signing does not guarantee that an antivirus vendor will allow a download.
 
 ## Classification
 
-The report needs support for ESET's external URL-classification decision; the log establishes a blocked download but no incorrect uv behavior or confirmed false-positive mechanism. No existing issue was found tracking this specific ESET URL block. The broad AV guidance explicitly distinguishes new vendor/failure-mode reports, and the older ESET comment concerns a different detection stage. Signing already shipped, but it was not a confirmed fix for this blacklist, so a regression is not established.
+This is a vendor-support question under the available classifications. The report concerns ESET’s external URL-classification decision and requests no new uv capability. The reporter’s log documents a blocked download; the block has not been independently reproduced, and neither a uv defect nor a false-positive mechanism is confirmed. A missing local reproduction is not the classification rationale.
 
-This is a vendor-support question under the available classifications. The report requests no new uv capability. The logged interception is established by the reporter's evidence; the reason ESET classified this URL, whether ESET confirms a false positive, and any uv-side defect remain unconfirmed. A missing local reproduction is not the classification rationale.
-
-The existing AV/EDR tracker is useful support guidance, but its maintainer clarification explicitly distinguishes new vendors and failure modes. The earlier ESET mention concerns behavior during CI execution, not this URL blacklist. Those differences do not establish a duplicate. The signing change was described as a mitigation that would not immediately resolve false positives, so this later report does not establish that a previously fixed uv bug returned.
+No existing issue was found tracking this specific ESET URL block. The broad AV/EDR tracker explicitly distinguishes new vendors and failure modes, and the older ESET comment concerns CI execution rather than URL filtering. Those differences do not establish a duplicate. Windows signing already shipped as a mitigation, but was not a confirmed fix for this blacklist; this report does not establish that a previously fixed uv bug returned.
 
 ## Related
 
@@ -51,6 +89,6 @@ Additional inspected chains included astral-sh/uv#10079 to astral-sh/uv#4300 and
 
 ## Maintainer follow-up
 
-Ask the reporter to submit the exact URL and detection log to ESET for review and share the support ticket ID and vendor response. That response can establish whether ESET has corrected the classification or identified an actionable issue. The draft does not promise a uv change or claim the ESET detection has already been confirmed as a false positive.
+Collect the Windows, Scoop, and ESET details listed in the reproduction section, including a fresh sanitized detection log. Ask the reporter to submit the exact URL and detection log to ESET for review and share the support ticket ID and vendor response. That response can establish whether ESET has corrected the classification or identified an actionable issue. The draft does not promise a uv change or claim the ESET detection has already been confirmed as a false positive.
 
 This handoff and the proposed reply are for review only. No GitHub changes were made.

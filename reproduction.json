@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "The report describes ESET blocking Scoop’s download of uv 0.13.0’s Windows x64 archive. This runner is Linux; `uv --version` reports 0.12.13, and the Windows/Scoop/ESET environment is unavailable. The block was not independently reproduced. Needed: exact Scoop command and error, Scoop version/manifest, Windows version, ESET product and detection database versions, web/PUA protection settings, and a fresh sanitized detection log. Existing self-update tests do not exercise Scoop or ESET filtering. Updated $RUNNER_TEMP/issue-context/README.md with findings; no checkout or GitHub changes were made."
+}
