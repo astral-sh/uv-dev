@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::str::FromStr;
-use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTimeError};
 use std::{env, io};
 use uv_python_types::{PythonDownloadRequest, PythonDownloadRequestError};
@@ -21,7 +19,7 @@ use reqwest_retry::policies::ExponentialBackoff;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
 use tracing::{debug, instrument};
@@ -714,7 +712,11 @@ impl ManagedPythonDownload {
             // Download with or without progress bar.
             if let Some(progress) = progress.as_ref() {
                 tokio::io::copy(
-                    &mut ProgressReader::new(reader, progress.id, progress.reporter),
+                    &mut uv_fs::ProgressReader::new(reader, |bytes| {
+                        progress
+                            .reporter
+                            .on_request_progress(progress.id, bytes as u64);
+                    }),
                     &mut archive_writer,
                 )
                 .await?;
@@ -1139,42 +1141,6 @@ impl Drop for RequestGuard<'_> {
         if !self.completed {
             self.reporter.on_request_failed(self.id);
         }
-    }
-}
-
-/// An asynchronous reader that reports progress as bytes are read.
-struct ProgressReader<'a, R> {
-    reader: R,
-    index: usize,
-    reporter: &'a dyn Reporter,
-}
-
-impl<'a, R> ProgressReader<'a, R> {
-    /// Create a new [`ProgressReader`] that wraps another reader.
-    fn new(reader: R, index: usize, reporter: &'a dyn Reporter) -> Self {
-        Self {
-            reader,
-            index,
-            reporter,
-        }
-    }
-}
-
-impl<R> AsyncRead for ProgressReader<'_, R>
-where
-    R: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.as_mut().reader)
-            .poll_read(cx, buf)
-            .map_ok(|()| {
-                self.reporter
-                    .on_request_progress(self.index, buf.filled().len() as u64);
-            })
     }
 }
 

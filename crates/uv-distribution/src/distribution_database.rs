@@ -2,16 +2,14 @@ use std::cmp::Reverse;
 use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use futures::{FutureExt, TryStreamExt};
 use http_content_range::{ContentRange, ContentRangeBytes, ContentRangeUnbound};
 use rayon::in_place_scope;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
-use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Instrument, debug, info_span, instrument, warn};
@@ -1203,8 +1201,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 Some(progress) => {
                     // Wrap the reader in a progress reporter. This will report 100%
                     // progress once the download is complete, before the wheel is unzipped.
-                    let mut reader =
-                        ProgressReader::new(&mut hasher, progress.id, progress.reporter);
+                    let mut reader = uv_fs::ProgressReader::new(&mut hasher, |bytes| {
+                        progress
+                            .reporter
+                            .on_download_progress(progress.id, bytes as u64);
+                    });
 
                     tokio::io::copy(&mut reader, &mut writer)
                         .await
@@ -1782,42 +1783,6 @@ fn content_range(
     }
 
     Some(range)
-}
-
-/// An asynchronous reader that reports progress as bytes are read.
-struct ProgressReader<'a, R> {
-    reader: R,
-    index: usize,
-    reporter: &'a dyn Reporter,
-}
-
-impl<'a, R> ProgressReader<'a, R> {
-    /// Create a new [`ProgressReader`] that wraps another reader.
-    fn new(reader: R, index: usize, reporter: &'a dyn Reporter) -> Self {
-        Self {
-            reader,
-            index,
-            reporter,
-        }
-    }
-}
-
-impl<R> AsyncRead for ProgressReader<'_, R>
-where
-    R: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.as_mut().reader)
-            .poll_read(cx, buf)
-            .map_ok(|()| {
-                self.reporter
-                    .on_download_progress(self.index, buf.filled().len() as u64);
-            })
-    }
 }
 
 /// A pointer to an archive in the cache, fetched from an HTTP archive.
