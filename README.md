@@ -6,41 +6,162 @@ Classification: bug
 
 ## Summary
 
-The reporter requests SchemaStore definitions for two existing uv settings under
-`[tool.uv.audit]`: `malware-check` (Boolean) and `malware-check-url` (URL string).
-The expected behavior is editor completion and type validation for this supported configuration:
+The reported SchemaStore omission is reproducible. SchemaStore's published `uv.json`
+and current source omit `malware-check` and `malware-check-url` from
+`AuditOptions.properties`. A targeted JSON Schema validation accepts invalid Boolean,
+URL-type, and URL-format values that uv's generated schema rejects. Both schemas
+accept the reporter's valid configuration, and installed uv 0.12.13 accepts it during
+an offline lock operation.
+
+These settings shipped in uv 0.11.31 on July 21, 2026, through astral-sh/uv#20587.
+The issue concerns publishing definitions for existing settings, including completion
+metadata and type constraints. It does not establish a runtime uv defect or a
+particular editor diagnostic.
+
+## Classification
+
+Bug: incomplete external schema coverage for supported configuration. The published
+`AuditOptions` allows additional properties, so its omission leaves these values
+unvalidated instead of necessarily rejecting valid configuration. Validation behavior
+was reproduced directly; editor completion was not exercised because no editor,
+extension, or version was supplied.
+
+There is no evidence that these properties were previously published and then removed.
+Earlier SchemaStore refreshes predate their introduction, so this is not an established
+regression of those fixes. No additional runtime configuration feature is needed.
+
+## Reproduction
+
+Outcome: **reproducible**, verified October 10, 2026.
+
+### Environment and scope
+
+- Linux 6.17.0-1022-azure, x86_64.
+- Installed executable on PATH: `/opt/hostedtoolcache/uv/0.12.13/x86_64/uv`,
+  reporting `uv 0.12.13 (x86_64-unknown-linux-gnu)`.
+- CPython 3.12.3 at `/usr/bin/python3`.
+- `jsonschema` 4.10.3, `Draft7Validator`, with `FormatChecker` and the optional
+  `rfc3987` 1.3.8 URI checker installed only in the temporary reproduction directory.
+- Local schema from checkout commit `44b2e5877ef752e360acc02c7d198ba71ddf948d`.
+- Report supplies the configuration below, but no uv/Python versions, platform,
+  command failure, editor version, or specific editor diagnostic.
+- All reproduction inputs, downloaded schemas, outputs, and caches are under
+  `/tmp/uv-22458-dcm0d2ll`. No checkout files or GitHub state were changed.
+
+### Runtime acceptance of the reported configuration
+
+Created `project/pyproject.toml` under the temporary directory:
 
 ```toml
+[project]
+name = "schema-repro"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
 [tool.uv.audit]
 malware-check = true
 malware-check-url = "https://example.com"
 ```
 
-The omission is confirmed in both SchemaStore's current source and its published schema.
-Both definitions already exist in uv's generated schema and Rust configuration types, and the
-changelog records their release in uv 0.11.31 on July 21, 2026.
+From that project directory, ran the installed executable:
 
-astral-sh/uv#20587 implemented the settings requested in astral-sh/uv#20497. astral-sh/uv#17173 and astral-sh/uv#16545 document earlier SchemaStore refreshes. The current omission is confirmed; none of these items is a duplicate target.
+```sh
+uv lock --offline --no-python-downloads --python /usr/bin/python3
+```
 
-## Draft response
+The subprocess used a clean environment with PATH retained and `UV_CACHE_DIR`,
+`UV_PYTHON_INSTALL_DIR`, `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, and `TMPDIR` pointing
+inside the temporary directory. It exited 0:
 
-Your example uses settings supported since uv 0.11.31, added in astral-sh/uv#20587. Both are present in uv.schema.json, but SchemaStore's current uv.json omits them from AuditOptions. The next step is to refresh src/schemas/json/uv.json in SchemaStore/schemastore from uv's generated schema, including the Boolean and URI definitions. The repository's scripts/update_schemastore.py provides the existing update workflow.
+```text
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Resolved 1 package in 1ms
+```
 
-## Classification
+This confirms configuration acceptance. It does not exercise a malware-service request;
+the command was offline and the project had no dependencies.
 
-Both settings shipped in uv 0.11.31 and exist in the source and generated schema, but SchemaStore's current source and published AuditOptions omit them. This is incomplete schema coverage for supported configuration, affecting completion and type validation. The original feature request is already implemented, and earlier schema refreshes predate these fields; no existing item was found tracking this specific omission or a prior fix for it.
+### Published-schema validation
 
-The report requests correctness for existing settings rather than a new runtime capability.
-The source comparison establishes missing schema definitions without requiring an editor
-reproduction. No particular editor diagnostic was supplied or reproduced: missing definitions
-must not be described as proof that every editor rejects the valid example.
-The published `AuditOptions` does not explicitly forbid additional properties, so absent type
-constraints and completion metadata are the confirmed defects.
+Downloaded these public resources directly, without authentication:
 
-The 2025 refreshes fixed other settings before the malware options were introduced in July 2026.
-There is no evidence that these specific properties were previously published and then removed,
-so this is not an established regression of those historical fixes. The implementation PR
-also predates the new issue and addressed runtime configuration, not this SchemaStore omission.
+- https://json.schemastore.org/uv.json
+- https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/uv.json
+- https://json.schemastore.org/pyproject.json
+
+The first two files were identical, SHA-256
+`7bbc3c50810a097efdcd8be3981b2c73c91b06eaabbdf3b9729462b636d4d99a`.
+Their `AuditOptions.properties` contained only `ignore` and `ignore-until-fixed`;
+`additionalProperties` was omitted. The published pyproject schema references
+`uv.json` at `properties.tool.properties.uv`.
+
+Validated the parsed TOML's `tool.uv` object against the complete published uv schema
+and against a temporary copy of the checkout's generated `uv.schema.json`.
+The validation script and JSON results are retained as `validate_schema.py` and
+`validation-results.json` in the temporary directory. The essential comparison is:
+
+```python
+import json
+from pathlib import Path
+from urllib.request import urlopen
+from jsonschema import Draft7Validator, FormatChecker
+
+with urlopen("https://json.schemastore.org/uv.json", timeout=30) as response:
+    published_schema = json.load(response)
+local_schema = json.loads(
+    Path("/home/runner/work/uv/uv/uv.schema.json").read_text()
+)
+published = Draft7Validator(published_schema, format_checker=FormatChecker())
+local = Draft7Validator(local_schema, format_checker=FormatChecker())
+
+def compare(audit):
+    instance = {"audit": audit}
+    print(published.is_valid(instance), local.is_valid(instance))
+
+compare({"malware-check": True, "malware-check-url": "https://example.com"})
+compare({"malware-check": "yes", "malware-check-url": "https://example.com"})
+compare({"malware-check": True, "malware-check-url": 123})
+compare({"malware-check": True, "malware-check-url": "not a URL"})
+```
+
+Run with `jsonschema` and its URI checker available. The retained script can be rerun with:
+
+```sh
+PYTHONPATH=/tmp/uv-22458-dcm0d2ll/validation-packages \
+  python3 /tmp/uv-22458-dcm0d2ll/validate_schema.py
+```
+
+Observed results:
+
+| Configuration | Published SchemaStore schema | Local uv schema |
+| --- | --- | --- |
+| Reported Boolean and HTTPS URL | Accepts | Accepts |
+| `malware-check = "yes"` | Accepts | Rejects |
+| `malware-check-url = 123` | Accepts | Rejects |
+| `malware-check-url = "not a URL"` | Accepts | Rejects with URI checking enabled |
+
+The initial system validator lacked an optional URI checker and accepted the malformed
+URL even with the local schema. Installing `rfc3987` into the temporary target enabled
+that check and produced the final result above. Type rejection did not require this
+optional dependency. This distinction matters for editor-specific format validation.
+
+### Existing test coverage
+
+Read the setup and snapshot of
+`crates/uv/tests/sync/sync.rs::sync_malware_detected`. It sets both properties in
+`[tool.uv.audit]`, points the URL to a mock OSV service, removes the corresponding
+environment overrides, and asserts that a mocked malware advisory aborts sync with
+exit code 2. This covers runtime use of both file settings, not external schema publication.
+The `sync` module is gated by `test-python` and `test-pypi` in
+`crates/uv/tests/sync/main.rs`.
+
+Searches of `crates/uv/tests/` and `crates/uv-client/tests/it/` found no integration
+coverage for these fields in the published SchemaStore schema. The repository's
+`scripts/validate-pyproject.sh` validates using the checked-in schema, so it does not
+check whether SchemaStore's separate copy includes the fields. No Rust tests were
+added or run; the targeted schema validation and installed-uv command are the
+behavioral reproductions.
 
 ## Related
 
@@ -51,33 +172,20 @@ also predates the new issue and addressed runtime configuration, not this Schema
 
 ## Supporting evidence
 
-- `crates/uv-settings/src/settings.rs:3018` defines `AuditOptions`, with
-  `malware_check: Option<bool>` and `malware_check_url: Option<DisplaySafeUrl>`.
-  Serde maps their names to kebab case.
-- `uv.schema.json:674` defines `AuditOptions`; its two malware properties begin at
-  lines 691 and 695. The Boolean accepts `boolean` or `null`; the URL accepts
-  `DisplaySafeUrl` or `null`. `DisplaySafeUrl` has JSON type `string` and format
-  `uri` at lines 939–940.
+- `crates/uv-settings/src/settings.rs:3018` defines `AuditOptions` with
+  `malware_check: Option<bool>` and `malware_check_url: Option<DisplaySafeUrl>`;
+  serde maps names to kebab case.
+- `uv.schema.json:674` defines `AuditOptions`; `malware-check` accepts Boolean or
+  null, and `malware-check-url` accepts `DisplaySafeUrl` or null. The URL definition
+  specifies a string with `format: "uri"`.
 - `docs/concepts/projects/sync.md:236` documents enabling checks through
   `audit.malware-check`; line 239 documents choosing the service through
   `audit.malware-check-url`.
-- `changelogs/0.11.x.md:1357` lists both settings under uv 0.11.31, released July 21,
-  2026. The schema diff in astral-sh/uv#20587 adds both properties; its file list
-  contains uv source, tests, documentation, and the local schema.
-- On October 10, 2026, https://json.schemastore.org/uv.json and
-  https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/uv.json
-  both defined only `ignore` and `ignore-until-fixed` within `AuditOptions.properties`.
-  Neither defined either malware setting there.
-- https://json.schemastore.org/pyproject.json references `uv.json` from
-  `properties.tool.properties.uv`, confirming that this published copy applies to
-  `[tool.uv.audit]` in `pyproject.toml`.
-- `scripts/update_schemastore.py:53` reads uv's generated schema, sets its SchemaStore
+- `changelogs/0.11.x.md:1357` lists both settings in uv 0.11.31, released July 21,
+  2026, through astral-sh/uv#20587.
+- `scripts/update_schemastore.py:53` reads the generated schema, sets its SchemaStore
   identifier, and writes `src/schemas/json/uv.json` in a SchemaStore checkout. The
-  script also commits and pushes changes, so it was inspected but not executed.
-- Maintainer comments on astral-sh/uv#16545 and astral-sh/uv#17173 link to
-  SchemaStore/schemastore#5091 and SchemaStore/schemastore#5232 respectively.
-  Both linked PRs were inspected and are merged; each updates the external
-  `src/schemas/json/uv.json` from a uv commit.
+  script includes commits and pushes and was not executed.
 
 ## Search coverage and exclusions
 
@@ -97,7 +205,16 @@ astral-sh/uv#20497 and astral-sh/uv#20587 supply the focused request and impleme
 ## Recommended next step
 
 Refresh SchemaStore's `src/schemas/json/uv.json` from an appropriate released uv schema
-containing both fields, and validate that the resulting schema exposes the Boolean and URI
-definitions through `AuditOptions`. The existing update script and the historical upstream
-PRs document that workflow. No additional runtime configuration feature is needed to address
-this report.
+containing both fields. Verify that `AuditOptions` exposes their definitions and that
+invalid Boolean, URL-type, and URL-format values fail validation with URI checking
+enabled. The existing update script and historical upstream PRs document the workflow.
+No fix or publication was performed as part of this reproduction.
+
+## Draft response
+
+Reproduced with the current published SchemaStore schema: it omits both properties
+and accepts invalid values that uv's generated schema rejects. Your valid configuration
+is accepted by uv 0.12.13. Both settings have been supported since uv 0.11.31 through
+astral-sh/uv#20587; SchemaStore's separate copy needs a refresh. The omission removes
+completion metadata and validation constraints, although it does not itself make the
+valid example fail JSON Schema validation.

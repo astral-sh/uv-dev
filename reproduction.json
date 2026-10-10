@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with uv 0.12.13 and Python 3.12.3, the reported configuration passed `uv lock --offline --no-python-downloads --python /usr/bin/python3` in a temporary dependency-free project. The published https://json.schemastore.org/uv.json omits both audit properties. JSON Schema validation accepted malware-check = \"yes\", malware-check-url = 123, and a malformed URL; the checkout schema rejected all three with URI checking enabled. Both schemas accept the valid example, confirming missing validation constraints rather than rejection of valid configuration. Editor-specific behavior was not tested. Existing crates/uv/tests/sync/sync.rs::sync_malware_detected covers runtime use of both settings, not SchemaStore publication. Updated $RUNNER_TEMP/issue-context/README.md with reproduction commands, evidence, and limitations. No checkout files or GitHub state were changed."
+}
