@@ -1162,7 +1162,7 @@ fn workspace_groups_ordinary_targeting() -> Result<()> {
 #[test]
 #[cfg(feature = "test-python-patch")]
 fn workspace_groups_select_python_outside_patch_gap() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12.13", "3.13"]);
+    let context = uv_test::test_context_with_versions!(&["3.12.9", "3.13"]);
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1185,7 +1185,7 @@ fn workspace_groups_select_python_outside_patch_gap() -> Result<()> {
         [project]
         name = "legacy"
         version = "1.0.0"
-        requires-python = ">=3.12,<3.12.10"
+        requires-python = ">=3.12,<3.12.8"
         dependencies = ["common"]
         [tool.uv]
         package = false
@@ -1197,7 +1197,7 @@ fn workspace_groups_select_python_outside_patch_gap() -> Result<()> {
         [project]
         name = "modern"
         version = "1.0.0"
-        requires-python = ">=3.12.15,<3.14"
+        requires-python = ">=3.12.10,<3.14"
         dependencies = ["common"]
         [tool.uv]
         package = false
