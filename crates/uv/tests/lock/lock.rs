@@ -50091,3 +50091,92 @@ fn lock_required_environment_dynamic_version_preserves_inactive_pin() -> Result<
     ");
     Ok(())
 }
+
+/// Flattened recursive extras retain unchanged activation and unrelated platform-specific pins.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_dynamic_recursive_extra_preserves_inactive_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "dynamic-recursive-extra-inactive-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.available.versions."1.0.0"]
+        sdist = false
+        [packages.platform-only.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+        [packages.platform-only.versions."2.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+    "#})?);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        requires-python = ">=3.12"
+        dependencies = ["platform-only; sys_platform == 'win32'"]
+        dynamic = ["version"]
+        [project.optional-dependencies]
+        async = ["available"]
+        all = ["project[async]"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = pathlib.Path(metadata_directory, "project-1.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: project\n"
+                "Version: 1.0.0\n"
+                "Requires-Python: >=3.12\n"
+                "Requires-Dist: platform-only; sys_platform == 'win32'\n"
+                "Requires-Dist: available; extra == 'async'\n"
+                "Requires-Dist: available; extra == 'all'\n"
+                "Provides-Extra: async\n"
+                "Provides-Extra: all\n"
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "platform-only==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        requires-python = ">=3.12"
+        dependencies = ["platform-only; sys_platform == 'win32'"]
+        dynamic = ["version"]
+        [project.optional-dependencies]
+        async = ["available"]
+        all = ["project[async]"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv]
+        required-environments = ["sys_platform == 'linux'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
