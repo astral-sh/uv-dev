@@ -94,6 +94,10 @@ impl TryFrom<WireArtifactId> for ArtifactId {
 pub struct Sha256Digest([u8; 32]);
 
 impl Sha256Digest {
+    pub fn into_bytes(self) -> [u8; 32] {
+        self.0
+    }
+
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
