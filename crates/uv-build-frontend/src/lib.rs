@@ -3,6 +3,7 @@
 //! <https://packaging.python.org/en/latest/specifications/source-distribution-format/>
 
 mod error;
+mod native_build;
 mod pipreqs;
 
 use std::borrow::Cow;
@@ -51,6 +52,7 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 pub use crate::error::{Error, MissingHeaderCause};
+pub use crate::native_build::spawn_native_build;
 
 /// The default backend to use when PEP 517 is used without a `build-system` section.
 static DEFAULT_BACKEND: LazyLock<Pep517Backend> = LazyLock::new(|| Pep517Backend {
