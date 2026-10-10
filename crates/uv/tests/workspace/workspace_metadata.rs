@@ -3250,3 +3250,122 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
 
     Ok(())
 }
+
+/// An included empty member group still has a metadata node and a link from its owner.
+#[test]
+fn workspace_metadata_included_empty_member_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["tools"]
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { requires-python = ">=3.13", include-workspace-groups = [{ package = "tools", group = "empty" }] }
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        empty = []
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--preview-features", "include-group-workspace"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.workspace_metadata().args([
+        "--frozen", "--offline", "--preview-features", "workspace-metadata,include-group-workspace",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "tools",
+          "path": "[TEMP_DIR]/tools",
+          "id": "tools==0.1.0@virtual+[TEMP_DIR]/tools"
+        }
+      ],
+      "resolution": {
+        "tools:empty==0.1.0@virtual+[TEMP_DIR]/tools": {
+          "name": "tools",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/tools"
+          },
+          "kind": {
+            "group": "empty"
+          },
+          "dependencies": []
+        },
+        "tools==0.1.0@virtual+[TEMP_DIR]/tools": {
+          "name": "tools",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/tools"
+          },
+          "kind": "package",
+          "dependencies": [],
+          "dependency_groups": [
+            {
+              "name": "empty",
+              "id": "tools:empty==0.1.0@virtual+[TEMP_DIR]/tools"
+            }
+          ]
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": [],
+          "dependency_groups": [
+            {
+              "name": "lint",
+              "id": "workspace+[TEMP_DIR]/:lint"
+            }
+          ]
+        },
+        "workspace+[TEMP_DIR]/:lint": {
+          "kind": {
+            "group": "lint"
+          },
+          "path": "[TEMP_DIR]/",
+          "dependencies": [
+            {
+              "id": "tools:empty==0.1.0@virtual+[TEMP_DIR]/tools",
+              "marker": "python_full_version >= '3.13'"
+            }
+          ]
+        }
+      }
+    }
+    "#);
+    Ok(())
+}
