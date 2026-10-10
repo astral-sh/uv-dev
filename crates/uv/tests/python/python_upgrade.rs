@@ -124,6 +124,50 @@ fn python_upgrade_without_version() {
     ");
 }
 
+#[tokio::test]
+async fn python_upgrade_without_installs_skips_download_catalog() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/unused-catalog.json"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    for arguments in [vec![], vec!["--reinstall"], vec!["--offline"]] {
+        context
+            .python_upgrade()
+            .args(arguments)
+            .env(
+                EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL,
+                format!("{}/unused-catalog.json", server.uri()),
+            )
+            .assert()
+            .success()
+            .stderr("There are no installed versions to upgrade\n");
+    }
+    server.verify().await;
+
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/required-catalog.json"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .python_upgrade()
+        .arg("3.12")
+        .env(
+            EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL,
+            format!("{}/required-catalog.json", server.uri()),
+        )
+        .assert()
+        .failure();
+    server.verify().await;
+    Ok(())
+}
+
 #[test]
 fn python_upgrade_transparent_from_venv() {
     let context = uv_test::test_context_with_versions!(&["3.13"])

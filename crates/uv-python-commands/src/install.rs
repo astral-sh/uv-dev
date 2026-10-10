@@ -335,6 +335,21 @@ async fn perform_install(
         .inspect(|installation| trace!("Found existing installation {}", installation.key()))
         .collect();
 
+    // A bare upgrade only applies to installed managed Python versions.
+    if targets.is_empty()
+        && matches!(
+            upgrade,
+            PythonUpgrade::Enabled(PythonUpgradeSource::Upgrade)
+        )
+        && existing_installations.is_empty()
+    {
+        writeln!(
+            printer.stderr(),
+            "There are no installed versions to upgrade"
+        )?;
+        return Ok(ExitStatus::Success);
+    }
+
     // Resolve the requests
     let mut is_default_install = false;
     let mut is_unspecified_upgrade = false;
