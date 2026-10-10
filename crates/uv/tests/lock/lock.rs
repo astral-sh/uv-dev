@@ -48931,6 +48931,11 @@ fn lock_required_environment_rejects_excluded_python_wheel() -> Result<()> {
         requires_python = ">=3.12,!=3.13.*"
     "#})?;
     let server = PackseServer::from_scenario(&scenario);
+    let context = context.with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
     context
         .temp_dir
         .child("pyproject.toml")
@@ -48952,17 +48957,45 @@ fn lock_required_environment_rejects_excluded_python_wheel() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
-    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
-    assert_eq!(
-        lock["package"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|package| package["name"].as_str() == Some("example"))
-            .unwrap()["version"]
-            .as_str(),
-        Some("1.0.0")
-    );
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+        supported-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+        required-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+
+        [options]
+        required-environments-mode = "require-wheels"
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/example-1.0.0.tar.gz", hash = "sha256:[SHA256:example-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:example-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example" }]
+        "#);
+    });
     Ok(())
 }
 

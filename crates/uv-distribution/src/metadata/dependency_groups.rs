@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use uv_auth::CredentialsCache;
@@ -10,7 +10,7 @@ use uv_workspace::dependency_groups::FlatDependencyGroups;
 use uv_workspace::pyproject::{Sources, ToolUvSources};
 use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache, WorkspaceError,
-    WorkspaceErrorKind,
+    WorkspaceErrorKind, WorkspaceMembers,
 };
 
 use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
@@ -48,8 +48,8 @@ use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
 #[derive(Debug, Clone)]
 pub struct SourcedDependencyGroups {
     pub name: Option<PackageName>,
-    /// Local workspace sources whose paths were used while lowering these groups.
-    pub workspace_member_paths: BTreeSet<PathBuf>,
+    /// Shared workspace membership discovered while lowering these groups.
+    pub workspace_members: Option<WorkspaceMembers>,
     pub dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
 }
 
@@ -103,7 +103,7 @@ impl SourcedDependencyGroups {
         if matches!(no_sources, NoSources::All) {
             return Ok(Self {
                 name: project.project_name().cloned(),
-                workspace_member_paths: BTreeSet::new(),
+                workspace_members: None,
                 dependency_groups: dependency_groups
                     .into_iter()
                     .map(|(name, group)| {
@@ -191,13 +191,7 @@ impl SourcedDependencyGroups {
 
         Ok(Self {
             name: project.project_name().cloned(),
-            workspace_member_paths: project
-                .workspace()
-                .packages()
-                .iter()
-                .filter(|(name, _)| !no_sources.for_package(name))
-                .map(|(_, member)| member.root().clone())
-                .collect(),
+            workspace_members: Some(project.workspace().shared_packages()),
             dependency_groups: lowered_dependency_groups,
         })
     }

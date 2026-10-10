@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, VecDeque};
+use std::path::Path;
 use std::slice;
 
 use rustc_hash::FxHashSet;
@@ -12,7 +12,9 @@ use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_workspace::dependency_groups::FlatDependencyGroups;
 use uv_workspace::pyproject::{Sources, ToolUvSources};
-use uv_workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, WorkspaceCache};
+use uv_workspace::{
+    DiscoveryOptions, MemberDiscovery, ProjectWorkspace, WorkspaceCache, WorkspaceMembers,
+};
 
 use crate::Metadata;
 use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
@@ -24,8 +26,8 @@ pub struct RequiresDist {
     pub provides_extra: Box<[ExtraName]>,
     pub dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
     pub dynamic: bool,
-    /// Local workspace members discovered while lowering the requirements.
-    pub workspace_member_paths: BTreeSet<PathBuf>,
+    /// Shared workspace membership discovered while lowering the requirements.
+    pub workspace_members: Option<WorkspaceMembers>,
 }
 
 impl RequiresDist {
@@ -100,7 +102,7 @@ impl RequiresDist {
             provides_extra: metadata.provides_extra,
             dependency_groups: BTreeMap::default(),
             dynamic: metadata.dynamic,
-            workspace_member_paths: BTreeSet::new(),
+            workspace_members: None,
         })
     }
 
@@ -238,13 +240,7 @@ impl RequiresDist {
             dependency_groups: lowered_dependency_groups,
             provides_extra: metadata.provides_extra,
             dynamic: metadata.dynamic,
-            workspace_member_paths: project_workspace
-                .workspace()
-                .packages()
-                .iter()
-                .filter(|(name, _)| !no_sources.for_package(name))
-                .map(|(_, member)| member.root().clone())
-                .collect(),
+            workspace_members: Some(project_workspace.workspace().shared_packages()),
         })
     }
 
@@ -316,7 +312,7 @@ impl From<Metadata> for RequiresDist {
             provides_extra: metadata.provides_extra,
             dependency_groups: metadata.dependency_groups,
             dynamic: metadata.dynamic,
-            workspace_member_paths: metadata.workspace_member_paths,
+            workspace_members: metadata.workspace_members,
         }
     }
 }
