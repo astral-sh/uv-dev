@@ -7658,6 +7658,33 @@ impl Package {
         self.wheels.iter().map(|wheel| &wheel.filename)
     }
 
+    /// Whether a registry release has an artifact allowed by the build policy and Python target.
+    ///
+    /// Fixed sources cannot select a different release when their artifacts are disallowed, so
+    /// their version preferences do not need to be invalidated by this check.
+    pub fn satisfies_build_options(
+        &self,
+        requires_python: &RequiresPython,
+        build_options: &BuildOptions,
+    ) -> bool {
+        match &self.id.source {
+            Source::Registry(_) => {
+                (!build_options.no_binary_package(self.name())
+                    && self
+                        .wheels
+                        .iter()
+                        .any(|wheel| requires_python.matches_wheel_tag(&wheel.filename)))
+                    || (!build_options.no_build_package(self.name()) && self.sdist.is_some())
+            }
+            Source::Git(..)
+            | Source::Direct(..)
+            | Source::Path(_)
+            | Source::Directory(_)
+            | Source::Editable(_)
+            | Source::Virtual(_) => true,
+        }
+    }
+
     /// Returns the Git SHA of the package, if it is a Git source.
     pub fn git_sha(&self) -> Option<&GitOid> {
         match &self.id.source {

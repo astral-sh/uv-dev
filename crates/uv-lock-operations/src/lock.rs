@@ -913,6 +913,8 @@ async fn do_lock(
                         lock,
                         target.install_path(),
                         upgrade,
+                        &requires_python,
+                        build_options,
                         lock_required_environments.as_markers(),
                         activation,
                         minimum_libc_version,
