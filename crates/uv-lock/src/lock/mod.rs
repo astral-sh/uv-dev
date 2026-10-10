@@ -50,8 +50,7 @@ use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{
-    MarkerEnvironment, MarkerTree, RequirementOrigin, Scheme, VerbatimUrl, VerbatimUrlError,
-    split_scheme,
+    MarkerEnvironment, MarkerTree, Scheme, VerbatimUrl, VerbatimUrlError, split_scheme,
 };
 use uv_platform_tags::{
     AbiTag, IncompatibleTag, LanguageTag, PlatformTag, TagCompatibility, TagPriority, Tags,
@@ -2744,6 +2743,33 @@ impl Lock {
                     && dist.id.source.is_implicit_root());
             if is_member {
                 workspace_members.insert(dist.id.name.clone(), PackageIndex(index));
+            }
+        }
+
+        // Frozen consumers rely on every workspace-group reference naming a declared member group.
+        for (root_group, includes) in &manifest.dependency_group_includes {
+            if !manifest.dependency_groups.contains_key(root_group) {
+                return Err(LockErrorKind::UnknownWorkspaceRootGroup(root_group.clone()).into());
+            }
+            for included in includes {
+                let valid = workspace_members
+                    .get(&included.package)
+                    .is_some_and(|index| {
+                        let package = &packages[index.0];
+                        package.dependency_groups.contains_key(&included.group)
+                            || package
+                                .metadata
+                                .dependency_groups
+                                .contains_key(&included.group)
+                    });
+                if !valid {
+                    return Err(LockErrorKind::UnknownWorkspaceGroupInclude {
+                        root_group: root_group.clone(),
+                        package: included.package.clone(),
+                        group: included.group.clone(),
+                    }
+                    .into());
+                }
             }
         }
 
@@ -6466,19 +6492,7 @@ impl ManifestDependencyGroups {
                     input.workspace_includes.into_iter().collect(),
                 );
             }
-            manifest.requirements.insert(
-                group,
-                input
-                    .requirements
-                    .into_iter()
-                    .filter(|requirement| {
-                        !matches!(
-                            requirement.origin,
-                            Some(RequirementOrigin::Group(_, Some(_), _))
-                        )
-                    })
-                    .collect(),
-            );
+            manifest.requirements.insert(group, input.requirements);
         }
         manifest
     }
@@ -9942,6 +9956,18 @@ enum LockErrorKind {
     /// metadata-free lockfile cannot be scoped to their packages.
     #[error(transparent)]
     InvalidScopedOverride(#[from] ScopedOverrideSourceError),
+    /// Includes refer to a group missing from the lockfile manifest.
+    #[error("Workspace dependency group `{0}` has includes but is not declared in the lockfile")]
+    UnknownWorkspaceRootGroup(GroupName),
+    /// A workspace-group include references an unknown member or dependency group.
+    #[error(
+        "Workspace dependency group `{root_group}` includes unknown member group `{package}:{group}`"
+    )]
+    UnknownWorkspaceGroupInclude {
+        root_group: GroupName,
+        package: PackageName,
+        group: GroupName,
+    },
     /// An error that occurs when multiple packages with the same
     /// ID were found.
     #[error("Found duplicate package `{id}`", id = id.cyan())]

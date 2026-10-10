@@ -552,7 +552,7 @@ impl<'lock> InstallTarget<'lock> {
                                 .flat_map(|dependency_groups| {
                                     dependency_groups
                                         .into_values()
-                                        .flat_map(|group| group.requirements)
+                                        .flat_map(|group| group.requirements.into_requirements())
                                         .map(Cow::Owned)
                                 }),
                         )
