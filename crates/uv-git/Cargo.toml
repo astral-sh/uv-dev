@@ -9,6 +9,10 @@ repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
 
+[features]
+# Enables tests that execute the Git CLI.
+test-git = []
+
 [lib]
 doctest = false
 
@@ -17,6 +21,7 @@ workspace = true
 
 [dependencies]
 uv-auth = { workspace = true }
+uv-cache = { workspace = true }
 uv-cache-key = { workspace = true }
 uv-fs = { workspace = true, features = ["tokio"] }
 uv-git-types = { workspace = true }
@@ -37,3 +42,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 which = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

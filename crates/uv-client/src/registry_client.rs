@@ -994,7 +994,7 @@ impl RegistryClient {
                     .fetch(
                         &wheel.git,
                         self.git_http_settings(wheel.git.url()),
-                        self.cache.bucket(CacheBucket::Git),
+                        &self.cache,
                         reporter,
                     )
                     .await

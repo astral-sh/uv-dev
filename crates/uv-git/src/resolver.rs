@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -8,6 +7,7 @@ use papaya::{HashMap, ResizeMode};
 use reqwest_middleware::ClientWithMiddleware;
 use tracing::debug;
 
+use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{RepositoryUrl, cache_digest};
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode};
 use uv_git_types::{GitHubRepository, GitOid, GitReference, GitUrl};
@@ -208,7 +208,7 @@ impl GitResolver {
         &self,
         url: &GitUrl,
         http_settings: GitHttpSettings,
-        cache: PathBuf,
+        cache: &Cache,
         reporter: Option<Arc<dyn Reporter>>,
     ) -> Result<Fetch, GitResolverError> {
         debug!("Fetching source distribution from Git: {url}");
@@ -230,10 +230,11 @@ impl GitResolver {
         };
 
         // Avoid races between different processes, too.
-        let lock_dir = cache.join("locks");
+        let git_cache = cache.bucket(CacheBucket::Git);
+        let lock_dir = git_cache.join("locks");
         fs::create_dir_all(&lock_dir).await?;
         let repository_url = url.repository().clone();
-        let _lock = LockedFile::acquire(
+        let lock = LockedFile::acquire(
             lock_dir.join(cache_digest(&repository_url)),
             LockedFileMode::Exclusive,
             &repository_url,
@@ -242,10 +243,10 @@ impl GitResolver {
 
         // Fetch the Git repository.
         let source = if let Some(reporter) = reporter {
-            GitSource::new(url.as_ref().clone(), cache, http_settings.offline)
+            GitSource::new(url.as_ref().clone(), git_cache, http_settings.offline)
                 .with_reporter(reporter)
         } else {
-            GitSource::new(url.as_ref().clone(), cache, http_settings.offline)
+            GitSource::new(url.as_ref().clone(), git_cache, http_settings.offline)
         };
 
         // If necessary, disable SSL.
@@ -255,9 +256,16 @@ impl GitResolver {
             source
         };
 
-        let fetch = tokio::task::spawn_blocking(move || source.fetch())
-            .await?
-            .map_err(GitResolverError::Git)?;
+        // Blocking Git work continues after the awaiting future is cancelled. Keep both the
+        // repository lock and the root cache lease alive until that work finishes.
+        let cache = cache.clone();
+        let fetch = tokio::task::spawn_blocking(move || {
+            let _cache = cache;
+            let _lock = lock;
+            source.fetch()
+        })
+        .await?
+        .map_err(GitResolverError::Git)?;
 
         // Insert the resolved URL into the in-memory cache. This ensures that subsequent fetches
         // resolve to the same precise commit.
@@ -342,3 +350,6 @@ impl From<&GitUrl> for RepositoryReference {
         }
     }
 }
+
+#[cfg(all(test, feature = "test-git"))]
+mod worker_tests;
