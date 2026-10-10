@@ -6334,6 +6334,7 @@ dependencies = [
  "hex",
  "http",
  "http-body-util",
+ "http-content-range",
  "hyper",
  "hyper-util",
  "insta",

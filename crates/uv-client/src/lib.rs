@@ -12,6 +12,7 @@ pub use registry_client::{
     Connectivity, MetadataFormat, MetadataRangeRequest, RegistryClient, RegistryClientBuilder,
     SimpleDetailMetadata, SimpleDetailMetadatum, SimpleIndexMetadata, VersionFiles,
 };
+pub use resumable::resumable_bytes_stream;
 pub(crate) use retry::UvRetryableStrategy;
 pub use retry::{RetriableError, RetryState, retryable_on_request_failure};
 pub use rkyvutil::OwnedArchive;
@@ -28,6 +29,7 @@ mod linehaul;
 mod middleware;
 mod registry_client;
 mod remote_metadata;
+mod resumable;
 mod retry;
 mod rkyvutil;
 mod tls;
