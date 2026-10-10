@@ -14688,18 +14688,21 @@ fn git_source_checkout_marker() -> Result<()> {
         version = "0.1.0"
     "#})?;
     repository.child(".ok").write_str("repository content\n")?;
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .arg(repository.path())
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .args(["add", "."])
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .args([

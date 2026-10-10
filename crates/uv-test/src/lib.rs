@@ -1245,6 +1245,26 @@ impl TestContext {
         command
     }
 
+    /// Create a Git command for constructing a local fixture repository.
+    ///
+    /// Callers supply the fixture identity and can override these defaults explicitly.
+    pub fn git_command(&self) -> Command {
+        let mut command = Self::new_command_with(Path::new("git"));
+        command
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+            .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
+            .arg("-c")
+            .arg(format!(
+                "core.hooksPath={}",
+                self.root.join("empty-git-hooks").display()
+            ))
+            .args(["-c", "init.defaultBranch=main"]);
+        self.add_shared_env(&mut command, false);
+        command
+    }
+
     pub fn disallow_git_cli(bin_dir: &Path) -> std::io::Result<()> {
         let contents = r"#!/bin/sh
     echo 'error: `git` operations are not allowed — are you missing a cfg for the `git` feature?' >&2
@@ -2134,6 +2154,22 @@ impl TestContext {
             .filter(|name| !passthrough.contains(name))
         {
             command.env_remove(env_var);
+        }
+
+        // Git accepts an open-ended set of environment-injected configuration entries.
+        // Keep `GIT_EXEC_PATH`, like `PATH`, so bundled Git installations find their subcommands.
+        // Authored test settings are applied afterward by `add_shared_env` or the caller.
+        for (name, _) in env::vars_os() {
+            if name
+                .as_encoded_bytes()
+                .get(..4)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"GIT_"))
+                && !name
+                    .as_encoded_bytes()
+                    .eq_ignore_ascii_case(b"GIT_EXEC_PATH")
+            {
+                command.env_remove(name);
+            }
         }
 
         if let Some(rust_log) = env::var_os(EnvVars::UV_INTERNAL__TEST_RUST_LOG) {

@@ -8,8 +8,6 @@ use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-#[cfg(feature = "test-git")]
-use std::process::Command;
 use tempfile::tempdir_in;
 use url::Url;
 use wiremock::matchers::{basic_auth, body_string_contains, method, path};
@@ -13135,19 +13133,22 @@ fn lock_git_poetry_path_dependency() -> Result<()> {
         build-backend = "hatchling.build"
     "#})?;
 
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .arg(repository.path())
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("add")
         .arg(".")
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("-c")
@@ -13269,19 +13270,22 @@ fn sync_git_metadata_archive_dependency() -> Result<()> {
         )
     "#})?;
 
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .arg(repository.path())
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("add")
         .arg(".")
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("-c")
