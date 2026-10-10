@@ -1,4 +1,6 @@
 use std::path::Path;
+#[cfg(all(unix, feature = "test-python"))]
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
@@ -8,6 +10,10 @@ use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use url::Url;
+#[cfg(all(unix, feature = "test-python"))]
+use wiremock::matchers::{method, path};
+#[cfg(all(unix, feature = "test-python"))]
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
 #[cfg(target_os = "macos")]
@@ -788,6 +794,202 @@ fn workspace_metadata_script_sync_launcher_override() -> Result<()> {
     [VENV]/bin/python3
     ");
 
+    Ok(())
+}
+
+#[cfg(all(unix, feature = "test-python"))]
+#[tokio::test]
+async fn workspace_metadata_script_reuses_resolution_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let [(_, resolution_python), (_, later_python)] = context.python_versions.as_slice() else {
+        return Err(anyhow::anyhow!("expected Python 3.12 and 3.11"));
+    };
+
+    let resolution_python_dir = context.temp_dir.join("resolution-python");
+    fs_err::create_dir_all(&resolution_python_dir)?;
+    uv_fs::create_symlink(resolution_python, resolution_python_dir.join("python3"))?;
+
+    let staged_python_dir = context.temp_dir.join("staged-python");
+    fs_err::create_dir_all(&staged_python_dir)?;
+    uv_fs::create_symlink(later_python, staged_python_dir.join("python3"))?;
+    let later_python_dir = context.temp_dir.join("later-python");
+
+    let wheel = context
+        .temp_dir
+        .child("changing_python-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "changing-python",
+        "changing_python-0.1.0",
+        &[("changing_python.py", "")],
+    )?;
+    let wheel_bytes = fs_err::read(wheel.path())?;
+
+    let server = MockServer::start().await;
+    let published = Arc::new(OnceLock::new());
+    let publish_once = Arc::clone(&published);
+    let staged_python_dir_for_server = staged_python_dir.clone();
+    let later_python_dir_for_server = later_python_dir.clone();
+    Mock::given(method("GET"))
+        .and(path("/changing_python-0.1.0-py3-none-any.whl"))
+        .respond_with(move |_: &wiremock::Request| {
+            let publish_result = publish_once.get_or_init(|| {
+                fs_err::rename(&staged_python_dir_for_server, &later_python_dir_for_server)
+                    .map_err(|error| error.to_string())
+            });
+            if let Err(error) = publish_result {
+                return ResponseTemplate::new(500).set_body_string(error.clone());
+            }
+            ResponseTemplate::new(200).set_body_bytes(wheel_bytes.clone())
+        })
+        .mount(&server)
+        .await;
+
+    let script = context.temp_dir.child("script.py");
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["changing-python @ {server}/changing_python-0.1.0-py3-none-any.whl"]
+        # ///
+        "#,
+        server = server.uri(),
+    })?;
+    // The first search path entry appears while resolution fetches the wheel above.
+    let python_search_path = std::env::join_paths([&later_python_dir, &resolution_python_dir])?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_search_path)
+        .assert()
+        .success();
+    assert!(published.get().is_some_and(Result::is_ok));
+
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"]["python"]["version"], @r#""3.12.[X]""#);
+    });
+
+    Ok(())
+}
+
+/// Replacing a script environment during resolution retains the selected Python and exact patch pin.
+#[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
+#[tokio::test]
+async fn workspace_metadata_script_replaces_changed_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_keys()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror()
+        .with_filters([(r"uv = [^\n]+".to_owned(), "uv = [UV_VERSION]".to_owned())]);
+    context.python_install().arg("3.12.13").assert().success();
+    let [(_, _), (_, replacement_python)] = context.python_versions.as_slice() else {
+        return Err(anyhow::anyhow!("expected Python 3.12 and 3.11"));
+    };
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r"
+        # /// script
+        # dependencies = []
+        # ///
+        "})?;
+    let initial = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--python")
+        .arg("3.12.13")
+        .arg("--managed-python")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&initial.get_output().stdout)?;
+    let environment = Path::new(
+        metadata["environment"]["root"]
+            .as_str()
+            .context("expected an environment root")?,
+    )
+    .to_path_buf();
+    let replacement = context.temp_dir.join("replacement-environment");
+    context
+        .venv()
+        .arg(&replacement)
+        .arg("--python")
+        .arg(replacement_python)
+        .assert()
+        .success();
+
+    let wheel = context
+        .temp_dir
+        .child("changing_python-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "changing-python",
+        "changing_python-0.1.0",
+        &[("changing_python.py", "")],
+    )?;
+    let wheel_bytes = fs_err::read(wheel.path())?;
+    let server = MockServer::start().await;
+    let replaced = Arc::new(OnceLock::new());
+    let replace_once = Arc::clone(&replaced);
+    Mock::given(method("GET"))
+        .and(path("/changing_python-0.1.0-py3-none-any.whl"))
+        .respond_with(move |_: &wiremock::Request| {
+            let result = replace_once.get_or_init(|| {
+                fs_err::remove_dir_all(&environment)
+                    .and_then(|()| fs_err::rename(&replacement, &environment))
+                    .map_err(|error| error.to_string())
+            });
+            if let Err(error) = result {
+                return ResponseTemplate::new(500).set_body_string(error.clone());
+            }
+            ResponseTemplate::new(200).set_body_bytes(wheel_bytes.clone())
+        })
+        .mount(&server)
+        .await;
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["changing-python @ {server}/changing_python-0.1.0-py3-none-any.whl"]
+        # ///
+        "#,
+        server = server.uri(),
+    })?;
+
+    let result = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--python")
+        .arg("3.12.13")
+        .arg("--managed-python")
+        .assert()
+        .success();
+    assert!(replaced.get().is_some_and(Result::is_ok));
+    let metadata: serde_json::Value = serde_json::from_slice(&result.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"]["python"]["version"], @r#""3.12.[X]""#);
+    });
+    let environment = Path::new(
+        metadata["environment"]["root"]
+            .as_str()
+            .context("expected an environment root")?,
+    );
+    let configuration = fs_err::read_to_string(environment.join("pyvenv.cfg"))?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(configuration, @r#"
+    home = [TEMP_DIR]/managed/cpython-3.12.[X]-[PLATFORM]/[BIN]
+    implementation = CPython
+    uv = [UV_VERSION]
+    version_info = 3.12.[X]
+    include-system-site-packages = false
+    prompt = script.py
+    "#);
+    });
     Ok(())
 }
 
@@ -3248,5 +3450,105 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
     "#
     );
 
+    Ok(())
+}
+
+/// Reading script metadata can use a copied environment after its base executable is removed.
+#[cfg(all(target_os = "linux", feature = "test-python"))]
+#[test]
+fn workspace_metadata_script_active_without_base_executable() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let base = context
+        .python_command()
+        .args(["-c", "import sys; print(sys.base_prefix)"])
+        .output()?
+        .assert()
+        .success();
+    let base = String::from_utf8(base.get_output().stdout.clone())?;
+    let active = context.temp_dir.child("active");
+    context
+        .python_command()
+        .args(["-m", "venv", "--copies", "--without-pip"])
+        .arg(active.path())
+        .assert()
+        .success();
+    // Standalone shared builds load libpython relative to the copied executable.
+    let libpython = Path::new(base.trim()).join("lib/libpython3.12.so.1.0");
+    let library_target = active.child("lib/libpython3.12.so.1.0");
+    if libpython.is_file() && !library_target.path().exists() {
+        fs_err::os::unix::fs::symlink(libpython, library_target.path())?;
+    }
+    let missing_base = context.temp_dir.child("missing-base");
+    missing_base.child("bin").create_dir_all()?;
+    fs_err::os::unix::fs::symlink(
+        Path::new(base.trim()).join("lib"),
+        missing_base.child("lib"),
+    )?;
+    let configuration = active.child("pyvenv.cfg");
+    let contents = fs_err::read_to_string(configuration.path())?;
+    configuration.write_str(
+        &contents
+            .lines()
+            .map(|line| {
+                if line.starts_with("home = ") {
+                    format!("home = {}", missing_base.child("bin").path().display())
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    let unavailable = context.temp_dir.child("unavailable");
+    unavailable.create_dir_all()?;
+    fs_err::remove_dir_all(context.venv.path())?;
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .args(["--script", "script.py", "--active", "--offline", "--no-cache", "--preview-features", "workspace-metadata"])
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, unavailable.path())
+        .env(EnvVars::UV_PYTHON_INSTALL_DIR, unavailable.path())
+        .env(EnvVars::VIRTUAL_ENV, active.path()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[TEMP_DIR]/active",
+        "python": {
+          "path": "[TEMP_DIR]/active/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "script": {
+        "path": "[TEMP_DIR]/script.py",
+        "id": "script+[TEMP_DIR]/script.py"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "resolution": {
+        "script+[TEMP_DIR]/script.py": {
+          "kind": "script",
+          "path": "[TEMP_DIR]/script.py",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    Resolved in [TIME]
+    "#);
     Ok(())
 }

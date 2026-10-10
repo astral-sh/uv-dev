@@ -29,7 +29,9 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
-use uv_python_interpreter::{BrokenLink, Interpreter, InvalidEnvironmentKind, PythonEnvironment};
+use uv_python_interpreter::{
+    BrokenLink, Interpreter, InvalidEnvironmentKind, PythonEnvironment, RequestedInterpreter,
+};
 use uv_python_managed::{PythonMinorVersionLink, UpgradePolicy};
 use uv_python_types::{
     EnvironmentPreference, LenientImplementationName, PythonArchitecture, PythonDownloads,
@@ -1146,6 +1148,7 @@ impl ScriptEnvironment {
     pub async fn get_or_init(
         script: Pep723ItemRef<'_>,
         python_request: Option<PythonRequest>,
+        interpreter_request: Option<RequestedInterpreter>,
         client_builder: &BaseClientBuilder<'_>,
         python_preference: PythonPreference,
         python_arch: Option<PythonArchitecture>,
@@ -1166,6 +1169,22 @@ impl ScriptEnvironment {
             })
             .ok();
 
+        // An interpreter selected by an earlier operation should constrain discovery without
+        // changing the resolved request that controls managed Python patch upgrades.
+        let (python_request, upgrade_policy) =
+            if let Some(interpreter_request) = interpreter_request {
+                let upgrade_policy = UpgradePolicy::from_request(interpreter_request.request());
+                let python_request = PythonRequest::File(
+                    interpreter_request
+                        .into_interpreter()
+                        .sys_executable()
+                        .to_path_buf(),
+                );
+                (Some(python_request), Some(upgrade_policy))
+            } else {
+                (python_request, None)
+            };
+
         match ScriptInterpreter::discover(
             script,
             python_request,
@@ -1183,11 +1202,12 @@ impl ScriptEnvironment {
         .await?
         {
             // If we found an existing, compatible environment, use it.
-            ScriptInterpreter::Environment(environment) => Ok(Self::Existing(environment)),
+            ScriptInterpreter::Environment { environment, .. } => Ok(Self::Existing(environment)),
 
             // Otherwise, create a virtual environment with the discovered interpreter.
             ScriptInterpreter::Interpreter(requested) => {
-                let upgrade_policy = UpgradePolicy::from_request(requested.request());
+                let upgrade_policy = upgrade_policy
+                    .unwrap_or_else(|| UpgradePolicy::from_request(requested.request()));
                 let interpreter = requested.into_interpreter();
                 let root = ScriptInterpreter::root(script, active, cache);
 

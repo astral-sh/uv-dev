@@ -10,6 +10,7 @@ use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, Modifications,
 };
 use uv_dispatch::UniversalState;
+use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
@@ -23,6 +24,7 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
+use uv_python_interpreter::RequestedInterpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -95,6 +97,7 @@ pub async fn metadata(
 
     // Don't enable any groups' requires-python for interpreter discovery.
     let groups = DependencyGroupsWithDefaults::none();
+    let mut script_interpreter_request = None;
     let state = UniversalState::default();
 
     let resolved_lock;
@@ -107,22 +110,48 @@ pub async fn metadata(
                 LockMode::Frozen(frozen_source.into())
             } else {
                 interpreter = match target {
-                    LockTarget::Script(script) => ScriptInterpreter::discover(
-                        script.into(),
-                        python.as_deref().map(PythonRequest::parse),
-                        &client_builder,
-                        python_preference,
-                        python_arch,
-                        python_downloads,
-                        &install_mirrors,
-                        false,
-                        config_discovery,
-                        active,
-                        cache,
-                        printer,
-                    )
-                    .await?
-                    .into_interpreter(),
+                    LockTarget::Script(script) => {
+                        let interpreter = ScriptInterpreter::discover(
+                            script.into(),
+                            python.as_deref().map(PythonRequest::parse),
+                            &client_builder,
+                            python_preference,
+                            python_arch,
+                            python_downloads,
+                            &install_mirrors,
+                            false,
+                            config_discovery,
+                            active,
+                            cache,
+                            printer,
+                        )
+                        .await?;
+                        let interpreter = match interpreter {
+                            ScriptInterpreter::Interpreter(requested) => {
+                                let request = requested.request().clone();
+                                let interpreter = requested.into_interpreter();
+                                script_interpreter_request =
+                                    Some(RequestedInterpreter::new(interpreter.clone(), request));
+                                interpreter
+                            }
+                            ScriptInterpreter::Environment {
+                                environment,
+                                request,
+                            } => {
+                                let interpreter = environment.into_interpreter();
+                                if sync.is_some() {
+                                    let base_interpreter =
+                                        CachedEnvironment::base_interpreter(&interpreter, cache)?;
+                                    script_interpreter_request =
+                                        Some(RequestedInterpreter::new(base_interpreter, request));
+                                }
+                                interpreter
+                            }
+                        };
+                        // Keep environment discovery consistent with the interpreter used for
+                        // resolution. The environment itself is still rediscovered under its lock.
+                        interpreter
+                    }
                     LockTarget::Workspace(workspace) => {
                         let project_python = ProjectPythonRequest::from_request(
                             python.as_deref().map(PythonRequest::parse),
@@ -235,6 +264,7 @@ pub async fn metadata(
             MetadataSource::Manifest(LockTarget::Script(script)) => ScriptEnvironment::get_or_init(
                 (*script).into(),
                 python.as_deref().map(PythonRequest::parse),
+                script_interpreter_request,
                 &client_builder,
                 python_preference,
                 python_arch,
