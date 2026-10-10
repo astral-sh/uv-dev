@@ -8416,6 +8416,145 @@ fn run_pep723_shared_upgrade_package_conflict() -> Result<()> {
     Ok(())
 }
 
+/// Editable overlay sources and startup customizations precede shared dependencies in all run layers.
+#[test]
+fn run_pep723_shared_editable_overlay_precedence() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"shared-editable".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("shared_editable/value.py", "VALUE = 'shared'\n")],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"shared-extra".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("editable/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared-editable"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("editable/src/shared_editable/__init__.py")
+        .touch()?;
+    context
+        .temp_dir
+        .child("editable/src/shared_editable/value.py")
+        .write_str("VALUE = 'editable'\n")?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-editable==1.0.0"]
+        # ///
+        import builtins
+        from importlib.metadata import version
+        from pathlib import Path
+        from shared_editable.value import VALUE
+        import sys
+        import sysconfig
+        Path("overlay-python").write_text(sys.executable)
+        Path("overlay-site-packages").write_text(sysconfig.get_path("purelib"))
+        print(VALUE)
+        print(version("shared-editable"))
+        print(getattr(builtins, "_uv_sitecustomize", "absent"))
+        if "--extra" in sys.argv:
+            import shared_extra
+            print(shared_extra.__version__)
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared
+    1.0.0
+    absent
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-editable==1.0.0
+    ");
+    let overlay_python = context.read("overlay-python");
+    let overlay_site_packages = context.read("overlay-site-packages");
+    context
+        .pip_install()
+        .args([
+            "--offline",
+            "--no-index",
+            "--editable",
+            "editable",
+            "--python",
+        ])
+        .arg(&overlay_python)
+        .assert()
+        .success();
+    fs_err::write(
+        Path::new(&overlay_site_packages).join("sitecustomize.py"),
+        "import builtins\nbuiltins._uv_sitecustomize = 'customized'\n",
+    )?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    editable
+    2.0.0
+    customized
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "--with", "shared-editable==2.0.0", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    editable
+    2.0.0
+    customized
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "--with", "shared-extra==1.0.0", "script.py", "--extra"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    editable
+    2.0.0
+    customized
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-extra==1.0.0
+    ");
+    Ok(())
+}
+
 /// Reinstallation replaces a shared base without mutating another script's environment.
 #[test]
 fn run_pep723_shared_reinstall_replaces_base() -> Result<()> {
@@ -8996,7 +9135,7 @@ fn run_pep723_shared_native_entrypoints() -> Result<()> {
     Ok(())
 }
 
-/// Immutable cache hits leave configuration untouched; legacy cache entries migrate atomically.
+/// Immutable cache hits leave their configuration contents and modification time untouched.
 #[test]
 fn run_cached_environment_configuration_is_stable() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_pyvenv_cfg_filters();
@@ -9050,17 +9189,6 @@ fn run_cached_environment_configuration_is_stable() -> Result<()> {
     );
     assert_eq!(fs_err::read_to_string(path)?, contents);
 
-    fs_err::write(path, contents.replace("immutable = true\n", ""))?;
-    context
-        .run()
-        .args(["--with", "example==1.0.0", "--offline"])
-        .arg("--index-url")
-        .arg(server.index_url())
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("script.py")
-        .assert()
-        .success();
-    assert_eq!(fs_err::read_to_string(path)?, contents);
     Ok(())
 }
 

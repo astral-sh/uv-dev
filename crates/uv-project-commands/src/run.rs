@@ -541,13 +541,7 @@ pub async fn run(
                                 shared_environment.site_packages().next().context(
                                     "Failed to find `site-packages` directory for environment",
                                 )?;
-                            set_overlay(
-                                &environment,
-                                &format!(
-                                    "import site; site.addsitedir({})",
-                                    parent_site_packages.escape_for_python()
-                                ),
-                            )?;
+                            set_shared_overlay(&environment, &parent_site_packages)?;
                             sync_shared_environment_files(
                                 &environment,
                                 shared_environment.interpreter(),
@@ -1391,20 +1385,45 @@ pub async fn run(
     run_to_completion(handle).await
 }
 
+/// Add shared dependencies after the writable environment's editable paths.
+fn set_shared_overlay(
+    environment: &PythonEnvironment,
+    parent_site_packages: &Path,
+) -> anyhow::Result<()> {
+    let site_packages = environment
+        .site_packages()
+        .next()
+        .context("Failed to find `site-packages` directory for environment")?;
+    write_overlay_file(
+        &site_packages.join("_uv_shared_overlay.py"),
+        include_str!("_uv_shared_overlay.py"),
+    )?;
+    set_overlay(
+        environment,
+        &format!(
+            "import _uv_shared_overlay; _uv_shared_overlay.add_overlay({})",
+            parent_site_packages.escape_for_python()
+        ),
+    )
+}
+
 /// Add the parent environments' site packages to an ephemeral environment.
 fn set_overlay(environment: &PythonEnvironment, contents: &str) -> anyhow::Result<()> {
     let site_packages = environment
         .site_packages()
         .next()
         .context("Failed to find `site-packages` directory for environment")?;
-    let overlay_path = site_packages.join("_uv_ephemeral_overlay.pth");
-    match fs_err::read(&overlay_path) {
+    write_overlay_file(&site_packages.join("_uv_ephemeral_overlay.pth"), contents)
+}
+
+fn write_overlay_file(path: &Path, contents: &str) -> anyhow::Result<()> {
+    match fs_err::read(path) {
         Ok(current) if current == contents.as_bytes() => return Ok(()),
         Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(err.into()),
     }
-    uv_fs::write_atomic_sync(overlay_path, contents)?;
+    uv_fs::write_atomic_sync(path, contents)?;
     Ok(())
 }
 

@@ -269,7 +269,6 @@ impl CachedEnvironment {
         if !reinstall {
             if let Ok(root) = cache.resolve_link(cache_entry.path()) {
                 if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
-                    environment.set_pyvenv_cfg("immutable", "true")?;
                     return Ok(Self(environment));
                 }
             }
