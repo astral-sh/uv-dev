@@ -4930,6 +4930,104 @@ fn sync_relative_wheel() -> Result<()> {
     Ok(())
 }
 
+/// A host-specialized union can retain a compatible interpreter without one PEP 440 conjunction.
+#[cfg(target_os = "linux")]
+#[test]
+fn sync_platform_disjoint_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13"]);
+    context.venv().assert().success();
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12,<3.14"
+        [tool.uv]
+        package = false
+        environments = ["sys_platform != 'linux' or python_full_version < '3.12.3' or python_full_version >= '3.13'"]
+    "#})?;
+    let environment = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--python", "3.13"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    "#);
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--frozen"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// A partial global request can match a later interval even when its version floor matches an earlier one.
+#[cfg(target_os = "linux")]
+#[test]
+fn sync_platform_disjoint_python_global_major_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13"]);
+    context.venv().args(["--python", "3.13"]).assert().success();
+    context
+        .python_pin()
+        .args(["--global", "3"])
+        .assert()
+        .success();
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3,<4"
+        [tool.uv]
+        package = false
+        environments = ["sys_platform != 'linux' or python_full_version < '3.12.3' or python_full_version >= '3.13'"]
+    "#})?;
+    let environment = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(
+        context.read(context.user_config_dir.child("uv/.python-version")),
+        "3\n"
+    );
+    Ok(())
+}
+
+/// Available interpreters in any exact interval take priority over downloading another interval.
+#[cfg(target_os = "linux")]
+#[test]
+fn sync_platform_disjoint_python_prefers_installed() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    context.venv().args(["--python", "3.11"]).assert().success();
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.11,<3.14"
+        [tool.uv]
+        package = false
+        environments = ["sys_platform != 'linux' or (python_full_version >= '3.12' and python_full_version < '3.12.99') or python_full_version >= '3.13'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().arg("--offline").env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    "#);
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 12)")
+        .success();
+    Ok(())
+}
+
 /// Syncing against an unstable environment should fail (but locking should succeed).
 #[test]
 fn sync_environment() -> Result<()> {

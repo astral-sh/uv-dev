@@ -1005,6 +1005,30 @@ impl VersionRequest {
         Self::Range(specifiers, variant)
     }
 
+    /// Replace the version constraints while retaining the requested interpreter variant.
+    #[must_use]
+    fn with_specifiers(&self, specifiers: VersionSpecifiers) -> Self {
+        Self::from_specifiers(specifiers, self.variant().unwrap_or_default())
+    }
+
+    /// Intersect version constraints while retaining the requested interpreter variant.
+    #[must_use]
+    pub fn intersect_specifiers(&self, specifiers: &VersionSpecifiers) -> Self {
+        let requested = self.as_version_specifiers().unwrap_or_default();
+        let requested_range = release_specifiers_to_ranges(requested.clone());
+        if requested_range.intersection(&release_specifiers_to_ranges(specifiers.clone()))
+            == requested_range
+        {
+            return self.clone();
+        }
+        self.with_specifiers(
+            requested
+                .into_iter()
+                .chain(specifiers.iter().cloned())
+                .collect(),
+        )
+    }
+
     /// Drop any patch or prerelease information from the version request.
     #[must_use]
     pub fn only_minor(self) -> Self {
@@ -2453,6 +2477,23 @@ mod tests {
                 VersionSpecifiers::from_str(">=3.12,<3.14").unwrap(),
                 PythonVariant::Default
             )
+        );
+    }
+
+    #[test]
+    fn version_request_refinement_retains_variant() {
+        let request = VersionRequest::from_str("3.13t").unwrap();
+        let replaced = request.with_specifiers(">=3.12,<3.14".parse().unwrap());
+        assert_eq!(replaced, VersionRequest::from_str(">=3.12,<3.14t").unwrap());
+        let exact = VersionRequest::from_str("3.13.16t").unwrap();
+        assert_eq!(
+            exact.intersect_specifiers(&">=3.13.10,<3.14".parse().unwrap()),
+            exact
+        );
+        let intersected = request.intersect_specifiers(&">=3.13.10,<3.14".parse().unwrap());
+        assert_eq!(
+            intersected,
+            VersionRequest::from_str("==3.13.*,>=3.13.10,<3.14t").unwrap()
         );
     }
 

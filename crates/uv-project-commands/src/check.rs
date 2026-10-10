@@ -215,83 +215,6 @@ pub async fn check(
         })
         .unwrap_or_else(|| project_dir.to_owned());
 
-    let check_targets = if let Some(script) = script.as_ref() {
-        vec![script.path.clone()]
-    } else if let Some(project) = project.as_ref() {
-        if defacto_all_packages {
-            // In --all-packages mode, and anything equivalent like virtual workspaces,
-            // we can't just pass ty the root of the project because:
-            //
-            // * It excludes members of the workspace that aren't nested under the root,
-            //   as constructs like `members = ["../foo"]` are legal.
-            // * For virtual workspaces, this can include files that are not strictly
-            //   part of any member, such as `scripts/myscript.py`
-            //
-            // The first issue is definitely important to handle, but the second issue
-            // is debatable. It is in fact Useful for ty to find and check all your
-            // random scripts, and indeed this is the default ty behaviour. Attempting
-            // to manually suppress this behaviour is an attempt to maintain "uv-like"
-            // behaviour, but if anyone disagrees we can change this by just always
-            // including the workspace root, even for virtual workspaces.
-            project
-                .workspace()
-                .packages()
-                .values()
-                .map(|member| member.root().clone())
-                .collect()
-        } else if !package.is_empty() {
-            // If the user has specified a list of packages, tell ty to only check those packages.
-            package
-                .iter()
-                .map(|name| {
-                    project
-                        .workspace()
-                        .packages()
-                        .get(name)
-                        .map(|member| member.root().clone())
-                        .ok_or_else(|| anyhow::anyhow!("Package `{name}` not found in workspace"))
-                })
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            // Otherwise we're checking just this one package (nearest ancestor).
-            vec![project.root().to_owned()]
-        }
-    } else {
-        Vec::new()
-    };
-
-    // Any selected package can contain other workspace members, even in a virtual workspace.
-    // Explicitly exclude any workspace members that aren't selected *and are nested under
-    // a selected one*, so ty doesn't emit diagnostics for them (if they're dependencies
-    // of selected packages that's fine, ty will still find them for those purposes).
-    //
-    // The most common case this is handling is a non-virtual workspace, where the root
-    // package will almost always have the other packages nested under it, and we need a
-    // way to select just the workspace root.
-    let excluded_targets = if let Some(project) = project.as_ref()
-        && !defacto_all_packages
-    {
-        project
-            .workspace()
-            .packages()
-            .iter()
-            .filter(|(name, member)| {
-                let selected = if package.is_empty() {
-                    project.project_name() == Some(*name)
-                } else {
-                    package.contains(name)
-                };
-                !selected
-                    && check_targets
-                        .iter()
-                        .any(|target| member.root().starts_with(target))
-            })
-            .map(|(_, member)| member.root().clone())
-            .collect()
-    } else {
-        Vec::new()
-    };
-
     let groups = if let Some(project) = &project {
         groups.with_defaults(project.default_groups()?)
     } else {
@@ -326,6 +249,7 @@ pub async fn check(
         Vec::new(),
     );
     let mut resolved_before_environment = None;
+    let mut selected_workspace_members = None;
     let discovery_workspace = if let Some(project) = &project {
         let workspace = project.workspace();
         let selection = if let Some(lock) = frozen_workspace_lock.as_ref() {
@@ -392,7 +316,7 @@ pub async fn check(
                 .await?;
                 let interpreter = ProjectInterpreter::discover(
                     ProjectEnvironmentTarget::from(&workspace),
-                    project_python,
+                    project_python.environment_probe(),
                     &client_builder,
                     python_preference,
                     python_arch,
@@ -450,10 +374,97 @@ pub async fn check(
         };
         Some(finalized.map_or_else(
             || workspace.clone(),
-            |selection| selection.environment_workspace(workspace),
+            |selection| {
+                selected_workspace_members = Some(selection.target_members().clone());
+                selection.environment_workspace(workspace)
+            },
         ))
     } else {
         None
+    };
+
+    let check_targets = if let Some(script) = script.as_ref() {
+        vec![script.path.clone()]
+    } else if let Some(project) = project.as_ref() {
+        if defacto_all_packages {
+            // In --all-packages mode, and anything equivalent like virtual workspaces,
+            // we can't just pass ty the root of the project because:
+            //
+            // * It excludes members of the workspace that aren't nested under the root,
+            //   as constructs like `members = ["../foo"]` are legal.
+            // * For virtual workspaces, this can include files that are not strictly
+            //   part of any member, such as `scripts/myscript.py`
+            //
+            // The first issue is definitely important to handle, but the second issue
+            // is debatable. It is in fact Useful for ty to find and check all your
+            // random scripts, and indeed this is the default ty behaviour. Attempting
+            // to manually suppress this behaviour is an attempt to maintain "uv-like"
+            // behaviour, but if anyone disagrees we can change this by just always
+            // including the workspace root, even for virtual workspaces.
+            project
+                .workspace()
+                .packages()
+                .iter()
+                .filter(|(name, _)| {
+                    selected_workspace_members
+                        .as_ref()
+                        .is_none_or(|members| members.contains(*name))
+                })
+                .map(|(_, member)| member.root().clone())
+                .collect()
+        } else if !package.is_empty() {
+            // If the user has specified a list of packages, tell ty to only check those packages.
+            package
+                .iter()
+                .map(|name| {
+                    project
+                        .workspace()
+                        .packages()
+                        .get(name)
+                        .map(|member| member.root().clone())
+                        .ok_or_else(|| anyhow::anyhow!("Package `{name}` not found in workspace"))
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            // Otherwise we're checking just this one package (nearest ancestor).
+            vec![project.root().to_owned()]
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Any selected package can contain other workspace members, even in a virtual workspace.
+    // Explicitly exclude any workspace members that aren't selected *and are nested under
+    // a selected one*, so ty doesn't emit diagnostics for them (if they're dependencies
+    // of selected packages that's fine, ty will still find them for those purposes).
+    //
+    // The most common case this is handling is a non-virtual workspace, where the root
+    // package will almost always have the other packages nested under it, and we need a
+    // way to select just the workspace root.
+    let excluded_targets = if let Some(project) = project.as_ref()
+        && (!defacto_all_packages || selected_workspace_members.is_some())
+    {
+        project
+            .workspace()
+            .packages()
+            .iter()
+            .filter(|(name, member)| {
+                let selected = if let Some(members) = selected_workspace_members.as_ref() {
+                    members.contains(*name)
+                } else if package.is_empty() {
+                    project.project_name() == Some(*name)
+                } else {
+                    package.contains(name)
+                };
+                !selected
+                    && check_targets
+                        .iter()
+                        .any(|target| member.root().starts_with(target))
+            })
+            .map(|(_, member)| member.root().clone())
+            .collect()
+    } else {
+        Vec::new()
     };
 
     // Create an isolated environment, if requested.
@@ -496,6 +507,7 @@ pub async fn check(
                     EnvironmentPreference::Any,
                     python_preference,
                     python_arch,
+                    None,
                     python_downloads,
                     &client_builder,
                     cache,
@@ -667,6 +679,7 @@ pub async fn check(
                 &client_builder,
                 python_preference,
                 python_arch,
+                None,
                 python_downloads,
                 no_sync,
                 config_discovery,
@@ -694,12 +707,13 @@ pub async fn check(
             )
             .await?;
             Some(
-                ProjectInterpreter::discover(
+                ProjectInterpreter::discover_for_environment(
                     ProjectEnvironmentTarget::from(workspace),
                     project_python,
                     &client_builder,
                     python_preference,
                     python_arch,
+                    None,
                     python_downloads,
                     &install_mirrors,
                     ProjectEnvironmentPolicy::Optional,

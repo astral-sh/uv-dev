@@ -339,7 +339,11 @@ pub async fn add(
             .await?;
             let interpreter = ProjectInterpreter::discover(
                 ProjectEnvironmentTarget::from(&discovery_workspace),
-                project_python,
+                if provisional_groups.is_empty() {
+                    project_python
+                } else {
+                    project_python.environment_probe()
+                },
                 &client_builder,
                 python_preference,
                 python_arch,
@@ -374,6 +378,7 @@ pub async fn add(
                 &client_builder,
                 python_preference,
                 python_arch,
+                None,
                 python_downloads,
                 no_sync,
                 config_discovery,
@@ -875,7 +880,11 @@ pub async fn add(
                 PythonTarget::Interpreter(
                     ProjectInterpreter::discover(
                         ProjectEnvironmentTarget::from(&workspace),
-                        project_python,
+                        if pending_selection.is_some() {
+                            project_python.environment_probe()
+                        } else {
+                            project_python
+                        },
                         &client_builder,
                         python_preference,
                         python_arch,
@@ -905,6 +914,7 @@ pub async fn add(
                     &client_builder,
                     python_preference,
                     python_arch,
+                    None,
                     python_downloads,
                     no_sync,
                     config_discovery,
@@ -1492,6 +1502,7 @@ async fn lock_and_sync(
                 client_builder,
                 python_preference,
                 python_arch,
+                None,
                 python_downloads,
                 false,
                 config_discovery,

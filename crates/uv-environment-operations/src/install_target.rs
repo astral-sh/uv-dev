@@ -355,6 +355,14 @@ impl<'lock> InstallTarget<'lock> {
         };
         Ok(ProjectPythonRequirement {
             requires_python,
+            environments: if lock.supported_environments().is_empty() {
+                uv_pep508::MarkerTree::TRUE
+            } else {
+                lock.supported_environments()
+                    .iter()
+                    .copied()
+                    .fold(uv_pep508::MarkerTree::FALSE, uv_pep508::MarkerTree::or)
+            },
             source: PythonRequirementSource::Lockfile {
                 locked: lock.requires_python().clone(),
                 groups: group_requirements,

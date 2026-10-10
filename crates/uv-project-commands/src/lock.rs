@@ -264,6 +264,11 @@ impl PendingCommandWorkspaceSelection {
 }
 
 impl FinalizedCommandWorkspaceSelection {
+    /// The roots selected for this command, after applying workspace-group defaults.
+    pub(crate) fn target_members(&self) -> &BTreeSet<PackageName> {
+        &self.scope.target_members
+    }
+
     pub(crate) fn environment_workspace(&self, workspace: &Workspace) -> Workspace {
         self.scope.workspace(workspace)
     }

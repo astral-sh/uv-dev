@@ -577,7 +577,11 @@ async fn lock_and_sync(
             .await?;
             let interpreter = ProjectInterpreter::discover(
                 ProjectEnvironmentTarget::from(&workspace),
-                project_python,
+                if pending_selection.is_some() {
+                    project_python.environment_probe()
+                } else {
+                    project_python
+                },
                 &client_builder,
                 python_preference,
                 python_arch,
@@ -613,6 +617,7 @@ async fn lock_and_sync(
                 &client_builder,
                 python_preference,
                 python_arch,
+                None,
                 python_downloads,
                 no_sync,
                 config_discovery,
@@ -672,6 +677,7 @@ async fn lock_and_sync(
                 &client_builder,
                 python_preference,
                 python_arch,
+                None,
                 python_downloads,
                 false,
                 config_discovery,

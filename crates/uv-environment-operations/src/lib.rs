@@ -750,6 +750,87 @@ impl ProjectInterpreter {
         Ok(Self::Interpreter(project_python.validate(interpreter)?))
     }
 
+    /// Discover an interpreter using the selected domain's Python bounds for its target platform.
+    ///
+    /// Universal locking and metadata probes use [`Self::discover`] directly. A concrete
+    /// environment first probes the platform without changing it, then selects against that
+    /// platform's Python requirement before any environment can be created or replaced.
+    pub async fn discover_for_environment(
+        target: ProjectEnvironmentTarget<'_>,
+        project_python: ProjectPythonRequest,
+        client_builder: &BaseClientBuilder<'_>,
+        python_preference: PythonPreference,
+        python_arch: Option<PythonArchitecture>,
+        python_platform: Option<&TargetTriple>,
+        python_downloads: PythonDownloads,
+        install_mirrors: &PythonInstallMirrors,
+        policy: ProjectEnvironmentPolicy,
+        active: ActiveEnvironment,
+        cache: &Cache,
+        printer: Printer,
+    ) -> Result<Self, EnvironmentError> {
+        let requests = if project_python.has_environment_constraints()
+            && !matches!(policy, ProjectEnvironmentPolicy::Preserve)
+        {
+            let probe = Self::discover(
+                target,
+                project_python.environment_probe(),
+                client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                install_mirrors,
+                ProjectEnvironmentPolicy::Optional,
+                active.without_warning(),
+                cache,
+                Printer::Silent,
+            )
+            .await?
+            .into_interpreter();
+            let markers = python_platform.map_or_else(
+                || probe.markers().clone(),
+                |platform| platform.markers(probe.markers().clone()),
+            );
+            let mut requests = project_python.for_environment(&markers)?;
+            ProjectPythonRequest::prefer_existing(
+                &mut requests,
+                &probe,
+                EnvironmentPreference::OnlySystem,
+                python_preference,
+                python_arch,
+                cache,
+            )?;
+            requests
+        } else {
+            vec![project_python]
+        };
+        let mut missing = None;
+        for request in requests {
+            match Self::discover(
+                target,
+                request,
+                client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                install_mirrors,
+                policy,
+                active,
+                cache,
+                printer,
+            )
+            .await
+            {
+                Ok(interpreter) => return Ok(interpreter),
+                Err(EnvironmentError::Python(error)) if error.can_try_another_request() => {
+                    missing = Some(EnvironmentError::Python(error));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(missing.expect("at least one environment request was attempted"))
+    }
+
     /// Convert the [`ProjectInterpreter`] into an [`Interpreter`].
     pub fn into_interpreter(self) -> Interpreter {
         match self {
@@ -841,6 +922,7 @@ impl ProjectEnvironment {
         client_builder: &BaseClientBuilder<'_>,
         python_preference: PythonPreference,
         python_arch: Option<PythonArchitecture>,
+        python_platform: Option<&TargetTriple>,
         python_downloads: PythonDownloads,
         no_sync: bool,
         config_discovery: ConfigDiscovery,
@@ -894,12 +976,13 @@ impl ProjectEnvironment {
             .await?
         };
 
-        match ProjectInterpreter::discover(
+        match ProjectInterpreter::discover_for_environment(
             target,
             project_python,
             client_builder,
             python_preference,
             python_arch,
+            python_platform,
             python_downloads,
             install_mirrors,
             if no_sync {

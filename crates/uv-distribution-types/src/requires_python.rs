@@ -106,9 +106,7 @@ impl RequiresPython {
     }
 
     /// Project an environment marker onto the Python versions it can support.
-    ///
-    /// Returns `None` if the domain is empty or cannot be represented exactly by PEP 440 specifiers.
-    pub fn from_marker_tree(marker: MarkerTree) -> Option<Self> {
+    fn marker_python_ranges(marker: MarkerTree) -> Ranges<Version> {
         fn project(
             marker: MarkerTree,
             memo: &mut BTreeMap<MarkerTree, Ranges<Version>>,
@@ -166,7 +164,14 @@ impl RequiresPython {
             memo.insert(marker, range.clone());
             range
         }
-        let range = project(marker, &mut BTreeMap::new());
+        project(marker, &mut BTreeMap::new())
+    }
+
+    /// Project an environment marker onto the Python versions it can support.
+    ///
+    /// Returns `None` if the domain is empty or cannot be represented exactly by PEP 440 specifiers.
+    pub fn from_marker_tree(marker: MarkerTree) -> Option<Self> {
+        let range = Self::marker_python_ranges(marker);
         if range.is_empty() {
             return None;
         }
@@ -178,6 +183,24 @@ impl RequiresPython {
             specifiers,
             range: RequiresPythonRange::from_range(&range),
         })
+    }
+
+    /// Project an environment onto a disjunction of exact, individually representable intervals.
+    ///
+    /// This retains domains whose gaps cannot be expressed by a single PEP 440 conjunction.
+    pub fn from_marker_tree_parts(marker: MarkerTree) -> Vec<Self> {
+        Self::marker_python_ranges(marker)
+            .iter()
+            .map(|(lower, upper)| {
+                let range = Ranges::from_range_bounds((lower.cloned(), upper.cloned()));
+                let specifiers = VersionSpecifiers::from_release_only_bounds(range.iter());
+                debug_assert_eq!(release_specifiers_to_ranges(specifiers.clone()), range);
+                Self {
+                    specifiers,
+                    range: RequiresPythonRange::from_range(&range),
+                }
+            })
+            .collect()
     }
 
     /// Convert the complete declaration, including excluded versions, to a marker.

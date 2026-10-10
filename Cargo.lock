@@ -7634,6 +7634,7 @@ dependencies = [
  "uv-errors",
  "uv-fs",
  "uv-pep440",
+ "uv-pep508",
  "uv-platform",
  "uv-preview",
  "uv-python-interpreter",

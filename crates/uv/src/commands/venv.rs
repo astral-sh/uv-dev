@@ -160,7 +160,7 @@ pub(crate) async fn venv(
                 .and_then(|groups| workspace.with_provisional_workspace_groups(&groups))
         })
         .transpose()?;
-    let project_python = ProjectPythonRequest::from_request(
+    let mut project_python = ProjectPythonRequest::from_request(
         python_request,
         discovery_workspace.as_ref(),
         &groups,
@@ -172,8 +172,13 @@ pub(crate) async fn venv(
 
     // Locate the Python interpreter to use in the environment
     let interpreter = {
-        let python = PythonInstallation::find_or_download(
-            project_python.python_request.as_ref(),
+        let probe_request = if project_python.has_environment_constraints() {
+            project_python.environment_probe()
+        } else {
+            project_python.clone()
+        };
+        let mut python = PythonInstallation::find_or_download(
+            probe_request.python_request.as_ref(),
             EnvironmentPreference::OnlySystem,
             python_preference,
             python_arch,
@@ -185,6 +190,62 @@ pub(crate) async fn venv(
             install_mirrors.python_downloads_json_url.as_deref(),
         )
         .await?;
+        if project_python.has_environment_constraints() {
+            let requests = match project_python
+                .clone()
+                .for_environment(python.interpreter().markers())
+            {
+                Ok(mut requests) => {
+                    ProjectPythonRequest::prefer_existing(
+                        &mut requests,
+                        python.interpreter(),
+                        EnvironmentPreference::OnlySystem,
+                        python_preference,
+                        python_arch,
+                        cache,
+                    )?;
+                    requests
+                }
+                // A venv can be created for an explicitly requested interpreter even when that
+                // interpreter cannot run the project's selected environment.
+                Err(error) => {
+                    warn_user!("{error}");
+                    vec![project_python.clone()]
+                }
+            };
+            let mut missing = None;
+            let mut selected = None;
+            for request in requests {
+                match PythonInstallation::find_or_download(
+                    request.python_request.as_ref(),
+                    EnvironmentPreference::OnlySystem,
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    client_builder,
+                    cache,
+                    Some(&reporter),
+                    install_mirrors.mirrors(),
+                    install_mirrors.python_downloads_json_url.as_deref(),
+                )
+                .await
+                {
+                    Ok(installation) => {
+                        selected = Some((request, installation));
+                        break;
+                    }
+                    Err(error) if error.can_try_another_request() => missing = Some(error),
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            let Some((request, installation)) = selected else {
+                return Err(missing
+                    .expect("at least one environment request was attempted")
+                    .into());
+            };
+            project_python = request;
+            python = installation;
+        }
         report_interpreter(&python, false, printer)?;
         python.into_interpreter()
     };

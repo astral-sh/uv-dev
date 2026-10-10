@@ -791,7 +791,7 @@ pub async fn run(
                     .await?;
                     let interpreter = ProjectInterpreter::discover(
                         ProjectEnvironmentTarget::from(&workspace),
-                        project_python,
+                        project_python.environment_probe(),
                         &client_builder,
                         python_preference,
                         python_arch,
@@ -866,11 +866,17 @@ pub async fn run(
                 )
                 .await?;
 
+                let project_python = if no_sync {
+                    project_python.without_environment_constraints()
+                } else {
+                    project_python
+                };
                 let interpreter = project_python
                     .find_or_download(
                         EnvironmentPreference::Any,
                         python_preference,
                         python_arch,
+                        python_platform.as_ref(),
                         python_downloads,
                         &client_builder,
                         &cache,
@@ -906,6 +912,7 @@ pub async fn run(
                     &client_builder,
                     python_preference,
                     python_arch,
+                    python_platform.as_ref(),
                     python_downloads,
                     no_sync,
                     config_discovery,

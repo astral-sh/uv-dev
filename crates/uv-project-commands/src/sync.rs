@@ -372,7 +372,7 @@ pub async fn sync(
                 .await?;
                 let interpreter = ProjectInterpreter::discover(
                     ProjectEnvironmentTarget::from(&workspace),
-                    project_python,
+                    project_python.environment_probe(),
                     &client_builder,
                     python_preference,
                     python_arch,
@@ -472,6 +472,7 @@ pub async fn sync(
                 &client_builder,
                 python_preference,
                 python_arch,
+                python_platform.as_ref(),
                 python_downloads,
                 false,
                 config_discovery,
@@ -505,6 +506,7 @@ pub async fn sync(
                 &client_builder,
                 python_preference,
                 python_arch,
+                python_platform.as_ref(),
                 python_downloads,
                 false,
                 config_discovery,

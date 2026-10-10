@@ -88,7 +88,7 @@ pub async fn discover_workspace_groups(
                 },
             ))
         };
-        let interpreter = match discover(project_python).await {
+        let interpreter = match discover(project_python.environment_probe()).await {
             Ok(interpreter) => interpreter,
             Err(EnvironmentError::PythonSelection(error))
                 if matches!(
