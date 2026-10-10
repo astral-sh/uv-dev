@@ -3,7 +3,7 @@
 # This excludes crates which are versioned as binaries.
 #
 # After incrementing the version in each member `Cargo.toml`, it updates the version pins in the
-# root `Cargo.toml` to match.
+# root and member `Cargo.toml` files to match.
 
 # /// script
 # requires-python = ">=3.13"
@@ -103,14 +103,20 @@ def main() -> None:
         version_changes[name] = (version, new_version)
         manifest.write_text(contents)
 
-    # Update all the pins in the workspace root
-    for name, (old_version, new_version) in version_changes.items():
-        workspace_manifest_contents = workspace_manifest_contents.replace(
-            f'{name} = {{ version = "{old_version}"',
-            f'{name} = {{ version = "{new_version}"',
-        )
-
-    workspace_manifest.write_text(workspace_manifest_contents)
+    # Update inherited workspace pins and explicit member pins. Members can opt out of
+    # workspace features by declaring a versioned path dependency directly.
+    manifests = [workspace_manifest] + [
+        pathlib.Path(packages[member]["manifest_path"])
+        for member in content["workspace_members"]
+    ]
+    for manifest in manifests:
+        contents = manifest.read_text()
+        for name, (old_version, new_version) in version_changes.items():
+            contents = contents.replace(
+                f'{name} = {{ version = "{old_version}"',
+                f'{name} = {{ version = "{new_version}"',
+            )
+        manifest.write_text(contents)
 
 
 if __name__ == "__main__":

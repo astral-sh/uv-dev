@@ -15,8 +15,7 @@ use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{
-    DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,
-    VerbatimParsedUrl,
+    DependencyGroupSpecifier, LenientRequirement, ResolverMarkerEnvironment, VerbatimParsedUrl,
 };
 use uv_python_discovery::ProjectPythonRequirement;
 use uv_python_discovery::PythonRequirementSource;
@@ -180,7 +179,7 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
                 .dependency_groups
                 .as_ref()
                 .into_iter()
-                .flat_map(DependencyGroups::keys);
+                .flat_map(|groups| groups.keys());
             let legacy_dev = pyproject
                 .tool
                 .as_ref()

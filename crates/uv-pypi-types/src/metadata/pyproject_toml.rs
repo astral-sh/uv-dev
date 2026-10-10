@@ -8,6 +8,7 @@ use tracing::instrument;
 
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
+use uv_pyproject_toml::{Ignored, ProjectWire as PyProjectProjectWire};
 
 use crate::{LenientVersionSpecifiers, MetadataError};
 
@@ -81,16 +82,15 @@ pub struct Project {
     pub dynamic: Option<Vec<String>>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
-#[serde(rename_all = "kebab-case")]
-struct PyprojectTomlWire {
-    name: Option<PackageName>,
-    version: Option<Version>,
-    requires_python: Option<String>,
-    dependencies: Option<Vec<String>>,
-    optional_dependencies: Option<IndexMap<ExtraName, Vec<String>>>,
-    dynamic: Option<Vec<String>>,
-}
+type PyprojectTomlWire = PyProjectProjectWire<
+    Option<PackageName>,
+    Option<Version>,
+    Option<String>,
+    Option<Vec<String>>,
+    Option<IndexMap<ExtraName, Vec<String>>>,
+    Option<Ignored>,
+    Option<Ignored>,
+>;
 
 impl TryFrom<PyprojectTomlWire> for Project {
     type Error = MetadataError;
@@ -126,6 +126,29 @@ mod tests {
 
     use super::PyProjectToml;
     use crate::MetadataError;
+
+    #[test]
+    fn optional_dependencies_keep_last_normalized_value() -> Result<(), MetadataError> {
+        let pyproject = PyProjectToml::from_toml(
+            r#"
+            [project]
+            name = "example"
+            [project.optional-dependencies]
+            dev-test = ["pytest"]
+            dev_test = ["ruff"]
+            "#,
+            "pyproject.toml",
+        )?;
+        let project = pyproject.project.expect("project metadata");
+        insta::assert_json_snapshot!(project.optional_dependencies, @r#"
+        {
+          "dev-test": [
+            "ruff"
+          ]
+        }
+        "#);
+        Ok(())
+    }
 
     #[test]
     fn requires_python_allows_unrelated_dynamic_metadata() {
