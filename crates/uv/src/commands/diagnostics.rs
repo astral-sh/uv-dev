@@ -81,8 +81,12 @@ fn collect_hint<T: Hinted + std::error::Error + 'static>(
 mod tests {
     use insta::assert_debug_snapshot;
 
+    use uv_distribution_types::{DerivationChain, DerivationStep};
     use uv_lock_operations::LockError;
+    use uv_normalize::PackageName;
+    use uv_pep440::{Version, VersionSpecifier};
     use uv_project_commands::ProjectError;
+    use uv_resolver::ResolveError;
     use uv_settings::{LockedFlag, LockedSource};
     use uv_workspace::pyproject::{PyprojectTomlError, SourceError};
 
@@ -135,5 +139,57 @@ mod tests {
             "To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.",
         ]
         "#);
+    }
+
+    #[test]
+    fn collects_unhashed_package_context_through_operation_errors() {
+        let name: PackageName = "sklearn".parse().expect("valid package name");
+        let version = Version::new([2]);
+        let chain: DerivationChain = [DerivationStep::new(
+            "parent".parse().expect("valid package name"),
+            None,
+            None,
+            Some(Version::new([1])),
+            ">=2"
+                .parse::<VersionSpecifier>()
+                .expect("valid version specifier")
+                .into(),
+        )]
+        .into_iter()
+        .collect();
+        let plain = ResolveError::UnhashedPackage(name.clone());
+
+        for wrapped in [false, true] {
+            let contextual =
+                ResolveError::UnhashedPackageVersion(name.clone(), version.clone(), chain.clone());
+            assert_eq!(contextual.to_string(), plain.to_string());
+            let error = if wrapped {
+                anyhow::Error::new(uv_resolve_operations::Error::Resolve(contextual))
+            } else {
+                anyhow::Error::new(contextual)
+            };
+            assert_eq!(
+                error.chain().map(ToString::to_string).collect::<Vec<_>>(),
+                vec![plain.to_string()]
+            );
+            let hints = hints_for_error(&error)
+                .into_iter()
+                .map(|hint| anstream::adapter::strip_str(&hint).to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                hints,
+                vec!["`sklearn` (v2) was included because `parent` (v1) depends on `sklearn>=2`"]
+            );
+        }
+
+        let direct =
+            ResolveError::UnhashedPackageVersion(name, version, DerivationChain::default());
+        assert_eq!(direct.to_string(), plain.to_string());
+        assert!(
+            hints_for_error(&anyhow::Error::new(direct))
+                .iter()
+                .next()
+                .is_none()
+        );
     }
 }

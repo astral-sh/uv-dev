@@ -40,14 +40,18 @@ pub fn dist_hints(
             suggestion.cyan(),
         ));
     } else if !chain.is_empty() {
-        hints.push(format_chain(name, version, chain));
+        hints.push(format_derivation_chain(name, version, chain));
     }
     hints.extend(cause_hints);
     hints.into_owned()
 }
 
 /// Format a [`DerivationChain`] as a human-readable error message.
-fn format_chain(name: &PackageName, version: Option<&Version>, chain: &DerivationChain) -> String {
+pub fn format_derivation_chain(
+    name: &PackageName,
+    version: Option<&Version>,
+    chain: &DerivationChain,
+) -> String {
     /// Format a step in the [`DerivationChain`] as a human-readable error message.
     fn format_step(step: &DerivationStep, range: Option<Ranges<Version>>) -> String {
         if let Some(range) =
