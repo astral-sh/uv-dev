@@ -606,7 +606,7 @@ impl<'a> BaseClientBuilder<'a> {
         let client_builder = ClientBuilder::new()
             .http1_title_case_headers()
             .user_agent(user_agent)
-            .pool_max_idle_per_host(20)
+            .pool_max_idle_per_host(Concurrency::DEFAULT_DOWNLOADS)
             .read_timeout(read_timeout)
             .connect_timeout(connect_timeout)
             .redirect(redirect_policy.reqwest_policy());
