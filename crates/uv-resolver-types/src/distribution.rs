@@ -60,6 +60,9 @@ pub struct AnnotatedDist {
     /// resolution, this marker corresponds to the disjunction of all paths to
     /// this distribution in the resolution graph.
     pub marker: UniversalMarker,
+    /// Input preference indices used to select this distribution and their marker domains.
+    /// Resolver-generated preferences have no input index and are not recorded here.
+    pub preferences: Vec<(usize, UniversalMarker)>,
 }
 
 impl AnnotatedDist {

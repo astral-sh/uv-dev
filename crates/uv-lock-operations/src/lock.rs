@@ -24,7 +24,9 @@ use uv_pypi_types::{ConflictKind, SupportedEnvironments};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::{ExtrasResolver, script_extra_build_requires};
 use uv_resolve_operations::Error as ResolveError;
-use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
+use uv_resolve_operations::locked_requirements::{
+    LockedRequirements, read_lock_requirements, retain_wheel_ready_preferences,
+};
 use uv_resolve_operations::loggers::{ResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::{
@@ -872,57 +874,11 @@ async fn do_lock(
             });
 
             // If an existing lockfile exists, build up a set of preferences.
-            let activation = if let Some(lock) = versions_lock
-                && !lock_required_environments.as_markers().is_empty()
-            {
-                let refresh_locked_packages = refresh.is_some_and(|refresh| match refresh {
-                    Refresh::None(_) => false,
-                    Refresh::All(_) => true,
-                    Refresh::Packages(refreshed_packages, ..) => lock
-                        .packages()
-                        .iter()
-                        .any(|package| refreshed_packages.contains(package.name())),
-                });
-                Some(
-                    lock.package_reachability(
-                        target.install_path(),
-                        &requires_python,
-                        lock_supported_environments.as_markers(),
-                        packages,
-                        &requirements,
-                        &constraints,
-                        &dependency_groups,
-                        &overrides,
-                        &excludes,
-                        dependency_metadata,
-                        index_locations,
-                        &options.exclude_newer,
-                        &options.prerelease,
-                        &conflicts,
-                        refresh_locked_packages,
-                        &database,
-                    )
-                    .await?,
-                )
-            } else {
-                None
-            };
             let LockedRequirements {
                 mut preferences,
                 git,
             } = versions_lock
-                .map(|lock| {
-                    read_lock_requirements(
-                        lock,
-                        target.install_path(),
-                        upgrade,
-                        &requires_python,
-                        build_options,
-                        lock_required_environments.as_markers(),
-                        activation,
-                        minimum_libc_version,
-                    )
-                })
+                .map(|lock| read_lock_requirements(lock, target.install_path(), upgrade))
                 .transpose()?
                 .unwrap_or_default();
 
@@ -1026,38 +982,16 @@ async fn do_lock(
                 )
                 .await?;
 
-                let Some(lock) = versions_lock.filter(|_| {
-                    !preferences.is_empty() && !lock_required_environments.as_markers().is_empty()
-                }) else {
-                    break resolution;
-                };
                 // Registry revalidation can replace a preferred release without an explicit
                 // refresh request. Recheck wheel preferences against the actual selected graph.
                 // Each retry removes at least one retained preference; removed preferences are
-                // never restored, so this process terminates without limiting the number of retries.
-                let resolved_packages =
-                    lock.resolved_packages(&resolution, target.install_path(), index_locations)?;
-                let retained = read_lock_requirements(
-                    lock,
-                    target.install_path(),
-                    upgrade,
-                    &requires_python,
-                    build_options,
+                // never restored, so the preference set strictly decreases until resolution settles.
+                if !retain_wheel_ready_preferences(
+                    &mut preferences,
+                    &resolution,
                     lock_required_environments.as_markers(),
-                    Some(
-                        resolved_packages
-                            .iter()
-                            .map(|(package, marker)| (package.as_ref(), *marker))
-                            .collect(),
-                    ),
                     minimum_libc_version,
-                )?
-                .preferences
-                .into_iter()
-                .collect::<FxHashSet<_>>();
-                let previous_count = preferences.len();
-                preferences.retain(|preference| retained.contains(preference));
-                if preferences.len() == previous_count {
+                ) {
                     break resolution;
                 }
             };

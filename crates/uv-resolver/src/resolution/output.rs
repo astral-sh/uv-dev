@@ -54,28 +54,47 @@ pub(crate) fn from_state(
     let root_index = graph.add_node(ResolutionGraphNode::Root);
 
     for resolution in &mut resolutions {
+        let preference_marker = resolution.env.try_universal_markers().unwrap_or_default();
         // Add every package to the graph.
         for (package, selected) in resolution.nodes.drain(..) {
             let node = ResolutionNode {
                 package,
                 version: selected.version().clone(),
             };
-            let Entry::Vacant(entry) = inverse.entry(node) else {
-                // Insert each node only once.
-                continue;
-            };
-            let package = &entry.key().package;
-            let node = add_version(
-                &mut graph,
-                &mut diagnostics,
-                preferences,
-                hasher,
-                index,
-                package,
-                selected,
-                project == Some(&package.name) || workspace_members.contains(&package.name),
-            );
-            entry.insert(node);
+            match inverse.entry(node) {
+                Entry::Occupied(entry) => {
+                    if let ResolutionGraphNode::Dist(distribution) = &mut graph[*entry.get()] {
+                        for &preference in selected.preferences() {
+                            if let Some((_, marker)) = distribution
+                                .preferences
+                                .iter_mut()
+                                .find(|(id, _)| *id == preference)
+                            {
+                                marker.or(preference_marker);
+                            } else {
+                                distribution
+                                    .preferences
+                                    .push((preference, preference_marker));
+                            }
+                        }
+                    }
+                }
+                Entry::Vacant(entry) => {
+                    let package = &entry.key().package;
+                    let node = add_version(
+                        &mut graph,
+                        &mut diagnostics,
+                        preferences,
+                        hasher,
+                        index,
+                        package,
+                        selected,
+                        preference_marker,
+                        project == Some(&package.name) || workspace_members.contains(&package.name),
+                    );
+                    entry.insert(node);
+                }
+            }
         }
     }
 
@@ -122,6 +141,9 @@ pub(crate) fn from_state(
         if let ResolutionGraphNode::Dist(dist) = &mut graph[index] {
             dist.marker = reachability.remove(&index).unwrap_or_default();
             dist.marker.imbibe(conflict_marker);
+            for (_, marker) in &mut dist.preferences {
+                marker.and(dist.marker);
+            }
         }
     }
     for weight in graph.edge_weights_mut() {
@@ -225,6 +247,7 @@ fn add_version(
     in_memory: &InMemoryIndex,
     package: &ResolutionPackage,
     selected: SelectedDistribution,
+    preference_marker: UniversalMarker,
     is_workspace_member: bool,
 ) -> NodeIndex {
     let ResolutionPackage {
@@ -243,7 +266,7 @@ fn add_version(
         hasher,
         in_memory,
     );
-    let (version, dist, metadata) = selected.into_parts();
+    let (version, dist, metadata, selected_preferences) = selected.into_parts();
 
     // Track yanks for registry distributions.
     match dist.yanked() {
@@ -299,6 +322,10 @@ fn add_version(
         hashes,
         metadata,
         marker: UniversalMarker::TRUE,
+        preferences: selected_preferences
+            .into_iter()
+            .map(|preference| (preference, preference_marker))
+            .collect(),
     }))
 }
 

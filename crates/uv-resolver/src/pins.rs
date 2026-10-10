@@ -18,6 +18,8 @@ enum FilePin<'index> {
         dist: ResolvedDist,
         /// The concrete distribution whose metadata is used during resolution.
         metadata: PinMetadata<'index>,
+        /// Input preferences used to select this package, including selections through proxies.
+        preferences: Vec<usize>,
     },
     Url(RegisteredMetadata<'index>),
 }
@@ -49,6 +51,12 @@ impl<'index> FilePins<'index> {
             .entry((candidate.name().clone(), candidate.version().clone()))
         {
             Entry::Occupied(mut entry) => {
+                if let Some(preference_id) = candidate.preference_id()
+                    && let FilePin::Registry { preferences, .. } = entry.get_mut()
+                    && !preferences.contains(&preference_id)
+                {
+                    preferences.push(preference_id);
+                }
                 if let Some(request) = request
                     && let FilePin::Registry {
                         metadata: metadata @ PinMetadata::Unrequested(_),
@@ -67,6 +75,7 @@ impl<'index> FilePins<'index> {
                 entry.insert(FilePin::Registry {
                     dist: dist.for_installation().to_owned(),
                     metadata,
+                    preferences: candidate.preference_id().into_iter().collect(),
                 });
             }
         }
@@ -112,19 +121,24 @@ impl<'index> FilePins<'index> {
         }
     }
 
-    /// Return the pinned registry artifact and its metadata identity in a single lookup.
+    /// Return the registry artifact, metadata identity, and input preferences in a single lookup.
     pub(crate) fn dist_and_id(
         &self,
         name: &PackageName,
         version: &Version,
-    ) -> Option<(&ResolvedDist, &DistributionId)> {
+    ) -> Option<(&ResolvedDist, &DistributionId, &[usize])> {
         match self.0.get(&(name.clone(), version.clone()))? {
-            FilePin::Registry { dist, metadata } => Some((
+            FilePin::Registry {
+                dist,
+                metadata,
+                preferences,
+            } => Some((
                 dist,
                 match metadata {
                     PinMetadata::Unrequested(id) => id,
                     PinMetadata::Registered(metadata) => metadata.id(),
                 },
+                preferences,
             )),
             FilePin::Url(_) => None,
         }

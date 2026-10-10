@@ -44,6 +44,7 @@ pub(crate) struct ResolvedFork {
 pub(crate) struct SelectedDistribution {
     version: Version,
     source: SelectedSource,
+    preferences: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -69,7 +70,7 @@ impl SelectedDistribution {
         index: &InMemoryIndex,
         git: &GitResolver,
     ) -> Result<Self, ResolveError> {
-        let source = if let Some(url) = &package.url {
+        let (source, preferences) = if let Some(url) = &package.url {
             let metadata_id = Dist::from_url(package.name.clone(), url.clone())?.distribution_id();
             let response = index.distributions().get(&metadata_id).ok_or_else(|| {
                 ResolveError::UnregisteredTask(format!("{} @ {}", package.name, url.verbatim))
@@ -77,19 +78,22 @@ impl SelectedDistribution {
             let MetadataResponse::Found(archive) = &*response else {
                 return Err(ResolveError::PackageUnavailable(package.name.clone()));
             };
-            SelectedSource::Url {
-                dist: ResolvedDist::Installable {
-                    dist: Arc::new(Dist::from_url(
-                        package.name.clone(),
-                        url_to_precise(url.clone(), git),
-                    )?),
-                    version: Some(version.clone()),
+            (
+                SelectedSource::Url {
+                    dist: ResolvedDist::Installable {
+                        dist: Arc::new(Dist::from_url(
+                            package.name.clone(),
+                            url_to_precise(url.clone(), git),
+                        )?),
+                        version: Some(version.clone()),
+                    },
+                    metadata_id,
+                    metadata: archive.metadata.clone(),
                 },
-                metadata_id,
-                metadata: archive.metadata.clone(),
-            }
+                Vec::new(),
+            )
         } else {
-            let (dist, metadata_id) =
+            let (dist, metadata_id, preferences) =
                 pins.dist_and_id(&package.name, &version).ok_or_else(|| {
                     ResolveError::UnregisteredTask(format!("{}=={version}", package.name))
                 })?;
@@ -100,24 +104,39 @@ impl SelectedDistribution {
                     None
                 }
             });
-            SelectedSource::Registry {
-                dist: dist.clone(),
-                metadata_id: metadata_id.clone(),
-                metadata,
-            }
+            (
+                SelectedSource::Registry {
+                    dist: dist.clone(),
+                    metadata_id: metadata_id.clone(),
+                    metadata,
+                },
+                preferences.to_vec(),
+            )
         };
-        Ok(Self { version, source })
+        Ok(Self {
+            version,
+            source,
+            preferences,
+        })
     }
 
     pub(crate) fn version(&self) -> &Version {
         &self.version
     }
 
+    pub(crate) fn preferences(&self) -> &[usize] {
+        &self.preferences
+    }
+
     /// Move the selected artifact and metadata into the output graph.
-    pub(crate) fn into_parts(self) -> (Version, ResolvedDist, Option<Metadata>) {
+    pub(crate) fn into_parts(self) -> (Version, ResolvedDist, Option<Metadata>, Vec<usize>) {
         match self.source {
-            SelectedSource::Url { dist, metadata, .. } => (self.version, dist, Some(metadata)),
-            SelectedSource::Registry { dist, metadata, .. } => (self.version, dist, metadata),
+            SelectedSource::Url { dist, metadata, .. } => {
+                (self.version, dist, Some(metadata), self.preferences)
+            }
+            SelectedSource::Registry { dist, metadata, .. } => {
+                (self.version, dist, metadata, self.preferences)
+            }
         }
     }
 

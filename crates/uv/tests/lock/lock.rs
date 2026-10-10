@@ -49596,7 +49596,7 @@ fn lock_required_environment_preserves_lowered_index_pin() -> Result<()> {
     Ok(())
 }
 
-/// A replacement release can activate any locked package within the parent's marker domain.
+/// A replacement refreshes child activation while unrelated conditional pins remain stable.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_unlocked_parent_activation() -> Result<()> {
@@ -49655,7 +49655,6 @@ fn lock_required_environment_unlocked_parent_activation() -> Result<()> {
     Resolved 4 packages in [TIME]
     Updated child v1.0.0 -> v2.0.0
     Updated parent v1.0.0 -> v2.0.0
-    Updated platform-only v1.0.0 -> v2.0.0
     ");
     Ok(())
 }
@@ -51567,6 +51566,282 @@ fn lock_required_environment_moved_dynamic_extra() -> Result<()> {
     Updated child v1.0.0 -> v2.0.0
     Updated helper v1.0.0, v2.0.0 -> v1.0.0
     Updated parent v2.0.0 -> v1.0.0
+    ");
+    Ok(())
+}
+
+/// A version preference reused on an implicit index needs that registry's current wheel coverage.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_replaced_implicit_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "original-implicit-index-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64", "cp313-cp313-manylinux_2_17_x86_64"]
+    "#})?);
+    let replacement = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "replacement-implicit-index-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0"]
+    "#})?);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(original.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"python_version == '3.13' and sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(replacement.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated example v1.0.0 -> v2.0.0
+    ");
+    Ok(())
+}
+
+/// A local variant selected through a base-version preference needs current wheel coverage.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_local_variant_preference() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "original-local-variant-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64", "cp313-cp313-manylinux_2_17_x86_64"]
+    "#})?);
+    let replacement = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "replacement-local-variant-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.example.versions."1.0.0+cpu"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0"]
+    "#})?);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(original.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"python_version == '3.13' and sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(replacement.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated example v1.0.0 -> v2.0.0
+    ");
+    Ok(())
+}
+
+/// Omitted workspace metadata does not activate a Windows-only dependency on required Linux.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_metadata_free_inactive_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "metadata-free-inactive-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.platform-only.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+        [packages.platform-only.versions."2.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+    "#})?);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["platform-only; sys_platform == 'win32'"]
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "platform-only==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    pyproject.write_str(&format!(
+        "{}\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A wheel-ineligible version on one explicit index does not invalidate another index's pin.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_preserves_explicit_index_fork() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let windows = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "windows-explicit-index-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+    "#})?);
+    let linux = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "linux-explicit-index-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0"]
+    "#})?);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example; sys_platform == 'win32'", "example==1; sys_platform == 'linux'"]
+        [tool.uv]
+        required-environments = []
+        [tool.uv.sources]
+        example = [
+            {{ index = "windows", marker = "sys_platform == 'win32'" }},
+            {{ index = "linux", marker = "sys_platform == 'linux'" }},
+        ]
+        [[tool.uv.index]]
+        name = "windows"
+        url = "{}"
+        explicit = true
+        [[tool.uv.index]]
+        name = "linux"
+        url = "{}"
+        explicit = true
+    "#, windows.index_url(), linux.index_url()})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "example==1"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    pyproject.write_str(&context.read("pyproject.toml").replace(
+        "required-environments = []",
+        "required-environments = [\"python_version == '3.13' and sys_platform == 'linux'\"]",
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A rejected parent cannot make a final Windows-only child preference require Linux wheels.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_backtracking_preserves_inactive_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "backtracked-parent-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["a-child", "z-conflict"]
+        [packages.a-child.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        [packages.a-child.versions."2.0.0"]
+        [packages.z-conflict.versions."1.0.0"]
+        requires = ["leaf==1"]
+        [packages.leaf.versions."1.0.0"]
+        [packages.leaf.versions."2.0.0"]
+    "#})?);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent", "a-child; sys_platform == 'win32'", "leaf==2"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent==1", "--upgrade-package", "a-child==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
     ");
     Ok(())
 }

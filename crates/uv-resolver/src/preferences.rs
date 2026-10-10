@@ -20,7 +20,7 @@ pub enum PreferenceError {
 }
 
 /// A pinned requirement, as extracted from a `requirements.txt` file.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Preference {
     name: PackageName,
     version: Version,
@@ -117,7 +117,7 @@ impl Preference {
     }
 }
 
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum PreferenceIndex {
     /// The preference should match to any index.
     Any,
@@ -151,7 +151,7 @@ impl From<Option<IndexUrl>> for PreferenceIndex {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreferenceSource {
     /// The preference is from an installed package in the environment.
     Environment,
@@ -165,6 +165,8 @@ pub(crate) enum PreferenceSource {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Entry {
+    /// The position in the input preference list, before flattening fork markers.
+    preference_id: Option<usize>,
     marker: UniversalMarker,
     index: PreferenceIndex,
     pin: Pin,
@@ -172,6 +174,10 @@ pub(crate) struct Entry {
 }
 
 impl Entry {
+    pub(crate) fn preference_id(&self) -> Option<usize> {
+        self.preference_id
+    }
+
     /// Return the [`UniversalMarker`] associated with the entry.
     pub(crate) fn marker(&self) -> &UniversalMarker {
         &self.marker
@@ -212,7 +218,7 @@ impl Preferences {
         env: &ResolverEnvironment,
     ) -> Self {
         let mut map = FxHashMap::<PackageName, Vec<_>>::default();
-        for preference in preferences {
+        for (preference_id, preference) in preferences.into_iter().enumerate() {
             // Filter non-matching preferences when resolving for an environment.
             if let Some(markers) = env.marker_environment() {
                 if !preference.marker.evaluate(markers, &[]) {
@@ -237,6 +243,7 @@ impl Preferences {
             // Flatten the list of markers into individual entries.
             if preference.fork_markers.is_empty() {
                 map.entry(preference.name).or_default().push(Entry {
+                    preference_id: Some(preference_id),
                     marker: UniversalMarker::TRUE,
                     index: preference.index,
                     pin: Pin {
@@ -248,6 +255,7 @@ impl Preferences {
             } else {
                 for fork_marker in preference.fork_markers {
                     map.entry(preference.name.clone()).or_default().push(Entry {
+                        preference_id: Some(preference_id),
                         marker: fork_marker,
                         index: preference.index.clone(),
                         pin: Pin {
@@ -273,6 +281,7 @@ impl Preferences {
         source: PreferenceSource,
     ) {
         self.0.entry(package_name).or_default().push(Entry {
+            preference_id: None,
             marker: markers,
             index: PreferenceIndex::from(index),
             pin: pin.into(),
