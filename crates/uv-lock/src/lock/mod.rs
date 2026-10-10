@@ -3944,6 +3944,33 @@ impl Lock {
         Ok((expected, actual))
     }
 
+    /// Normalize package groups using this lock revision's empty-group convention.
+    fn normalized_dependency_groups<I, R>(
+        &self,
+        normalizer: &RequirementNormalizer<'_>,
+        groups: I,
+    ) -> Result<BTreeMap<GroupName, NormalizedRequirements>, LockError>
+    where
+        I: IntoIterator<Item = (GroupName, R)>,
+        R: IntoIterator<Item = Requirement>,
+    {
+        groups
+            .into_iter()
+            .filter_map(|(group, requirements)| {
+                let mut requirements = requirements.into_iter().peekable();
+                if !self.includes_empty_groups() && requirements.peek().is_none() {
+                    None
+                } else {
+                    Some(
+                        normalizer
+                            .requirements(requirements)
+                            .map(|requirements| (group, requirements)),
+                    )
+                }
+            })
+            .collect()
+    }
+
     fn filtered_dependency_metadata(
         filter: &ManifestFilter,
         dependency_metadata: &DependencyMetadata,
@@ -3953,29 +3980,6 @@ impl Lock {
             .filter(|entry| filter.includes_metadata(entry))
             .cloned()
             .collect()
-    }
-
-    /// Propagate unlocked ancestors' activation without trusting their old dependency markers.
-    pub fn descendant_activation<'lock>(
-        &'lock self,
-        mut unlocked: Vec<(&'lock PackageName, MarkerTree)>,
-    ) -> BTreeMap<&'lock PackageName, MarkerTree> {
-        let mut activation = BTreeMap::new();
-        while let Some((name, marker)) = unlocked.pop() {
-            for package in self.packages_for_name(name) {
-                for dependency in package.all_dependencies() {
-                    let current = activation
-                        .entry(dependency.package_name())
-                        .or_insert(MarkerTree::FALSE);
-                    let combined = current.or(marker);
-                    if combined != *current {
-                        *current = combined;
-                        unlocked.push((dependency.package_name(), combined));
-                    }
-                }
-            }
-        }
-        activation
     }
 
     /// Whether current root declarations retain the activation recorded in this lockfile.
@@ -4146,28 +4150,16 @@ impl Lock {
                 }
             }
             // Scoped overrides apply to regular dependencies but not dependency groups.
-            let current_groups = current
-                .dependency_groups
-                .into_iter()
-                .filter(|(_, requirements)| {
-                    self.includes_empty_groups() || !requirements.is_empty()
-                })
-                .map(|(group, requirements)| Ok((group, normalizer.requirements(requirements)?)))
-                .collect::<Result<BTreeMap<_, _>, LockError>>()?;
-            let previous_groups = package
-                .metadata
-                .dependency_groups
-                .iter()
-                .filter(|(_, requirements)| {
-                    self.includes_empty_groups() || !requirements.is_empty()
-                })
-                .map(|(group, requirements)| {
-                    Ok((
-                        group.clone(),
-                        normalizer.requirements(requirements.iter().cloned())?,
-                    ))
-                })
-                .collect::<Result<BTreeMap<_, _>, LockError>>()?;
+            let current_groups =
+                self.normalized_dependency_groups(&normalizer, current.dependency_groups)?;
+            let previous_groups = self.normalized_dependency_groups(
+                &normalizer,
+                package
+                    .metadata
+                    .dependency_groups
+                    .iter()
+                    .map(|(group, requirements)| (group.clone(), requirements.iter().cloned())),
+            )?;
             if current_groups != previous_groups {
                 return Ok(false);
             }
@@ -4391,23 +4383,15 @@ impl Lock {
             ));
         }
 
-        let expected_groups = dependency_groups
-            .into_iter()
-            .filter(|(_, requirements)| self.includes_empty_groups() || !requirements.is_empty())
-            .map(|(group, requirements)| Ok((group, normalizer.requirements(requirements)?)))
-            .collect::<Result<BTreeMap<_, _>, LockError>>()?;
-        let actual = package
-            .metadata
-            .dependency_groups
-            .iter()
-            .filter(|(_, requirements)| self.includes_empty_groups() || !requirements.is_empty())
-            .map(|(group, requirements)| {
-                Ok((
-                    group.clone(),
-                    normalizer.requirements(requirements.iter().cloned())?,
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>, LockError>>()?;
+        let expected_groups = self.normalized_dependency_groups(&normalizer, dependency_groups)?;
+        let actual = self.normalized_dependency_groups(
+            &normalizer,
+            package
+                .metadata
+                .dependency_groups
+                .iter()
+                .map(|(group, requirements)| (group.clone(), requirements.iter().cloned())),
+        )?;
         if !missing_metadata && expected_groups != actual {
             return Ok(SatisfiesResult::MismatchedPackageDependencyGroups(
                 &package.id.name,
