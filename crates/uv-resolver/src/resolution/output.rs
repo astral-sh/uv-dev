@@ -120,7 +120,7 @@ pub(crate) fn from_state(
     let conflict_marker = ConflictMarker::from_conflicts(conflicts);
     for index in graph.node_indices() {
         if let ResolutionGraphNode::Dist(dist) = &mut graph[index] {
-            dist.marker = reachability.remove(&index).unwrap_or_default();
+            dist.marker = reachability[index].take().unwrap_or_default();
             dist.marker.imbibe(conflict_marker);
         }
     }
