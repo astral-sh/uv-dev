@@ -695,6 +695,50 @@ fn parse_extras_cursor<T: Pep508Url>(
     Ok(extras)
 }
 
+/// Return the URI-reference span, optionally tracking bracketed extras.
+fn parse_url_span(cursor: &mut Cursor, allow_extras: bool) -> (usize, usize) {
+    let start = cursor.pos();
+    let mut len = 0;
+    let mut depth = 0u32;
+    while let Some((_, c)) = cursor.next() {
+        // If we see a line break, we're done.
+        if matches!(c, '\r' | '\n') {
+            break;
+        }
+
+        if allow_extras {
+            // Track the depth of brackets.
+            if c == '[' {
+                depth = depth.saturating_add(1);
+            } else if c == ']' {
+                depth = depth.saturating_sub(1);
+            }
+        }
+
+        // If we see top-level whitespace, check if it's followed by a semicolon or hash. If so,
+        // end the URL at the last non-whitespace character.
+        if depth == 0 && c.is_whitespace() {
+            let mut cursor = cursor.clone();
+            cursor.eat_whitespace();
+            if matches!(cursor.peek_char(), None | Some(';' | '#')) {
+                break;
+            }
+        }
+
+        len += c.len_utf8();
+
+        // If we see a top-level semicolon or hash followed by whitespace, we're done.
+        if depth == 0 && cursor.peek_char().is_some_and(|c| matches!(c, ';' | '#')) {
+            let mut cursor = cursor.clone();
+            cursor.next();
+            if cursor.peek_char().is_some_and(char::is_whitespace) {
+                break;
+            }
+        }
+    }
+    (start, len)
+}
+
 /// Parse a raw string for a URL requirement, which could be either a URL or a local path, and which
 /// could contain unexpanded environment variables.
 ///
@@ -719,38 +763,7 @@ fn parse_url<T: Pep508Url>(
     // wsp*
     cursor.eat_whitespace();
     // <URI_reference>
-    let (start, len) = {
-        let start = cursor.pos();
-        let mut len = 0;
-        while let Some((_, c)) = cursor.next() {
-            // If we see a line break, we're done.
-            if matches!(c, '\r' | '\n') {
-                break;
-            }
-
-            // If we see top-level whitespace, check if it's followed by a semicolon or hash. If so,
-            // end the URL at the last non-whitespace character.
-            if c.is_whitespace() {
-                let mut cursor = cursor.clone();
-                cursor.eat_whitespace();
-                if matches!(cursor.peek_char(), None | Some(';' | '#')) {
-                    break;
-                }
-            }
-
-            len += c.len_utf8();
-
-            // If we see a top-level semicolon or hash followed by whitespace, we're done.
-            if cursor.peek_char().is_some_and(|c| matches!(c, ';' | '#')) {
-                let mut cursor = cursor.clone();
-                cursor.next();
-                if cursor.peek_char().is_some_and(char::is_whitespace) {
-                    break;
-                }
-            }
-        }
-        (start, len)
-    };
+    let (start, len) = parse_url_span(cursor, false);
 
     let url = cursor.slice(start, len);
     if url.is_empty() {
@@ -1972,5 +1985,176 @@ mod tests {
         assert_eq!(actual, expected);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod url_span_tests {
+    use std::str::FromStr;
+
+    use crate::cursor::Cursor;
+    use crate::{Pep508ErrorSource, Requirement, VerbatimUrl};
+
+    fn assert_span(
+        input: &str,
+        allow_extras: bool,
+        expected_start: usize,
+        expected_url: &str,
+        expected_rest: &str,
+    ) {
+        let mut cursor = Cursor::new(input);
+        cursor.eat_whitespace();
+        let (start, len) = crate::parse_url_span(&mut cursor, allow_extras);
+        assert_eq!(
+            (start, len),
+            (expected_start, expected_url.len()),
+            "{input}"
+        );
+        assert_eq!(cursor.slice(start, len), expected_url, "{input}");
+        assert_eq!(cursor.pos(), input.len() - expected_rest.len(), "{input}");
+        assert_eq!(&input[cursor.pos()..], expected_rest, "{input}");
+        assert_eq!(cursor.peek_char(), expected_rest.chars().next(), "{input}");
+    }
+
+    #[test]
+    fn url_span_boundaries() {
+        let url = "https://example.com/λ.whl";
+        for allow_extras in [false, true] {
+            for (prefix, suffix, rest) in [
+                ("", "", ""),
+                (
+                    "\t\u{2003}",
+                    " \t; python_version == '3.12'",
+                    "\t; python_version == '3.12'",
+                ),
+                (
+                    "",
+                    "; python_version == '3.12'",
+                    "; python_version == '3.12'",
+                ),
+                ("", "# comment", "# comment"),
+                ("", " \t\u{2003}", "\t\u{2003}"),
+                ("", "\r\nnext", "\nnext"),
+                ("", "\nnext", "next"),
+            ] {
+                let input = format!("{prefix}{url}{suffix}");
+                assert_span(&input, allow_extras, prefix.len(), url, rest);
+            }
+            for url in [
+                "https://example.com/demo.whl[ dev , test ]",
+                "https://example.com/]/demo.whl",
+            ] {
+                let input = format!("{url} ; python_version == '3.12'");
+                assert_span(&input, allow_extras, 0, url, "; python_version == '3.12'");
+            }
+        }
+
+        let input = "https://example.com/[a[b; c]d]/demo.whl ; python_version == '3.12'";
+        assert_span(
+            input,
+            false,
+            0,
+            "https://example.com/[a[b",
+            "; c]d]/demo.whl ; python_version == '3.12'",
+        );
+        assert_span(
+            input,
+            true,
+            0,
+            "https://example.com/[a[b; c]d]/demo.whl",
+            "; python_version == '3.12'",
+        );
+
+        let requirement = Requirement::<VerbatimUrl>::from_str(
+            "demo @ https://example.com/λ.whl ; python_version == '3.12'",
+        )
+        .unwrap();
+        let Some(crate::VersionOrUrl::Url(url)) = requirement.version_or_url.as_ref() else {
+            panic!("expected a direct URL requirement");
+        };
+        assert_eq!(url.given(), Some("https://example.com/λ.whl"));
+        let expected =
+            Requirement::<VerbatimUrl>::from_str("demo; python_version == '3.12'").unwrap();
+        assert_eq!(requirement.marker, expected.marker);
+    }
+
+    #[test]
+    fn named_url_error_spans() {
+        for input in ["demo @", "demo @ \t\u{2003}"] {
+            let error = Requirement::<VerbatimUrl>::from_str(input).unwrap_err();
+            assert_eq!((error.start, error.len), (input.len(), 0));
+            assert_eq!(error.input, input);
+            assert!(matches!(
+                error.message,
+                Pep508ErrorSource::String(ref message) if message == "Expected URL"
+            ));
+        }
+
+        for input in ["", "\t\u{2003}"] {
+            let mut cursor = Cursor::new(input);
+            let error = crate::parse_url::<VerbatimUrl>(&mut cursor, None).unwrap_err();
+            assert_eq!((error.start, error.len), (input.len(), 0));
+            assert_eq!(error.input, input);
+            assert_eq!(cursor.pos(), input.len());
+            assert!(matches!(
+                error.message,
+                Pep508ErrorSource::String(ref message) if message == "Expected URL"
+            ));
+        }
+
+        let input = "\t\u{2003}https:// \t";
+        let mut cursor = Cursor::new(input);
+        let error = crate::parse_url::<url::Url>(&mut cursor, None).unwrap_err();
+        assert_eq!(
+            (error.start, error.len),
+            ("\t\u{2003}".len(), "https://".len())
+        );
+        assert_eq!(error.input, input);
+        assert_eq!(&input[cursor.pos()..], "\t");
+        assert!(matches!(error.message, Pep508ErrorSource::UrlError(_)));
+    }
+
+    #[test]
+    #[cfg(feature = "non-pep508-extensions")]
+    fn unnamed_url_spans_and_extras() {
+        let named = Requirement::<VerbatimUrl>::from_str(
+            "demo[dev,test] @ https://example.com/demo.whl ; python_version == '3.12'",
+        )
+        .unwrap();
+        let unnamed = crate::UnnamedRequirement::<VerbatimUrl>::from_str(
+            "https://example.com/demo.whl[ dev , test ] ; python_version == '3.12'",
+        )
+        .unwrap();
+        let Some(crate::VersionOrUrl::Url(named_url)) = named.version_or_url.as_ref() else {
+            panic!("expected a direct URL requirement");
+        };
+        assert_eq!(named_url.given(), Some("https://example.com/demo.whl"));
+        assert_eq!(unnamed.url.given(), named_url.given());
+        assert_eq!(unnamed.extras, named.extras);
+        assert_eq!(unnamed.marker, named.marker);
+
+        let input = "https://example.com/[a[b; c]d]/demo.whl";
+        let unnamed = crate::UnnamedRequirement::<VerbatimUrl>::from_str(input).unwrap();
+        assert_eq!(unnamed.url.given(), Some(input));
+        assert!(unnamed.extras.is_empty());
+
+        for input in ["", "\t\u{2003}"] {
+            let error = crate::UnnamedRequirement::<VerbatimUrl>::from_str(input).unwrap_err();
+            assert_eq!((error.start, error.len), (input.len(), 0));
+            assert_eq!(error.input, input);
+            assert!(matches!(
+                error.message,
+                Pep508ErrorSource::String(ref message) if message == "Expected URL"
+            ));
+        }
+
+        let input = "\t\u{2003}https:// \t";
+        let error = crate::UnnamedRequirement::<VerbatimUrl>::from_str(input).unwrap_err();
+        assert_eq!(
+            (error.start, error.len),
+            ("\t\u{2003}".len(), "https://".len())
+        );
+        assert_eq!(error.input, input);
+        assert!(matches!(error.message, Pep508ErrorSource::UrlError(_)));
     }
 }
