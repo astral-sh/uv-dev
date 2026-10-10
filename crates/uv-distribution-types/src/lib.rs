@@ -243,12 +243,12 @@ pub struct RegistryBuiltWheel {
 pub struct RegistryBuiltDist {
     /// All wheels associated with this distribution. It is guaranteed
     /// that there is at least one wheel.
-    pub wheels: Vec<RegistryBuiltWheel>,
+    wheels: Vec<RegistryBuiltWheel>,
     /// The "best" wheel selected based on the current wheel tag
     /// environment.
     ///
     /// This is guaranteed to point into a valid entry in `wheels`.
-    pub best_wheel_index: usize,
+    best_wheel_index: usize,
     /// A source distribution if one exists for this distribution.
     ///
     /// It is possible for this to be `None`. For example, when a distribution
@@ -835,6 +835,39 @@ impl SourceDist {
 }
 
 impl RegistryBuiltDist {
+    /// Create a distribution with a selected wheel, retaining the supplied wheel order.
+    pub fn try_new(
+        wheels: Vec<RegistryBuiltWheel>,
+        best_wheel_index: usize,
+        sdist: Option<RegistrySourceDist>,
+    ) -> Result<Self, InvalidWheelSelection> {
+        if best_wheel_index >= wheels.len() {
+            return Err(InvalidWheelSelection {
+                index: best_wheel_index,
+                wheels: wheels.len(),
+            });
+        }
+        Ok(Self {
+            wheels,
+            best_wheel_index,
+            sdist,
+        })
+    }
+
+    /// Create a distribution containing a single wheel.
+    pub fn from_wheel(wheel: RegistryBuiltWheel) -> Self {
+        Self {
+            wheels: vec![wheel],
+            best_wheel_index: 0,
+            sdist: None,
+        }
+    }
+
+    /// Return all wheels associated with this distribution in their original order.
+    pub fn wheels(&self) -> &[RegistryBuiltWheel] {
+        &self.wheels
+    }
+
     /// Returns the best or "most compatible" wheel in this distribution.
     pub fn best_wheel(&self) -> &RegistryBuiltWheel {
         &self.wheels[self.best_wheel_index]
@@ -1761,8 +1794,65 @@ impl Identifier for BuildableSource<'_> {
 
 #[cfg(test)]
 mod test {
-    use crate::{BuiltDist, Dist, RemoteSource, SourceDist, UrlString};
+    use std::error::Error;
+    use std::slice;
+
+    use uv_pypi_types::HashDigests;
     use uv_redacted::DisplaySafeUrl;
+
+    use crate::{
+        BuiltDist, Dist, File, FileLocation, IndexUrl, InvalidWheelSelection, RegistryBuiltDist,
+        RegistryBuiltWheel, RemoteSource, SourceDist, UrlString,
+    };
+
+    fn registry_wheel(filename: &str) -> Result<RegistryBuiltWheel, Box<dyn Error>> {
+        Ok(RegistryBuiltWheel {
+            filename: filename.parse()?,
+            file: Box::new(File {
+                dist_info_metadata: None,
+                filename: filename.into(),
+                hashes: HashDigests::empty(),
+                requires_python: None,
+                size: None,
+                upload_time_utc_ms: None,
+                url: FileLocation::AbsoluteUrl(UrlString::from(DisplaySafeUrl::parse(&format!(
+                    "https://example.com/{filename}"
+                ))?)),
+                yanked: None,
+            }),
+            index: IndexUrl::parse("https://example.com/simple", None)?,
+            size_is_authoritative: false,
+        })
+    }
+
+    #[test]
+    fn registry_wheel_selection() -> Result<(), Box<dyn Error>> {
+        assert_eq!(
+            RegistryBuiltDist::try_new(vec![], 0, None).err(),
+            Some(InvalidWheelSelection {
+                index: 0,
+                wheels: 0
+            }),
+        );
+        let first = registry_wheel("demo-1.0.0-py2-none-any.whl")?;
+        let second = registry_wheel("demo-1.0.0-py3-none-any.whl")?;
+        let wheels = vec![first.clone(), second.clone()];
+        assert_eq!(
+            RegistryBuiltDist::try_new(wheels.clone(), wheels.len(), None).err(),
+            Some(InvalidWheelSelection {
+                index: 2,
+                wheels: 2
+            }),
+        );
+        let distribution = RegistryBuiltDist::try_new(wheels.clone(), 1, None)?;
+        assert_eq!(distribution.wheels(), wheels);
+        assert_eq!(distribution.best_wheel(), &second);
+
+        let distribution = RegistryBuiltDist::from_wheel(first.clone());
+        assert_eq!(distribution.wheels(), slice::from_ref(&first));
+        assert_eq!(distribution.best_wheel(), &first);
+        Ok(())
+    }
 
     /// Ensure that we don't accidentally grow the `Dist` sizes.
     #[test]

@@ -543,7 +543,7 @@ impl<'lock> PylockToml {
                         tags,
                         &requires_python,
                         node_index,
-                        &dist.wheels,
+                        dist.wheels(),
                         build_options.no_binary_package(dist.name()),
                     )?;
 
@@ -1332,16 +1332,14 @@ impl<'lock> PylockToml {
                 package.find_best_wheel(tags).filter(|_| !no_binary)
             {
                 let hashes = HashDigests::from(best_wheel.hashes.clone());
-                let built_dist = Dist::Built(BuiltDist::Registry(RegistryBuiltDist {
-                    wheels: vec![best_wheel.to_registry_wheel(
+                let built_dist = Dist::Built(BuiltDist::Registry(RegistryBuiltDist::from_wheel(
+                    best_wheel.to_registry_wheel(
                         install_path,
                         &package.name,
                         package.version.as_ref(),
                         package.index.as_ref(),
-                    )?],
-                    best_wheel_index: 0,
-                    sdist: None,
-                }));
+                    )?,
+                )));
                 let dist = ResolvedDist::Installable {
                     dist: Arc::new(built_dist),
                     version: package.version,
