@@ -1623,7 +1623,7 @@ mod tests {
     use std::str::FromStr;
     use std::time::{Duration, UNIX_EPOCH};
 
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use fs_err as fs;
     use indoc::{formatdoc, indoc};
     use serde_json::Value;
@@ -1789,6 +1789,64 @@ mod tests {
             Version::from_str("3.13")?
         );
         assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
+        Ok(())
+    }
+
+    /// The v4 cache can contain an inferred base path that differs from Python's response.
+    #[tokio::test]
+    async fn test_legacy_virtualenv_cache() -> Result<()> {
+        let mock_dir = tempdir()?;
+        let base_python = mock_dir.path().join("python3.12");
+        let symlinked_python = mock_dir.path().join("python3");
+        let executable = mock_dir.path().join("venv/bin/python");
+        let query_log = mock_dir.path().join("queries");
+        fs::create_dir_all(executable.parent().context("Executable has no parent")?)?;
+        fs::os::unix::fs::symlink(&base_python, &symlinked_python)?;
+        fs::os::unix::fs::symlink(&symlinked_python, &executable)?;
+        fs::write(&query_log, "")?;
+
+        let mut response = serde_json::from_str::<Value>(mocked_interpreter_response())?;
+        response["sys_executable"] = serde_json::to_value(&executable)?;
+        response["sys_base_executable"] = serde_json::to_value(&base_python)?;
+        fs::write(
+            &base_python,
+            formatdoc! {r#"
+                #!/bin/sh
+                printf '.' >> "{}"
+                echo '{}'
+            "#, query_log.display(), response},
+        )?;
+        fs::set_permissions(
+            &base_python,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+
+        let cache = Cache::temp()?.init().await?;
+        let canonical = canonicalize_executable(&executable)?;
+        let cache_entry = InterpreterInfo::cache_entry(&executable, &canonical, &cache);
+        let legacy_entry = cache.root().join("interpreter-v4").join(
+            cache_entry
+                .path()
+                .strip_prefix(cache.bucket(CacheBucket::Interpreter))?,
+        );
+        let mut info = serde_json::from_value::<InterpreterInfo>(response)?;
+        info.sys_base_executable = Some(symlinked_python.clone());
+        fs::create_dir_all(legacy_entry.parent().context("Cache entry has no parent")?)?;
+        fs::write(
+            &legacy_entry,
+            rmp_serde::to_vec(&CachedByTimestamp {
+                timestamp: Timestamp::from_path(&canonical)?,
+                data: info,
+            })?,
+        )?;
+
+        let interpreter = Interpreter::query(&executable, &cache)?;
+        assert_eq!(
+            interpreter.sys_base_executable(),
+            Some(symlinked_python.as_path())
+        );
+        assert_eq!(Interpreter::query(&executable, &cache)?, interpreter);
+        assert_eq!(fs::read_to_string(&query_log)?, "");
         Ok(())
     }
 
