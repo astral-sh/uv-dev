@@ -284,30 +284,19 @@ impl ManagedPythonInstallations {
 
     /// Return whether the interpreter's base prefix belongs to these managed installations.
     pub fn contains(&self, interpreter: &Interpreter) -> bool {
-        self.installation_path(interpreter).is_some()
+        self.installation_path_and_key(interpreter).is_some()
     }
 
     /// Locate an interpreter's installation by its base prefix and installation key.
-    fn installation_path(&self, interpreter: &Interpreter) -> Option<PathBuf> {
+    fn installation_path_and_key(
+        &self,
+        interpreter: &Interpreter,
+    ) -> Option<(PathBuf, PythonInstallationKey)> {
         let root = self.absolute_root().ok()?;
-
-        // Canonicalize both paths to handle Windows path format differences
-        // (e.g., \\?\ prefix, different casing, junction vs actual path).
-        // Fall back to the original path if canonicalization fails (e.g., target doesn't exist).
-        let sys_base_prefix = dunce::canonicalize(interpreter.sys_base_prefix())
-            .unwrap_or_else(|_| interpreter.sys_base_prefix().to_path_buf());
-        let root = dunce::canonicalize(&root).unwrap_or(root);
-
-        // Verify the interpreter's base prefix is within the managed root
-        let suffix = sys_base_prefix.strip_prefix(&root).ok()?;
-
-        let first_component = suffix.components().next()?;
-        let name = first_component.as_os_str().to_str()?;
-
-        // Verify it's a valid installation key
-        PythonInstallationKey::from_str(name).ok()?;
-
-        Some(root.join(name))
+        ManagedPythonInstallation::path_and_key_from_base_prefix(
+            root,
+            interpreter.sys_base_prefix(),
+        )
     }
 }
 
@@ -361,6 +350,10 @@ impl ManagedPythonInstallation {
                 .ok_or(Error::NameError("not a valid string".to_string()))?,
         )?;
 
+        Self::from_path_and_key(path, key)
+    }
+
+    fn from_path_and_key(path: &Path, key: PythonInstallationKey) -> Result<Self, Error> {
         let implementation = ImplementationName::try_from(&key.implementation)?;
 
         let path = std::path::absolute(path)
@@ -387,9 +380,47 @@ impl ManagedPythonInstallation {
     ///
     /// Returns `None` if the interpreter is not a managed installation.
     pub fn try_from_interpreter(interpreter: &Interpreter) -> Option<Self> {
+        let (path, key) = Self::path_and_key_from_interpreter(interpreter)?;
+        Self::from_path_and_key(&path, key).ok()
+    }
+
+    /// Return the managed installation key for an interpreter, if it is installed in the managed
+    /// Python directory.
+    pub fn key_from_interpreter(interpreter: &Interpreter) -> Option<PythonInstallationKey> {
+        Self::path_and_key_from_interpreter(interpreter).map(|(_, key)| key)
+    }
+
+    /// Return the managed installation path and [`PythonInstallationKey`] for an interpreter,
+    /// without reading its build revision.
+    fn path_and_key_from_interpreter(
+        interpreter: &Interpreter,
+    ) -> Option<(PathBuf, PythonInstallationKey)> {
         let installations = ManagedPythonInstallations::from_settings(None).ok()?;
-        let path = installations.installation_path(interpreter)?;
-        Self::from_path(path).ok()
+        installations.installation_path_and_key(interpreter)
+    }
+
+    fn path_and_key_from_base_prefix(
+        root: PathBuf,
+        sys_base_prefix: &Path,
+    ) -> Option<(PathBuf, PythonInstallationKey)> {
+        // Canonicalize both paths to handle Windows path format differences
+        // (e.g., \\?\ prefix, different casing, junction vs actual path).
+        // Fall back to the original path if canonicalization fails (e.g., target doesn't exist).
+        let sys_base_prefix =
+            dunce::canonicalize(sys_base_prefix).unwrap_or_else(|_| sys_base_prefix.to_path_buf());
+        let root = dunce::canonicalize(&root).unwrap_or(root);
+
+        // Verify the interpreter's base prefix is within the managed root
+        let suffix = sys_base_prefix.strip_prefix(&root).ok()?;
+
+        let first_component = suffix.components().next()?;
+        let name = first_component.as_os_str().to_str()?;
+
+        // Verify it's a valid installation key.
+        let key = PythonInstallationKey::from_str(name).ok()?;
+
+        // Construct the installation path within the managed root.
+        Some((root.join(name), key))
     }
 
     /// The path to this managed installation's Python executable.
@@ -669,6 +700,11 @@ impl ManagedPythonInstallation {
         }
         // Require a matching variant
         if self.key.variant != other.key.variant {
+            return false;
+        }
+        // Build names are separate installation identities. Selecting which identity owns the
+        // ordinary executable names is handled explicitly by installation options.
+        if self.key.build_name() != other.key.build_name() {
             return false;
         }
         // Require matching minor version
@@ -1091,13 +1127,16 @@ impl From<&ManagedPythonInstallation> for PythonDownloadRequest {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::{Context, Result};
+
     use super::*;
     use std::path::PathBuf;
     use std::str::FromStr;
     use uv_pep440::{Prerelease, PrereleaseKind};
     use uv_platform::Platform;
     use uv_python_types::{
-        ImplementationName, LenientImplementationName, PythonInstallationKey, PythonVariant,
+        ImplementationName, LenientImplementationName, PythonBuildName, PythonInstallationKey,
+        PythonVariant,
     };
 
     fn create_test_installation(
@@ -1143,6 +1182,27 @@ mod tests {
 
         // Same patch version should not be an upgrade
         assert!(!installation.is_upgrade_of(&installation));
+    }
+
+    #[test]
+    fn path_and_key_from_base_prefix_preserves_build_name() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let root = temp_dir.path().join("python");
+        let name = "cpython-3.13.0+custom_internal-linux-x86_64-gnu";
+        let installation = root.join(name);
+        let base_prefix = installation.join("lib").join("python3.13");
+        fs::create_dir_all(&base_prefix)?;
+        // Resolving the identity must not require readable build metadata.
+        fs::create_dir(installation.join("BUILD"))?;
+
+        let (path, key) =
+            ManagedPythonInstallation::path_and_key_from_base_prefix(root, &base_prefix)
+                .context("Missing managed installation identity")?;
+        assert_eq!(path, dunce::canonicalize(installation)?);
+        assert_eq!(key, PythonInstallationKey::from_str(name)?);
+        assert!(ManagedPythonInstallation::from_path_and_key(&path, key).is_err());
+
+        Ok(())
     }
 
     #[test]
@@ -1248,6 +1308,38 @@ mod tests {
         // Different variants should not be upgrades
         assert!(!freethreaded.is_upgrade_of(&default));
         assert!(!default.is_upgrade_of(&freethreaded));
+    }
+
+    #[test]
+    fn test_is_upgrade_of_different_build_name() {
+        let mut previous = create_test_installation(
+            ImplementationName::CPython,
+            3,
+            10,
+            8,
+            None,
+            PythonVariant::Default,
+            None,
+        );
+        let newer = create_test_installation(
+            ImplementationName::CPython,
+            3,
+            10,
+            9,
+            None,
+            PythonVariant::Default,
+            None,
+        );
+        assert!(newer.is_upgrade_of(&previous));
+
+        let build_name = PythonBuildName::from_str("custom").expect("valid build name");
+        let mut custom = newer.clone();
+        custom.key = custom.key.with_build_name(build_name.clone());
+        assert!(!custom.is_upgrade_of(&previous));
+
+        previous.key = previous.key.with_build_name(build_name);
+        assert!(custom.is_upgrade_of(&previous));
+        assert!(!newer.is_upgrade_of(&previous));
     }
 
     #[test]
