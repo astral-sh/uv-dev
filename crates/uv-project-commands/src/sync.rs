@@ -52,8 +52,8 @@ use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace,
 
 use crate::lock::{
     CommandWorkspaceSelection, command_workspace_group, command_workspace_group_from_lock,
-    lockfile_selection_members, select_workspace_group_lock, select_workspace_group_result,
-    workspace_selection_members,
+    lockfile_selection_members, provisional_command_workspace_group, select_workspace_group_lock,
+    select_workspace_group_result, workspace_selection_members,
 };
 
 /// Sync the project environment.
@@ -206,11 +206,11 @@ pub async fn sync(
                     Some(&selection_members),
                 )
             } else {
-                let initial = command_workspace_group(
+                let initial = provisional_command_workspace_group(
                     project.workspace(),
                     workspace_group.as_ref(),
                     Some(&selection_members),
-                    project
+                    &project
                         .workspace()
                         .workspace_groups_with_sources(&settings.resolver.sources)?,
                 )
@@ -233,7 +233,7 @@ pub async fn sync(
                     project.workspace(),
                     workspace_group.as_ref(),
                     Some(&selection_members),
-                    discover_workspace_groups(
+                    &discover_workspace_groups(
                         project.workspace(),
                         project_dir,
                         python.as_deref(),

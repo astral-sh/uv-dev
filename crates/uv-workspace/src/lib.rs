@@ -5,7 +5,8 @@ pub use workspace::{
     WorkspaceErrorKind, WorkspaceMember,
 };
 pub use workspace_groups::{
-    ResolvedWorkspaceGroup, WorkspaceGroup, WorkspaceGroupMemberMetadata, WorkspaceResolution,
+    ProvisionalWorkspaceGroup, ResolvedWorkspaceGroup, WorkspaceGroup,
+    WorkspaceGroupMemberMetadata, WorkspaceResolution,
 };
 
 pub mod dependency_groups;

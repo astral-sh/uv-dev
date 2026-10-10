@@ -18,6 +18,7 @@ use uv_distribution::{ArchiveMetadata, Metadata};
 use uv_distribution_types::{Identifier, RequiresPython};
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
+    discover_workspace_groups,
 };
 use uv_lock::implicit_constraints_marker;
 use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget};
@@ -34,7 +35,7 @@ use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference};
 use uv_redacted::DisplaySafeUrl;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolver::MetadataResponse;
-use uv_settings::{PythonInstallMirrors, ResolverSettings};
+use uv_settings::{LockCheck, PythonInstallMirrors, ResolverSettings};
 use uv_workspace::pyproject::{DependencyType, Source};
 use uv_workspace::{
     DiscoveryOptions, ProjectWorkspace, VirtualProject, WorkspaceCache, WorkspaceErrorKind,
@@ -201,6 +202,11 @@ pub async fn upgrade(
         }
         Err(err) => return Err(err.into()),
     };
+    let provisional_workspace = project.workspace().with_provisional_workspace_groups(
+        &project
+            .workspace()
+            .workspace_groups_with_sources(&settings.sources)?,
+    );
     // Locking defaults a missing `requires-python` to the discovered interpreter's minor version.
     // Use that same bound when deciding whether selected declarations and sources can apply.
     let fallback_interpreter =
@@ -215,7 +221,7 @@ pub async fn upgrade(
             let groups = DependencyGroupsWithDefaults::none();
             let project_python = ProjectPythonRequest::from_request(
                 None,
-                Some(project.workspace()),
+                Some(&provisional_workspace),
                 &groups,
                 &settings.sources,
                 project_dir,
@@ -223,7 +229,7 @@ pub async fn upgrade(
             )
             .await?;
             match ProjectInterpreter::discover(
-                ProjectEnvironmentTarget::from(project.workspace()),
+                ProjectEnvironmentTarget::from(&provisional_workspace),
                 project_python,
                 &client_builder,
                 python_preference,
@@ -381,36 +387,6 @@ pub async fn upgrade(
     )
     .await?;
 
-    let interpreter = if let Some(interpreter) = fallback_interpreter {
-        interpreter
-    } else {
-        let groups = DependencyGroupsWithDefaults::none();
-        let project_python = ProjectPythonRequest::from_request(
-            None,
-            Some(project.workspace()),
-            &groups,
-            &settings.sources,
-            project_dir,
-            config_discovery,
-        )
-        .await?;
-        ProjectInterpreter::discover(
-            ProjectEnvironmentTarget::from(project.workspace()),
-            project_python,
-            &client_builder,
-            python_preference,
-            python_arch,
-            python_downloads,
-            &install_mirrors,
-            ProjectEnvironmentPolicy::Optional,
-            ActiveEnvironment::Ignore,
-            &cache,
-            printer,
-        )
-        .await?
-        .into_interpreter()
-    };
-
     let state = UniversalState::default();
     let distribution_id = DisplaySafeUrl::from_file_path(project.project_root())
         .map_err(|()| anyhow!("Project root is not a valid file URL"))?
@@ -419,6 +395,60 @@ pub async fn upgrade(
         distribution_id,
         Arc::new(MetadataResponse::Found(ArchiveMetadata::from(metadata))),
     );
+
+    let discovered = discover_workspace_groups(
+        project.workspace(),
+        project_dir,
+        None,
+        LockCheck::Disabled,
+        &settings,
+        &client_builder,
+        &state,
+        &BTreeSet::new(),
+        python_preference,
+        python_arch,
+        python_downloads,
+        &install_mirrors,
+        &concurrency,
+        config_discovery,
+        &cache,
+        workspace_cache,
+        printer,
+        preview,
+    )
+    .await?;
+    let workspace = project.workspace().with_workspace_groups(&discovered);
+
+    let interpreter =
+        if let Some(interpreter) = fallback_interpreter.filter(|_| discovered.is_empty()) {
+            interpreter
+        } else {
+            let groups = DependencyGroupsWithDefaults::none();
+            let project_python = ProjectPythonRequest::from_request(
+                None,
+                Some(&workspace),
+                &groups,
+                &settings.sources,
+                project_dir,
+                config_discovery,
+            )
+            .await?;
+            ProjectInterpreter::discover(
+                ProjectEnvironmentTarget::from(&workspace),
+                project_python,
+                &client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                &install_mirrors,
+                ProjectEnvironmentPolicy::Optional,
+                ActiveEnvironment::Ignore,
+                &cache,
+                printer,
+            )
+            .await?
+            .into_interpreter()
+        };
 
     let result = match Box::pin(
         LockOperation::new(

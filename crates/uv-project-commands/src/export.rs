@@ -314,7 +314,7 @@ pub async fn export(
                     project.workspace(),
                     workspace_group.as_ref(),
                     batch.is_none().then_some(&selection_members),
-                    discover_workspace_groups(
+                    &discover_workspace_groups(
                         project.workspace(),
                         project_dir,
                         python.as_deref(),

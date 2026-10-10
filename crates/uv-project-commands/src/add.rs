@@ -29,7 +29,7 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     EnvironmentError, LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy,
-    ProjectEnvironmentTarget, ProjectInterpreter, sync_from_lock,
+    ProjectEnvironmentTarget, ProjectInterpreter, discover_workspace_groups, sync_from_lock,
 };
 use uv_errors::HintOrdering;
 use uv_fs::Simplified;
@@ -311,11 +311,20 @@ pub async fn add(
         // Enable the default groups of the project
         defaulted_groups = groups.with_defaults(project.default_groups()?);
 
-        if frozen.is_some() || no_sync {
+        // Requirement preparation can precede edits that change a group's domain. Keep this
+        // interpreter read-only until the updated manifests have completed metadata discovery.
+        let provisional_groups = project
+            .workspace()
+            .workspace_groups_with_sources(&settings.resolver.sources)?;
+        let discovery_workspace = project
+            .workspace()
+            .with_provisional_workspace_groups(&provisional_groups);
+
+        if frozen.is_some() || no_sync || !provisional_groups.is_empty() {
             // Discover the interpreter.
             let project_python = ProjectPythonRequest::from_request(
                 python.as_deref().map(PythonRequest::parse),
-                Some(project.workspace()),
+                Some(&discovery_workspace),
                 &defaulted_groups,
                 &settings.resolver.sources,
                 project_dir,
@@ -323,7 +332,7 @@ pub async fn add(
             )
             .await?;
             let interpreter = ProjectInterpreter::discover(
-                ProjectEnvironmentTarget::from(project.workspace()),
+                ProjectEnvironmentTarget::from(&discovery_workspace),
                 project_python,
                 &client_builder,
                 python_preference,
@@ -334,7 +343,11 @@ pub async fn add(
                 // Suppress warnings about the active environment when we won't modify it.
                 active.without_warning(),
                 cache,
-                printer,
+                if provisional_groups.is_empty() || printer == Printer::Verbose {
+                    printer
+                } else {
+                    Printer::Silent
+                },
             )
             .await?
             .into_interpreter();
@@ -346,7 +359,7 @@ pub async fn add(
         } else {
             // Discover or create the virtual environment.
             let environment = ProjectEnvironment::get_or_init(
-                ProjectEnvironmentTarget::from(project.workspace()),
+                ProjectEnvironmentTarget::from(&discovery_workspace),
                 None,
                 &defaulted_groups,
                 &settings.resolver.sources,
@@ -788,11 +801,132 @@ pub async fn add(
     // Use separate state for locking and syncing.
     let lock_state = state.fork();
     let sync_state = state;
+    let refined_python_target = if let EditTarget::Project(project) = &target
+        && !project
+            .workspace()
+            .workspace_groups_with_sources(&settings.resolver.sources)?
+            .is_empty()
+    {
+        drop(_lock);
+        let install_options = InstallOptions::new(
+            no_install_project,
+            only_install_project,
+            no_install_workspace,
+            only_install_workspace,
+            no_install_local,
+            only_install_local,
+            no_install_package.clone(),
+            only_install_package.clone(),
+        );
+        let exclusions = PackageSelection::from_args(false, &[], project.project_name())
+            .first_party_exclusions(
+                project.workspace(),
+                project.project_name(),
+                &install_options,
+            );
+        let workspace_cache = WorkspaceCache::default();
+        let discovered = discover_workspace_groups(
+            project.workspace(),
+            project_dir,
+            python.as_deref(),
+            lock_check,
+            &settings.resolver,
+            &client_builder,
+            &lock_state,
+            &exclusions,
+            python_preference,
+            python_arch,
+            python_downloads,
+            &install_mirrors,
+            &concurrency,
+            config_discovery,
+            cache,
+            &workspace_cache,
+            printer,
+            preview,
+        )
+        .await?;
+        let workspace = project.workspace().with_workspace_groups(&discovered);
+        Some(if no_sync {
+            let project_python = ProjectPythonRequest::from_request(
+                python.as_deref().map(PythonRequest::parse),
+                Some(&workspace),
+                &defaulted_groups,
+                &settings.resolver.sources,
+                project_dir,
+                config_discovery,
+            )
+            .await?;
+            PythonTarget::Interpreter(
+                ProjectInterpreter::discover(
+                    ProjectEnvironmentTarget::from(&workspace),
+                    project_python,
+                    &client_builder,
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    &install_mirrors,
+                    ProjectEnvironmentPolicy::Optional,
+                    active.without_warning(),
+                    cache,
+                    printer,
+                )
+                .await?
+                .into_interpreter(),
+            )
+        } else {
+            PythonTarget::Environment(
+                ProjectEnvironment::get_or_init(
+                    ProjectEnvironmentTarget::from(&workspace),
+                    None,
+                    &defaulted_groups,
+                    &settings.resolver.sources,
+                    python.as_deref().map(PythonRequest::parse),
+                    &install_mirrors,
+                    &client_builder,
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    no_sync,
+                    config_discovery,
+                    active,
+                    cache,
+                    DryRun::Disabled,
+                    LinkErrorReporting::User,
+                    printer,
+                )
+                .await?
+                .into_environment()?,
+            )
+        })
+    } else {
+        None
+    };
+    // Metadata and in-flight artifacts from requirement preparation belong to its interpreter.
+    // A refined group can select a different Python before synchronization.
+    let sync_state = if refined_python_target.is_some() {
+        lock_state.fork()
+    } else {
+        sync_state
+    };
+    let python_target = refined_python_target.as_ref().unwrap_or(&python_target);
+    let _refined_lock = if refined_python_target.is_some() {
+        python_target
+            .interpreter()
+            .lock()
+            .await
+            .inspect_err(|err| {
+                warn!("Failed to acquire environment lock: {err}");
+            })
+            .ok()
+    } else {
+        None
+    };
     let python_minor = python_target.interpreter().python_minor();
 
     match Box::pin(lock_and_sync(
         target,
-        &python_target,
+        python_target,
         &mut toml,
         &edits,
         lock_state,

@@ -879,6 +879,182 @@ fn workspace_groups_configuration_errors() -> Result<()> {
     Ok(())
 }
 
+/// Package selection includes local members reached only through dependency groups.
+#[test]
+fn workspace_groups_select_dependency_group_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+
+        [dependency-groups]
+        test = ["leaf"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["leaf-dep==1.0.0"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[],
+    )?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--package", "leaf", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf-dep==1.0.0
+        # via leaf
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--package", "leaf", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf-dep==1.0.0
+        # via leaf
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Package selection includes local members reached only through an optional extra.
+#[test]
+fn workspace_groups_select_optional_extra_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+
+        [project.optional-dependencies]
+        test = ["leaf"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["leaf-dep==1.0.0"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[],
+    )?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--package", "leaf", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf-dep==1.0.0
+        # via leaf
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--package", "leaf", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf-dep==1.0.0
+        # via leaf
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
 #[test]
 fn workspace_groups_ordinary_targeting() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -961,6 +1137,7 @@ fn workspace_groups_ordinary_targeting() -> Result<()> {
     uv_snapshot!(context.filters(), context.export().args(["--offline", "--all-packages"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Resolved 8 packages in [TIME]
     error: Workspace members are not reachable from any workspace group: `unused`, `unused-two`
     ");
 
@@ -3468,6 +3645,235 @@ fn workspace_groups_dynamic_version_reselects_python() -> Result<()> {
     ");
     let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
     insta::assert_snapshot!(lock["workspace-group"][0]["effective-requires-python"].as_str().expect("group records its Python domain"), @">=3.13");
+    Ok(())
+}
+
+/// Interpreter-only commands use provisional group bounds without executing project backends.
+#[test]
+fn workspace_groups_interpreter_commands_do_not_build_metadata() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        raise RuntimeError("interpreter discovery must not execute this backend")
+    "#})?;
+    uv_snapshot!(context.filters(), context.python_find(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.12]
+    ");
+    uv_snapshot!(context.filters(), context.venv(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-sync", "python", "-c", "import sys; print(sys.version_info[:2])",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
+    ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Adding a dependency completes dynamic group discovery before creating the project environment.
+#[test]
+fn workspace_groups_add_reselects_python_after_metadata() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+        dynamic = ["version"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv]
+        exclude-dependencies = [
+            { package = { name = "app" }, dependencies = ["leaf"] },
+            { package = { name = "app", version = "2.0.0" }, dependencies = [] },
+        ]
+        [tool.uv.workspace]
+        members = ["leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+        import tomllib
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]
+            dist_info = pathlib.Path(metadata_directory, "app-2.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: app\n"
+                "Version: 2.0.0\n"
+                "Requires-Python: >=3.12\n"
+                + "".join(f"Requires-Dist: {dependency}\n" for dependency in project["dependencies"])
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/fresh-1.0.0-py3-none-any.whl"),
+        "fresh",
+        "1.0.0",
+        "fresh-1.0.0",
+        "",
+        &[],
+    )?;
+    uv_snapshot!(context.filters(), context.add().args([
+        "fresh", "--offline", "--no-index", "--find-links", "wheels", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + fresh==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-sync", "python", "-c", "import sys; print(sys.version_info[:2])",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 13)
+    ");
+    Ok(())
+}
+
+/// Removing a dependency still validates an explicit Python request against completed metadata.
+#[test]
+fn workspace_groups_remove_checks_final_python_domain() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        requires-python = ">=3.12"
+        dependencies = ["leaf", "fresh"]
+        dynamic = ["version"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv]
+        exclude-dependencies = [
+            { package = { name = "app" }, dependencies = ["leaf"] },
+            { package = { name = "app", version = "2.0.0" }, dependencies = [] },
+        ]
+        [tool.uv.workspace]
+        members = ["leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+        import tomllib
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]
+            dist_info = pathlib.Path(metadata_directory, "app-2.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: app\n"
+                "Version: 2.0.0\n"
+                "Requires-Python: >=3.12\n"
+                + "".join(f"Requires-Dist: {dependency}\n" for dependency in project["dependencies"])
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    let original = context.read("pyproject.toml");
+    uv_snapshot!(context.filters(), context.remove().args([
+        "fresh", "--offline", "--no-index", "--no-sync", "--python", "3.12",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13`
+    ");
+    assert_eq!(original, context.read("pyproject.toml"));
+    context
+        .temp_dir
+        .child(".venv")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
     Ok(())
 }
 

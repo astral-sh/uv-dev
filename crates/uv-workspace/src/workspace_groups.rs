@@ -42,48 +42,102 @@ pub struct WorkspaceGroupMemberMetadata {
     pub requires_python: Option<VersionSpecifiers>,
 }
 
-/// A validated workspace group and its effective Python requirement.
+/// A workspace group whose Python domain may still need dynamic member metadata.
 #[derive(Debug, Clone)]
-pub struct ResolvedWorkspaceGroup {
-    definition: WorkspaceGroup,
-    requires_python: RequiresPython,
-    /// The supported environments, including conditional local-member Python bounds.
-    environments: MarkerTree,
-    /// The environments in which each local member is reachable from these roots.
-    member_environments: BTreeMap<PackageName, MarkerTree>,
-    /// Dynamic metadata needed before outgoing dependency edges can determine a final domain.
+pub struct ProvisionalWorkspaceGroup {
+    domain: WorkspaceGroupDomain,
     pending_metadata: BTreeSet<PackageName>,
 }
 
-impl ResolvedWorkspaceGroup {
+/// A workspace group whose effective domain includes all required dynamic metadata.
+#[derive(Debug, Clone)]
+pub struct ResolvedWorkspaceGroup {
+    domain: WorkspaceGroupDomain,
+}
+
+#[derive(Debug, Clone)]
+struct WorkspaceGroupDomain {
+    definition: WorkspaceGroup,
+    requires_python: RequiresPython,
+    environments: MarkerTree,
+    /// Production reachability used to infer Python bounds, excluding unselected extras and groups.
+    member_environments: BTreeMap<PackageName, MarkerTree>,
+}
+
+impl ProvisionalWorkspaceGroup {
     pub fn definition(&self) -> &WorkspaceGroup {
-        &self.definition
+        &self.domain.definition
     }
 
     pub fn requires_python(&self) -> &RequiresPython {
-        &self.requires_python
+        &self.domain.requires_python
     }
 
     pub fn environments(&self) -> MarkerTree {
-        self.environments
+        self.domain.environments
     }
 
     pub fn member_environments(&self) -> &BTreeMap<PackageName, MarkerTree> {
-        &self.member_environments
+        &self.domain.member_environments
     }
 
-    /// Dynamic metadata needed to refine this group's provisional Python domain.
     pub fn pending_metadata(&self) -> &BTreeSet<PackageName> {
         &self.pending_metadata
     }
 
-    /// Consume the validated group for storage or command selection.
+    /// Complete discovery only after every active member's dynamic metadata is available.
+    pub fn finalize(self) -> Result<ResolvedWorkspaceGroup, WorkspaceError> {
+        if !self.pending_metadata.is_empty() {
+            return Err(WorkspaceErrorKind::PendingWorkspaceGroupMetadata(
+                self.domain.definition.name,
+            )
+            .into());
+        }
+        Ok(ResolvedWorkspaceGroup {
+            domain: self.domain,
+        })
+    }
+
+    /// Restrict the provisional domain for a metadata-only interpreter probe.
+    pub fn narrow_environment(&mut self, marker: MarkerTree) -> Result<(), WorkspaceError> {
+        self.domain.narrow_environment(marker)
+    }
+}
+
+impl ResolvedWorkspaceGroup {
+    pub fn definition(&self) -> &WorkspaceGroup {
+        &self.domain.definition
+    }
+
+    pub fn requires_python(&self) -> &RequiresPython {
+        &self.domain.requires_python
+    }
+
+    pub fn environments(&self) -> MarkerTree {
+        self.domain.environments
+    }
+
+    pub fn member_environments(&self) -> &BTreeMap<PackageName, MarkerTree> {
+        &self.domain.member_environments
+    }
+
+    /// Consume the completed group for storage or command selection.
     pub fn into_parts(self) -> (WorkspaceGroup, RequiresPython, MarkerTree) {
-        (self.definition, self.requires_python, self.environments)
+        (
+            self.domain.definition,
+            self.domain.requires_python,
+            self.domain.environments,
+        )
     }
 
     /// Restrict every representation of the group's effective domain together.
     pub fn narrow_environment(&mut self, marker: MarkerTree) -> Result<(), WorkspaceError> {
+        self.domain.narrow_environment(marker)
+    }
+}
+
+impl WorkspaceGroupDomain {
+    fn narrow_environment(&mut self, marker: MarkerTree) -> Result<(), WorkspaceError> {
         let environments = self.environments.and(marker);
         let requires_python = RequiresPython::from_marker_tree(environments).ok_or_else(|| {
             WorkspaceError::from(WorkspaceErrorKind::DisjointWorkspaceGroupPython(
@@ -112,7 +166,7 @@ impl Workspace {
     pub fn workspace_groups_with_sources(
         &self,
         no_sources: &NoSources,
-    ) -> Result<Vec<ResolvedWorkspaceGroup>, WorkspaceError> {
+    ) -> Result<Vec<ProvisionalWorkspaceGroup>, WorkspaceError> {
         self.workspace_groups_with_metadata(no_sources, &BTreeMap::new())
     }
 
@@ -121,7 +175,7 @@ impl Workspace {
         &self,
         no_sources: &NoSources,
         metadata: &BTreeMap<PackageName, WorkspaceGroupMemberMetadata>,
-    ) -> Result<Vec<ResolvedWorkspaceGroup>, WorkspaceError> {
+    ) -> Result<Vec<ProvisionalWorkspaceGroup>, WorkspaceError> {
         let Some(definitions) = self
             .pyproject_toml()
             .tool
@@ -254,15 +308,17 @@ impl Workspace {
                     .get(name)
                     .is_some_and(|active| !active.and(environments).is_false())
             });
-            groups.push(ResolvedWorkspaceGroup {
-                definition: definition.clone(),
-                requires_python,
-                environments,
+            groups.push(ProvisionalWorkspaceGroup {
                 pending_metadata,
-                member_environments: member_environments
-                    .into_iter()
-                    .map(|(name, marker)| (name, marker.and(environments)))
-                    .collect(),
+                domain: WorkspaceGroupDomain {
+                    definition: definition.clone(),
+                    requires_python,
+                    environments,
+                    member_environments: member_environments
+                        .into_iter()
+                        .map(|(name, marker)| (name, marker.and(environments)))
+                        .collect(),
+                },
             });
         }
         Ok(groups)
@@ -537,11 +593,24 @@ impl Workspace {
         lowered
     }
 
-    /// Create a resolution view while retaining all members for source lookup.
+    /// Create a resolution view from completed group domains.
     #[must_use]
     pub fn with_workspace_groups(&self, groups: &[ResolvedWorkspaceGroup]) -> Self {
+        self.with_workspace_group_domains(groups.iter().map(|group| &group.domain))
+    }
+
+    /// Create a provisional view for metadata probes and commands that skip synchronization.
+    #[must_use]
+    pub fn with_provisional_workspace_groups(&self, groups: &[ProvisionalWorkspaceGroup]) -> Self {
+        self.with_workspace_group_domains(groups.iter().map(|group| &group.domain))
+    }
+
+    fn with_workspace_group_domains<'a>(
+        &self,
+        groups: impl Iterator<Item = &'a WorkspaceGroupDomain> + Clone,
+    ) -> Self {
         let Some(requires_python) =
-            RequiresPython::union(groups.iter().map(|group| &group.requires_python))
+            RequiresPython::union(groups.clone().map(|group| &group.requires_python))
         else {
             return self.clone();
         };
@@ -576,16 +645,20 @@ impl Workspace {
         if let Some(requires_python) = self.resolution_requires_python() {
             return Ok(Some(requires_python.clone()));
         }
-        let groups = self.workspace_groups_with_sources(sources)?;
+        let groups = self
+            .workspace_groups_with_sources(sources)?
+            .into_iter()
+            .map(ProvisionalWorkspaceGroup::finalize)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(RequiresPython::union(
-            groups.iter().map(|group| &group.requires_python),
+            groups.iter().map(ResolvedWorkspaceGroup::requires_python),
         ))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ResolvedWorkspaceGroup, WorkspaceGroup};
+    use super::{ResolvedWorkspaceGroup, WorkspaceGroup, WorkspaceGroupDomain};
     use std::collections::{BTreeMap, BTreeSet};
     use uv_distribution_types::RequiresPython;
     use uv_normalize::PackageName;
@@ -598,16 +671,17 @@ mod tests {
         let active: MarkerTree =
             "python_full_version >= '3.12' and sys_platform == 'linux'".parse()?;
         let mut group = ResolvedWorkspaceGroup {
-            definition: WorkspaceGroup {
-                name: "main".parse()?,
-                members: BTreeSet::from([member.clone()]),
-                requires_python: None,
-                default: false,
+            domain: WorkspaceGroupDomain {
+                definition: WorkspaceGroup {
+                    name: "main".parse()?,
+                    members: BTreeSet::from([member.clone()]),
+                    requires_python: None,
+                    default: false,
+                },
+                requires_python: RequiresPython::from_specifiers(">=3.12".parse()?),
+                environments: original,
+                member_environments: BTreeMap::from([(member.clone(), active)]),
             },
-            requires_python: RequiresPython::from_specifiers(">=3.12".parse()?),
-            environments: original,
-            pending_metadata: BTreeSet::new(),
-            member_environments: BTreeMap::from([(member.clone(), active)]),
         };
         let narrowed: MarkerTree = "python_full_version >= '3.13'".parse()?;
         group.narrow_environment(narrowed)?;

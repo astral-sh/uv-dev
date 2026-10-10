@@ -292,6 +292,8 @@ pub enum WorkspaceErrorKind {
     UnknownWorkspaceGroup(GroupName),
     #[error("Workspace group `{0}` has incompatible `requires-python` declarations")]
     DisjointWorkspaceGroupPython(GroupName),
+    #[error("Workspace group `{0}` requires dynamic metadata before selecting its Python domain")]
+    PendingWorkspaceGroupMetadata(GroupName),
     #[error("Invalid dependency in workspace group `{0}` member `{1}`")]
     InvalidWorkspaceGroupDependency(
         GroupName,

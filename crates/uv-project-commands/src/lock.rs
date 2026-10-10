@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::Path;
 
@@ -36,8 +36,8 @@ use uv_scripts::Pep723Script;
 use uv_settings::{FrozenSource, LockCheck, PythonInstallMirrors, ResolverSettings};
 use uv_warnings::warn_user;
 use uv_workspace::{
-    DiscoveryOptions, ResolvedWorkspaceGroup, VirtualProject, Workspace, WorkspaceCache,
-    WorkspaceResolution,
+    DiscoveryOptions, ProvisionalWorkspaceGroup, ResolvedWorkspaceGroup, VirtualProject, Workspace,
+    WorkspaceCache, WorkspaceGroup, WorkspaceResolution,
 };
 
 use crate::{ProjectError, ScriptPath};
@@ -118,19 +118,6 @@ pub(crate) struct CommandWorkspaceSelection {
     requires_python: RequiresPython,
     environments: MarkerTree,
     selected_lock: Option<Lock>,
-}
-
-impl From<ResolvedWorkspaceGroup> for CommandWorkspaceSelection {
-    fn from(group: ResolvedWorkspaceGroup) -> Self {
-        let (definition, requires_python, environments) = group.into_parts();
-        Self {
-            name: Some(definition.name),
-            members: definition.members,
-            requires_python,
-            environments,
-            selected_lock: None,
-        }
-    }
 }
 
 impl CommandWorkspaceSelection {
@@ -217,18 +204,82 @@ pub(crate) fn command_workspace_group_from_lock(
     }))
 }
 
-/// Select group metadata for Python discovery from the workspace manifests.
+/// Select completed group metadata for Python discovery.
 pub(crate) fn command_workspace_group(
     workspace: &Workspace,
     name: Option<&GroupName>,
     members: Option<&BTreeSet<PackageName>>,
-    groups: Vec<ResolvedWorkspaceGroup>,
+    groups: &[ResolvedWorkspaceGroup],
+) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
+    select_command_workspace_group(
+        workspace,
+        name,
+        members,
+        &groups
+            .iter()
+            .map(|group| CommandGroupDomain {
+                definition: group.definition(),
+                requires_python: group.requires_python(),
+                environments: group.environments(),
+                member_environments: group.member_environments(),
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Select an upper-bound domain for metadata probes and commands that skip synchronization.
+pub(crate) fn provisional_command_workspace_group(
+    workspace: &Workspace,
+    name: Option<&GroupName>,
+    members: Option<&BTreeSet<PackageName>>,
+    groups: &[ProvisionalWorkspaceGroup],
+) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
+    select_command_workspace_group(
+        workspace,
+        name,
+        members,
+        &groups
+            .iter()
+            .map(|group| CommandGroupDomain {
+                definition: group.definition(),
+                requires_python: group.requires_python(),
+                environments: group.environments(),
+                member_environments: group.member_environments(),
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+struct CommandGroupDomain<'a> {
+    definition: &'a WorkspaceGroup,
+    requires_python: &'a RequiresPython,
+    environments: MarkerTree,
+    member_environments: &'a BTreeMap<PackageName, MarkerTree>,
+}
+
+impl CommandGroupDomain<'_> {
+    fn selection(&self) -> CommandWorkspaceSelection {
+        CommandWorkspaceSelection {
+            name: Some(self.definition.name.clone()),
+            members: self.definition.members.clone(),
+            requires_python: self.requires_python.clone(),
+            environments: self.environments,
+            selected_lock: None,
+        }
+    }
+}
+
+fn select_command_workspace_group(
+    workspace: &Workspace,
+    name: Option<&GroupName>,
+    members: Option<&BTreeSet<PackageName>>,
+    groups: &[CommandGroupDomain<'_>],
 ) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
     if let Some(name) = name {
         return groups
-            .into_iter()
-            .find(|group| group.definition().name == *name)
-            .map(|group| Some(CommandWorkspaceSelection::from(group)))
+            .iter()
+            .find(|group| group.definition.name == *name)
+            .map(|group| Some(group.selection()))
             .ok_or_else(|| {
                 uv_workspace::WorkspaceError::from(
                     uv_workspace::WorkspaceErrorKind::UnknownWorkspaceGroup(name.clone()),
@@ -236,44 +287,33 @@ pub(crate) fn command_workspace_group(
                 .into()
             });
     }
-    if let Some(group) = groups.iter().find(|group| group.definition().default) {
-        return Ok(Some(group.clone().into()));
+    if let Some(group) = groups.iter().find(|group| group.definition.default) {
+        return Ok(Some(group.selection()));
     }
     if groups.is_empty() {
         return Ok(None);
     }
+    let all_environments = groups.iter().fold(MarkerTree::FALSE, |environment, group| {
+        environment.or(group.environments)
+    });
     let environments = if let Some(members) = members {
         let mut environments = MarkerTree::TRUE;
-        let mut uncovered = Vec::new();
         for member in members {
             let supported = groups
                 .iter()
-                .filter_map(|group| {
-                    group
-                        .member_environments()
-                        .get(member)
-                        .copied()
-                        .or_else(|| {
-                            // No-sync commands can use a provisional domain without building metadata.
-                            (!group.pending_metadata().is_empty()).then_some(group.environments())
-                        })
-                })
+                .filter_map(|group| group.member_environments.get(member).copied())
                 .fold(MarkerTree::FALSE, MarkerTree::or);
-            if supported.is_false() {
-                uncovered.push(member.clone());
+            // Python inference follows production dependencies. The complete lock also includes
+            // extras and dependency groups, so only lock projection can reject target membership.
+            environments = environments.and(if supported.is_false() {
+                all_environments
             } else {
-                environments = environments.and(supported);
-            }
-        }
-        if !uncovered.is_empty() {
-            return Err(WorkspaceGroupSelectionError::Uncovered(uncovered).into());
+                supported
+            });
         }
         environments
     } else {
-        // Batch exports select their roots independently and can use any supported context.
-        groups.iter().fold(MarkerTree::FALSE, |environment, group| {
-            environment.or(group.environments())
-        })
+        all_environments
     };
     let requires_python = RequiresPython::from_marker_tree(environments)
         .ok_or(WorkspaceGroupSelectionError::Ambiguous)?;

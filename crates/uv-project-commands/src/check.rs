@@ -17,7 +17,8 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, ScriptEnvironment, store_credentials_from_target, sync_from_lock,
+    ProjectInterpreter, ScriptEnvironment, discover_workspace_groups,
+    store_credentials_from_target, sync_from_lock,
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
@@ -293,6 +294,59 @@ pub async fn check(
         DependencyGroupsWithDefaults::none()
     };
 
+    let state = UniversalState::default();
+    let discovery_workspace = if let Some(project) = &project {
+        let workspace = project.workspace();
+        Some(if frozen.is_some() {
+            workspace.with_provisional_workspace_groups(
+                &workspace.workspace_groups_with_sources(&settings.resolver.sources)?,
+            )
+        } else {
+            let install_options = InstallOptions::new(
+                no_install_project,
+                false,
+                false,
+                false,
+                false,
+                false,
+                Vec::new(),
+                Vec::new(),
+            );
+            let selection =
+                PackageSelection::from_args(all_packages, &package, project.project_name());
+            let exclusions = selection.first_party_exclusions(
+                workspace,
+                project.project_name(),
+                &install_options,
+            );
+            workspace.with_workspace_groups(
+                &discover_workspace_groups(
+                    workspace,
+                    project_dir,
+                    python.as_deref(),
+                    lock_check,
+                    &settings.resolver,
+                    &client_builder,
+                    &state,
+                    &exclusions,
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    &install_mirrors,
+                    &concurrency,
+                    config_discovery,
+                    cache,
+                    workspace_cache,
+                    printer,
+                    preview,
+                )
+                .await?,
+            )
+        })
+    } else {
+        None
+    };
+
     // Create an isolated environment, if requested.
     let temp_dir;
     let isolated_venv = if isolated {
@@ -316,7 +370,7 @@ pub async fn check(
             .await?
             .into_interpreter()
         } else {
-            let workspace = project.as_ref().map(VirtualProject::workspace);
+            let workspace = discovery_workspace.as_ref();
             let project_python = ProjectPythonRequest::from_request(
                 python.as_deref().map(PythonRequest::parse),
                 workspace,
@@ -384,7 +438,6 @@ pub async fn check(
             .into_environment()?
         };
 
-        let state = UniversalState::default();
         let lock_target = LockTarget::Script(script);
         // Scripts always run in an isolated environment, so `--no-sync` has no effect.
         let _environment_lock = venv
@@ -485,6 +538,9 @@ pub async fn check(
 
         Some(venv)
     } else if let Some(project) = &project {
+        let workspace = discovery_workspace
+            .as_ref()
+            .unwrap_or_else(|| project.workspace());
         let extras = extras.with_defaults(DefaultExtras::default());
         let mut malware_context = MalwareCheckContext::from(&malware_settings);
         let install_options = InstallOptions::new(
@@ -502,7 +558,7 @@ pub async fn check(
             venv
         } else {
             ProjectEnvironment::get_or_init(
-                ProjectEnvironmentTarget::from(project.workspace()),
+                ProjectEnvironmentTarget::from(workspace),
                 None,
                 &groups,
                 &settings.resolver.sources,
@@ -529,7 +585,7 @@ pub async fn check(
         let lock_interpreter = if no_sync && !isolated && frozen.is_none() {
             let project_python = ProjectPythonRequest::from_request(
                 python.as_deref().map(PythonRequest::parse),
-                Some(project.workspace()),
+                Some(workspace),
                 &groups,
                 &settings.resolver.sources,
                 project_dir,
@@ -538,7 +594,7 @@ pub async fn check(
             .await?;
             Some(
                 ProjectInterpreter::discover(
-                    ProjectEnvironmentTarget::from(project.workspace()),
+                    ProjectEnvironmentTarget::from(workspace),
                     project_python,
                     &client_builder,
                     python_preference,
@@ -560,7 +616,6 @@ pub async fn check(
             .as_ref()
             .unwrap_or_else(|| venv.interpreter());
 
-        let state = UniversalState::default();
         // Keep the environment locked through synchronization and metadata collection.
         let _environment_lock;
         if !no_sync {

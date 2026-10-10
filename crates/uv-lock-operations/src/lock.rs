@@ -30,7 +30,7 @@ use uv_resolver::{OptionsBuilder, PythonRequirement, ResolverEnvironment, Univer
 use uv_settings::{LockedSource, ResolverSettings};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::{
-    ResolvedWorkspaceGroup, Workspace, WorkspaceCache, WorkspaceGroupMemberMetadata,
+    ProvisionalWorkspaceGroup, Workspace, WorkspaceCache, WorkspaceGroupMemberMetadata,
 };
 
 use crate::build_context::PreparedBuildContext;
@@ -160,7 +160,7 @@ impl<'env> LockOperation<'env> {
     pub async fn resolve_workspace_group_metadata(
         &self,
         workspace: &Workspace,
-        group: &ResolvedWorkspaceGroup,
+        group: &ProvisionalWorkspaceGroup,
         member: &PackageName,
     ) -> Result<(), LockError> {
         let interpreter = match self.mode {
@@ -169,7 +169,7 @@ impl<'env> LockOperation<'env> {
             | LockMode::Locked(interpreter, _) => interpreter,
             LockMode::Frozen(_) => return Ok(()),
         };
-        let scoped = workspace.with_workspace_groups(std::slice::from_ref(group));
+        let scoped = workspace.with_provisional_workspace_groups(std::slice::from_ref(group));
         let target = LockTarget::Workspace(&scoped);
         let existing = match target.read_with_contents().await {
             Ok(Some((existing, contents))) => {
@@ -388,7 +388,7 @@ pub fn workspace_groups_with_cached_metadata(
     workspace: &Workspace,
     no_sources: &NoSources,
     state: &UniversalState,
-) -> Result<Vec<ResolvedWorkspaceGroup>, LockError> {
+) -> Result<Vec<ProvisionalWorkspaceGroup>, LockError> {
     let groups = workspace.workspace_groups_with_sources(no_sources)?;
     if groups
         .iter()
@@ -417,7 +417,7 @@ pub fn workspace_groups_with_cached_metadata(
 /// Resolve named root sets together, splitting a failed shared solve into smaller contexts.
 async fn do_lock_workspace_groups(
     workspace: &Workspace,
-    mut groups: Vec<ResolvedWorkspaceGroup>,
+    mut groups: Vec<ProvisionalWorkspaceGroup>,
     interpreter: &Interpreter,
     existing_lock: Option<Lock>,
     mode: LockMode<'_>,
@@ -459,6 +459,10 @@ async fn do_lock_workspace_groups(
         .await?;
         groups = workspace_groups_with_cached_metadata(workspace, &settings.sources, state)?;
     }
+    let mut groups = groups
+        .into_iter()
+        .map(ProvisionalWorkspaceGroup::finalize)
+        .collect::<Result<Vec<_>, _>>()?;
     for group in &mut groups {
         if group.requires_python().specifiers().is_empty() {
             let default =

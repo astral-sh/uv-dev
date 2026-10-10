@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 use std::str::FromStr;
@@ -18,7 +19,7 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, sync_from_lock,
+    ProjectInterpreter, discover_workspace_groups, sync_from_lock,
 };
 use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
@@ -529,12 +530,38 @@ async fn lock_and_sync(
     let extras = ExtrasSpecification::default().with_defaults(default_extras);
     let install_options = InstallOptions::default();
 
+    let state = UniversalState::default();
+    let workspace_cache = WorkspaceCache::default();
+
+    let discovered = discover_workspace_groups(
+        project.workspace(),
+        project_dir,
+        python.as_deref(),
+        lock_check,
+        &settings.resolver,
+        &client_builder,
+        &state,
+        &BTreeSet::new(),
+        python_preference,
+        python_arch,
+        python_downloads,
+        &install_mirrors,
+        concurrency,
+        config_discovery,
+        cache,
+        &workspace_cache,
+        printer,
+        preview,
+    )
+    .await?;
+    let workspace = project.workspace().with_workspace_groups(&discovered);
+
     // Discover the interpreter or environment used to lock and sync the project.
     let python_target = if no_sync {
         // Discover the interpreter.
         let project_python = ProjectPythonRequest::from_request(
             python.as_deref().map(PythonRequest::parse),
-            Some(project.workspace()),
+            Some(&workspace),
             &groups,
             &settings.resolver.sources,
             project_dir,
@@ -542,7 +569,7 @@ async fn lock_and_sync(
         )
         .await?;
         let interpreter = ProjectInterpreter::discover(
-            ProjectEnvironmentTarget::from(project.workspace()),
+            ProjectEnvironmentTarget::from(&workspace),
             project_python,
             &client_builder,
             python_preference,
@@ -561,7 +588,7 @@ async fn lock_and_sync(
     } else {
         // Discover or create the virtual environment.
         let environment = ProjectEnvironment::get_or_init(
-            ProjectEnvironmentTarget::from(project.workspace()),
+            ProjectEnvironmentTarget::from(&workspace),
             None,
             &groups,
             &settings.resolver.sources,
@@ -591,10 +618,6 @@ async fn lock_and_sync(
     } else {
         LockMode::Write(python_target.interpreter())
     };
-
-    // Initialize any shared state.
-    let state = UniversalState::default();
-    let workspace_cache = WorkspaceCache::default();
 
     // Lock and sync the environment, if necessary.
     let lock = match Box::pin(

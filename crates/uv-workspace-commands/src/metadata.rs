@@ -125,6 +125,10 @@ pub async fn metadata(
         } else {
             None
         }
+    } else if let MetadataSource::Manifest(LockTarget::Workspace(workspace)) = &source {
+        Some(workspace.with_provisional_workspace_groups(
+            &workspace.workspace_groups_with_sources(&settings.sources)?,
+        ))
     } else {
         None
     };

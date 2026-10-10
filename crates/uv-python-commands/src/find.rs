@@ -75,9 +75,19 @@ pub async fn find(
 
     // Don't enable the requires-python settings on groups
     let groups = DependencyGroupsWithDefaults::none();
+    // Interpreter-only commands do not build project metadata to refine workspace groups.
+    let discovery_workspace = project
+        .as_ref()
+        .map(|project| {
+            let workspace = project.workspace();
+            workspace
+                .workspace_groups_with_sources(&NoSources::None)
+                .map(|groups| workspace.with_provisional_workspace_groups(&groups))
+        })
+        .transpose()?;
     let project_python = ProjectPythonRequest::from_request(
         request.map(|request| PythonRequest::parse(&request)),
-        project.as_ref().map(VirtualProject::workspace),
+        discovery_workspace.as_ref(),
         &groups,
         &NoSources::None,
         project_dir,

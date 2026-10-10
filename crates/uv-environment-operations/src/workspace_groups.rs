@@ -15,7 +15,7 @@ use uv_python_discovery::{ConfigDiscovery, ProjectPythonRequest, PythonSelection
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_settings::{LockCheck, PythonInstallMirrors, ResolverSettings};
-use uv_workspace::{ResolvedWorkspaceGroup, Workspace, WorkspaceCache};
+use uv_workspace::{ProvisionalWorkspaceGroup, ResolvedWorkspaceGroup, Workspace, WorkspaceCache};
 
 use crate::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
@@ -53,7 +53,8 @@ pub async fn discover_workspace_groups(
         // the final project environment is selected after metadata has refined every domain.
         let mut metadata_group = group.clone();
         metadata_group.narrow_environment(group.member_environments()[member])?;
-        let scoped = workspace.with_workspace_groups(std::slice::from_ref(&metadata_group));
+        let scoped =
+            workspace.with_provisional_workspace_groups(std::slice::from_ref(&metadata_group));
         let project_python = ProjectPythonRequest::from_request(
             python.map(PythonRequest::parse),
             Some(&scoped),
@@ -132,5 +133,8 @@ pub async fn discover_workspace_groups(
         .map_err(UvError::from)?;
         groups = workspace_groups_with_cached_metadata(workspace, &settings.sources, state)?;
     }
-    Ok(groups)
+    Ok(groups
+        .into_iter()
+        .map(ProvisionalWorkspaceGroup::finalize)
+        .collect::<Result<Vec<_>, _>>()?)
 }

@@ -89,7 +89,8 @@ struct GistFile {
 
 use crate::lock::{
     CommandWorkspaceSelection, command_workspace_group, command_workspace_group_from_lock,
-    select_workspace_group_lock, select_workspace_group_result, workspace_selection_members,
+    provisional_command_workspace_group, select_workspace_group_lock,
+    select_workspace_group_result, workspace_selection_members,
 };
 
 /// Run a command.
@@ -668,6 +669,16 @@ pub async fn run(
                     workspace_group.as_ref(),
                     Some(&selection_members),
                 )?
+            } else if no_sync {
+                provisional_command_workspace_group(
+                    project.workspace(),
+                    workspace_group.as_ref(),
+                    Some(&selection_members),
+                    &project
+                        .workspace()
+                        .workspace_groups_with_sources(&settings.resolver.sources)?,
+                )
+                .map_err(UvError::from)?
             } else if frozen.is_some() {
                 None
             } else {
@@ -675,33 +686,27 @@ pub async fn run(
                     project.workspace(),
                     workspace_group.as_ref(),
                     Some(&selection_members),
-                    if no_sync {
-                        project
-                            .workspace()
-                            .workspace_groups_with_sources(&settings.resolver.sources)?
-                    } else {
-                        discover_workspace_groups(
-                            project.workspace(),
-                            project_dir,
-                            python.as_deref(),
-                            lock_check,
-                            &settings.resolver,
-                            &client_builder,
-                            &lock_state,
-                            &BTreeSet::new(),
-                            python_preference,
-                            python_arch,
-                            python_downloads,
-                            &install_mirrors,
-                            &concurrency,
-                            config_discovery,
-                            &cache,
-                            workspace_cache,
-                            printer,
-                            preview,
-                        )
-                        .await?
-                    },
+                    &discover_workspace_groups(
+                        project.workspace(),
+                        project_dir,
+                        python.as_deref(),
+                        lock_check,
+                        &settings.resolver,
+                        &client_builder,
+                        &lock_state,
+                        &BTreeSet::new(),
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        &concurrency,
+                        config_discovery,
+                        &cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .await?,
                 )
                 .map_err(UvError::from)?
             };

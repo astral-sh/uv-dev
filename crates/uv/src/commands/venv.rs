@@ -150,9 +150,19 @@ pub(crate) async fn venv(
         None => DefaultGroups::default(),
     };
     let groups = DependencyGroups::default().with_defaults(default_groups);
+    // Interpreter-only commands do not build project metadata to refine workspace groups.
+    let discovery_workspace = project
+        .as_ref()
+        .map(|project| {
+            let workspace = project.workspace();
+            workspace
+                .workspace_groups_with_sources(&NoSources::None)
+                .map(|groups| workspace.with_provisional_workspace_groups(&groups))
+        })
+        .transpose()?;
     let project_python = ProjectPythonRequest::from_request(
         python_request,
-        project.as_ref().map(VirtualProject::workspace),
+        discovery_workspace.as_ref(),
         &groups,
         &NoSources::None,
         project_dir,

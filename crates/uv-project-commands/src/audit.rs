@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Result, bail};
@@ -14,6 +15,7 @@ use uv_configuration::{
 use uv_dispatch::UniversalState;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
+    discover_workspace_groups,
 };
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups};
@@ -108,6 +110,8 @@ pub async fn audit(
     // Determine whether we're performing a universal audit.
     let universal = python_version.is_none() && python_platform.is_none();
 
+    let state = UniversalState::default();
+
     // Find an interpreter for the project, unless we're performing a frozen audit with a universal target.
     let interpreter = if frozen.is_some() && universal {
         None
@@ -130,6 +134,36 @@ pub async fn audit(
             .await?
             .into_interpreter(),
             LockTarget::Workspace(workspace) => {
+                let scoped = if frozen.is_some() {
+                    workspace.with_provisional_workspace_groups(
+                        &workspace.workspace_groups_with_sources(&settings.sources)?,
+                    )
+                } else {
+                    workspace.with_workspace_groups(
+                        &discover_workspace_groups(
+                            workspace,
+                            project_dir,
+                            None,
+                            lock_check,
+                            &settings,
+                            &client_builder,
+                            &state,
+                            &BTreeSet::new(),
+                            python_preference,
+                            python_arch,
+                            python_downloads,
+                            &install_mirrors,
+                            &concurrency,
+                            config_discovery,
+                            &cache,
+                            workspace_cache,
+                            printer,
+                            preview,
+                        )
+                        .await?,
+                    )
+                };
+                let workspace = &scoped;
                 let project_python = ProjectPythonRequest::from_request(
                     None,
                     Some(workspace),
@@ -169,9 +203,6 @@ pub async fn audit(
     } else {
         LockMode::Write(interpreter.as_ref().unwrap())
     };
-
-    // Initialize any shared state.
-    let state = UniversalState::default();
 
     // Update the lockfile, if necessary.
     let lock = match Box::pin(
