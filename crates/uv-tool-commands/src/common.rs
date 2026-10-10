@@ -363,10 +363,6 @@ pub(crate) struct ValidatedProjectLock {
 }
 
 impl ValidatedProjectLock {
-    pub(crate) fn lock(&self) -> &Lock {
-        &self.lock
-    }
-
     pub(crate) fn git(&self) -> Option<&Fetch> {
         self.git.as_ref()
     }

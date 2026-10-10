@@ -3560,48 +3560,6 @@ impl Lock {
         Ok(selected)
     }
 
-    /// Returns the constraints that were used to generate this lock.
-    pub fn constraints(&self, root: &Path) -> Constraints {
-        Constraints::from_requirements(
-            self.manifest
-                .constraints
-                .iter()
-                .cloned()
-                .map(|requirement| requirement.into_absolute(root)),
-        )
-    }
-
-    /// Returns the overrides that were used to generate this lock.
-    pub fn overrides<'a>(
-        &'a self,
-        root: &'a Path,
-    ) -> impl Iterator<Item = Override<Requirement>> + 'a {
-        self.manifest
-            .overrides
-            .iter()
-            .cloned()
-            .map(move |entry| match entry {
-                Override::Requirement(requirement) => {
-                    Override::Requirement(requirement.into_absolute(root))
-                }
-                Override::Package(package) => Override::Package(PackageOverride {
-                    package: package.package,
-                    dependencies: package
-                        .dependencies
-                        .into_vec()
-                        .into_iter()
-                        .map(|requirement| requirement.into_absolute(root))
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                }),
-            })
-    }
-
-    /// Returns the excludes that were used to generate this lock.
-    pub fn excludes(&self) -> impl Iterator<Item = &ExcludeDependency> {
-        self.manifest.excludes.iter()
-    }
-
     /// Returns the build constraints that were used to generate this lock.
     pub fn build_constraints(&self, root: &Path) -> Constraints {
         Constraints::from_specifications(

@@ -6588,8 +6588,8 @@ fn tool_install_locked_preserves_dependency_policies() -> Result<()> {
         requirements = [{ name = "foo", directory = "[TEMP_DIR]/foo" }]
         constraints = [{ name = "iniconfig", specifier = "<2" }]
         overrides = [
-            { package = { name = "anyio", version = "3.7.0" }, dependencies = [{ name = "idna", specifier = "==3.2" }] },
             { name = "typing-extensions", specifier = "==4.9.0" },
+            { package = { name = "anyio", version = "3.7.0" }, dependencies = [{ name = "idna", specifier = "==3.2" }] },
         ]
         excludes = ["exceptiongroup"]
         entrypoints = [
@@ -9501,5 +9501,174 @@ fn tool_install_locked_git_build_index_survives_cache_removal() -> Result<()> {
      ~ foo==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT])
     Installed 1 executable: foo
     "#);
+    Ok(())
+}
+
+/// Upgrade policy retains declarations omitted by resolution-input pruning.
+#[test]
+fn tool_install_locked_preserves_pruned_project_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let project = context.temp_dir.child("project");
+    let bin = context.temp_dir.child("bin");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"dep".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child(format!("wheels/{filename}"))
+        .write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"dep".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child(format!("wheels/{filename}"))
+        .write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &["dep>=1".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "foo/cli.py",
+                "def main():\n    import dep\n    print(dep.__version__)\n",
+            ),
+            (
+                "foo-0.1.0.dist-info/entry_points.txt",
+                "[console_scripts]\nfoo = foo.cli:main\n",
+            ),
+        ],
+    );
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep>=1"]
+        [project.scripts]
+        foo = "foo.cli:main"
+        [tool.uv]
+        no-index = true
+        find-links = ["../wheels"]
+        preview-features = ["resolution-inputs"]
+        constraint-dependencies = ["dep<2", "unused-constrained<2"]
+        override-dependencies = ["unused-overridden==1"]
+        exclude-dependencies = ["unused-excluded"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+    ", bytes=hex::encode(wheel)})?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let lock = toml::from_str::<toml::Value>(&context.read("project/uv.lock"))?;
+    assert!(
+        lock.get("manifest")
+            .and_then(|manifest| manifest.get("constraints"))
+            .is_none()
+    );
+    uv_snapshot!(context.filters(), context.tool_install().arg("./project")
+        .args(["--locked", "--preview-features", "tool-install-locks", "--preview-features", "resolution-inputs"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + dep==1.0.0
+     + foo==0.1.0 (from file://[TEMP_DIR]/project)
+    Installed 1 executable: foo
+    "#);
+    project
+        .child("pyproject.toml")
+        .write_str(&context.read("project/pyproject.toml").replace(
+            "dependencies = [\"dep>=1\"]",
+            "dependencies = [\"dep>=2.0\"]",
+        ))?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &["dep>=2.0".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "foo/cli.py",
+                "def main():\n    import dep\n    print(dep.__version__)\n",
+            ),
+            (
+                "foo-0.1.0.dist-info/entry_points.txt",
+                "[console_scripts]\nfoo = foo.cli:main\n",
+            ),
+        ],
+    );
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+    ", bytes=hex::encode(wheel)})?;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["foo", "--reinstall", "--preview-features", "tool-install-locks", "--preview-features", "resolution-inputs"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade foo
+      cause: Because foo==0.1.0 depends on dep>=2.0 and dep<2, we can conclude that foo==0.1.0 cannot be used.
+             And because only foo==0.1.0 is available and you require foo, we can conclude that your requirements are unsatisfiable.
+    "#);
+    uv_snapshot!(context.filters(), context.external_command("foo").env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    "#);
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
+    [tool]
+    requirements = [{ name = "foo", directory = "[TEMP_DIR]/project" }]
+    constraints = [
+        { name = "dep", specifier = "<2" },
+        { name = "unused-constrained", specifier = "<2" },
+    ]
+    overrides = [{ name = "unused-overridden", specifier = "==1" }]
+    excludes = ["unused-excluded"]
+    entrypoints = [
+        { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
+    ]
+
+    [tool.options]
+    no-index = true
+    find-links = ["file://[TEMP_DIR]/wheels"]
+    "#);
+    });
     Ok(())
 }

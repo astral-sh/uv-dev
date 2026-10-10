@@ -42,7 +42,7 @@ use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
-use uv_lock_operations::LockValidationError;
+use uv_lock_operations::{LockTarget, LockValidationError};
 
 use crate::common::{
     ToolLock, ToolPython, finalize_tool_install, locked_tool_project, refine_interpreter,
@@ -640,18 +640,35 @@ pub async fn install(
             .map(LoweredRequirement::into_inner)
     };
 
-    if let Some((project, lock)) = source_project_lock.as_ref() {
-        let lock = lock.lock();
-        let project_root = project.workspace().install_path();
+    if let Some((project, _)) = source_project_lock.as_ref() {
+        // A lock retains only inputs needed to validate its selected versions. Upgrades need the
+        // complete declared policy, including bounds and declarations pruned from that lock.
+        let target = LockTarget::Workspace(project.workspace());
         receipt_constraints.extend(
-            lock.constraints(project_root)
-                .requirements()
-                .cloned()
+            target
+                .lower_constraints(
+                    &settings.resolver.index_locations,
+                    &settings.resolver.sources,
+                    &cache,
+                    workspace_cache,
+                    client_builder.credentials_cache(),
+                )
+                .await?
+                .into_iter()
                 .map(preserve_git)
                 .collect::<Result<Vec<_>, _>>()?,
         );
         receipt_overrides.extend(
-            lock.overrides(project_root)
+            target
+                .lower_overrides(
+                    &settings.resolver.index_locations,
+                    &settings.resolver.sources,
+                    &cache,
+                    workspace_cache,
+                    client_builder.credentials_cache(),
+                )
+                .await?
+                .into_iter()
                 .map(|entry| {
                     Ok::<_, LoweringError>(match entry {
                         Override::Requirement(requirement) => {
@@ -671,9 +688,17 @@ pub async fn install(
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         );
-        receipt_excludes.extend(lock.excludes().cloned());
+        receipt_excludes.extend(project.workspace().exclude_dependencies());
         receipt_build_constraints.extend(
-            lock.build_constraints(project_root)
+            target
+                .lower_build_constraints(
+                    &settings.resolver.index_locations,
+                    &settings.resolver.sources,
+                    &cache,
+                    workspace_cache,
+                    client_builder.credentials_cache(),
+                )
+                .await?
                 .specifications()
                 .cloned()
                 .map(|specification| {
