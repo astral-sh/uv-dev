@@ -214,13 +214,21 @@ impl PythonInstallation {
             return Err(err);
         };
 
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
-
         let downloads_enabled = preference.allows_managed()
             && python_downloads.is_automatic()
             && client_builder.connectivity.is_online();
+
+        let download_list =
+            match ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
+                .await
+            {
+                Ok(download_list) => download_list,
+                Err(download_error) if downloads_enabled => return Err(download_error.into()),
+                Err(download_error) => {
+                    debug!("Skipping the Python download availability hint: {download_error}");
+                    return Err(err);
+                }
+            };
 
         let download = download_request
             .clone()

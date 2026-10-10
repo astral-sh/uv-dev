@@ -72,7 +72,7 @@ pub async fn init_script_python_requirement(
         cache,
         Some(reporter),
         install_mirrors.mirrors(),
-        install_mirrors.python_downloads_json_url(),
+        install_mirrors.python_downloads_json_url.as_deref(),
     )
     .await?
     .into_interpreter();
@@ -284,7 +284,7 @@ impl ScriptInterpreter {
             cache,
             Some(&reporter),
             install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url(),
+            install_mirrors.python_downloads_json_url.as_deref(),
         )
         .await?
         .into_interpreter();

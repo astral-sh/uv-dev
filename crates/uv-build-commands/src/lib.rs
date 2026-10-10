@@ -577,7 +577,7 @@ async fn build_package(
         cache,
         Some(&PythonDownloadReporter::single(printer)),
         install_mirrors.mirrors(),
-        install_mirrors.python_downloads_json_url(),
+        install_mirrors.python_downloads_json_url.as_deref(),
     )
     .await?
     .into_interpreter();

@@ -1433,11 +1433,6 @@ pub struct PythonInstallMirrors {
 }
 
 impl PythonInstallMirrors {
-    /// Return an explicitly configured Python downloads catalog.
-    pub fn python_downloads_json_url(&self) -> Option<&str> {
-        self.python_downloads_json_url.as_deref()
-    }
-
     /// Return the mirrors to use for managed Python downloads.
     pub fn mirrors(&self) -> PythonDownloadMirrors<'_> {
         PythonDownloadMirrors {

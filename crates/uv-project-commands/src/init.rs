@@ -574,7 +574,7 @@ async fn determine_requires_python(
                         cache,
                         Some(reporter),
                         install_mirrors.mirrors(),
-                        install_mirrors.python_downloads_json_url(),
+                        install_mirrors.python_downloads_json_url.as_deref(),
                     )
                     .await?
                     .into_interpreter();
@@ -601,7 +601,7 @@ async fn determine_requires_python(
                     cache,
                     Some(reporter),
                     install_mirrors.mirrors(),
-                    install_mirrors.python_downloads_json_url(),
+                    install_mirrors.python_downloads_json_url.as_deref(),
                 )
                 .await?
                 .into_interpreter();
@@ -671,7 +671,7 @@ async fn determine_requires_python(
                 cache,
                 Some(reporter),
                 install_mirrors.mirrors(),
-                install_mirrors.python_downloads_json_url(),
+                install_mirrors.python_downloads_json_url.as_deref(),
             )
             .await?
             .into_interpreter();
@@ -700,7 +700,7 @@ async fn determine_requires_python(
             cache,
             Some(reporter),
             install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url(),
+            install_mirrors.python_downloads_json_url.as_deref(),
         )
         .await?
         .into_interpreter();

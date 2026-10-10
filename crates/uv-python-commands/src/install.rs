@@ -344,7 +344,7 @@ async fn perform_install(
         ManagedPythonDownloadList::new(
             &client_builder,
             cache,
-            install_mirrors.python_downloads_json_url(),
+            install_mirrors.python_downloads_json_url.as_deref(),
         )
     };
     // TODO(zanieb): We use this variable to special-case .python-version files, but it'd be nice to

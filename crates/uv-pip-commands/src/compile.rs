@@ -303,7 +303,7 @@ pub async fn pip_compile(
             &cache,
             Some(&reporter),
             install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url(),
+            install_mirrors.python_downloads_json_url.as_deref(),
         )
         .await
     } else {
@@ -325,7 +325,7 @@ pub async fn pip_compile(
             &cache,
             Some(&reporter),
             install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url(),
+            install_mirrors.python_downloads_json_url.as_deref(),
         )
         .await
     }?
