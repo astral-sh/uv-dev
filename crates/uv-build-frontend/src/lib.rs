@@ -32,6 +32,7 @@ use uv_cache::Cache;
 use uv_cache_key::cache_digest;
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
 use uv_distribution::BuildRequires;
+use uv_distribution_filename::{BuiltFilename, DistFilename, SourceDistFilename, WheelFilename};
 use uv_distribution_types::{
     ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, Requirement,
 };
@@ -967,19 +968,29 @@ impl SourceBuild {
         Ok(self.metadata_directory.clone())
     }
 
-    /// Build a distribution from an archive (`.zip` or `.tar.gz`) or source tree, and return the
-    /// location of the built distribution.
-    ///
-    /// The location will be inside `temp_dir`, i.e., you must use the distribution before dropping
-    /// the temporary directory.
+    /// Build a distribution from an archive (`.zip` or `.tar.gz`) or source tree, retaining its
+    /// parsed filename and exact on-disk spelling inside `output_dir`.
     ///
     /// <https://packaging.python.org/en/latest/specifications/source-distribution-format/>
     #[instrument(skip_all, fields(version_id = self.version_id))]
-    pub async fn build(&self, wheel_dir: &Path) -> Result<String, Error> {
+    pub async fn build(&self, output_dir: &Path) -> Result<BuiltFilename<DistFilename>, Error> {
+        let filename = self.build_raw(output_dir).await?;
+        match self.build_kind {
+            BuildKind::Wheel | BuildKind::Editable => {
+                BuiltFilename::<WheelFilename>::parse(filename)
+                    .map(BuiltFilename::from)
+                    .map_err(Error::InvalidBuiltWheelFilename)
+            }
+            BuildKind::Sdist => BuiltFilename::<SourceDistFilename>::parse(filename)
+                .map(BuiltFilename::from)
+                .map_err(Error::InvalidBuiltSourceDistFilename),
+        }
+    }
+
+    async fn build_raw(&self, output_dir: &Path) -> Result<String, Error> {
         // The build scripts run with the extracted root as cwd, so they need the absolute path.
-        let wheel_dir = std::path::absolute(wheel_dir)?;
-        let filename = self.pep517_build(&wheel_dir).await?;
-        Ok(filename)
+        let output_dir = std::path::absolute(output_dir)?;
+        self.pep517_build(&output_dir).await
     }
 
     /// Perform a PEP 517 build for a wheel or source distribution (sdist).
@@ -1102,8 +1113,14 @@ impl SourceBuildTrait for SourceBuild {
         Ok(self.get_metadata_without_build().await?)
     }
 
-    async fn wheel<'a>(&'a self, wheel_dir: &'a Path) -> Result<String, AnyErrorBuild> {
-        Ok(self.build(wheel_dir).await?)
+    async fn wheel<'a>(
+        &'a self,
+        wheel_dir: &'a Path,
+    ) -> Result<BuiltFilename<WheelFilename>, AnyErrorBuild> {
+        Ok(
+            BuiltFilename::<WheelFilename>::parse(self.build_raw(wheel_dir).await?)
+                .map_err(Error::InvalidBuiltWheelFilename)?,
+        )
     }
 }
 

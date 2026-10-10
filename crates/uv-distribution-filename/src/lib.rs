@@ -6,6 +6,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 
 pub use build_tag::{BuildTag, BuildTagError};
+pub use built::BuiltFilename;
 pub use egg::{EggInfoFilename, EggInfoFilenameError};
 pub use expanded_tags::{ExpandedTagError, ExpandedTags};
 pub use extension::{
@@ -15,6 +16,7 @@ pub use source_dist::{SourceDistFilename, SourceDistFilenameError};
 pub use wheel::{WheelFilename, WheelFilenameError};
 
 mod build_tag;
+mod built;
 mod egg;
 mod expanded_tags;
 mod extension;

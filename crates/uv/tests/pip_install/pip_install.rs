@@ -17886,6 +17886,74 @@ fn install_missing_python_version_with_target() {
     );
 }
 
+/// Backend filenames must retain their on-disk spelling through installation and cache reuse.
+#[test]
+fn build_backend_filename_spelling() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "Example.Pkg"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "Example.Pkg-1.0-py3-none-any.whl"
+            files = {
+                "example_pkg/__init__.py": "VALUE = 42\n",
+                "example_pkg-1.0.dist-info/METADATA": "Metadata-Version: 2.1\nName: Example.Pkg\nVersion: 1.0\n",
+                "example_pkg-1.0.dist-info/WHEEL": "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+            }
+            files["example_pkg-1.0.dist-info/RECORD"] = "".join(
+                f"{path},,\n" for path in [*files, "example_pkg-1.0.dist-info/RECORD"]
+            )
+            with ZipFile(Path(wheel_directory) / filename, "w") as wheel:
+                for path, contents in files.items():
+                    wheel.writestr(path, contents)
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg("./project").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example-pkg==1.0 (from file://[TEMP_DIR]/project)
+    ");
+    context
+        .assert_command("import example_pkg; assert example_pkg.VALUE == 42")
+        .success();
+
+    // Requirements files allow cached builds; explicit source-tree arguments force rebuilding.
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("./project")?;
+    context.venv().arg("--clear").assert().success();
+    uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt").arg("--offline").arg("--no-build"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example-pkg==1.0 (from file://[TEMP_DIR]/project)
+    ");
+    context
+        .assert_command("import example_pkg; assert example_pkg.VALUE == 42")
+        .success();
+    Ok(())
+}
+
 /// Use a wheel that is only compatible with Python 3.13 with Python 3.12 or Python 3.13 to simulate
 /// a wheel build for the wrong platform in a cross-install scenario. Ensure that we catch this case
 /// and error accordingly. Additionally, we ensure that for a build dependency, which builds and

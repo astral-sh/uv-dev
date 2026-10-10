@@ -26,7 +26,7 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_filename::{
-    DistFilename, SourceDistExtension, SourceDistFilename, WheelFilename,
+    BuiltFilename, DistFilename, SourceDistExtension, SourceDistFilename,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, IndexLocations,
@@ -88,7 +88,7 @@ pub enum Error {
     #[error(transparent)]
     BuildDispatch(AnyErrorBuild),
     #[error(transparent)]
-    BuildFrontend(#[from] uv_build_frontend::Error),
+    BuildFrontend(uv_build_frontend::Error),
     #[error("Failed to check build requirements")]
     RequirementsCheck(#[source] anyhow::Error),
     #[error("Build requirement is not satisfied: `{0}`")]
@@ -125,6 +125,20 @@ pub enum Error {
         output_dir: PathBuf,
         source_path: PathBuf,
     },
+}
+
+impl From<uv_build_frontend::Error> for Error {
+    fn from(error: uv_build_frontend::Error) -> Self {
+        match error {
+            uv_build_frontend::Error::InvalidBuiltWheelFilename(error) => {
+                Self::InvalidBuiltWheelFilename(error)
+            }
+            uv_build_frontend::Error::InvalidBuiltSourceDistFilename(error) => {
+                Self::InvalidBuiltSourceDistFilename(error)
+            }
+            error => Self::BuildFrontend(error),
+        }
+    }
 }
 
 impl From<PythonSelectionError> for Error {
@@ -1148,15 +1162,10 @@ async fn build_sdist(
                     tar_backend,
                 )
             })
-            .await??
-            .to_string();
+            .await??;
 
             BuildMessage::Build {
-                normalized_filename: DistFilename::SourceDistFilename(
-                    SourceDistFilename::parsed_normalized_filename(&filename)
-                        .map_err(Error::InvalidBuiltSourceDistFilename)?,
-                ),
-                raw_filename: filename,
+                filename: BuiltFilename::from(DistFilename::SourceDistFilename(filename)),
                 output_dir: output_dir.to_path_buf(),
             }
         }
@@ -1193,11 +1202,7 @@ async fn build_sdist(
             }
             let filename = builder.build(output_dir).await?;
             BuildMessage::Build {
-                normalized_filename: DistFilename::SourceDistFilename(
-                    SourceDistFilename::parsed_normalized_filename(&filename)
-                        .map_err(Error::InvalidBuiltSourceDistFilename)?,
-                ),
-                raw_filename: filename,
+                filename,
                 output_dir: output_dir.to_path_buf(),
             }
         }
@@ -1266,10 +1271,8 @@ async fn build_wheel(
             })
             .await??;
 
-            let raw_filename = filename.to_string();
             BuildMessage::Build {
-                normalized_filename: DistFilename::WheelFilename(filename),
-                raw_filename,
+                filename: BuiltFilename::from(DistFilename::WheelFilename(filename)),
                 output_dir: output_dir.to_path_buf(),
             }
         }
@@ -1306,10 +1309,7 @@ async fn build_wheel(
             }
             let filename = builder.build(output_dir).await?;
             BuildMessage::Build {
-                normalized_filename: DistFilename::WheelFilename(
-                    WheelFilename::from_str(&filename).map_err(Error::InvalidBuiltWheelFilename)?,
-                ),
-                raw_filename: filename,
+                filename,
                 output_dir: output_dir.to_path_buf(),
             }
         }
@@ -1440,10 +1440,8 @@ fn is_path_within(path: &Path, directory: &Path) -> bool {
 enum BuildMessage {
     /// A built wheel or source distribution.
     Build {
-        /// The normalized name of the built distribution.
-        normalized_filename: DistFilename,
-        /// The name of the built distribution before parsing and normalization.
-        raw_filename: String,
+        /// The parsed filename and exact on-disk spelling of the built distribution.
+        filename: BuiltFilename<DistFilename>,
         /// The location of the built distribution.
         output_dir: PathBuf,
     },
@@ -1464,10 +1462,7 @@ impl BuildMessage {
     /// The normalized filename of the wheel or source distribution.
     fn normalized_filename(&self) -> &DistFilename {
         match self {
-            Self::Build {
-                normalized_filename: name,
-                ..
-            } => name,
+            Self::Build { filename, .. } => filename.parsed(),
             Self::List {
                 normalized_filename: name,
                 ..
@@ -1478,9 +1473,7 @@ impl BuildMessage {
     /// The filename of the wheel or source distribution before normalization.
     fn raw_filename(&self) -> &str {
         match self {
-            Self::Build {
-                raw_filename: name, ..
-            } => name,
+            Self::Build { filename, .. } => filename.raw(),
             Self::List {
                 raw_filename: name, ..
             } => name,
@@ -1490,14 +1483,13 @@ impl BuildMessage {
     fn print(&self, printer: Printer) -> Result<()> {
         match self {
             Self::Build {
-                raw_filename,
+                filename,
                 output_dir,
-                ..
             } => {
                 writeln!(
                     printer.stderr(),
                     "Successfully built {}",
-                    output_dir.join(raw_filename).user_display().bold().cyan()
+                    output_dir.join(filename.raw()).user_display().bold().cyan()
                 )?;
             }
             Self::List {

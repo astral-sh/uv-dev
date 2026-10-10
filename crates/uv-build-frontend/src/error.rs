@@ -9,6 +9,7 @@ use owo_colors::OwoColorize;
 use regex::regex;
 use thiserror::Error;
 use uv_configuration::BuildOutput;
+use uv_distribution_filename::{SourceDistFilenameError, WheelFilenameError};
 use uv_distribution_types::IsBuildBackendError;
 use uv_errors::{Hinted, Hints};
 use uv_fs::Simplified;
@@ -24,6 +25,10 @@ pub enum Error {
     Lowering(#[from] uv_distribution::MetadataError),
     #[error("`{}` does not appear to be a Python project, as neither `pyproject.toml` nor `setup.py` are present in the directory", _0.simplified_display())]
     InvalidSourceDist(PathBuf),
+    #[error("Built wheel has an invalid filename")]
+    InvalidBuiltWheelFilename(#[source] WheelFilenameError),
+    #[error("The built source distribution has an invalid filename")]
+    InvalidBuiltSourceDistFilename(#[source] SourceDistFilenameError),
     #[error("Invalid `pyproject.toml`")]
     InvalidPyprojectTomlSyntax(#[from] toml_edit::TomlError),
     #[error(
@@ -61,6 +66,8 @@ impl IsBuildBackendError for Error {
     fn is_user_failure(&self) -> bool {
         match self {
             Self::InvalidSourceDist(_)
+            | Self::InvalidBuiltWheelFilename(_)
+            | Self::InvalidBuiltSourceDistFilename(_)
             | Self::InvalidPyprojectTomlSyntax(_)
             | Self::InvalidPyprojectTomlSchema(_)
             | Self::InvalidBackendPath(_)
@@ -84,6 +91,8 @@ impl IsBuildBackendError for Error {
             Self::Io(_)
             | Self::Lowering(_)
             | Self::InvalidSourceDist(_)
+            | Self::InvalidBuiltWheelFilename(_)
+            | Self::InvalidBuiltSourceDistFilename(_)
             | Self::InvalidPyprojectTomlSyntax(_)
             | Self::InvalidPyprojectTomlSchema(_)
             | Self::InvalidBackendPath(_)
