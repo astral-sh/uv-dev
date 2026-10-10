@@ -10,7 +10,8 @@ use configparser::ini::Ini;
 use fs_err as fs;
 use owo_colors::OwoColorize;
 use same_file::is_same_file;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use tracing::{debug, trace, warn};
 
@@ -1160,6 +1161,7 @@ pub enum InterpreterInfoError {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub(crate) struct InterpreterInfo {
     platform: Platform,
+    #[serde(deserialize_with = "deserialize_interpreter_markers")]
     markers: MarkerEnvironment,
     scheme: Scheme,
     virtualenv: Scheme,
@@ -1177,6 +1179,38 @@ pub(crate) struct InterpreterInfo {
     pointer_size: PointerSize,
     gil_disabled: bool,
     debug_enabled: bool,
+}
+
+/// Accept only versions with the components used by the interpreter's numeric accessors.
+fn deserialize_interpreter_markers<'de, D>(deserializer: D) -> Result<MarkerEnvironment, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let markers = MarkerEnvironment::deserialize(deserializer)?;
+    for (name, version, components) in [
+        ("python_full_version", markers.python_full_version(), 3),
+        (
+            "implementation_version",
+            markers.implementation_version(),
+            2,
+        ),
+    ] {
+        let release = version.version.release();
+        let Some(required) = release.get(..components) else {
+            return Err(D::Error::custom(format_args!(
+                "invalid `{name}` value `{version}`: expected at least {components} release components"
+            )));
+        };
+        if required
+            .iter()
+            .any(|component| u8::try_from(*component).is_err())
+        {
+            return Err(D::Error::custom(format_args!(
+                "invalid `{name}` value `{version}`: the first {components} release components must be at most 255"
+            )));
+        }
+    }
+    Ok(markers)
 }
 
 impl InterpreterInfo {
@@ -1617,24 +1651,44 @@ fn python_home(interpreter: &Path) -> Option<PathBuf> {
     pyvenv_cfg.home
 }
 
-#[cfg(unix)]
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+    #[cfg(unix)]
     use std::time::{Duration, UNIX_EPOCH};
 
     use anyhow::Result;
+    #[cfg(unix)]
     use fs_err as fs;
-    use indoc::{formatdoc, indoc};
+    #[cfg(unix)]
+    use indoc::formatdoc;
+    use indoc::indoc;
     use serde_json::Value;
+    #[cfg(unix)]
     use tempfile::tempdir;
 
+    #[cfg(unix)]
     use uv_cache::{Cache, CacheBucket, CachedByTimestamp};
+    #[cfg(unix)]
     use uv_cache_info::Timestamp;
     use uv_pep440::Version;
 
+    #[cfg(unix)]
     use crate::Interpreter;
-    use crate::interpreter::{InterpreterInfo, canonicalize_executable};
+    use crate::interpreter::InterpreterInfo;
+    #[cfg(unix)]
+    use crate::interpreter::canonicalize_executable;
+
+    const INVALID_INTERPRETER_VERSIONS: [(&str, &str); 8] = [
+        ("python_full_version", "3"),
+        ("python_full_version", "3.12"),
+        ("python_full_version", "256.12.0"),
+        ("python_full_version", "3.256.0"),
+        ("python_full_version", "3.12.256"),
+        ("implementation_version", "0"),
+        ("implementation_version", "256.1"),
+        ("implementation_version", "3.256"),
+    ];
 
     fn mocked_interpreter_response() -> &'static str {
         indoc! {r##"
@@ -1697,6 +1751,105 @@ mod tests {
     "##}
     }
 
+    #[test]
+    fn interpreter_info_validates_version_components() -> Result<()> {
+        let original: Value = serde_json::from_str(mocked_interpreter_response())?;
+        let mut errors = Vec::new();
+        for (field, version) in INVALID_INTERPRETER_VERSIONS {
+            let mut response = original.clone();
+            response["markers"][field] = Value::String(version.to_owned());
+            let error = serde_json::from_value::<InterpreterInfo>(response)
+                .expect_err("invalid interpreter version");
+            assert!(error.is_data());
+            errors.push(error.to_string());
+        }
+        assert_eq!(
+            errors,
+            [
+                "invalid `python_full_version` value `3`: expected at least 3 release components",
+                "invalid `python_full_version` value `3.12`: expected at least 3 release components",
+                "invalid `python_full_version` value `256.12.0`: the first 3 release components must be at most 255",
+                "invalid `python_full_version` value `3.256.0`: the first 3 release components must be at most 255",
+                "invalid `python_full_version` value `3.12.256`: the first 3 release components must be at most 255",
+                "invalid `implementation_version` value `0`: expected at least 2 release components",
+                "invalid `implementation_version` value `256.1`: the first 2 release components must be at most 255",
+                "invalid `implementation_version` value `3.256`: the first 2 release components must be at most 255",
+            ]
+        );
+
+        for (python, implementation) in [
+            ("3.12.0rc1", "7.3.17"),
+            ("3.13.1", "24.1.2"),
+            ("3.12.0", "0.1"),
+            ("255.255.255", "255.255.9999"),
+        ] {
+            let mut response = original.clone();
+            response["markers"]["python_full_version"] = Value::String(python.to_owned());
+            response["markers"]["implementation_version"] =
+                Value::String(implementation.to_owned());
+            let info: InterpreterInfo = serde_json::from_value(response)?;
+            assert_eq!(
+                info.markers.python_full_version().version,
+                Version::from_str(python)?
+            );
+            assert_eq!(
+                info.markers.implementation_version().version,
+                Version::from_str(implementation)?
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn interpreter_cache_requeries_invalid_version_components() -> Result<()> {
+        let directory = tempdir()?;
+        let executable = directory.path().join("python");
+        let query_log = directory.path().join("queries");
+        let json = mocked_interpreter_response()
+            .replace("{sys_executable}", &executable.display().to_string());
+        fs::write(
+            &executable,
+            formatdoc! {r"
+                #!/bin/sh
+                echo queried >> '{}'
+                echo '{json}'
+            ", query_log.display()},
+        )?;
+        fs::set_permissions(
+            &executable,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+        let cache = Cache::temp()?.init().await?;
+        Interpreter::query(&executable, &cache)?;
+        let absolute = std::path::absolute(&executable)?;
+        let canonical = canonicalize_executable(&absolute)?;
+        let cache_entry = InterpreterInfo::cache_entry(&absolute, &canonical, &cache);
+        let mut cached: CachedByTimestamp<InterpreterInfo> =
+            rmp_serde::from_slice(&fs::read(cache_entry.path())?)?;
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\n");
+
+        let mut markers = serde_json::to_value(&cached.data.markers)?;
+        markers["python_full_version"] = Value::String("3".to_owned());
+        // General marker environments allow this version; interpreter ingestion validates
+        // the stronger component requirements of its numeric accessors.
+        cached.data.markers = serde_json::from_value(markers)?;
+        fs::write(cache_entry.path(), rmp_serde::to_vec(&cached)?)?;
+        assert_eq!(cached.timestamp, Timestamp::from_path(&canonical)?);
+
+        let interpreter = Interpreter::query(&executable, &cache)?;
+        assert_eq!(interpreter.python_tuple(), (3, 12));
+        assert_eq!(interpreter.python_patch(), 0);
+        assert_eq!(interpreter.implementation_tuple(), (3, 12));
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
+
+        // The repaired entry is reusable without querying the unchanged executable again.
+        Interpreter::query(&executable, &cache)?;
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
+        Ok(())
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_cache_invalidation() -> Result<()> {
         let mock_dir = tempdir()?;
@@ -1792,6 +1945,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_cache_eviction_with_unchanged_executable() -> Result<()> {
         let mock_dir = tempdir()?;
