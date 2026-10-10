@@ -2142,6 +2142,209 @@ mod tests {
         Ok(())
     }
 
+    /// Indexes with no username in their URLs can require different keyring credentials.
+    ///
+    /// Regression test for <https://github.com/astral-sh/uv/issues/18955>.
+    #[test(tokio::test)]
+    async fn test_credentials_from_keyring_different_indexes_without_usernames() -> Result<(), Error>
+    {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path_regex("^/prefix_1/"))
+            .and(basic_auth("user1", "password1"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/prefix_2/"))
+            .and(basic_auth("user2", "password2"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/prefix_2/"))
+            .and(basic_auth("user1", "password1"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let base_url = Url::parse(&server.uri())?;
+        let index_url_1 = base_url.join("prefix_1/simple")?;
+        let index_url_2 = base_url.join("prefix_2/simple")?;
+        let indexes = Indexes::from_indexes(vec![
+            Index {
+                url: DisplaySafeUrl::from_url(index_url_1.clone()),
+                root_url: DisplaySafeUrl::from_url(base_url.join("prefix_1")?),
+                auth_policy: AuthPolicy::Always,
+            },
+            Index {
+                url: DisplaySafeUrl::from_url(index_url_2.clone()),
+                root_url: DisplaySafeUrl::from_url(base_url.join("prefix_2")?),
+                auth_policy: AuthPolicy::Always,
+            },
+        ]);
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_keyring(Some(KeyringProvider::dummy([
+                        (index_url_1.clone(), "user1", "password1"),
+                        (index_url_2.clone(), "user2", "password2"),
+                    ])))
+                    .with_indexes(indexes),
+            )
+            .build();
+
+        assert_eq!(client.get(index_url_1).send().await?.status(), 200);
+        // These requests should succeed, but the first index's cached credentials currently
+        // bypass the second index's keyring lookup. See astral-sh/uv#18955.
+        assert_eq!(
+            client.get(index_url_2).send().await?.status(),
+            401,
+            "The second index receives the first index's cached credentials"
+        );
+        assert_eq!(
+            client
+                .get(base_url.join("prefix_2/files/package.whl")?)
+                .send()
+                .await?
+                .status(),
+            401,
+            "File requests also receive the first index's cached credentials"
+        );
+
+        Ok(())
+    }
+
+    /// The realm cache remains a fallback when the keyring has no credentials for an index.
+    #[test(tokio::test)]
+    async fn test_credentials_from_keyring_index_falls_back_to_cached_realm() -> Result<(), Error> {
+        let username = "user";
+        let password = "password";
+        let server = start_test_server(username, password).await;
+        let base_url = Url::parse(&server.uri())?;
+        let index_url_1 = base_url.join("prefix_1/simple")?;
+        let index_url_2 = base_url.join("prefix_2/simple")?;
+        let indexes = Indexes::from_indexes(vec![
+            Index {
+                url: DisplaySafeUrl::from_url(index_url_1.clone()),
+                root_url: DisplaySafeUrl::from_url(base_url.join("prefix_1")?),
+                auth_policy: AuthPolicy::Always,
+            },
+            Index {
+                url: DisplaySafeUrl::from_url(index_url_2.clone()),
+                root_url: DisplaySafeUrl::from_url(base_url.join("prefix_2")?),
+                auth_policy: AuthPolicy::Always,
+            },
+        ]);
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_keyring(Some(KeyringProvider::dummy([(
+                        index_url_1.clone(),
+                        username,
+                        password,
+                    )])))
+                    .with_indexes(indexes),
+            )
+            .build();
+
+        assert_eq!(client.get(index_url_1).send().await?.status(), 200);
+        assert_eq!(
+            client.get(index_url_2).send().await?.status(),
+            200,
+            "The second index should fall back to the cached realm credentials"
+        );
+
+        Ok(())
+    }
+
+    /// A username cached for another index can enable a keyring lookup with automatic authentication.
+    #[test(tokio::test)]
+    async fn test_credentials_from_keyring_with_cached_realm_username() -> Result<(), Error> {
+        let username = "user";
+        let password = "password";
+        let server = start_test_server(username, password).await;
+        let base_url = Url::parse(&server.uri())?;
+        let index_url_1 = base_url.join("prefix_1/simple")?;
+        let index_url_2 = base_url.join("prefix_2/simple")?;
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            DisplaySafeUrl::ref_cast(&index_url_1),
+            Credentials::basic(Some(username.to_string()), None),
+        );
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(cache)
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_keyring(Some(KeyringProvider::dummy([(
+                        index_url_2.clone(),
+                        username,
+                        password,
+                    )])))
+                    .with_indexes(indexes_for(&index_url_2, AuthPolicy::Auto)),
+            )
+            .build();
+
+        // The password exists only in the keyring, so successful authentication requires using
+        // the cached realm username to perform the lookup.
+        assert_eq!(
+            client.get(index_url_2).send().await?.status(),
+            200,
+            "The cached realm username should enable the second index's keyring lookup"
+        );
+
+        Ok(())
+    }
+
+    /// A username-only index URL can still use a password cached from configuration.
+    #[test(tokio::test)]
+    async fn test_index_username_only_reuses_cached_password() -> Result<(), Error> {
+        let username = "user";
+        let password = "password";
+        let server = start_test_server(username, password).await;
+        let index_url = Url::parse(&format!("{}/simple", server.uri()))?;
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            DisplaySafeUrl::ref_cast(&index_url),
+            Credentials::basic(Some(username.to_string()), Some(password.to_string())),
+        );
+        cache.store_credentials(
+            DisplaySafeUrl::ref_cast(&index_url),
+            Credentials::basic(Some(username.to_string()), None),
+        );
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(cache)
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_indexes(indexes_for(&index_url, AuthPolicy::Always)),
+            )
+            .build();
+
+        assert_eq!(
+            client.get(index_url).send().await?.status(),
+            200,
+            "A username-only cache entry should still find the configured password"
+        );
+
+        Ok(())
+    }
+
     /// Demonstrates that when an index' credentials are cached for its realm, we
     /// find those credentials if they're not present in the keyring.
     #[test(tokio::test)]
