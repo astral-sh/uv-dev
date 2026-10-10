@@ -292,7 +292,7 @@ enum DownloadListFormat {
 
 /// Detect the format of a download list based on the URL or path extension.
 fn detect_download_list_format(url_or_path: &str) -> DownloadListFormat {
-    let is_ndjson = if let Ok(url) = Url::parse(url_or_path)
+    let is_ndjson = if let Ok(url) = SafeUrl::parse(url_or_path)
         && matches!(url.scheme(), "http" | "https" | "file")
     {
         url.path().ends_with(".ndjson")
@@ -624,9 +624,7 @@ impl ManagedPythonDownloadList {
 }
 
 /// Use the default mirror with upstream fallback, or an explicit mirror exclusively.
-fn python_download_metadata_urls(
-    astral_mirror_url: Option<&str>,
-) -> Result<Vec<SafeUrl>, Error> {
+fn python_download_metadata_urls(astral_mirror_url: Option<&str>) -> Result<Vec<SafeUrl>, Error> {
     let custom = custom_astral_mirror_url(astral_mirror_url);
     let mirror = astral_mirror_base_url(custom);
     let mut urls = vec![SafeUrl::parse(&format!(
@@ -2359,7 +2357,7 @@ mod tests {
     fn test_python_download_metadata_mirror_urls() -> Result<(), Error> {
         let urls = python_download_metadata_urls(None)?;
         assert_eq!(
-            urls.iter().map(|url| url.as_str()).collect::<Vec<_>>(),
+            urls.iter().map(SafeUrl::as_str).collect::<Vec<_>>(),
             [
                 "https://releases.astral.sh/github/versions/main/v1/python-build-standalone.ndjson",
                 "https://raw.githubusercontent.com/astral-sh/versions/main/v1/python-build-standalone.ndjson",
@@ -2369,7 +2367,7 @@ mod tests {
         assert_eq!(
             python_download_metadata_urls(Some("https://mirror.example/"))?
                 .iter()
-                .map(|url| url.as_str())
+                .map(SafeUrl::as_str)
                 .collect::<Vec<_>>(),
             ["https://mirror.example/github/versions/main/v1/python-build-standalone.ndjson",]
         );

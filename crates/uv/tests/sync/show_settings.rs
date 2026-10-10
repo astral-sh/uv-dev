@@ -4054,7 +4054,7 @@ fn preview_features() {
     // Compare against output of `--preview` alone.
     diff_uv_snapshot!(context.filters(), &preview, add_shared_args(context.version()).arg("--show-settings").arg("--preview").arg("--preview-features").arg("python-install-default"), @"
     ...
-                 BuildDependencyHashes,
+                 WheelVariants,
                  RemotePythonDownloadMetadata,
              ],
     -        explicit_flags: [],
@@ -4271,7 +4271,7 @@ fn preview_precedence() -> anyhow::Result<()> {
         show_settings().arg("--preview-features").arg("pylock"),
         @"
     ...
-                 BuildDependencyHashes,
+                 WheelVariants,
                  RemotePythonDownloadMetadata,
              ],
     -        explicit_flags: [],
@@ -4307,7 +4307,7 @@ fn preview_precedence() -> anyhow::Result<()> {
             .env(EnvVars::UV_PREVIEW, "1"),
         @"
     ...
-                 BuildDependencyHashes,
+                 WheelVariants,
                  RemotePythonDownloadMetadata,
              ],
     -        explicit_flags: [],
@@ -4487,7 +4487,7 @@ fn preview_precedence() -> anyhow::Result<()> {
         show_settings().arg("--preview-features").arg("pylock"),
         @"
     ...
-                 BuildDependencyHashes,
+                 WheelVariants,
                  RemotePythonDownloadMetadata,
              ],
     -        explicit_flags: [],
