@@ -679,7 +679,7 @@ pub struct ToolUv {
     )]
     pub(crate) environments: Option<SupportedEnvironments>,
 
-    /// A list of required platforms, for packages that lack source distributions.
+    /// A list of required platforms.
     ///
     /// When a package does not have a source distribution, its availability will be limited to
     /// the platforms supported by its built distributions (wheels). For example, if a package only

@@ -787,7 +787,7 @@ fn invalid_pyproject_toml_option_unknown_field() -> Result<()> {
         |
       2 | unknown = "field"
         | ^^^^^^^
-      unknown field `unknown`, expected one of `required-version`, `system-certs`, `native-tls`, `offline`, `no-cache`, `cache-dir`, `preview`, `preview-features`, `python-preference`, `python-downloads`, `concurrent-downloads`, `concurrent-builds`, `concurrent-installs`, `index`, `index-url`, `extra-index-url`, `no-index`, `find-links`, `index-strategy`, `keyring-provider`, `http-proxy`, `https-proxy`, `no-proxy`, `allow-insecure-host`, `resolution`, `prerelease`, `prerelease-package`, `fork-strategy`, `dependency-metadata`, `config-settings`, `config-settings-package`, `no-build-isolation`, `require-build-hashes`, `no-build-isolation-package`, `extra-build-dependencies`, `extra-build-variables`, `exclude-newer`, `exclude-newer-package`, `link-mode`, `compile-bytecode`, `no-sources`, `no-sources-package`, `upgrade`, `upgrade-package`, `reinstall`, `reinstall-package`, `no-build`, `no-build-package`, `no-binary`, `no-binary-package`, `torch-backend`, `python-install-mirror`, `pypy-install-mirror`, `graalpy-install-mirror`, `pyodide-install-mirror`, `python-downloads-json-url`, `publish-url`, `trusted-publishing`, `check-url`, `add-bounds`, `audit`, `pip`, `cache-keys`, `override-dependencies`, `exclude-dependencies`, `constraint-dependencies`, `build-constraint-dependencies`, `environments`, `required-environments`, `minimum-libc-version`, `conflicts`, `workspace`, `sources`, `managed`, `package`, `default-groups`, `dependency-groups`, `dev-dependencies`, `build-backend`
+      unknown field `unknown`, expected one of `required-version`, `system-certs`, `native-tls`, `offline`, `no-cache`, `cache-dir`, `preview`, `preview-features`, `python-preference`, `python-downloads`, `concurrent-downloads`, `concurrent-builds`, `concurrent-installs`, `index`, `index-url`, `extra-index-url`, `no-index`, `find-links`, `index-strategy`, `keyring-provider`, `http-proxy`, `https-proxy`, `no-proxy`, `allow-insecure-host`, `resolution`, `prerelease`, `prerelease-package`, `build-policy`, `build-policy-package`, `fork-strategy`, `dependency-metadata`, `config-settings`, `config-settings-package`, `no-build-isolation`, `require-build-hashes`, `no-build-isolation-package`, `extra-build-dependencies`, `extra-build-variables`, `exclude-newer`, `exclude-newer-package`, `link-mode`, `compile-bytecode`, `no-sources`, `no-sources-package`, `upgrade`, `upgrade-package`, `reinstall`, `reinstall-package`, `no-build`, `no-build-package`, `no-binary`, `no-binary-package`, `torch-backend`, `python-install-mirror`, `pypy-install-mirror`, `graalpy-install-mirror`, `pyodide-install-mirror`, `python-downloads-json-url`, `publish-url`, `trusted-publishing`, `check-url`, `add-bounds`, `audit`, `pip`, `cache-keys`, `override-dependencies`, `exclude-dependencies`, `constraint-dependencies`, `build-constraint-dependencies`, `environments`, `required-environments`, `minimum-libc-version`, `conflicts`, `workspace`, `sources`, `managed`, `package`, `default-groups`, `dependency-groups`, `dev-dependencies`, `build-backend`
 
     Resolved in [TIME]
     Checked in [TIME]
@@ -18817,5 +18817,119 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
     assert!(stdlib_sources > site_packages_sources);
     assert!(compiled <= site_packages_sources);
 
+    Ok(())
+}
+
+/// Inline legacy no-build settings retain the same editable exemption as the command line.
+#[test]
+fn script_no_build_allows_unnamed_editable() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("script.py").write_str(indoc! {r"
+        # /// script
+        # dependencies = []
+        # [tool.uv]
+        # no-build = true
+        # ///
+    "})?;
+    context
+        .temp_dir
+        .child("legacy/setup.py")
+        .write_str(indoc! {r#"
+        from pathlib import Path
+        from setuptools import setup
+
+        Path("backend-ran").write_text("called")
+        setup(name="example", version="0.1.0")
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("script.py")
+        .arg("--editable").arg("legacy"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==0.1.0 (from file://[TEMP_DIR]/legacy)
+    "#);
+    insta::assert_snapshot!(context.read("legacy/backend-ran"), @"called");
+    Ok(())
+}
+
+/// Inline global policies prohibit source-only requirements read from a script.
+#[test]
+fn script_build_policy_disallows_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "script-build-policy-global"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.source_only.versions."1.0.0"]
+        wheel = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["source-only==1.0.0"]
+        # [tool.uv]
+        # build-policy = "disallow"
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["-r", "script.py", "--dry-run"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features build-policy` to disable this warning.
+    error: No solution found when resolving dependencies
+      cause: Because source-only==1.0.0 has no usable wheels and you require source-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `source-only` because its build policy is `disallow`
+    "#);
+    Ok(())
+}
+
+/// Inline package policies are propagated, while an explicit CLI package policy takes precedence.
+#[test]
+fn script_build_policy_package_precedence() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "script-build-policy-package"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.source_only.versions."1.0.0"]
+        wheel = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["source-only==1.0.0"]
+        # [tool.uv]
+        # build-policy = "allow"
+        # build-policy-package = { source-only = "disallow" }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["-r", "script.py", "--dry-run", "--preview-features", "build-policy"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because source-only==1.0.0 has no usable wheels and you require source-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `source-only` because its build policy is `disallow`
+    "#);
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["-r", "script.py", "--dry-run", "--preview-features", "build-policy", "--build-policy-package", "source-only=allow"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
+     + source-only==1.0.0
+    "#);
     Ok(())
 }

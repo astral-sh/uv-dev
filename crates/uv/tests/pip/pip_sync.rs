@@ -14,7 +14,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_fs::{Simplified, copy_dir_all};
 use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
-use uv_test::packse::PackseServer;
+use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{download_to_disk, site_packages_path, uv_snapshot};
 
 #[test]
@@ -7011,5 +7011,71 @@ fn sync_with_target_installs_missing_python() -> Result<()> {
      + anyio==4.3.0
     "
     );
+    Ok(())
+}
+
+/// Apply the same source-build policy when installing and synchronizing.
+#[test]
+fn build_policy_install_sync() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "build-policy-install-sync"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.source-only.versions."0.9.0"]
+        [packages.source-only.versions."1.0.0"]
+        wheel = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("source-only")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--build-policy").arg("disallow")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + source-only==0.9.0
+    ");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("source-only==1.0.0")?;
+    // A global policy also applies to build dependencies. The fixture's hatchling has no sdist.
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("requirements.txt")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--build-policy").arg("force")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to download and build `source-only==1.0.0`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: No solution found when resolving: `hatchling`
+      cause: Because hatchling==1.20.0 has no source distribution and only hatchling==1.20.0 is available, we can conclude that all versions of hatchling cannot be used.
+             And because you require hatchling, we can conclude that your requirements are unsatisfiable.
+
+    hint: A source distribution is required for `hatchling` because its build policy is `force`
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("requirements.txt")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--build-policy-package").arg("source-only=force")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - source-only==0.9.0
+     + source-only==1.0.0
+    ");
     Ok(())
 }
