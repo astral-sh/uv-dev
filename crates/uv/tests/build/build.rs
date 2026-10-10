@@ -16,6 +16,10 @@ use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::generate_wheel;
 use uv_test::{DEFAULT_PYTHON_VERSION, apply_filters, get_bin, uv_snapshot};
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 fn zip_file_names(path: &Path) -> Result<Vec<String>> {
     block_on(async {
@@ -2824,6 +2828,134 @@ fn build_fast_path_unbounded_backend() -> Result<()> {
     Successfully built project/dist/project-0.1.0.tar.gz
     "#);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn build_fast_path_skips_flat_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/links"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let links = format!("{}/links", server.uri());
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--wheel")
+        .arg("--find-links")
+        .arg(&links), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/project-1.0.0-py3-none-any.whl
+    ");
+    context
+        .temp_dir
+        .child("dist/project-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--wheel")
+        .arg("--list")
+        .arg("--find-links")
+        .arg(&links), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Building project-1.0.0-py3-none-any.whl will include the following files:
+    project/__init__.py (src/project/__init__.py)
+    project-1.0.0.dist-info/WHEEL (generated)
+    project-1.0.0.dist-info/METADATA (generated)
+    ");
+    uv_snapshot!(context.filters(), context.build()
+        .args([
+            "--wheel",
+            "--no-build-isolation",
+            "--preview-features",
+            "build-dependency-check",
+        ])
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/project-1.0.0-py3-none-any.whl
+    ");
+    uv_snapshot!(context.filters(), context.build()
+        .args([
+            "--wheel",
+            "--no-build-isolation",
+            "--preview-features",
+            "build-dependency-check",
+        ])
+        .arg("--list")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Building project-1.0.0-py3-none-any.whl will include the following files:
+    project/__init__.py (src/project/__init__.py)
+    project-1.0.0.dist-info/WHEEL (generated)
+    project-1.0.0.dist-info/METADATA (generated)
+    ");
+
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.is_empty())
+    );
+
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--wheel")
+        .arg("--force-pep517")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Failed to read `--find-links` URL: http://[LOCALHOST]/links
+      cause: Failed to fetch: http://[LOCALHOST]/links
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/links)
+    ");
+
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+
+        [build-system]
+        requires = ["uv_build==0.5.15"]
+        build-backend = "uv_build"
+    "#})?;
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--wheel")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Failed to read `--find-links` URL: http://[LOCALHOST]/links
+      cause: Failed to fetch: http://[LOCALHOST]/links
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/links)
+    ");
+    server.verify().await;
     Ok(())
 }
 

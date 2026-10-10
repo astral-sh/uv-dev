@@ -6178,6 +6178,7 @@ dependencies = [
  "uv-resolve-operations",
  "uv-resolver",
  "uv-settings",
+ "uv-static",
  "uv-types",
  "uv-version",
  "uv-warnings",
