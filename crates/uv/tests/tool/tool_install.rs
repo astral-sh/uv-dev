@@ -19,9 +19,9 @@ use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
-use url::Url;
 #[cfg(windows)]
 use uv_fs::Simplified;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 
 use uv_test::packse::{
@@ -6373,7 +6373,7 @@ fn tool_install_locked_git_editable_workspace_dependency() -> Result<()> {
         .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
         .assert()
         .success();
-    let repository_url = Url::from_directory_path(project.path())
+    let repository_url = SafeUrl::from_directory_path(project.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     let path = tool_install_git_path(&bin_dir);
     let mut filters = context.filters();
@@ -6635,8 +6635,8 @@ fn tool_install_locked_preserves_dependency_policies() -> Result<()> {
         requirements = [{ name = "foo", directory = "[TEMP_DIR]/foo" }]
         constraints = [{ name = "iniconfig", specifier = "<2" }]
         overrides = [
-            { package = { name = "anyio", version = "3.7.0" }, dependencies = [{ name = "idna", specifier = "==3.2" }] },
             { name = "typing-extensions", specifier = "==4.9.0" },
+            { package = { name = "anyio", version = "3.7.0" }, dependencies = [{ name = "idna", specifier = "==3.2" }] },
         ]
         excludes = ["exceptiongroup"]
         entrypoints = [
@@ -7061,7 +7061,7 @@ fn tool_install_locked_git_workspace_member() -> Result<()> {
         .assert()
         .success();
 
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     let mut filters = context.filters();
     filters.push((
@@ -8167,7 +8167,7 @@ fn tool_install_locked_rejects_source_name_mismatch() -> Result<()> {
         .arg("--offline")
         .assert()
         .success();
-    let url = Url::from_directory_path(project.path())
+    let url = SafeUrl::from_directory_path(project.path())
         .map_err(|()| anyhow::anyhow!("invalid source directory URL"))?;
     uv_snapshot!(context.filters(), context.tool_install()
         .arg(format!("foo @ {url}"))
@@ -8208,7 +8208,7 @@ fn tool_install_locked_rejects_projectless_source() -> Result<()> {
         .arg("--offline")
         .assert()
         .success();
-    let url = Url::from_directory_path(workspace.path())
+    let url = SafeUrl::from_directory_path(workspace.path())
         .map_err(|()| anyhow::anyhow!("invalid source directory URL"))?;
     uv_snapshot!(context.filters(), context.tool_install()
         .arg(format!("foo @ {url}"))
@@ -8477,7 +8477,7 @@ fn tool_install_preserves_build_only_extra_requirements() -> Result<()> {
         .temp_dir
         .child(&helper_filename)
         .write_binary(&helper)?;
-    let helper_url = Url::from_file_path(context.temp_dir.child(&helper_filename).path())
+    let helper_url = SafeUrl::from_file_path(context.temp_dir.child(&helper_filename).path())
         .map_err(|()| anyhow::anyhow!("invalid helper wheel URL"))?;
     let (filename, wheel) = generate_wheel(
         &"foo".parse()?,
@@ -8525,7 +8525,7 @@ fn tool_install_preserves_build_only_extra_requirements() -> Result<()> {
             Path(wheel_directory, "{backend_filename}").write_bytes(bytes.fromhex("{}"))
             return "{backend_filename}"
     "#, hex::encode(&backend_wheel)})?;
-    let backend_url = Url::from_directory_path(backend.path())
+    let backend_url = SafeUrl::from_directory_path(backend.path())
         .map_err(|()| anyhow::anyhow!("invalid backend directory URL"))?;
     project.child("pyproject.toml").write_str(&formatdoc! {r#"
         [project]
@@ -8606,7 +8606,7 @@ fn tool_install_locked_rejects_matching_ancestor_project() -> Result<()> {
     "#})?;
     context.temp_dir.child("src").create_dir_all()?;
     context.lock().arg("--offline").assert().success();
-    let url = Url::from_directory_path(context.temp_dir.child("src").path())
+    let url = SafeUrl::from_directory_path(context.temp_dir.child("src").path())
         .map_err(|()| anyhow::anyhow!("invalid source directory"))?;
     uv_snapshot!(context.filters(), context.tool_install()
         .arg(format!("foo @ {url}")).args(["--locked", "--offline"]), @r#"
@@ -8762,7 +8762,7 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
         .stdout
         .clone();
     let commit = String::from_utf8(commit)?;
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository directory URL"))?;
     let mut filters = context.filters();
     filters.push((
@@ -9003,7 +9003,7 @@ fn tool_install_locked_unnamed_git_project_build_settings() -> Result<()> {
         ])
         .assert()
         .success();
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository directory URL"))?;
     let mut filters = context.filters();
     filters.push((
@@ -9095,8 +9095,8 @@ fn tool_install_locked_git_configuration_boundary() -> Result<()> {
         ])
         .assert()
         .success();
-    let url =
-        Url::from_directory_path(repository.path()).map_err(|()| anyhow!("invalid Git source"))?;
+    let url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid Git source"))?;
     let mut filters = context.filters();
     filters.push((
         r"git-v1/checkouts/[0-9a-f]+/[0-9a-f]+",
@@ -9231,8 +9231,8 @@ fn tool_install_locked_git_index_sources_survive_cache_removal() -> Result<()> {
         ])
         .assert()
         .success();
-    let url =
-        Url::from_directory_path(repository.path()).map_err(|()| anyhow!("invalid Git source"))?;
+    let url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid Git source"))?;
     let mut filters = context.filters();
     filters.push((
         r"file://[^\s]+/git-v1/checkouts/",
@@ -9281,13 +9281,13 @@ fn tool_install_locked_git_index_sources_survive_cache_removal() -> Result<()> {
         .expect("index sources");
     assert_eq!(sources.len(), 2);
     ChildPath::new(
-        Url::parse(sources[0]["index"].as_str().expect("index URL"))?
+        SafeUrl::parse(sources[0]["index"].as_str().expect("index URL"))?
             .to_file_path()
             .map_err(|()| anyhow!("invalid index URL"))?,
     )
     .assert(predicate::path::missing());
     ChildPath::new(
-        Url::parse(sources[1]["index"].as_str().expect("index URL"))?
+        SafeUrl::parse(sources[1]["index"].as_str().expect("index URL"))?
             .to_file_path()
             .map_err(|()| anyhow!("invalid index URL"))?,
     )
@@ -9481,8 +9481,8 @@ fn tool_install_locked_git_build_index_survives_cache_removal() -> Result<()> {
         ])
         .assert()
         .success();
-    let url =
-        Url::from_directory_path(repository.path()).map_err(|()| anyhow!("invalid Git source"))?;
+    let url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid Git source"))?;
     let mut filters = context.filters();
     filters.push((
         r"file://[^\s]+/git-v1/checkouts/",
@@ -9524,7 +9524,7 @@ fn tool_install_locked_git_build_index_survives_cache_removal() -> Result<()> {
         .as_str()
         .expect("build requirement index");
     ChildPath::new(
-        Url::parse(index)?
+        SafeUrl::parse(index)?
             .to_file_path()
             .map_err(|()| anyhow!("invalid index URL"))?,
     )
@@ -9548,5 +9548,174 @@ fn tool_install_locked_git_build_index_survives_cache_removal() -> Result<()> {
      ~ foo==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT])
     Installed 1 executable: foo
     "#);
+    Ok(())
+}
+
+/// Upgrade policy retains declarations omitted by resolution-input pruning.
+#[test]
+fn tool_install_locked_preserves_pruned_project_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let project = context.temp_dir.child("project");
+    let bin = context.temp_dir.child("bin");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"dep".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child(format!("wheels/{filename}"))
+        .write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"dep".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child(format!("wheels/{filename}"))
+        .write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &["dep>=1".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "foo/cli.py",
+                "def main():\n    import dep\n    print(dep.__version__)\n",
+            ),
+            (
+                "foo-0.1.0.dist-info/entry_points.txt",
+                "[console_scripts]\nfoo = foo.cli:main\n",
+            ),
+        ],
+    );
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep>=1"]
+        [project.scripts]
+        foo = "foo.cli:main"
+        [tool.uv]
+        no-index = true
+        find-links = ["../wheels"]
+        preview-features = ["resolution-inputs"]
+        constraint-dependencies = ["dep<2", "unused-constrained<2"]
+        override-dependencies = ["unused-overridden==1"]
+        exclude-dependencies = ["unused-excluded"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+    ", bytes=hex::encode(wheel)})?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let lock = toml::from_str::<toml::Value>(&context.read("project/uv.lock"))?;
+    assert!(
+        lock.get("manifest")
+            .and_then(|manifest| manifest.get("constraints"))
+            .is_none()
+    );
+    uv_snapshot!(context.filters(), context.tool_install().arg("./project")
+        .args(["--locked", "--preview-features", "tool-install-locks", "--preview-features", "resolution-inputs"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + dep==1.0.0
+     + foo==0.1.0 (from file://[TEMP_DIR]/project)
+    Installed 1 executable: foo
+    "#);
+    project
+        .child("pyproject.toml")
+        .write_str(&context.read("project/pyproject.toml").replace(
+            "dependencies = [\"dep>=1\"]",
+            "dependencies = [\"dep>=2.0\"]",
+        ))?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &["dep>=2.0".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "foo/cli.py",
+                "def main():\n    import dep\n    print(dep.__version__)\n",
+            ),
+            (
+                "foo-0.1.0.dist-info/entry_points.txt",
+                "[console_scripts]\nfoo = foo.cli:main\n",
+            ),
+        ],
+    );
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+    ", bytes=hex::encode(wheel)})?;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["foo", "--reinstall", "--preview-features", "tool-install-locks", "--preview-features", "resolution-inputs"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade foo
+      cause: Because foo==0.1.0 depends on dep>=2.0 and dep<2, we can conclude that foo==0.1.0 cannot be used.
+             And because only foo==0.1.0 is available and you require foo, we can conclude that your requirements are unsatisfiable.
+    "#);
+    uv_snapshot!(context.filters(), context.external_command("foo").env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    "#);
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
+    [tool]
+    requirements = [{ name = "foo", directory = "[TEMP_DIR]/project" }]
+    constraints = [
+        { name = "dep", specifier = "<2" },
+        { name = "unused-constrained", specifier = "<2" },
+    ]
+    overrides = [{ name = "unused-overridden", specifier = "==1" }]
+    excludes = ["unused-excluded"]
+    entrypoints = [
+        { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
+    ]
+
+    [tool.options]
+    no-index = true
+    find-links = ["file://[TEMP_DIR]/wheels"]
+    "#);
+    });
     Ok(())
 }
