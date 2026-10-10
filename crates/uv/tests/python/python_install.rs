@@ -4129,10 +4129,39 @@ fn python_install_compile_bytecode_pyodide() {
     No compatible versions to bytecode compile (skipped 1)
     ");
 
-    // TODO(tk) There's a bug with python_upgrade when pyodide is installed which leads to
-    // `error: No download found for request: pyodide-3.13-emscripten-wasm32-musl`
-    //// Recompilation where pyodide isn't explicitly specified shouldn't warn
-    //uv_snapshot!(context.filters(), context.python_upgrade().arg("--compile-bytecode"), @r"TODO");
+    // Recompilation should skip an existing Pyodide installation without failing the upgrade.
+    uv_snapshot!(context.filters(), context.python_upgrade().arg("--compile-bytecode"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    All versions already on latest supported patch release
+    No compatible versions to bytecode compile (skipped 1)
+    ");
+
+    // Replacing an older build must replace the executable, even when its Python version is unchanged.
+    let installation = context
+        .temp_dir
+        .child("managed/pyodide-3.13.2-emscripten-wasm32-musl");
+    installation.child("BUILD").write_str("0.1.0").unwrap();
+    let executable = installation.child("python");
+    filetime::set_file_mtime(
+        &executable,
+        filetime::FileTime::from_unix_time(1_700_000_000, 0),
+    )
+    .unwrap();
+    let previous_mtime =
+        filetime::FileTime::from_last_modification_time(&fs_err::metadata(&executable).unwrap());
+
+    uv_snapshot!(context.filters(), context.python_upgrade().arg("--compile-bytecode"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.13.2 in [TIME]
+     ~ pyodide-3.13.2-emscripten-wasm32-musl
+    No compatible versions to bytecode compile (skipped 1)
+    ");
+    assert_ne!(
+        filetime::FileTime::from_last_modification_time(&fs_err::metadata(&executable).unwrap()),
+        previous_mtime
+    );
 }
 
 #[test]

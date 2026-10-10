@@ -518,11 +518,14 @@ async fn perform_install(
             if matches!(upgrade, PythonUpgrade::Enabled(_)) {
                 // If this is an upgrade, the requested version is a minor version but the
                 // requested download is the highest patch for that minor version. We need to
-                // install it unless an exact match is found (including build version).
-                if let Some(installation) = existing_installations
-                    .iter()
-                    .find(|inst| request.download.key() == inst.key())
-                {
+                // install it unless an exact match is found (including build version). Compare the
+                // canonical keys so Emscripten's `cpython` download matches its `pyodide` install.
+                if let Some(installation) = existing_installations.iter().find(|inst| {
+                    request
+                        .download
+                        .key()
+                        .matches_implementation_alias(inst.key())
+                }) {
                     if matches_build(request.download.build(), installation.build()) {
                         debug!("Found `{}` for request `{}`", installation.key(), request);
                         satisfied.push(installation);
@@ -532,7 +535,7 @@ async fn perform_install(
                             "Build version mismatch for `{}`, will upgrade",
                             installation.key()
                         );
-                        changelog.existing.insert(installation.key().clone());
+                        changelog.existing.insert(request.download.key().clone());
                         unsatisfied.push(Cow::Borrowed(request));
                     }
                 } else {
