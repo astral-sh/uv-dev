@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::env;
 use std::fmt::Write;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -19,6 +21,8 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, PythonUpgrade, PythonUpgradeSource};
 use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
 use uv_fs::Simplified;
+#[cfg(unix)]
+use uv_fs::which::is_executable;
 use uv_platform::{Arch, Libc};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -889,6 +893,16 @@ async fn perform_install(
 
         if let Some(bin_dir) = bin_dir.as_ref() {
             warn_if_not_on_path(bin_dir);
+        }
+
+        #[cfg(unix)]
+        if installations.iter().any(|installation| {
+            changelog.installed.contains(installation.key())
+                && installation.implementation() == ImplementationName::Pyodide
+        }) && !env::var_os("PATH").is_some_and(|path| {
+            env::split_paths(&path).any(|directory| is_executable(&directory.join("node")))
+        }) {
+            warn_user!("Pyodide requires a `node` executable on `PATH`, but none was found");
         }
     }
 
