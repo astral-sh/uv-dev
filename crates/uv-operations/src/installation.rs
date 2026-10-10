@@ -133,11 +133,11 @@ impl ChangedDist {
 #[derive(Debug, Clone, Default)]
 pub struct Changelog {
     /// The distributions that were installed.
-    pub installed: HashSet<ChangedDist>,
+    pub(crate) installed: HashSet<ChangedDist>,
     /// The distributions that were uninstalled.
-    pub uninstalled: HashSet<ChangedDist>,
+    pub(crate) uninstalled: HashSet<ChangedDist>,
     /// The distributions that were reinstalled.
-    pub reinstalled: HashSet<ChangedDist>,
+    pub(crate) reinstalled: HashSet<ChangedDist>,
 }
 
 impl Changelog {
@@ -178,6 +178,21 @@ impl Changelog {
     /// Create a [`Changelog`] from a list of installed distributions.
     pub fn from_installed(installed: Vec<CachedDist>) -> Self {
         Self::from_local(installed, Vec::new())
+    }
+
+    /// Iterate over distributions installed into the environment.
+    pub fn installed(&self) -> impl Iterator<Item = &ChangedDist> {
+        self.installed.iter()
+    }
+
+    /// Iterate over distributions removed from the environment.
+    pub fn uninstalled(&self) -> impl Iterator<Item = &ChangedDist> {
+        self.uninstalled.iter()
+    }
+
+    /// Iterate over distributions reinstalled in the environment.
+    pub fn reinstalled(&self) -> impl Iterator<Item = &ChangedDist> {
+        self.reinstalled.iter()
     }
 
     /// Returns `true` if the changelog includes a distribution with the given name, either via
