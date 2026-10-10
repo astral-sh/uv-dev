@@ -365,11 +365,13 @@ fn tool_run_from_install() {
     // Install `black` at a specific version.
     context
         .tool_install()
+        .arg("--index")
+        .arg("https://pypi.org/simple")
         .arg("black==24.1.0")
         .assert()
         .success();
 
-    // Verify that `tool run black` uses the already-installed version.
+    // The installed version can be reused without repeating its index.
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("black")
         .arg("--version"), @"
@@ -377,6 +379,21 @@ fn tool_run_from_install() {
     ----- stdout -----
     black, 24.1.0 (compiled: yes)
     Python (CPython) 3.12.[X]
+    ");
+
+    // An explicitly different index requires a new resolution.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--default-index")
+        .arg("https://different.invalid/simple")
+        .arg("--offline")
+        .arg("black")
+        .arg("--version"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving tool dependencies
+      cause: Because black was not found in the cache and you require black, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
 
     // Verify that `--isolated` uses an isolated environment.
@@ -481,6 +498,10 @@ fn tool_run_from_install_constraints() {
     // Install `flask` at a specific version.
     context
         .tool_install()
+        .arg("--index-url")
+        .arg("https://pypi.org/simple")
+        .arg("--extra-index-url")
+        .arg("https://pypi.org/simple")
         .arg("flask==3.0.0")
         .assert()
         .success();
