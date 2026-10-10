@@ -60,6 +60,9 @@ on:
       test-system:
         description: "Whether system tests should run"
         value: ${{ jobs.plan.outputs.test-system }}
+      require-test-system:
+        description: "Whether system tests must pass"
+        value: ${{ jobs.plan.outputs.require-test-system }}
       test-macos:
         description: "Whether macOS tests should run"
         value: ${{ jobs.plan.outputs.test-macos }}
@@ -96,6 +99,7 @@ jobs:
       test-ecosystem: ${{ steps.plan.outputs.test_ecosystem }}
       test-integration: ${{ steps.plan.outputs.test_integration }}
       test-system: ${{ steps.plan.outputs.test_system }}
+      require-test-system: ${{ steps.plan.outputs.require_test_system }}
       test-macos: ${{ steps.plan.outputs.test_macos }}
       build-docker: ${{ steps.plan.outputs.build_docker }}
       push-docker: ${{ steps.plan.outputs.push_docker }}
@@ -242,6 +246,7 @@ jobs:
           [[ ! $has_skip_label ]] && test_ecosystem=1
           [[ $has_integration_label || $has_extended_label || $on_main_branch || $integration_changed ]] && test_integration=1
           [[ $has_system_label || $has_extended_label || $on_main_branch || $system_workflow_changed || $system_test_changed ]] && test_system=1
+          [[ $has_system_label || $system_workflow_changed || $system_test_changed ]] && require_test_system=1
           [[ $has_macos_label || $has_extended_label || $on_main_branch || $build_release_binaries ]] && test_macos=1
           [[ ! $has_build_skip_label && ! $has_build_skip_docker_label && ($docker_build_changed || $has_build_push_docker_label) ]] && build_docker=1
           [[ $has_build_push_docker_label ]] && push_docker=1
@@ -265,6 +270,7 @@ jobs:
             out test_ecosystem          "$test_ecosystem"
             out test_integration        "$test_integration"
             out test_system             "$test_system"
+            out require_test_system     "$require_test_system"
             out test_macos              "$test_macos"
             out build_docker            "$build_docker"
             out push_docker             "$push_docker"
