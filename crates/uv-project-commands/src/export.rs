@@ -42,8 +42,8 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
 
 use crate::lock::{
-    command_workspace_group, command_workspace_group_from_lock, lockfile_selection_members,
-    select_workspace_group_lock, workspace_selection_members,
+    CommandWorkspaceSelection, command_workspace_group, command_workspace_group_from_lock,
+    lockfile_selection_members, select_workspace_group_lock, workspace_selection_members,
 };
 
 #[derive(Debug, Clone)]
@@ -287,16 +287,36 @@ pub async fn export(
         ),
         ExportSource::Manifest(ExportTarget::Script(_)) => BTreeSet::default(),
     };
-    let workspace_group = match &source {
-        ExportSource::Manifest(ExportTarget::Project(project)) => command_workspace_group(
-            project.workspace(),
-            workspace_group.as_ref(),
-            batch.is_none().then_some(&selection_members),
-            frozen,
-            &settings.sources,
+    let frozen_lock = if let Some(frozen) = frozen
+        && let ExportSource::Manifest(ExportTarget::Project(project)) = &source
+    {
+        Some(
+            LockTarget::Workspace(project.workspace())
+                .read_frozen(frozen.into())
+                .await
+                .map_err(UvError::from)?,
         )
-        .await
-        .map_err(UvError::from)?,
+    } else {
+        None
+    };
+    let mut workspace_group = match &source {
+        ExportSource::Manifest(ExportTarget::Project(project)) => {
+            if let Some(lock) = frozen_lock.as_ref() {
+                command_workspace_group_from_lock(
+                    lock,
+                    workspace_group.as_ref(),
+                    batch.is_none().then_some(&selection_members),
+                )
+            } else {
+                command_workspace_group(
+                    project.workspace(),
+                    workspace_group.as_ref(),
+                    batch.is_none().then_some(&selection_members),
+                    &settings.sources,
+                )
+            }
+            .map_err(UvError::from)?
+        }
         ExportSource::Lockfile { workspace, .. } => command_workspace_group_from_lock(
             workspace.lock(),
             workspace_group.as_ref(),
@@ -327,9 +347,10 @@ pub async fn export(
         _ => None,
     };
 
-    let resolved_lock = match &source {
-        ExportSource::Lockfile { workspace, .. } => workspace.lock().clone(),
-        ExportSource::Manifest(target) => {
+    let resolved_lock = match (&source, frozen_lock) {
+        (_, Some(lock)) => lock,
+        (ExportSource::Lockfile { workspace, .. }, None) => workspace.lock().clone(),
+        (ExportSource::Manifest(target), None) => {
             // Find an interpreter for the project, unless `--frozen` is set.
             let interpreter = if frozen.is_some() {
                 None
@@ -569,14 +590,20 @@ pub async fn export(
         return Ok(ExitStatus::Success);
     }
 
-    let resolved_lock = select_workspace_group_lock(
-        resolved_lock,
-        workspace_group
-            .as_ref()
-            .filter(|group| group.name.is_some())
-            .and_then(|group| group.name.as_ref()),
-        &selection_members,
-    )?;
+    let resolved_lock = if let Some(lock) = workspace_group
+        .as_mut()
+        .and_then(CommandWorkspaceSelection::take_selected_lock)
+    {
+        lock
+    } else {
+        select_workspace_group_lock(
+            resolved_lock,
+            workspace_group
+                .as_ref()
+                .and_then(|group| group.name.as_ref()),
+            &selection_members,
+        )?
+    };
     let lock = &resolved_lock;
 
     let groups = match &source {

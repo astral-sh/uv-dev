@@ -100,9 +100,8 @@ impl Lock {
                 continue;
             };
             let available = candidate
-                .packages
-                .iter()
-                .map(Package::name)
+                .workspace_member_paths()
+                .map(|(name, _)| name)
                 .collect::<BTreeSet<_>>();
             let contained = members
                 .iter()
@@ -126,9 +125,10 @@ impl Lock {
     }
 
     fn contains_workspace_members(&self, members: &BTreeSet<PackageName>) -> bool {
-        members
-            .iter()
-            .all(|name| self.packages.iter().any(|package| &package.id.name == name))
+        members.iter().all(|name| {
+            self.workspace_member_paths()
+                .any(|(member, _)| member == name)
+        })
     }
 
     /// Return the workspace contexts recorded in this lockfile.

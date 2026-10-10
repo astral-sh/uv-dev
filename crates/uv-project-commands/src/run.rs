@@ -42,7 +42,7 @@ use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
-use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockError, LockMode, LockOperation, LockResult, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, GroupName, PackageName};
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
@@ -87,8 +87,8 @@ struct GistFile {
 }
 
 use crate::lock::{
-    command_workspace_group, command_workspace_group_from_lock, select_workspace_group_lock,
-    select_workspace_group_result, workspace_selection_members,
+    CommandWorkspaceSelection, command_workspace_group, command_workspace_group_from_lock,
+    select_workspace_group_lock, select_workspace_group_result, workspace_selection_members,
 };
 
 /// Run a command.
@@ -645,23 +645,37 @@ pub async fn run(
         if let Some(project) = project {
             let mut selection_members =
                 workspace_selection_members(&project, package.as_slice(), all_packages);
-            let workspace_group = if no_sync && frozen.is_some() && workspace_group.is_none() {
-                // An unqualified no-sync invocation does not require a lockfile to exist.
-                match LockTarget::Workspace(project.workspace()).read().await? {
-                    Some(lock) => {
-                        command_workspace_group_from_lock(&lock, None, Some(&selection_members))?
-                    }
-                    None => None,
+            let frozen_lock = if let Some(frozen) = frozen {
+                let target = LockTarget::Workspace(project.workspace());
+                if no_sync && workspace_group.is_none() {
+                    // An unqualified no-sync invocation does not require a lockfile to exist.
+                    target.read().await?
+                } else {
+                    Some(
+                        target
+                            .read_frozen(frozen.into())
+                            .await
+                            .map_err(UvError::from)?,
+                    )
                 }
+            } else {
+                None
+            };
+            let mut workspace_group = if let Some(lock) = frozen_lock.as_ref() {
+                command_workspace_group_from_lock(
+                    lock,
+                    workspace_group.as_ref(),
+                    Some(&selection_members),
+                )?
+            } else if frozen.is_some() {
+                None
             } else {
                 command_workspace_group(
                     project.workspace(),
                     workspace_group.as_ref(),
                     Some(&selection_members),
-                    frozen,
                     &settings.resolver.sources,
                 )
-                .await
                 .map_err(UvError::from)?
             };
             let select_group_roots = workspace_group
@@ -683,10 +697,26 @@ pub async fn run(
                 .as_ref()
                 .filter(|_| select_group_roots)
                 .map(|group| group.members.iter().cloned().collect::<Vec<_>>());
+            let projected_frozen_lock = workspace_group
+                .as_mut()
+                .and_then(CommandWorkspaceSelection::take_selected_lock);
             let selected_workspace_group = workspace_group
                 .as_ref()
                 .filter(|_| select_group_roots)
                 .and_then(|group| group.name.as_ref());
+            let selected_frozen_lock = if let Some(lock) = projected_frozen_lock {
+                Some(lock)
+            } else {
+                frozen_lock
+                    .map(|lock| {
+                        select_workspace_group_lock(
+                            lock,
+                            selected_workspace_group,
+                            &selection_members,
+                        )
+                    })
+                    .transpose()?
+            };
             if let Some(project_name) = project.project_name() {
                 debug!(
                     "Discovered project `{project_name}` at: {}",
@@ -785,20 +815,27 @@ pub async fn run(
                 // If we're not syncing, we should still attempt to respect the locked preferences
                 // in any `--with` requirements.
                 if !isolated && !requirements.is_empty() {
-                    if let Some(lock) = LockTarget::from(project.workspace())
-                        .read()
-                        .await
-                        .ok()
-                        .flatten()
-                    {
-                        base_lock = Some((
-                            select_workspace_group_lock(
-                                lock,
-                                selected_workspace_group,
-                                &selection_members,
-                            )?,
-                            project.workspace().install_path().to_owned(),
-                        ));
+                    let lock = if let Some(lock) = selected_frozen_lock {
+                        Some(lock)
+                    } else if frozen.is_none() {
+                        LockTarget::from(project.workspace())
+                            .read()
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|lock| {
+                                select_workspace_group_lock(
+                                    lock,
+                                    selected_workspace_group,
+                                    &selection_members,
+                                )
+                            })
+                            .transpose()?
+                    } else {
+                        None
+                    };
+                    if let Some(lock) = lock {
+                        base_lock = Some((lock, project.workspace().install_path().to_owned()));
                     }
                 }
                 // `--with` may still build an overlay under `--no-sync`. Unless explicitly frozen,
@@ -834,33 +871,37 @@ pub async fn run(
                     LockMode::Write(venv.interpreter())
                 };
 
-                let result = match Box::pin(
-                    LockOperation::new(
-                        mode,
-                        &settings.resolver,
-                        &client_builder,
-                        &lock_state,
-                        if show_resolution {
-                            Box::new(DefaultResolveLogger)
-                        } else {
-                            Box::new(SummaryResolveLogger)
-                        },
-                        &concurrency,
-                        &cache,
-                        workspace_cache,
-                        printer,
-                        preview,
+                let result = if let Some(lock) = selected_frozen_lock {
+                    LockResult::Unchanged(lock)
+                } else {
+                    match Box::pin(
+                        LockOperation::new(
+                            mode,
+                            &settings.resolver,
+                            &client_builder,
+                            &lock_state,
+                            if show_resolution {
+                                Box::new(DefaultResolveLogger)
+                            } else {
+                                Box::new(SummaryResolveLogger)
+                            },
+                            &concurrency,
+                            &cache,
+                            workspace_cache,
+                            printer,
+                            preview,
+                        )
+                        .execute(project.workspace().into()),
                     )
-                    .execute(project.workspace().into()),
-                )
-                .await
-                {
-                    Ok(result) => select_workspace_group_result(
-                        result,
-                        selected_workspace_group,
-                        &selection_members,
-                    )?,
-                    Err(err) => return Err(UvError::from(err).into()),
+                    .await
+                    {
+                        Ok(result) => select_workspace_group_result(
+                            result,
+                            selected_workspace_group,
+                            &selection_members,
+                        )?,
+                        Err(err) => return Err(UvError::from(err).into()),
+                    }
                 };
 
                 // Identify the installation target.

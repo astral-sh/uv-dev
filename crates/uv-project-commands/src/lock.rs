@@ -118,6 +118,7 @@ pub(crate) struct CommandWorkspaceSelection {
     pub members: BTreeSet<PackageName>,
     requires_python: RequiresPython,
     environments: MarkerTree,
+    selected_lock: Option<Lock>,
 }
 
 impl From<ResolvedWorkspaceGroup> for CommandWorkspaceSelection {
@@ -128,11 +129,17 @@ impl From<ResolvedWorkspaceGroup> for CommandWorkspaceSelection {
             members: definition.members,
             requires_python,
             environments,
+            selected_lock: None,
         }
     }
 }
 
 impl CommandWorkspaceSelection {
+    /// Reuse the graph projected while deriving an ordinary frozen selection's Python domain.
+    pub(crate) fn take_selected_lock(&mut self) -> Option<Lock> {
+        self.selected_lock.take()
+    }
+
     pub(crate) fn scoped_workspace(
         &self,
         workspace: &Workspace,
@@ -184,6 +191,7 @@ pub(crate) fn command_workspace_group_from_lock(
             members: group.definition.members.clone(),
             requires_python: group.effective_requires_python.clone(),
             environments: group.effective_environment(),
+            selected_lock: None,
         }));
     }
     if let Some(name) = name {
@@ -197,7 +205,7 @@ pub(crate) fn command_workspace_group_from_lock(
     } else {
         members
     };
-    let selected = select_workspace_group_lock(lock.clone(), None, members)?;
+    let selected = lock.select_workspace_context(None, members)?;
     Ok(Some(CommandWorkspaceSelection {
         name: None,
         members: members.clone(),
@@ -206,23 +214,17 @@ pub(crate) fn command_workspace_group_from_lock(
             selected.requires_python().to_exact_marker_tree(),
             selected.supported_environments(),
         ),
+        selected_lock: Some(selected),
     }))
 }
 
-/// Select group metadata for Python discovery, using only the lock in frozen mode.
-pub(crate) async fn command_workspace_group(
+/// Select group metadata for Python discovery from the workspace manifests.
+pub(crate) fn command_workspace_group(
     workspace: &Workspace,
     name: Option<&GroupName>,
     members: Option<&BTreeSet<PackageName>>,
-    frozen: Option<FrozenSource>,
     no_sources: &NoSources,
 ) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
-    if let Some(frozen) = frozen {
-        let lock = LockTarget::Workspace(workspace)
-            .read_frozen(frozen.into())
-            .await?;
-        return command_workspace_group_from_lock(&lock, name, members);
-    }
     let groups = workspace.workspace_groups_with_sources(no_sources)?;
     if let Some(name) = name {
         return groups
@@ -270,6 +272,7 @@ pub(crate) async fn command_workspace_group(
             .unwrap_or_else(|| workspace.packages().keys().cloned().collect()),
         requires_python,
         environments,
+        selected_lock: None,
     }))
 }
 

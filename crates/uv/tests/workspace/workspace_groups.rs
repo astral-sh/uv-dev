@@ -2805,3 +2805,181 @@ fn workspace_groups_tree_includes_each_context() -> Result<()> {
     ");
     Ok(())
 }
+
+/// A registry dependency with a member's name does not make that local member reachable.
+#[test]
+fn workspace_groups_reject_registry_package_as_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "workspace-group-registry-member"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.leaf.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--no-sources", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--dry-run", "--workspace-group", "main", "--package", "leaf",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The selected packages are not all reachable in workspace group `main`
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "leaf", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The selected packages are not covered by a single workspace group; add them to a group or select a narrower target
+    ");
+    Ok(())
+}
+
+/// A stale-lock preview uses the explicitly selected context before reporting the mismatch.
+#[test]
+fn workspace_groups_locked_dry_run_uses_selected_context() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context.temp_dir.child("wheels/leaf-1.0.0-py3-none-any.whl"),
+        "leaf",
+        "1.0.0",
+        "leaf-1.0.0",
+        "",
+        &[],
+    )?;
+    write_wheel_with_metadata(
+        &context.temp_dir.child("wheels/leaf-2.0.0-py3-none-any.whl"),
+        "leaf",
+        "2.0.0",
+        "leaf-2.0.0",
+        "",
+        &[],
+    )?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/fresh-1.0.0-py3-none-any.whl"),
+        "fresh",
+        "1.0.0",
+        "fresh-1.0.0",
+        "",
+        &[],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["main", "next"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["main"]
+        default = true
+        [[tool.uv.workspace.groups]]
+        name = "next"
+        members = ["next"]
+    "#})?;
+    context
+        .temp_dir
+        .child("main/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "main"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf==1.0.0"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("next/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "next"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf==2.0.0"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    let existing = context.read("uv.lock");
+    context
+        .temp_dir
+        .child("next/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "next"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf==2.0.0", "fresh"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--locked", "--dry-run", "--workspace-group", "next",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 5 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
+     + fresh==1.0.0
+     + leaf==2.0.0
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(existing, context.read("uv.lock"));
+    Ok(())
+}
