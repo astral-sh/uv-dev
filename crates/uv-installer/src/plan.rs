@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
@@ -329,6 +330,15 @@ impl<'a> Planner<'a> {
         let mut reinstalls = vec![];
         let mut extraneous = vec![];
 
+        let reinstall_packages: Option<FxHashSet<_>> = match reinstall {
+            Reinstall::Packages(packages, _)
+                if packages.len() > 1 && self.resolution.distributions().nth(1).is_some() =>
+            {
+                Some(packages.iter().collect())
+            }
+            _ => None,
+        };
+
         // TODO(charlie): There are a few assumptions here that are hard to spot:
         //
         // 1. Apparently, we never return direct URL distributions as [`ResolvedDist::Installed`].
@@ -342,7 +352,12 @@ impl<'a> Planner<'a> {
         //    as [`ResolvedDist::Installed`] here.
         for dist in self.resolution.distributions() {
             // Check if the package should be reinstalled.
-            let reinstall = reinstall.contains_package(dist.name())
+            let reinstall_package = if let Some(packages) = &reinstall_packages {
+                packages.contains(dist.name())
+            } else {
+                reinstall.contains_package(dist.name())
+            };
+            let reinstall = reinstall_package
                 || dist
                     .source_tree()
                     .is_some_and(|source_tree| reinstall.contains_path(source_tree));
