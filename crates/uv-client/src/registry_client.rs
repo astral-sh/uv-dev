@@ -209,6 +209,7 @@ impl<'a> RegistryClientBuilder<'a> {
             client,
             read_timeout,
             flat_indexes: Arc::default(),
+            directory_concurrency: Arc::new(Semaphore::new(16)),
             parse_concurrency: Arc::new(Semaphore::new(
                 thread::available_parallelism().map_or(1, |parallelism| parallelism.get().min(4)),
             )),
@@ -237,6 +238,8 @@ pub struct RegistryClient {
     read_timeout: Duration,
     /// The flat index entries for each `--find-links`-style index URL, with one slot per index.
     flat_indexes: Arc<Mutex<FlatIndexCache>>,
+    /// Bound local directory scans across independently cached flat indexes.
+    directory_concurrency: Arc<Semaphore>,
     /// Bound CPU work for large remote index responses independently of network requests.
     parse_concurrency: Arc<Semaphore>,
     /// Limit decoded input bytes held by offloaded parsers, independently of parsed output size.
@@ -501,7 +504,12 @@ impl RegistryClient {
             return Ok(entries.get(package_name).cloned().unwrap_or_default());
         }
 
-        let client = FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache);
+        let client = FlatIndexClient::new_with_directory_concurrency(
+            self.cached_client(),
+            self.connectivity,
+            &self.cache,
+            self.directory_concurrency.clone(),
+        );
 
         // Fetch the entries for the index.
         let (entries, _) = client
@@ -1818,6 +1826,7 @@ mod tests {
     use std::assert_matches;
     use std::str::FromStr;
 
+    use futures::FutureExt;
     use tokio::sync::Semaphore;
     use url::Url;
     use uv_normalize::PackageName;
@@ -1863,6 +1872,38 @@ mod tests {
                 .index_locations(IndexLocations::new(vec![], flat_indexes, true))
                 .build()?,
         )
+    }
+
+    #[test]
+    fn flat_indexes_share_directory_admission() -> Result<(), Error> {
+        let client = no_index_client(vec![])?;
+        let clone = client.clone();
+        let slots = client
+            .directory_concurrency
+            .clone()
+            .try_acquire_many_owned(16)?;
+        let first = tempfile::tempdir()?;
+        let second = tempfile::tempdir()?;
+        let first_index = IndexUrl::parse(&first.path().to_string_lossy(), None)?;
+        let second_index = IndexUrl::parse(&second.path().to_string_lossy(), None)?;
+        let package = PackageName::from_str("demo")?;
+
+        // Distinct cache entries and cloned clients must use the same scan quota.
+        // With no runtime, polling also catches any worker spawned before admission.
+        assert!(
+            client
+                .flat_single_index(&package, &first_index)
+                .now_or_never()
+                .is_none()
+        );
+        assert!(
+            clone
+                .flat_single_index(&package, &second_index)
+                .now_or_never()
+                .is_none()
+        );
+        drop(slots);
+        Ok(())
     }
 
     async fn assert_no_index(
