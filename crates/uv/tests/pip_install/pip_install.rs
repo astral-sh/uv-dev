@@ -18741,6 +18741,24 @@ fn handle_record_mismatches() -> Result<()> {
         context.read_bytes(healed_record)
     );
 
+    // Repeat finalization without content-addressing or a previously cached archive.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--find-links")
+        .arg(context.temp_dir.as_ref())
+        .arg("--offline")
+        .arg("--no-cache")
+        .arg("--reinstall")
+        .args(["--link-mode", "hardlink"])
+        .arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ foo==0.1.0
+    ");
+
     // Read the healed RECORD.
     let installed_record = context.read(context.site_packages().join("foo-0.1.0.dist-info/RECORD"));
     let snapshot = apply_filters(installed_record, context.filters());
