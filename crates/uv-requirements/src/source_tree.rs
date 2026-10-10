@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -20,6 +19,7 @@ use uv_pypi_types::PyProjectToml;
 use uv_redacted::SafeUrl;
 use uv_resolver::{InMemoryIndex, MetadataResponse};
 use uv_types::{BuildContext, HashStrategy, HashVerification};
+use uv_workspace::WorkspaceMembers;
 
 #[derive(Debug, Clone)]
 pub enum SourceTree {
@@ -55,8 +55,8 @@ pub struct SourceTreeResolution {
     project: PackageName,
     /// The extras used when resolving the requirements.
     extras: Box<[ExtraName]>,
-    /// Local workspace members discovered while lowering the source tree.
-    workspace_member_paths: BTreeSet<PathBuf>,
+    /// Shared workspace membership discovered while lowering the source tree.
+    workspace_members: Option<WorkspaceMembers>,
 }
 
 impl SourceTreeResolution {
@@ -71,8 +71,8 @@ impl SourceTreeResolution {
     }
 
     /// Return the lowered requirements and the discovered local workspace members.
-    pub fn into_parts(self) -> (Box<[Requirement]>, BTreeSet<PathBuf>) {
-        (self.requirements, self.workspace_member_paths)
+    pub fn into_parts(self) -> (Box<[Requirement]>, Option<WorkspaceMembers>) {
+        (self.requirements, self.workspace_members)
     }
 }
 
@@ -164,7 +164,7 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
             requirements,
             project,
             extras,
-            workspace_member_paths: metadata.workspace_member_paths,
+            workspace_members: metadata.workspace_members,
         })
     }
 

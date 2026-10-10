@@ -135,7 +135,8 @@ impl ProjectEnvironmentSelection {
     }
 }
 
-type WorkspaceMembers = Arc<BTreeMap<PackageName, WorkspaceMember>>;
+/// Shared membership discovered for a workspace.
+pub type WorkspaceMembers = Arc<BTreeMap<PackageName, WorkspaceMember>>;
 type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
 type CachedWorkspaceResult = Result<CachedWorkspace, WorkspaceError>;
 
@@ -1081,6 +1082,11 @@ impl Workspace {
     /// The members of the workspace.
     pub fn packages(&self) -> &BTreeMap<PackageName, WorkspaceMember> {
         &self.packages
+    }
+
+    /// Share discovered membership without copying the member records or paths.
+    pub fn shared_packages(&self) -> WorkspaceMembers {
+        Arc::clone(&self.packages)
     }
 
     /// The sources table from the workspace `pyproject.toml`.

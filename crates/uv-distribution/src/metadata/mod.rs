@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -11,7 +11,7 @@ use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pypi_types::{HashDigests, ResolutionMetadata};
 use uv_workspace::dependency_groups::DependencyGroupError;
-use uv_workspace::{WorkspaceCache, WorkspaceError};
+use uv_workspace::{WorkspaceCache, WorkspaceError, WorkspaceMembers};
 
 pub use crate::metadata::build_requires::{BuildRequires, LoweredExtraBuildDependencies};
 pub use crate::metadata::dependency_groups::SourcedDependencyGroups;
@@ -74,8 +74,8 @@ pub struct Metadata {
     pub provides_extra: Box<[ExtraName]>,
     pub dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
     pub dynamic: bool,
-    /// Local workspace members discovered while lowering the requirements.
-    pub workspace_member_paths: BTreeSet<PathBuf>,
+    /// Shared workspace membership discovered while lowering the requirements.
+    pub workspace_members: Option<WorkspaceMembers>,
 }
 
 impl Metadata {
@@ -105,7 +105,7 @@ impl Metadata {
             provides_extra: metadata.provides_extra,
             dependency_groups: BTreeMap::default(),
             dynamic: metadata.dynamic,
-            workspace_member_paths: BTreeSet::new(),
+            workspace_members: None,
         }
     }
 
@@ -135,7 +135,7 @@ impl Metadata {
             provides_extra,
             dependency_groups,
             dynamic,
-            workspace_member_paths,
+            workspace_members,
         } = RequiresDist::from_project_maybe_workspace(
             requires_dist,
             install_path,
@@ -158,7 +158,7 @@ impl Metadata {
             provides_extra,
             dependency_groups,
             dynamic,
-            workspace_member_paths,
+            workspace_members,
         })
     }
 
