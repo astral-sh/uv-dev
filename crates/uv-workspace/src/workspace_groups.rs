@@ -14,7 +14,7 @@ use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl};
 use uv_pypi_types::{LenientRequirement, SupportedEnvironments, VerbatimParsedUrl};
 
 use crate::pyproject::{Source, ToolUvSources, WorkspaceReference};
-use crate::{Workspace, WorkspaceError, WorkspaceErrorKind};
+use crate::{Workspace, WorkspaceError, WorkspaceErrorKind, WorkspaceMember};
 
 /// A named set of workspace resolution roots.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -680,6 +680,44 @@ impl Workspace {
                     .collect(),
                 _ => vec![environments],
             }),
+        }))
+    }
+
+    /// Scope a build's provisional Python domain to the member whose artifact is being produced.
+    pub fn with_provisional_workspace_member(
+        &self,
+        groups: &[ProvisionalWorkspaceGroup],
+        member: &WorkspaceMember,
+    ) -> Result<Self, WorkspaceError> {
+        if groups.is_empty() {
+            return Ok(self.clone());
+        }
+        let mut environments = MarkerTree::FALSE;
+        let mut names = Vec::new();
+        for group in groups {
+            if let Some(active) = group.member_environments().get(&member.project().name) {
+                environments = environments.or(*active);
+                names.push(group.definition().name.clone());
+            }
+        }
+        // Members outside the active resolution roots can still be built independently.
+        let requires_python = if environments.is_false() {
+            let requires_python = RequiresPython::from_specifiers(
+                member.project().requires_python.clone().unwrap_or_default(),
+            );
+            environments = requires_python.to_exact_marker_tree();
+            requires_python
+        } else {
+            RequiresPython::from_marker_tree(environments).ok_or_else(|| {
+                WorkspaceError::from(WorkspaceErrorKind::UnrepresentableWorkspaceGroupUnion(
+                    names,
+                ))
+            })?
+        };
+        Ok(self.with_resolution(WorkspaceResolution {
+            roots: BTreeMap::from([(member.project().name.clone(), environments)]),
+            requires_python,
+            environments: SupportedEnvironments::from_markers(vec![environments]),
         }))
     }
 

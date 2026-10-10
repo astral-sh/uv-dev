@@ -3251,10 +3251,178 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
     Ok(())
 }
 
+/// A manifest-free workspace-wide target uses the default context for synchronization.
+#[test]
+fn workspace_metadata_grouped_lockfile_sync_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context.temp_dir.child("wheels/leaf-1.0.0-py3-none-any.whl"),
+        "leaf",
+        "1.0.0",
+        "leaf-1.0.0",
+        "",
+        &[("leaf_module.py", "VALUE = 42\n")],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "other"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [[tool.uv.workspace.groups]]
+        name = "other"
+        members = ["other"]
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("other/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "other"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("app/pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("other/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.workspace_metadata().args([
+        "--frozen", "--sync", "--offline", "--preview-features", "frozen-lockfile",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "module_owners": {
+        "leaf_module": [
+          {
+            "package_id": "leaf==1.0.0@registry+[TEMP_DIR]/wheels"
+          }
+        ]
+      },
+      "members": [
+        {
+          "name": "app",
+          "path": "[TEMP_DIR]/app",
+          "id": "app==0.1.0@virtual+[TEMP_DIR]/app"
+        },
+        {
+          "name": "other",
+          "path": "[TEMP_DIR]/other",
+          "id": "other==0.1.0@virtual+[TEMP_DIR]/other"
+        }
+      ],
+      "resolution": {
+        "app==0.1.0@virtual+[TEMP_DIR]/app": {
+          "name": "app",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/app"
+          },
+          "kind": "package",
+          "dependencies": [
+            {
+              "id": "leaf==1.0.0@registry+[TEMP_DIR]/wheels",
+              "marker": "extra == 'workspace-main'"
+            }
+          ]
+        },
+        "leaf==1.0.0@registry+[TEMP_DIR]/wheels": {
+          "name": "leaf",
+          "version": "1.0.0",
+          "source": {
+            "registry": {
+              "path": "[TEMP_DIR]/wheels"
+            }
+          },
+          "kind": "package",
+          "dependencies": [],
+          "wheels": [
+            {
+              "path": "[TEMP_DIR]/leaf-1.0.0-py3-none-any.whl",
+              "filename": "leaf-1.0.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "other==0.1.0@virtual+[TEMP_DIR]/other": {
+          "name": "other",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/other"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    "#);
+    context
+        .assert_command("import leaf_module; assert leaf_module.VALUE == 42")
+        .success();
+    Ok(())
+}
+
 /// Synchronized module owners use the selected context while metadata retains the full graph.
 #[test]
 fn workspace_metadata_grouped_sync_module_owners() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     context.temp_dir.child("wheels").create_dir_all()?;
     write_wheel_with_metadata(
         &context.temp_dir.child("wheels/leaf-1.0.0-py3-none-any.whl"),
@@ -3301,7 +3469,7 @@ fn workspace_metadata_grouped_sync_module_owners() -> Result<()> {
       "environment": {
         "root": "[VENV]/",
         "python": {
-          "path": "[VENV]/bin/python",
+          "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
         }
@@ -3381,7 +3549,9 @@ fn workspace_metadata_grouped_sync_module_owners() -> Result<()> {
 /// An existing environment is matched against the selected frozen context without synchronization.
 #[test]
 fn workspace_metadata_grouped_frozen_module_owners() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     context.temp_dir.child("wheels").create_dir_all()?;
     write_wheel_with_metadata(
         &context.temp_dir.child("wheels/leaf-1.0.0-py3-none-any.whl"),
@@ -3429,7 +3599,7 @@ fn workspace_metadata_grouped_frozen_module_owners() -> Result<()> {
       "environment": {
         "root": "[VENV]/",
         "python": {
-          "path": "[VENV]/bin/python",
+          "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
         }
@@ -3505,7 +3675,9 @@ fn workspace_metadata_grouped_frozen_module_owners() -> Result<()> {
 /// Module inspection synchronizes with the selected default context's Python requirement.
 #[test]
 fn workspace_metadata_grouped_sync_selects_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     context.temp_dir.child("wheels").create_dir_all()?;
     write_wheel_with_metadata(
         &context.temp_dir.child("wheels/leaf-1.0.0-py3-none-any.whl"),
@@ -3567,7 +3739,7 @@ fn workspace_metadata_grouped_sync_selects_python() -> Result<()> {
       "environment": {
         "root": "[VENV]/",
         "python": {
-          "path": "[VENV]/bin/python",
+          "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.13.[X]",
           "implementation": "cpython"
         }

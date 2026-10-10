@@ -215,6 +215,308 @@ fn build_workspace_group_with_dynamic_dependencies() -> Result<()> {
     Ok(())
 }
 
+/// A selected build member uses its own group domain instead of an unrelated existing environment.
+#[test]
+fn build_workspace_group_selected_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "1.0.0"
+        requires-python = "==3.12.*"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "1.0.0"
+        requires-python = "==3.13.*"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (_, modern_wheel) = generate_wheel(
+        &"modern".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&"==3.13.*".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("modern/fixture.whl")
+        .write_binary(&modern_wheel)?;
+    context
+        .temp_dir
+        .child("modern/backend.py")
+        .write_str(indoc! {r#"
+        import sys
+        from pathlib import Path
+        from shutil import copyfile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            if sys.version_info[:2] != (3, 13):
+                raise RuntimeError("backend requires Python 3.13")
+            filename = "modern-1.0.0-py3-none-any.whl"
+            copyfile(Path(__file__).parent / "fixture.whl", Path(wheel_directory) / filename)
+            return filename
+    "#})?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    uv_snapshot!(context.filters(), context.build().args([
+        "--package", "modern", "--wheel", "--offline",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/modern-1.0.0-py3-none-any.whl
+    "#);
+    context
+        .temp_dir
+        .child("dist/modern-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// A member outside the resolution roots can still build with its own declared Python support.
+#[test]
+fn build_workspace_group_unselected_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "1.0.0"
+        requires-python = "==3.12.*"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "1.0.0"
+        requires-python = "==3.13.*"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (_, modern_wheel) = generate_wheel(
+        &"modern".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&"==3.13.*".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("modern/fixture.whl")
+        .write_binary(&modern_wheel)?;
+    context
+        .temp_dir
+        .child("modern/backend.py")
+        .write_str(indoc! {r#"
+        import sys
+        from pathlib import Path
+        from shutil import copyfile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            if sys.version_info[:2] != (3, 13):
+                raise RuntimeError("backend requires Python 3.13")
+            filename = "modern-1.0.0-py3-none-any.whl"
+            copyfile(Path(__file__).parent / "fixture.whl", Path(wheel_directory) / filename)
+            return filename
+    "#})?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    uv_snapshot!(context.filters(), context.build().args([
+        "--package", "modern", "--wheel", "--offline",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/modern-1.0.0-py3-none-any.whl
+    "#);
+    context
+        .temp_dir
+        .child("dist/modern-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Building every member selects a compatible interpreter independently for each artifact.
+#[test]
+fn build_workspace_group_each_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_filter((r"\[(legacy|modern)\]", "[PKG]"));
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+        requires-python = "==3.13.*"
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "1.0.0"
+        requires-python = "==3.12.*"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (_, legacy_wheel) = generate_wheel(
+        &"legacy".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&"==3.12.*".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("legacy/fixture.whl")
+        .write_binary(&legacy_wheel)?;
+    context
+        .temp_dir
+        .child("legacy/backend.py")
+        .write_str(indoc! {r#"
+        import sys
+        from pathlib import Path
+        from shutil import copyfile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            if sys.version_info[:2] != (3, 12):
+                raise RuntimeError("backend requires Python 3.12")
+            filename = "legacy-1.0.0-py3-none-any.whl"
+            copyfile(Path(__file__).parent / "fixture.whl", Path(wheel_directory) / filename)
+            return filename
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (_, modern_wheel) = generate_wheel(
+        &"modern".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("modern/fixture.whl")
+        .write_binary(&modern_wheel)?;
+    context
+        .temp_dir
+        .child("modern/backend.py")
+        .write_str(indoc! {r#"
+        import sys
+        from pathlib import Path
+        from shutil import copyfile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            if sys.version_info[:2] != (3, 13):
+                raise RuntimeError("backend requires Python 3.13")
+            filename = "modern-1.0.0-py3-none-any.whl"
+            copyfile(Path(__file__).parent / "fixture.whl", Path(wheel_directory) / filename)
+            return filename
+    "#})?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    uv_snapshot!(context.filters(), context.build().args([
+        "--all-packages", "--wheel", "--offline",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    Successfully built dist/legacy-1.0.0-py3-none-any.whl
+    Successfully built dist/modern-1.0.0-py3-none-any.whl
+    "#);
+    context
+        .temp_dir
+        .child("dist/legacy-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    context
+        .temp_dir
+        .child("dist/modern-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
 /// Global lazy imports are opt-in on supported build interpreters.
 #[test]
 fn build_lazy_imports() -> Result<()> {

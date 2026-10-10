@@ -830,47 +830,106 @@ fn workspace_groups_internal_conflict() -> Result<()> {
 }
 
 #[test]
-fn workspace_groups_configuration_errors() -> Result<()> {
+fn workspace_groups_duplicate_names() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    workspace(&context)?;
-    let original = context.read("pyproject.toml");
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&original.replace("name = \"next\"", "name = \"main\""))?;
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Workspace group `main` is defined more than once
     ");
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_multiple_defaults() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&original.replace("name = \"next\"", "name = \"next\"\ndefault = true"))?;
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [[tool.uv.workspace.groups]]
+        name = "next"
+        members = ["app"]
+        default = true
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Workspace groups `main` and `next` are both marked as default
     ");
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_unknown_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&original.replace(
-            "members = [\"common\", \"next\"]",
-            "members = [\"missing\"]",
-        ))?;
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "next"
+        members = ["missing"]
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Workspace group `next` contains unknown member `missing`
     ");
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_incompatible_python_bounds() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&original.replace(
-            "requires-python = \">=3.12,<3.13\"",
-            "requires-python = \">=3.14\"",
-        ))?;
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.14"
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----

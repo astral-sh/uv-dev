@@ -416,12 +416,9 @@ impl<'lock> InstallTarget<'lock> {
         if lock.workspace_groups().is_empty() {
             return Ok(Cow::Borrowed(lock));
         }
-        let workspace_target = match self {
-            Self::Workspace { .. } | Self::NonProjectWorkspace { .. } => true,
-            Self::Project { .. }
-            | Self::Projects { .. }
-            | Self::Lockfile { .. }
-            | Self::Script { .. } => false,
+        let workspace_target = match self.package_selection() {
+            Some(PackageSelection::Workspace | PackageSelection::NonProjectWorkspace) => true,
+            Some(PackageSelection::Projects(_)) | None => false,
         };
         let members = if workspace_target
             && let Some(group) = lock

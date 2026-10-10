@@ -557,14 +557,19 @@ async fn build_package(
     if interpreter_request.is_none() {
         if let Ok(workspace) = workspace {
             let groups = DependencyGroupsWithDefaults::none();
-            // The interpreter is needed to build this project's dynamic metadata.
-            let workspace = workspace
-                .with_provisional_workspace_groups(
-                    &workspace
-                        .workspace_groups_with_dependency_metadata(&sources, dependency_metadata)
-                        .map_err(PythonSelectionError::from)?,
-                )
+            // The interpreter is needed to build this member's dynamic metadata.
+            let provisional_groups = workspace
+                .workspace_groups_with_dependency_metadata(&sources, dependency_metadata)
                 .map_err(PythonSelectionError::from)?;
+            let workspace = if let Source::Directory(directory) = &source.source
+                && let Some(member) = workspace.packages().values().find(|member| {
+                    normalize_path(member.root()) == normalize_path(directory.as_ref())
+                }) {
+                workspace.with_provisional_workspace_member(&provisional_groups, member)
+            } else {
+                workspace.with_provisional_workspace_groups(&provisional_groups)
+            }
+            .map_err(PythonSelectionError::from)?;
             interpreter_request = find_requires_python(&workspace, &groups, &sources)?
                 .as_ref()
                 .and_then(|requires_python| {
