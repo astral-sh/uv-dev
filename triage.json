@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 20792,
+        "title": "Windows antivirus/EDR issues",
+        "url": "https://github.com/astral-sh/uv/issues/20792",
+        "state": "open",
+        "reason": "Maintainer guidance for antivirus interference recommends contacting the vendor and sharing its support ticket ID. The August 4 clarification treats new vendors or failure modes separately; this thread does not establish the cause of ESET's URL blacklist."
+      },
+      {
+        "kind": "issue",
+        "number": 10079,
+        "title": "Antivirus detects `uv` installer as malicious on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/10079",
+        "state": "closed",
+        "reason": "Reports a BitDefender installer block and includes a September 2026 ESET report. That ESET comment concerns CI execution and hidden-file activity, whereas the new report concerns a release URL blocked during download. Maintainer advice is to submit the detection to the antivirus vendor."
+      },
+      {
+        "kind": "issue",
+        "number": 21336,
+        "title": "Uv 0.12.7 and 0.12.6 removed by netskope",
+        "url": "https://github.com/astral-sh/uv/issues/21336",
+        "state": "closed",
+        "reason": "Another vendor prevented installation of specific uv releases. Maintainers directed the reporter to vendor support and astral-sh/uv#20792, noting that signatures cannot prevent all false positives. Different vendor and older releases; no evidence of the same ESET blacklist."
+      },
+      {
+        "kind": "issue",
+        "number": 10336,
+        "title": "Sign published executables for Windows",
+        "url": "https://github.com/astral-sh/uv/issues/10336",
+        "state": "closed",
+        "reason": "Windows signing shipped in uv 0.12.12 on September 9, 2026, before the affected 0.13.0 release. This establishes the mitigation's status, not a fix for ESET URL blocking or evidence that signing has regressed."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Literal searches covered ESET, PUA, PUA blacklist, PUA 黑名单, the Windows ZIP filename, Scoop blocked, and 0.13.0 antivirus/malware reports. Conceptual searches covered antivirus, blacklist, potentially unwanted, false positive, blocked URL, web protection, and download blocking, including external-label vocabulary. Fix-oriented PR searches covered signing, Authenticode, antivirus, malware, ESET, and PUA; no matching fix was returned. Inspected candidate comments and followed references through historical Defender reports and signing discussions. Ruled out astral-sh/uv#10428 as an installer-script/documentation request, and astral-sh/uv#1587 and astral-sh/uv#17344 as historical Defender detections. The referenced signing PR astral-sh/uv#18280 was closed unmerged, not an ESET fix. Verified signing timing against the uv 0.12.12 release notes."
+  },
+  "type": "question",
+  "type_reason": "The report needs support for ESET's external URL-classification decision; the log establishes a blocked download but no incorrect uv behavior or confirmed false-positive mechanism. No existing issue was found tracking this specific ESET URL block. The broad AV guidance explicitly distinguishes new vendor/failure-mode reports, and the older ESET comment concerns a different detection stage. Signing already shipped, but it was not a confirmed fix for this blacklist, so a regression is not established.",
+  "summary": "Related vendor-support guidance and antivirus reports exist, but no exact ESET URL-blacklist duplicate was found. Windows signing predates the affected release.",
+  "draft_response": "Your log shows ESET blocking the uv 0.13.0 download URL during the Scoop update. Please submit that URL and detection log to ESET for review as a suspected false positive, then share their support ticket ID and response here, as described in astral-sh/uv#20792. We have signed Windows release binaries since uv 0.12.12 (astral-sh/uv#10336), but signing does not guarantee that an antivirus vendor will allow a download."
+}
