@@ -65,7 +65,6 @@ use uv_cli_settings::{
 use uv_cli_types::exit::ExitStatus;
 use uv_cli_types::script::ScriptPath;
 use uv_cli_types::tool::ToolRunCommand;
-use uv_project::ProjectError;
 use uv_run_command::run::{ParsedRunCommand, RunCommand};
 
 mod diagnostics;
@@ -3164,14 +3163,6 @@ where
             let error = match err.downcast::<UvError>() {
                 Ok(error) => error,
                 Err(err) if err.is::<ArgumentError>() => UvError::argument(err),
-                Err(err)
-                    if matches!(
-                        err.downcast_ref::<ProjectError>(),
-                        Some(ProjectError::LockFormat(..))
-                    ) =>
-                {
-                    UvError::User(err)
-                }
                 Err(err) => UvError::unexpected(err),
             };
             match error {
