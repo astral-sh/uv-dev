@@ -979,6 +979,16 @@ impl<'lock> Installable<'lock> for LockedPackages<'lock> {
         std::iter::empty()
     }
 
+    fn directly_includes_group(
+        &self,
+        package: Option<&PackageName>,
+        group: &GroupName,
+        groups: &DependencyGroupsWithDefaults,
+    ) -> bool {
+        // Concrete roots exclude requirements and group activation attached to the manifest.
+        package.is_some() && groups.contains(group)
+    }
+
     fn project_name(&self) -> Option<&PackageName> {
         self.project_name
     }
@@ -1106,6 +1116,7 @@ impl Lock {
 mod tests {
     use std::cell::Cell;
     use std::cmp::Ordering;
+    use std::error::Error;
     use std::str::FromStr;
     use std::sync::LazyLock;
 
@@ -1116,6 +1127,7 @@ mod tests {
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
     use uv_platform_tags::{Arch, Os, Platform, TagsOptions};
     use uv_warnings::anstream;
+    use uv_workspace::dependency_groups::WorkspaceGroupReference;
 
     use super::*;
 
@@ -1820,6 +1832,40 @@ source = { registry = "https://example.com/simple" }
         )
         "#);
         });
+    }
+
+    #[test]
+    fn concrete_roots_do_not_activate_manifest_group_includes() -> Result<(), Box<dyn Error>> {
+        let mut lock = lock();
+        lock.manifest.dependency_group_includes.insert(
+            GroupName::from_str("lint")?,
+            BTreeSet::from([WorkspaceGroupReference {
+                package: PackageName::from_str("root-a")?,
+                group: GroupName::from_str("dev")?,
+                marker: MarkerTree::TRUE,
+            }]),
+        );
+        let root = package(&lock, "root-a", "1.0.0");
+        let extras = ExtrasSpecification::default().with_defaults(DefaultExtras::default());
+        let groups = DependencyGroups::from_group(GroupName::from_str("lint")?)
+            .with_defaults(DefaultGroups::default());
+        let resolution = lock.to_resolution(
+            Path::new("."),
+            std::iter::once(root),
+            None,
+            &DARWIN_MARKERS,
+            &TAGS,
+            &extras,
+            &groups,
+            &BuildOptions::default(),
+            &InstallOptions::default(),
+        )?;
+        assert!(
+            resolution
+                .distributions()
+                .all(|distribution| distribution.name().as_ref() != "dev-dependency")
+        );
+        Ok(())
     }
 
     #[test]

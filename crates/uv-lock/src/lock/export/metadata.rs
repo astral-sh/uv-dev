@@ -1,3 +1,4 @@
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Display;
 use std::path::Path;
@@ -1402,13 +1403,33 @@ impl Metadata {
                         .flatten()
                     {
                         if let Some(&index) = lock.workspace_members.get(&included.package) {
-                            dependencies.push(MetadataDependency {
-                                id: MetadataNodeId::from_package_id(
+                            let package = lock.package(index);
+                            let id = MetadataNodeId::from_package_id(
+                                &workspace_root,
+                                &package.id,
+                                MetadataNodeKind::Group(included.group.clone()),
+                            )
+                            .to_flat();
+                            // Empty groups have no locked dependency edges but can still be included.
+                            if let Entry::Vacant(entry) = resolve.entry(id.clone()) {
+                                entry.insert(MetadataNode::from_package_id(
                                     &workspace_root,
-                                    &lock.package(index).id,
+                                    &package.id,
                                     MetadataNodeKind::Group(included.group.clone()),
+                                ));
+                                let owner_id = MetadataNodeId::from_package_id(
+                                    &workspace_root,
+                                    &package.id,
+                                    MetadataNodeKind::Package,
                                 )
-                                .to_flat(),
+                                .to_flat();
+                                if let Some(owner) = resolve.get_mut(&owner_id) {
+                                    owner.add_dependency_group(included.group.clone(), id.clone());
+                                    owner.dependency_groups.sort();
+                                }
+                            }
+                            dependencies.push(MetadataDependency {
+                                id,
                                 marker: included.marker.contents().map(|marker| marker.to_string()),
                             });
                         }
