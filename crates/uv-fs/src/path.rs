@@ -32,7 +32,8 @@ pub trait Simplified {
 
     /// Render a [`Path`] for user-facing display.
     ///
-    /// Like [`simplified_display`], but relativizes the path against the current working directory.
+    /// Like [`Self::simplified_display`], but relativizes the path against the current working
+    /// directory.
     fn user_display(&self) -> impl std::fmt::Display;
 
     /// Render a [`Path`] for user-facing display, where the [`Path`] is relative to a base path.
@@ -43,7 +44,7 @@ pub trait Simplified {
 
     /// Render a [`Path`] for user-facing display using a portable representation.
     ///
-    /// Like [`user_display`], but uses a portable representation for relative paths.
+    /// Like [`Self::user_display`], but uses a portable representation for relative paths.
     fn portable_display(&self) -> impl std::fmt::Display;
 }
 
