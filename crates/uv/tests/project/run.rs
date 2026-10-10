@@ -8555,6 +8555,160 @@ fn run_pep723_shared_editable_overlay_precedence() -> Result<()> {
     Ok(())
 }
 
+/// Startup hooks can import shared dependencies after an editable overlay path becomes available.
+#[test]
+fn run_pep723_shared_startup_hooks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"shared-hook-target".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("shared_hook_target/value.py", "VALUE = 'shared'\n")],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"shared-startup".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "shared_startup/hook.py",
+            indoc! {r"
+            def initialize():
+                import builtins
+                from shared_hook_target.value import VALUE
+                builtins._uv_startup_value = VALUE
+        "},
+        )],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"shared-extra".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("editable/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared-hook-target"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("editable/src/shared_hook_target/__init__.py")
+        .touch()?;
+    context
+        .temp_dir
+        .child("editable/src/shared_hook_target/value.py")
+        .write_str("VALUE = 'editable'\n")?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-hook-target==1.0.0", "shared-startup==1.0.0"]
+        # ///
+        import builtins
+        from pathlib import Path
+        import sys
+        import sysconfig
+        Path("overlay-python").write_text(sys.executable)
+        Path("overlay-site-packages").write_text(sysconfig.get_path("purelib"))
+        print(getattr(builtins, "_uv_startup_value", "missing"))
+        print(getattr(builtins, "_uv_startup_hooks_restored", False))
+        if "--extra" in sys.argv:
+            import shared_extra
+            print(shared_extra.__version__)
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    missing
+    False
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + shared-hook-target==1.0.0
+     + shared-startup==1.0.0
+    ");
+    let overlay_python = context.read("overlay-python");
+    let overlay_site_packages = context.read("overlay-site-packages");
+    context
+        .pip_install()
+        .args([
+            "--offline",
+            "--no-index",
+            "--editable",
+            "editable",
+            "--python",
+        ])
+        .arg(&overlay_python)
+        .assert()
+        .success();
+    fs_err::write(
+        Path::new(&overlay_site_packages).join("zz_shared_startup.pth"),
+        "import shared_startup.hook; shared_startup.hook.initialize()\n",
+    )?;
+    fs_err::write(
+        Path::new(&overlay_site_packages).join("sitecustomize.py"),
+        indoc! {r#"
+            import builtins
+            from pathlib import Path
+            import site
+            site.addsitedir(str(Path(__file__).parent))
+            builtins._uv_startup_hooks_restored = (
+                site.addpackage.__module__ == "site"
+                and site.execsitecustomize.__module__ == "site"
+            )
+        "#},
+    )?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    editable
+    True
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "--with", "shared-extra==1.0.0", "script.py", "--extra"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    editable
+    True
+    1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-extra==1.0.0
+    ");
+    Ok(())
+}
+
 /// Reinstallation replaces a shared base without mutating another script's environment.
 #[test]
 fn run_pep723_shared_reinstall_replaces_base() -> Result<()> {
