@@ -4,6 +4,7 @@
 
 mod error;
 mod pipreqs;
+mod process;
 
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -23,7 +24,6 @@ use rustc_hash::FxHashMap;
 use serde::de::{self, IntoDeserializer, SeqAccess, Visitor, value};
 use serde::{Deserialize, Deserializer};
 use tempfile::TempDir;
-use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{Instrument, debug, info_span, instrument, warn};
@@ -562,7 +562,6 @@ impl SourceBuild {
         sources: NoSources,
         credentials_cache: &CredentialsCache,
     ) -> Result<Vec<Requirement>, Error> {
-        let _lock = self.acquire_lock().await?;
         get_pep517_build_requirements(
             &self.runner,
             &self.source_tree,
@@ -589,32 +588,8 @@ impl SourceBuild {
     }
 
     /// Acquire a lock on the source tree, if necessary.
-    async fn acquire_lock(&self) -> Result<Option<LockedFile>, Error> {
-        // Depending on the command, setuptools puts `*.egg-info`, `build/`, and `dist/` in the
-        // source tree, and concurrent invocations of setuptools using the same source dir can
-        // stomp on each other. We need to lock something to fix that, but we don't want to dump a
-        // `.lock` file into the source tree that the user will need to .gitignore. Take a global
-        // proxy lock instead.
-        let mut source_tree_lock = None;
-        if self.pep517_backend.is_setuptools() {
-            debug!("Locking the source tree for setuptools");
-            let canonical_source_path = self.source_tree.canonicalize()?;
-            let lock_path = env::temp_dir().join(format!(
-                "uv-setuptools-{}.lock",
-                cache_digest(&canonical_source_path)
-            ));
-            source_tree_lock = LockedFile::acquire(
-                lock_path,
-                LockedFileMode::Exclusive,
-                self.source_tree.to_string_lossy(),
-            )
-            .await
-            .inspect_err(|err| {
-                warn!("Failed to acquire build lock: {err}");
-            })
-            .ok();
-        }
-        Ok(source_tree_lock)
+    async fn acquire_lock(&self) -> Result<Option<Arc<LockedFile>>, Error> {
+        acquire_source_tree_lock(&self.pep517_backend, &self.source_tree).await
     }
 
     async fn get_resolved_requirements(
@@ -942,6 +917,7 @@ impl SourceBuild {
                 &self.source_tree,
                 &self.environment_variables,
                 &self.modified_path,
+                _lock.clone(),
             )
             .instrument(span)
             .await?;
@@ -1062,6 +1038,7 @@ impl SourceBuild {
                 &self.source_tree,
                 &self.environment_variables,
                 &self.modified_path,
+                _lock.clone(),
             )
             .instrument(span)
             .await?;
@@ -1105,6 +1082,39 @@ impl SourceBuildTrait for SourceBuild {
     async fn wheel<'a>(&'a self, wheel_dir: &'a Path) -> Result<String, AnyErrorBuild> {
         Ok(self.build(wheel_dir).await?)
     }
+}
+
+/// Acquire the canonical source lock for setuptools hooks.
+async fn acquire_source_tree_lock(
+    backend: &Pep517Backend,
+    source_tree: &Path,
+) -> Result<Option<Arc<LockedFile>>, Error> {
+    // Depending on the command, setuptools puts `*.egg-info`, `build/`, and `dist/` in the
+    // source tree, and concurrent invocations of setuptools using the same source dir can
+    // stomp on each other. We need to lock something to fix that, but we don't want to dump a
+    // `.lock` file into the source tree that the user will need to .gitignore. Take a global
+    // proxy lock instead.
+    let mut source_tree_lock = None;
+    if backend.is_setuptools() {
+        debug!("Locking the source tree for setuptools");
+        let canonical_source_path = source_tree.canonicalize()?;
+        let lock_path = env::temp_dir().join(format!(
+            "uv-setuptools-{}.lock",
+            cache_digest(&canonical_source_path)
+        ));
+        source_tree_lock = LockedFile::acquire(
+            lock_path,
+            LockedFileMode::Exclusive,
+            source_tree.to_string_lossy(),
+        )
+        .await
+        .inspect_err(|err| {
+            warn!("Failed to acquire build lock: {err}");
+        })
+        .ok()
+        .map(Arc::new);
+    }
+    Ok(source_tree_lock)
 }
 
 /// Discover additional requirements before completing build environment setup.
@@ -1164,6 +1174,7 @@ async fn get_pep517_build_requirements(
         script = format!("get_requires_for_build_{}", build_kind),
         version_id = version_id,
     );
+    let source_tree_lock = acquire_source_tree_lock(pep517_backend, source_tree).await?;
     let output = runner
         .run_script(
             venv,
@@ -1171,6 +1182,7 @@ async fn get_pep517_build_requirements(
             source_tree,
             environment_variables,
             modified_path,
+            source_tree_lock.clone(),
         )
         .instrument(span)
         .await?;
@@ -1209,6 +1221,9 @@ async fn get_pep517_build_requirements(
             ));
         }
     };
+
+    // Lowering and installing requirements can recursively build other projects.
+    drop(source_tree_lock);
 
     // If necessary, lower the requirements.
     let extra_requires = if no_sources.all() {
@@ -1276,27 +1291,14 @@ impl PythonRunner {
         source_tree: &Path,
         environment_variables: &FxHashMap<OsString, OsString>,
         modified_path: &OsString,
+        source_tree_lock: Option<Arc<LockedFile>>,
     ) -> Result<PythonRunnerOutput, Error> {
-        /// Read lines from a reader and store them in a buffer.
-        async fn read_from(
-            mut reader: tokio::io::Split<tokio::io::BufReader<impl tokio::io::AsyncRead + Unpin>>,
-            mut printer: Printer,
-            buffer: &mut Vec<String>,
-        ) -> io::Result<()> {
-            loop {
-                match reader.next_segment().await? {
-                    Some(line_buf) => {
-                        let line_buf = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
-                        let line = String::from_utf8_lossy(line_buf).into();
-                        let _ = write!(printer, "{line}");
-                        buffer.push(line);
-                    }
-                    None => return Ok(()),
-                }
-            }
-        }
-
-        let _permit = self.concurrent_build_slots.acquire().await.unwrap();
+        let permit = self
+            .concurrent_build_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
 
         let mut command = Command::new(venv.python_executable());
         if uv_preview::is_enabled(PreviewFeature::BuildLazyImports)
@@ -1306,7 +1308,7 @@ impl PythonRunner {
             command.args(["-X", "lazy_imports=all"]);
         }
 
-        let mut child = command
+        command
             .args(["-c", script])
             .current_dir(source_tree.simplified())
             .envs(environment_variables)
@@ -1324,45 +1326,10 @@ impl PythonRunner {
             .env_remove(EnvVars::PYX_AUTH_TOKEN)
             .env_remove(EnvVars::UV_AUTH_TOKEN)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|err| Error::CommandFailed(venv.python_executable().to_path_buf(), err))?;
-
-        // Create buffers to capture `stdout` and `stderr`.
-        let mut stdout_buf = Vec::with_capacity(1024);
-        let mut stderr_buf = Vec::with_capacity(1024);
-
-        // Create separate readers for `stdout` and `stderr`.
-        let stdout_reader = tokio::io::BufReader::new(child.stdout.take().unwrap()).split(b'\n');
-        let stderr_reader = tokio::io::BufReader::new(child.stderr.take().unwrap()).split(b'\n');
-
-        // Asynchronously read from the in-memory pipes.
-        let printer = Printer::from(self.level);
-        let result = tokio::join!(
-            read_from(stdout_reader, printer, &mut stdout_buf),
-            read_from(stderr_reader, printer, &mut stderr_buf),
-        );
-        match result {
-            (Ok(()), Ok(())) => {}
-            (Err(err), _) | (_, Err(err)) => {
-                return Err(Error::CommandFailed(
-                    venv.python_executable().to_path_buf(),
-                    err,
-                ));
-            }
-        }
-
-        // Wait for the child process to finish.
-        let status = child
-            .wait()
+            .stderr(std::process::Stdio::piped());
+        process::run(command, source_tree_lock, permit, Printer::from(self.level))
             .await
-            .map_err(|err| Error::CommandFailed(venv.python_executable().to_path_buf(), err))?;
-
-        Ok(PythonRunnerOutput {
-            stdout: stdout_buf,
-            stderr: stderr_buf,
-            status,
-        })
+            .map_err(|err| Error::CommandFailed(venv.python_executable().to_path_buf(), err))
     }
 }
 
