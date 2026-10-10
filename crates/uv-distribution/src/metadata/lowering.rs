@@ -981,6 +981,21 @@ fn path_source(
     }
 }
 
+impl GitWorkspaceMember<'_> {
+    /// Retain the source of a directory within this repository checkout.
+    pub fn directory_source(
+        &self,
+        path: &Path,
+    ) -> Result<Option<RequirementSource>, LoweringError> {
+        let path = git_path(path)?;
+        let root = git_path(self.fetch_root)?;
+        if !path.starts_with(&root) {
+            return Ok(None);
+        }
+        git_directory_source_from_path(path, self).map(Some)
+    }
+}
+
 fn git_directory_source_from_path(
     install_path: impl AsRef<Path>,
     git_member: &GitWorkspaceMember,

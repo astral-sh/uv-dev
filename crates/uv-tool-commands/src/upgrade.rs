@@ -1,4 +1,5 @@
 use crate::common::finalize_tool_install;
+use crate::indexes::restore_index_sources;
 use anyhow::{Context, Result};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
@@ -351,7 +352,16 @@ async fn upgrade_tool(
 
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
     let receipt_extra_build_dependencies = receipt.extra_build_dependencies.clone();
-    let options = args.clone().combine(receipt.combine(filesystem.clone()));
+    let mut options = args.clone().combine(receipt.combine(filesystem.clone()));
+    let state = PlatformState::default();
+    let receipt_index_sources = restore_index_sources(
+        &mut options,
+        existing_tool_receipt.index_sources(),
+        &state,
+        client_builder,
+        cache,
+    )
+    .await?;
     let settings = ResolverInstallerSettings::from(options.clone());
 
     // Persist source bindings only while the corresponding declared build requirements are unchanged.
@@ -418,8 +428,6 @@ async fn upgrade_tool(
             manifest_excludes,
         )
     };
-    // Initialize any shared state.
-    let state = PlatformState::default();
     // Check if we need to create a new environment — if so, resolve it first, then install the
     // requested tool.
     let requested_interpreter =
@@ -665,6 +673,7 @@ async fn upgrade_tool(
             existing_tool_receipt.excludes().to_vec(),
             existing_tool_receipt.build_constraints().to_vec(),
             Some(&receipt_extra_build_requires),
+            &receipt_index_sources,
             tool_lock.as_ref(),
             printer,
         )?;
@@ -675,7 +684,8 @@ async fn upgrade_tool(
             existing_tool_receipt
                 .clone()
                 .with_options(ToolOptions::from(options))
-                .with_extra_build_requires(receipt_extra_build_requires),
+                .with_extra_build_requires(receipt_extra_build_requires)
+                .with_index_sources(receipt_index_sources),
         )?;
     }
 

@@ -98,6 +98,24 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
         }
     }
 
+    /// Fetch a Git source without requiring a project or a build interpreter.
+    pub async fn fetch_git_source(
+        &self,
+        source: GitDirectorySourceUrl<'_>,
+    ) -> Result<Fetch, Error> {
+        let client = self.client_builder.build()?;
+        fetch_git_source_tree(
+            self.git,
+            source.git,
+            source.url.to_url(),
+            source.subdirectory,
+            client.git_http_settings(source.git.url()),
+            self.cache,
+            None,
+        )
+        .await
+    }
+
     /// Materialize a direct source tree, if the requirement identifies one.
     ///
     /// Directory requirements are already materialized. Git source trees are fetched into the
@@ -116,17 +134,13 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
                 subdirectory,
                 url,
             } => {
-                let client = self.client_builder.build()?;
-                let fetch = fetch_git_source_tree(
-                    self.git,
-                    git,
-                    url.to_url(),
-                    subdirectory.as_deref(),
-                    client.git_http_settings(git.url()),
-                    self.cache,
-                    None,
-                )
-                .await?;
+                let fetch = self
+                    .fetch_git_source(GitDirectorySourceUrl {
+                        git,
+                        url,
+                        subdirectory: subdirectory.as_deref(),
+                    })
+                    .await?;
 
                 let path = subdirectory.as_ref().map_or_else(
                     || fetch.path().to_path_buf(),

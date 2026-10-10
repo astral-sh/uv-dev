@@ -49,6 +49,7 @@ use crate::common::{
     remove_entrypoints, tool_environment_spec,
 };
 use crate::error::ToolLockError;
+use crate::indexes::capture_index_sources;
 use crate::requirements::resolve_names;
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
@@ -209,8 +210,11 @@ pub async fn install(
     } else {
         None
     };
-    let (options, settings) = if let Some((project, _, _)) = source_project.as_ref() {
-        let options = tool_options.for_project(project.workspace().install_path())?;
+    let (options, settings) = if let Some((project, git, _)) = source_project.as_ref() {
+        let options = tool_options.for_project(
+            project.workspace().install_path(),
+            git.as_ref().and_then(|fetch| fetch.path().parent()),
+        )?;
         let mut project_settings = ResolverInstallerSettings::from(options.clone());
         project_settings.resolver.torch_backend = settings.resolver.torch_backend;
         (options, project_settings)
@@ -683,6 +687,35 @@ pub async fn install(
     }
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
+    let receipt_index_sources = match (
+        &requirement.source,
+        source_project_lock
+            .as_ref()
+            .and_then(|(_, lock)| lock.git()),
+    ) {
+        (
+            RequirementSource::GitDirectory {
+                git,
+                subdirectory,
+                url,
+            },
+            Some(fetch),
+        ) => {
+            let source = GitDirectorySourceUrl {
+                git,
+                subdirectory: subdirectory.as_deref(),
+                url,
+            };
+            capture_index_sources(
+                &options,
+                &GitWorkspaceMember {
+                    fetch_root: fetch.path(),
+                    git_source: &source,
+                },
+            )?
+        }
+        _ => Vec::new(),
+    };
     // Convert to tool options.
     let options = ToolOptions::from(options);
     let lock_manifest = ToolLock::manifest(
@@ -1075,7 +1108,8 @@ pub async fn install(
                     )
                     .with_extra_build_requires(
                         receipt_extra_build_requires.clone().unwrap_or_default(),
-                    ),
+                    )
+                    .with_index_sources(receipt_index_sources.clone()),
                 )?;
                 writeln!(
                     printer.stderr(),
@@ -1341,6 +1375,7 @@ pub async fn install(
         receipt_excludes,
         receipt_build_constraints,
         receipt_extra_build_requires.as_ref(),
+        &receipt_index_sources,
         tool_lock.as_ref(),
         printer,
     )?;

@@ -8987,3 +8987,349 @@ fn tool_install_locked_unnamed_git_project_build_settings() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// A Git source without uv settings cannot inherit configuration from around its cache directory.
+#[cfg(feature = "test-git")]
+#[test]
+fn tool_install_locked_git_configuration_boundary() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let repository = context.temp_dir.child("repository");
+    let bin = context.temp_dir.child("bin");
+    let path = tool_install_git_path(&bin);
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig>=1"]
+        [project.scripts]
+        foo = "foo:main"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("src/foo/__init__.py")
+        .write_str("def main(): pass\n")?;
+    context
+        .lock()
+        .current_dir(repository.path())
+        .assert()
+        .success();
+    context
+        .cache_dir
+        .child("uv.toml")
+        .write_str("resolution = 'lowest'\n")?;
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+    let url =
+        Url::from_directory_path(repository.path()).map_err(|()| anyhow!("invalid Git source"))?;
+    let mut filters = context.filters();
+    filters.push((
+        r"git-v1/checkouts/[0-9a-f]+/[0-9a-f]+",
+        "git-v1/checkouts/[CHECKOUT]/[REV]",
+    ));
+    uv_snapshot!(filters, context.tool_install().arg(format!("git+{url}"))
+        .args(["--locked", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV])
+     + iniconfig==2.0.0
+    Installed 1 executable: foo
+    "#);
+    Ok(())
+}
+
+/// Git-backed indexes survive temporary caches and follow the source's requested revision.
+#[cfg(feature = "test-git")]
+#[test]
+fn tool_install_locked_git_index_sources_survive_cache_removal() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let repository = context.temp_dir.child("repository");
+    let bin = context.temp_dir.child("bin");
+    let path = tool_install_git_path(&bin);
+    let global_wheels = context.temp_dir.child("global-wheels");
+    global_wheels.create_dir_all()?;
+    let (simple_name, simple) = generate_wheel_with_files(
+        &"simple-child".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    repository
+        .child(format!("simple/simple-child/{simple_name}"))
+        .write_binary(&simple)?;
+    repository
+        .child("simple/simple-child/index.html")
+        .write_str(&format!("<a href='{simple_name}'>{simple_name}</a>"))?;
+    let (flat_name, flat) = generate_wheel_with_files(
+        &"flat-child".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    repository
+        .child(format!("wheels/{flat_name}"))
+        .write_binary(&flat)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &["simple-child>=1".parse()?, "flat-child>=1".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "foo/cli.py",
+                "def main():\n    import simple_child, flat_child\n    print(simple_child.__version__, flat_child.__version__)\n",
+            ),
+            (
+                "foo-0.1.0.dist-info/entry_points.txt",
+                "[console_scripts]\nfoo = foo.cli:main\n",
+            ),
+        ],
+    );
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["simple-child>=1", "flat-child>=1"]
+        [project.scripts]
+        foo = "foo.cli:main"
+        [tool.uv]
+        find-links = ["./wheels"]
+        [[tool.uv.index]]
+        name = "internal"
+        url = "./simple"
+        default = true
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    repository.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+    ", bytes=hex::encode(wheel)})?;
+    context
+        .lock()
+        .current_dir(repository.path())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+    let url =
+        Url::from_directory_path(repository.path()).map_err(|()| anyhow!("invalid Git source"))?;
+    let mut filters = context.filters();
+    filters.push((
+        r"file://[^\s]+/git-v1/checkouts/",
+        "file://[CACHE_DIR]/git-v1/checkouts/",
+    ));
+    filters.push((
+        r"git-v1/checkouts/[0-9a-f]+/[0-9a-f]+",
+        "git-v1/checkouts/[CHECKOUT]/[REV]",
+    ));
+    filters.push((r"[0-9a-f]{40}", "[COMMIT]"));
+    uv_snapshot!(filters, context.tool_install().arg(format!("git+{url}"))
+        .args(["--locked", "--no-cache", "--preview-features", "tool-install-locks", "--find-links", "global-wheels"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + flat-child==1.0.0
+     + foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV])
+     + simple-child==1.0.0
+    Installed 1 executable: foo
+    "#);
+    uv_snapshot!(context.filters(), context.external_command("foo").env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0 1.0.0
+    "#);
+    insta::with_settings!({filters => filters.clone()}, {
+        assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
+    [tool]
+    requirements = [{ name = "foo", git = "file://[TEMP_DIR]/repository/" }]
+    index-sources = [{ index = "file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/simple", source = { git = "file://[TEMP_DIR]/repository/?subdirectory=simple" } }, { index = "file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/wheels", source = { git = "file://[TEMP_DIR]/repository/?subdirectory=wheels" } }]
+    entrypoints = [
+        { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
+    ]
+
+    [tool.options]
+    index = [{ name = "internal", url = "file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/simple", explicit = false, default = true, format = "simple", authenticate = "auto" }]
+    find-links = ["file://[TEMP_DIR]/global-wheels", "file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/wheels"]
+    "#);
+    });
+    let receipt = toml::from_str::<toml::Value>(&context.read("tools/foo/uv-receipt.toml"))?;
+    let sources = receipt["tool"]["index-sources"]
+        .as_array()
+        .expect("index sources");
+    assert_eq!(sources.len(), 2);
+    ChildPath::new(
+        Url::parse(sources[0]["index"].as_str().expect("index URL"))?
+            .to_file_path()
+            .map_err(|()| anyhow!("invalid index URL"))?,
+    )
+    .assert(predicate::path::missing());
+    ChildPath::new(
+        Url::parse(sources[1]["index"].as_str().expect("index URL"))?
+            .to_file_path()
+            .map_err(|()| anyhow!("invalid index URL"))?,
+    )
+    .assert(predicate::path::missing());
+
+    let (simple_name, simple) = generate_wheel_with_files(
+        &"simple-child".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    repository
+        .child(format!("simple/simple-child/{simple_name}"))
+        .write_binary(&simple)?;
+    repository
+        .child("simple/simple-child/index.html")
+        .write_str(&format!("<a href='{simple_name}'>{simple_name}</a>"))?;
+    fs_err::remove_file(repository.child(format!("wheels/{flat_name}")))?;
+    let (flat_name, flat) = generate_wheel_with_files(
+        &"flat-child".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    repository
+        .child(format!("wheels/{flat_name}"))
+        .write_binary(&flat)?;
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Add newer index packages",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(filters, context.tool_upgrade()
+        .args(["foo", "--reinstall", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Reinstalled foo v0.1.0
+     - flat-child==1.0.0
+     + flat-child==2.0.0
+     - foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV])
+     + foo==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT])
+     - simple-child==1.0.0
+     + simple-child==2.0.0
+    Installed 1 executable: foo
+    "#);
+    uv_snapshot!(context.filters(), context.external_command("foo").env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0 2.0.0
+    "#);
+    uv_snapshot!(filters, context.tool_upgrade()
+        .args(["foo", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    "#);
+    uv_snapshot!(filters, context.tool_upgrade()
+        .args(["foo", "--reinstall", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified foo environment
+     ~ flat-child==2.0.0
+     ~ foo==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT])
+     ~ simple-child==2.0.0
+    Installed 1 executable: foo
+    "#);
+    Ok(())
+}
