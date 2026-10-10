@@ -42,7 +42,7 @@ use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
-use uv_lock::{Installable, Lock};
+use uv_lock::Lock;
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockResult, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, GroupName, PackageName};
 use uv_preview::Preview;
@@ -295,7 +295,7 @@ pub async fn run(
             let install_options = InstallOptions::default();
 
             match sync_from_lock(
-                target,
+                &target.select_workspace_context()?,
                 &environment,
                 &extras.with_defaults(DefaultExtras::default()),
                 &groups.with_defaults(DefaultGroups::default()),
@@ -960,7 +960,7 @@ pub async fn run(
                 target.validate_groups(&groups)?;
 
                 match sync_from_lock(
-                    target,
+                    &target.select_workspace_context()?,
                     &venv,
                     &extras,
                     &groups,

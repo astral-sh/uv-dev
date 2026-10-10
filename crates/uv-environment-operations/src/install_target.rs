@@ -28,7 +28,7 @@ use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, VirtualProj
 
 use crate::EnvironmentError;
 
-/// A target that can be installed from a lockfile.
+/// A project, workspace, or script target before selecting its installation context.
 #[derive(Debug, Copy, Clone)]
 pub enum InstallTarget<'lock> {
     /// A project (which could be a workspace root or member).
@@ -66,6 +66,16 @@ pub enum InstallTarget<'lock> {
         script: &'lock Pep723Script,
         lock: &'lock Lock,
     },
+}
+
+/// An installation target whose workspace context has been selected.
+///
+/// Installation traversal and tool lookup use this view; metadata export can retain the original
+/// [`InstallTarget`] to describe every locked context.
+#[derive(Debug)]
+pub struct SelectedInstallTarget<'lock> {
+    target: InstallTarget<'lock>,
+    lock: Cow<'lock, Lock>,
 }
 
 /// The workspace packages selected by an installation target.
@@ -128,8 +138,9 @@ impl<'lock> PackageSelection<'lock> {
     }
 }
 
-impl<'lock> Installable<'lock> for InstallTarget<'lock> {
-    fn install_path(&self) -> &'lock Path {
+impl<'lock> InstallTarget<'lock> {
+    /// Return the root installation path.
+    pub fn install_path(&self) -> &'lock Path {
         match self {
             Self::Project { workspace, .. } => workspace.install_path(),
             Self::Projects { workspace, .. } => workspace.install_path(),
@@ -140,7 +151,8 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         }
     }
 
-    fn lock(&self) -> &'lock Lock {
+    /// Return the lockfile described by this target.
+    pub(crate) fn lock(&self) -> &'lock Lock {
         match self {
             Self::Project { lock, .. } => lock,
             Self::Projects { lock, .. } => lock,
@@ -151,8 +163,8 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         }
     }
 
-    #[allow(refining_impl_trait)]
-    fn roots(&self) -> Box<dyn Iterator<Item = &PackageName> + '_> {
+    /// Return the root package names in the described target.
+    pub fn roots(&self) -> Box<dyn Iterator<Item = &'lock PackageName> + 'lock> {
         let lock = self.lock();
         match self.package_selection() {
             Some(PackageSelection::Projects(names)) => Box::new(names.iter()),
@@ -172,7 +184,8 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         }
     }
 
-    fn group_root(&self, groups: &DependencyGroupsWithDefaults) -> Option<&PackageName> {
+    /// Return the workspace root whose explicitly selected groups are inherited.
+    fn group_root(&self, groups: &DependencyGroupsWithDefaults) -> Option<&'lock PackageName> {
         let (name, workspace) = self.selected_project()?;
         let root = self.lock().root().filter(|root| root.name() != name)?;
         let includes_root_group = if let Some(workspace) = workspace {
@@ -203,6 +216,7 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         includes_root_group.then_some(root.name())
     }
 
+    /// Return whether a dependency group is included for its owning package.
     fn includes_group(
         &self,
         package: Option<&PackageName>,
@@ -256,7 +270,8 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         })
     }
 
-    fn project_name(&self) -> Option<&PackageName> {
+    /// Return the selected project name, when the target represents one project.
+    fn project_name(&self) -> Option<&'lock PackageName> {
         match self {
             Self::Project { name, .. } => Some(name),
             Self::Projects { .. } => None,
@@ -410,11 +425,14 @@ impl<'lock> InstallTarget<'lock> {
 
     /// Select the workspace context before traversing packages for installation or tool lookup.
     pub fn select_workspace_context(
-        &self,
-    ) -> Result<Cow<'lock, Lock>, WorkspaceGroupSelectionError> {
+        self,
+    ) -> Result<SelectedInstallTarget<'lock>, WorkspaceGroupSelectionError> {
         let lock = self.lock();
         if lock.workspace_groups().is_empty() {
-            return Ok(Cow::Borrowed(lock));
+            return Ok(SelectedInstallTarget {
+                target: self,
+                lock: Cow::Borrowed(lock),
+            });
         }
         let workspace_target = match self.package_selection() {
             Some(PackageSelection::Workspace | PackageSelection::NonProjectWorkspace) => true,
@@ -430,11 +448,14 @@ impl<'lock> InstallTarget<'lock> {
         } else {
             self.roots().cloned().collect()
         };
-        Ok(Cow::Owned(lock.select_workspace_context(None, &members)?))
+        Ok(SelectedInstallTarget {
+            target: self,
+            lock: Cow::Owned(lock.select_workspace_context(None, &members)?),
+        })
     }
 
     /// Use a projected lock while retaining the installation target.
-    pub fn with_lock<'selected>(self, lock: &'selected Lock) -> InstallTarget<'selected>
+    fn with_lock<'selected>(self, lock: &'selected Lock) -> InstallTarget<'selected>
     where
         'lock: 'selected,
     {
@@ -478,58 +499,6 @@ impl<'lock> InstallTarget<'lock> {
             },
             Self::Script { script, .. } => InstallTarget::Script { script, lock },
         }
-    }
-
-    /// Convert the target's locked packages to a [`Resolution`].
-    pub fn to_resolution(
-        self,
-        marker_env: &ResolverMarkerEnvironment,
-        tags: &Tags,
-        extras: &ExtrasSpecificationWithDefaults,
-        groups: &DependencyGroupsWithDefaults,
-        build_options: &BuildOptions,
-        install_options: &InstallOptions,
-    ) -> Result<Resolution, LockError> {
-        // Package-backed project and workspace targets without conflicts can use concrete roots.
-        // Other targets need the generic path to include manifest dependencies or evaluate
-        // conflict markers from project roots.
-        let use_concrete_roots = self.lock().conflicts().is_empty()
-            && match self {
-                Self::Project { workspace, .. }
-                | Self::Projects { workspace, .. }
-                | Self::Workspace { workspace, .. } => !workspace.is_non_project(),
-                Self::Lockfile { lock, .. } => lock.root().is_some(),
-                Self::NonProjectWorkspace { .. } | Self::Script { .. } => false,
-            };
-        if use_concrete_roots
-            && self.group_root(groups).is_none()
-            && let Some(roots) = self
-                .roots()
-                .map(|root_name| self.lock().find_by_name(root_name).ok().flatten())
-                .collect::<Option<Vec<_>>>()
-        {
-            return self.lock().to_resolution(
-                self.install_path(),
-                roots,
-                self.project_name(),
-                marker_env,
-                tags,
-                extras,
-                groups,
-                build_options,
-                install_options,
-            );
-        }
-
-        Installable::to_resolution(
-            &self,
-            marker_env,
-            tags,
-            extras,
-            groups,
-            build_options,
-            install_options,
-        )
     }
 
     /// Return an iterator over the [`Index`] definitions in the target.
@@ -981,5 +950,101 @@ impl<'lock> InstallTarget<'lock> {
                 BTreeSet::new()
             }
         }
+    }
+}
+
+impl SelectedInstallTarget<'_> {
+    /// Return the descriptor bound to the selected context.
+    pub fn as_target(&self) -> InstallTarget<'_> {
+        self.target.with_lock(&self.lock)
+    }
+
+    /// Return the lockfile projected to the selected context.
+    pub fn lock(&self) -> &Lock {
+        &self.lock
+    }
+
+    /// Convert the target's locked packages to a [`Resolution`].
+    pub fn to_resolution(
+        &self,
+        marker_env: &ResolverMarkerEnvironment,
+        tags: &Tags,
+        extras: &ExtrasSpecificationWithDefaults,
+        groups: &DependencyGroupsWithDefaults,
+        build_options: &BuildOptions,
+        install_options: &InstallOptions,
+    ) -> Result<Resolution, LockError> {
+        let target = self.as_target();
+        // Package-backed project and workspace targets without conflicts can use concrete roots.
+        // Other targets need the generic path to include manifest dependencies or evaluate
+        // conflict markers from project roots.
+        let use_concrete_roots = target.lock().conflicts().is_empty()
+            && match target {
+                InstallTarget::Project { workspace, .. }
+                | InstallTarget::Projects { workspace, .. }
+                | InstallTarget::Workspace { workspace, .. } => !workspace.is_non_project(),
+                InstallTarget::Lockfile { lock, .. } => lock.root().is_some(),
+                InstallTarget::NonProjectWorkspace { .. } | InstallTarget::Script { .. } => false,
+            };
+        if use_concrete_roots
+            && target.group_root(groups).is_none()
+            && let Some(roots) = target
+                .roots()
+                .map(|root_name| target.lock().find_by_name(root_name).ok().flatten())
+                .collect::<Option<Vec<_>>>()
+        {
+            return target.lock().to_resolution(
+                target.install_path(),
+                roots,
+                target.project_name(),
+                marker_env,
+                tags,
+                extras,
+                groups,
+                build_options,
+                install_options,
+            );
+        }
+
+        Installable::to_resolution(
+            &self,
+            marker_env,
+            tags,
+            extras,
+            groups,
+            build_options,
+            install_options,
+        )
+    }
+}
+
+impl<'selected> Installable<'selected> for &'selected SelectedInstallTarget<'_> {
+    fn install_path(&self) -> &'selected Path {
+        self.target.install_path()
+    }
+
+    fn lock(&self) -> &'selected Lock {
+        SelectedInstallTarget::lock(self)
+    }
+
+    fn roots(&self) -> impl Iterator<Item = &PackageName> {
+        self.as_target().roots()
+    }
+
+    fn group_root(&self, groups: &DependencyGroupsWithDefaults) -> Option<&PackageName> {
+        self.as_target().group_root(groups)
+    }
+
+    fn includes_group(
+        &self,
+        package: Option<&PackageName>,
+        group: &GroupName,
+        groups: &DependencyGroupsWithDefaults,
+    ) -> bool {
+        self.as_target().includes_group(package, group, groups)
+    }
+
+    fn project_name(&self) -> Option<&PackageName> {
+        self.as_target().project_name()
     }
 }

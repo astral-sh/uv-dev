@@ -775,6 +775,9 @@ async fn render_export<'output>(
         detect_conflicts(&target, extras, groups)?;
     }
 
+    let selected_target = target.select_workspace_context()?;
+    let target = &selected_target;
+
     // If the user is exporting to PEP 751, ensure the filename matches the specification.
     if matches!(format, ExportFormat::PylockToml) {
         if let Some(file_name) = output_file

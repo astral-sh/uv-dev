@@ -1124,21 +1124,18 @@ fn workspace_groups_ordinary_targeting() -> Result<()> {
             .replace("default = true\n", ""),
     )?;
     context.lock().arg("--offline").assert().success();
-    let next = context
-        .export()
-        .args([
-            "--offline",
-            "--frozen",
-            "--package",
-            "next",
-            "--no-header",
-            "--no-hashes",
-        ])
-        .output()?;
-    next.clone().assert().success();
-    let next = String::from_utf8(next.stdout)?;
-    assert!(next.contains("shared-leaf==2.0.0"));
-    assert!(!next.contains("branch-one"));
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--package", "next", "--no-header", "--no-hashes",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    branch-two==1.0.0
+        # via next
+    common-leaf==1.0.0
+        # via common
+    shared-leaf==2.0.0
+        # via branch-two
+    "#);
     uv_snapshot!(context.filters(), context.export().args(["--offline", "--frozen", "--package", "common", "--no-header", "--no-hashes"]), @"
     exit_code: 0 (success)
     ----- stdout -----

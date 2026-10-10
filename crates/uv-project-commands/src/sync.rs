@@ -29,7 +29,7 @@ use uv_fs::{PortablePathBuf, Simplified};
 use uv_install_operations::Changelog;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_install_operations::report::{PackageChangesReport, SchemaReport};
-use uv_lock::{Installable, Lock, PythonReport};
+use uv_lock::{Lock, PythonReport};
 use uv_lock_operations::{
     DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockResult, LockTarget,
     MissingLockfileSource,
@@ -691,7 +691,7 @@ pub async fn sync(
 
     // Perform the sync operation.
     let changelog = match sync_from_lock(
-        sync_target,
+        &sync_target.select_workspace_context()?,
         &environment,
         &extras,
         &groups,

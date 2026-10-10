@@ -1448,7 +1448,7 @@ async fn lock_and_sync(
     );
 
     sync_from_lock(
-        target,
+        &target.select_workspace_context()?,
         venv,
         extras,
         groups,

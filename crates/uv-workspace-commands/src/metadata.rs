@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -252,12 +251,13 @@ pub async fn metadata(
         },
     };
     let mut export = metadata_for_target(install_target);
-    let selected_lock = if sync.is_some() {
-        install_target.select_workspace_context()?
-    } else {
-        Cow::Borrowed(lock)
-    };
-    let environment_target = install_target.with_lock(&selected_lock);
+    let selected_target = sync
+        .is_some()
+        .then(|| install_target.select_workspace_context())
+        .transpose()?;
+    let environment_target = selected_target
+        .as_ref()
+        .map_or(install_target, |target| target.as_target());
     let environment = if sync.is_some() {
         Some(match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
@@ -347,8 +347,15 @@ pub async fn metadata(
                 tracing::warn!("Failed to acquire environment lock: {err}");
             })
             .ok();
+        let selected_target = if let Some(target) = selected_target {
+            target
+        } else {
+            install_target
+                .select_workspace_context()
+                .context("Failed to collect module owners")?
+        };
         let module_owners = collect_module_owners(
-            environment_target,
+            &selected_target,
             &environment,
             &settings,
             &client_builder,

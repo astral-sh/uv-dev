@@ -538,7 +538,7 @@ pub async fn check(
             lock: result.lock(),
         };
         match sync_from_lock(
-            target,
+            &target.select_workspace_context()?,
             &venv,
             &extras,
             &groups,
@@ -705,19 +705,19 @@ pub async fn check(
             }
         };
 
-        let target = InstallTarget::from_project(project, result.lock(), selection);
-        let selected_lock = target.select_workspace_context()?;
-        let lock = selected_lock.as_ref();
-        let target = InstallTarget::from_project(project, lock, selection);
+        let target = InstallTarget::from_project(project, result.lock(), selection)
+            .select_workspace_context()?;
+        let lock = target.lock();
+        let install_target = target.as_target();
 
-        target.validate_extras(&extras)?;
-        target.validate_groups(&groups)?;
+        install_target.validate_extras(&extras)?;
+        install_target.validate_groups(&groups)?;
 
         if ty_path.is_none()
             && ty_version.is_none()
             && let Some(tool) = toolchain::find_locked_tool(
                 project,
-                lock,
+                &target,
                 lock_interpreter,
                 &PackageName::from_str("ty")?,
                 &DEV_DEPENDENCIES,
@@ -736,12 +736,12 @@ pub async fn check(
                     CachedEnvironment::base_interpreter(lock_interpreter, cache)?;
                 let resolution = toolchain::resolution_from_lock(
                     project,
-                    lock,
+                    &target,
                     &tool,
                     &base_interpreter,
                     &settings.resolver.build_options,
                 )?;
-                store_credentials_from_target(target, &client_builder)?;
+                store_credentials_from_target(install_target, &client_builder)?;
                 let ty_state = state.fork();
                 let environment = match CachedEnvironment::from_locked_resolution(
                     &resolution,
@@ -775,7 +775,7 @@ pub async fn check(
         } else {
             let sync_state = state.fork();
             match sync_from_lock(
-                target,
+                &target,
                 &venv,
                 &extras,
                 &groups,

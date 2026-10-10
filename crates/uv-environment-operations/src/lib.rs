@@ -23,7 +23,7 @@ use uv_distribution_types::{
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
-use uv_lock::{Installable, Lock};
+use uv_lock::Lock;
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
