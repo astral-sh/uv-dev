@@ -1567,7 +1567,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             if env.included_by_marker(required_markers) {
                 let mut unavailable_wheel = None;
                 // But isn't supported by the distribution in this fork...
-                let supported_markers = if require_wheels
+                let supported = if require_wheels
                     && self
                         .options
                         .required_environments
@@ -1575,7 +1575,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         .any(|required| *required == marker)
                 {
                     if let Some(prioritized) = dist.prioritized() {
-                        prioritized.implied_wheel_markers(
+                        prioritized.has_wheel_coverage(
                             self.options.minimum_libc_version,
                             required_markers.and(fork_markers),
                             |wheel| match self
@@ -1591,12 +1591,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             },
                         )?
                     } else {
-                        MarkerTree::TRUE
+                        true
                     }
                 } else {
-                    artifact_markers
+                    env.included_by_marker(artifact_markers.and(marker))
                 };
-                if !env.included_by_marker(supported_markers.and(required_markers)) {
+                if !supported {
                     // Separate the required environment from the candidate's wheel coverage in
                     // this fork, allowing environments in neither set to fall on either side.
                     // For example, Darwin == 24 becomes Darwin < 25 when the wheels require
@@ -1760,19 +1760,29 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        self.visit_candidate(candidate, dist, package, name, pins, requests)?;
-        self.visit_candidate(&base_candidate, base_dist, package, name, pins, requests)?;
+        let (base_version, local_version) =
+            if require_wheels && !self.options.required_environments.is_empty() {
+                // Each platform fork must validate wheel coverage before selecting a version.
+                (None, None)
+            } else {
+                self.visit_candidate(candidate, dist, package, name, pins, requests)?;
+                self.visit_candidate(&base_candidate, base_dist, package, name, pins, requests)?;
+                (
+                    Some(base_candidate.version().clone()),
+                    Some(candidate.version().clone()),
+                )
+            };
 
         let forks = vec![
             VersionFork {
-                env: base_env.clone(),
+                env: base_env,
                 id,
-                version: Some(base_candidate.version().clone()),
+                version: base_version,
             },
             VersionFork {
-                env: local_env.clone(),
+                env: local_env,
                 id,
-                version: Some(candidate.version().clone()),
+                version: local_version,
             },
         ];
         Ok(Some(ResolverVersion::Forked(forks)))

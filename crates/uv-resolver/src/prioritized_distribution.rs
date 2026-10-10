@@ -539,16 +539,33 @@ impl PrioritizedDist {
         &self.0.hashes
     }
 
-    /// Return the environments supported by the compatible wheels in this distribution, without
-    /// treating a source distribution as support for every environment.
-    pub(crate) fn implied_wheel_markers<E>(
+    /// Check whether compatible wheels cover a required environment, without treating a source
+    /// distribution as wheel coverage. Prefer index metadata, then the best wheel's metadata.
+    pub(crate) fn has_wheel_coverage<E>(
         &self,
         minimum_libc_version: Option<MinimumLibcVersion>,
         required_markers: MarkerTree,
         mut metadata_markers: impl FnMut(&RegistryBuiltWheel) -> Result<MarkerTree, E>,
-    ) -> Result<MarkerTree, E> {
+    ) -> Result<bool, E> {
+        let indexed_wheels = self
+            .0
+            .wheels
+            .iter()
+            .filter(|(wheel, _)| wheel.file.requires_python.is_some());
+        let metadata_wheels = self
+            .best_wheel()
+            .into_iter()
+            .chain(
+                self.0
+                    .wheels
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| Some(*index) != self.0.best_wheel_index)
+                    .map(|(_, wheel)| wheel),
+            )
+            .filter(|(wheel, _)| wheel.file.requires_python.is_none());
         let mut markers = [MarkerTree::FALSE; 2];
-        for (wheel, compatibility) in &self.0.wheels {
+        for (wheel, compatibility) in indexed_wheels.chain(metadata_wheels) {
             if !compatibility.is_compatible() {
                 continue;
             }
@@ -569,9 +586,12 @@ impl PrioritizedDist {
             for (coverage, marker) in markers.iter_mut().zip(wheel_markers) {
                 *coverage = coverage.or(marker.and(requires_python));
             }
+            let [glibc, musl] = markers;
+            if !glibc.and(musl).is_false() {
+                return Ok(true);
+            }
         }
-        let [glibc, musl] = markers;
-        Ok(glibc.and(musl))
+        Ok(false)
     }
 
     /// Returns true if and only if this distribution does not contain any

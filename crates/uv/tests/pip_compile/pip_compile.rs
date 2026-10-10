@@ -20700,3 +20700,214 @@ async fn universal_required_environment_skips_inactive_dependency_metadata() -> 
     "#);
     Ok(())
 }
+
+/// Index-provided coverage makes metadata from an otherwise matching wheel unnecessary.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn universal_required_environment_uses_index_coverage_first() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/example/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            formatdoc! {r#"
+                <a href="{base}/files/example-1.0.0-py3-none-any.whl" data-core-metadata="true">example-1.0.0-py3-none-any.whl</a>
+                <a href="{base}/files/example-1.0.0-1-py3-none-any.whl" data-core-metadata="true" data-requires-python=">=3.12">example-1.0.0-1-py3-none-any.whl</a>
+            "#, base = server.uri()},
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/example-1.0.0-py3-none-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/example-1.0.0-1-py3-none-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "Metadata-Version: 2.3\nName: example\nVersion: 1.0.0\nRequires-Python: >=3.12\n",
+        ))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pyproject.toml", "--universal", "--no-header", "--no-annotate"])
+        .arg("--index-url").arg(format!("{}/simple", server.uri()))
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// Once the preferred wheel establishes coverage, another wheel's missing metadata is irrelevant.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn universal_required_environment_stops_after_preferred_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/example/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            formatdoc! {r#"
+                <a href="{base}/files/example-1.0.0-py3-none-any.whl" data-core-metadata="true">example-1.0.0-py3-none-any.whl</a>
+                <a href="{base}/files/example-1.0.0-1-py3-none-any.whl" data-core-metadata="true">example-1.0.0-1-py3-none-any.whl</a>
+            "#, base = server.uri()},
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/example-1.0.0-py3-none-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/example-1.0.0-1-py3-none-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "Metadata-Version: 2.3\nName: example\nVersion: 1.0.0\nRequires-Python: >=3.12\n",
+        ))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pyproject.toml", "--universal", "--no-header", "--no-annotate"])
+        .arg("--index-url").arg(format!("{}/simple", server.uri()))
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// A source-only public version cannot bypass wheel coverage through a local-version fork.
+#[cfg(feature = "test-universal")]
+#[test]
+fn universal_required_environment_rechecks_local_version_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "required-environment-local-version-fork"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel = false
+        requires_python = ">=3.12"
+        [packages.example.versions."1.0.0+local"]
+        sdist = false
+        wheel_tags = ["cp313-cp313-win_amd64"]
+        requires_python = ">=3.12"
+    "#})?);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example==1.0.0"]
+        [tool.uv]
+        environments = ["python_version == '3.13'"]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pyproject.toml", "--universal", "--no-header", "--no-annotate"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: (python_full_version == '3.13.*' and platform_machine != 'AMD64') or (python_full_version == '3.13.*' and platform_python_implementation != 'CPython') or (python_full_version == '3.13.*' and sys_platform != 'win32'))
+      cause: Because all versions of example have no `python_full_version == '3.13.*'`-compatible wheels and project depends on example==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    ");
+    Ok(())
+}
+
+/// Required-wheel coverage permits local-version forks when both selected versions have wheels.
+#[cfg(feature = "test-universal")]
+#[test]
+fn universal_required_environment_allows_covered_local_version_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "required-environment-covered-local-version-fork"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-any"]
+        requires_python = ">=3.12"
+        [packages.example.versions."1.0.0+local"]
+        sdist = false
+        wheel_tags = ["cp313-cp313-win_amd64"]
+        requires_python = ">=3.12"
+    "#})?);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example==1.0.0"]
+        [tool.uv]
+        environments = ["python_version == '3.13'"]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pyproject.toml", "--universal", "--no-header", "--no-annotate"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0 ; (python_full_version == '3.13.*' and platform_machine != 'AMD64') or (python_full_version == '3.13.*' and platform_python_implementation != 'CPython') or (python_full_version == '3.13.*' and sys_platform != 'win32')
+    example==1.0.0+local ; python_full_version == '3.13.*' and platform_machine == 'AMD64' and platform_python_implementation == 'CPython' and sys_platform == 'win32'
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
