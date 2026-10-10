@@ -10,7 +10,7 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use ring::signature::Ed25519KeyPair;
 use serde_json::json;
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use url::Url;
@@ -559,6 +559,58 @@ async fn checksum_authority_direct_url_keeps_required_hashes() -> Result<()> {
     Installed 1 package in [TIME]
      + checksum-example==1.0.0 (from http://[LOCALHOST]/files/checksum_example-1.0.0-py3-none-any.whl)
     ");
+    Ok(())
+}
+
+/// Authority verification does not bypass policies using a different hash algorithm.
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_direct_url_keeps_additional_hash_algorithms() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let bytes = wheel()?;
+    index(&server, WHEEL, &bytes, false).await;
+    let url = format!("{}/files/{WHEEL}", server.uri());
+    let authority = Authority::start(vec![record(&url, WHEEL, &bytes)?]).await?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!(
+            "checksum-example @ {url} --hash=sha512:{}\n",
+            "0".repeat(128),
+        ))?;
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+        .args(["--no-index", "--require-hashes", "-r", "requirements.txt"])), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0-py3-none-any.whl`
+      cause: Hash mismatch for `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0-py3-none-any.whl`
+
+             Expected:
+               sha512:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+               sha256:de957d73d37350560035ae6ac5ff08831f3b910331970a929255dc2f85162a93
+               sha512:bc122ff3a6af4a678a4fee6fdd74bbd82fea06a46ba50c2bd0449b8b5d1310d5aa5ad1b370169a755d06e19edc679516bdd804c3acd6da8d16cf9631b09a7a30
+    "#);
+    context.assert_command("import checksum_example").failure();
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!(
+            "checksum-example @ {url} --hash=sha512:{}\n",
+            hex::encode(Sha512::digest(&bytes)),
+        ))?;
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+        .args(["--no-index", "--require-hashes", "-r", "requirements.txt"])), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + checksum-example==1.0.0 (from http://[LOCALHOST]/files/checksum_example-1.0.0-py3-none-any.whl)
+    "#);
+    context.assert_command("import checksum_example").success();
     Ok(())
 }
 
