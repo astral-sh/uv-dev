@@ -96,11 +96,23 @@ fn username_password_no_longer_supported() {
     );
 }
 
-#[test]
-fn invalid_token() {
+#[tokio::test]
+async fn invalid_token() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_sizes()
         .with_filtered_http_retries();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/legacy/"))
+        .and(basic_auth("__token__", "dummy"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+            "message": "Access was denied to this resource.",
+            "code": "403 Invalid or non-existent authentication information. See https://test.pypi.org/help/#invalid-auth for more information.",
+            "title": "Forbidden",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("-u")
@@ -108,17 +120,32 @@ fn invalid_token() {
         .arg("-p")
         .arg("dummy")
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
-        .arg(dummy_wheel()), @"
+        .arg(format!("{}/legacy/", server.uri()))
+        .arg(dummy_wheel())
+        .env(EnvVars::NO_PROXY, "*")
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/
+    Publishing 1 file to http://[LOCALHOST]/legacy/
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `https://test.pypi.org/legacy/`
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `http://[LOCALHOST]/legacy/`
       cause: Server returned status code 403 Forbidden. Server says: 403 Invalid or non-existent authentication information. See https://test.pypi.org/help/#invalid-auth for more information.
     "
     );
+
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("Request recording is enabled")
+            .len(),
+        1
+    );
+    server.verify().await;
 }
 
 /// Emulate a missing `permission` `id-token: write` situation.
