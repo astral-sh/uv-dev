@@ -94,6 +94,8 @@ pub trait Identifier {
 
 pub trait Verbatim {
     /// Return the verbatim representation of the distribution.
+    ///
+    /// This representation can contain credentials. Use [`std::fmt::Display`] for diagnostics.
     fn verbatim(&self) -> Cow<'_, str>;
 }
 
@@ -102,7 +104,7 @@ impl Verbatim for VerbatimUrl {
         if let Some(given) = self.given() {
             Cow::Borrowed(given)
         } else {
-            Cow::Owned(self.to_string())
+            Cow::Borrowed(self.as_str())
         }
     }
 }

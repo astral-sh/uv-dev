@@ -9,7 +9,6 @@ use std::str::FromStr;
 use anyhow::Result;
 #[cfg(all(feature = "test-git", feature = "test-universal"))]
 use anyhow::{Context, anyhow};
-#[cfg(feature = "test-universal")]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use fs_err::{File, read};
@@ -17,14 +16,12 @@ use fs_err::{File, read};
 use fs_err::{read_to_string, remove_file, write};
 #[cfg(feature = "test-python-managed")]
 use http::StatusCode;
-#[cfg(feature = "test-universal")]
-use indoc::formatdoc;
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 #[cfg(feature = "test-universal")]
 use regex::Regex;
 use sha2::{Digest, Sha256, Sha512};
 use url::Url;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[cfg(all(feature = "test-git", feature = "test-universal"))]
@@ -14916,6 +14913,85 @@ fn tool_uv_sources() -> Result<()> {
     Ok(())
 }
 
+/// Compiled URL sources retain the credentials needed to install the generated requirements.
+#[tokio::test]
+async fn tool_uv_sources_signed_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    Mock::given(path(format!("/{filename}")))
+        .and(query_param("X-Goog-Signature", "synthetic-signature"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(read(
+            context.workspace_root.join("test/links").join(filename),
+        )?))
+        .mount(&server)
+        .await;
+    let url = format!(
+        "{}/{filename}?X-Goog-Credential=synthetic-credential&X-Goog-Signature=synthetic-signature",
+        server.uri()
+    );
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = ["ok"]
+
+        [tool.uv.sources]
+        ok = {{ url = "{url}" }}
+    "#})?;
+    let compiled = uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("pyproject.toml")
+        .arg("--no-index")
+        .arg("--no-header")
+        .arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok @ http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl?X-Goog-Credential=synthetic-credential&X-Goog-Signature=synthetic-signature
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_binary(&compiled.stdout)?;
+    context
+        .pip_install()
+        .arg("-r")
+        .arg(requirements.path())
+        .arg("--no-deps")
+        .arg("--no-index")
+        .arg("--no-cache")
+        .assert()
+        .success();
+
+    // The same source is redacted when it is included in an error instead of requirement output.
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = ["wrong"]
+
+        [tool.uv.sources]
+        wrong = {{ url = "{url}" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("pyproject.toml")
+        .arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Requested package name `wrong` does not match `ok` in the distribution filename: http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl?X-Goog-Credential=****&X-Goog-Signature=****
+    ");
+    requirements.write_str(&format!("wrong @ {url}\n"))?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg(requirements.path())
+        .arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Requested package name `wrong` does not match `ok` in the distribution filename: http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl?X-Goog-Credential=****&X-Goog-Signature=****
+    ");
+    Ok(())
+}
+
 #[test]
 fn invalid_tool_uv_sources() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -14964,6 +15040,26 @@ fn invalid_tool_uv_sources() -> Result<()> {
       cause: Expected direct URL (`https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.tar.baz`) to end in a supported file extension: `.whl`, `.tar.gz`, `.zip`, `.tar.bz2`, `.tar.lz`, `.tar.lzma`, `.tar.xz`, `.tar.zst`, `.tar`, `.tbz`, `.tgz`, `.tlz`, or `.txz`
     "
     );
+
+    // A local source error uses the path from the project configuration.
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    context.temp_dir.child(filename).write_binary(&read(
+        context.workspace_root.join("test/links").join(filename),
+    )?)?;
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.0.0"
+        dependencies = ["wrong"]
+
+        [tool.uv.sources]
+        wrong = { path = "ok-1.0.0-py3-none-any.whl" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("pyproject.toml").arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Requested package name `wrong` does not match `ok` in the distribution filename: ok-1.0.0-py3-none-any.whl
+    ");
 
     Ok(())
 }

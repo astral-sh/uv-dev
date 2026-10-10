@@ -100,10 +100,12 @@ pub fn pip_freeze(
                 format!("{}=={}", dist.name().bold(), dist.version)
             }
             InstalledDistKind::Url(dist) => {
+                // Requirement output needs signed query values to fetch the source again.
+                let url = dist.url.without_credentials();
                 if dist.editable {
-                    format!("-e {}", dist.url)
+                    format!("-e {url}")
                 } else {
-                    format!("{} @ {}", dist.name().bold(), dist.url)
+                    format!("{} @ {url}", dist.name().bold())
                 }
             }
             InstalledDistKind::EggInfoFile(dist) => {
