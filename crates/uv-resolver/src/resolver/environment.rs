@@ -166,19 +166,8 @@ impl ResolverEnvironment {
             ..
         } = &mut self.kind
         {
-            *project_conflicting_extras = Arc::new(
-                conflicts
-                    .iter()
-                    .flat_map(|set| {
-                        set.iter()
-                            .filter(move |item| {
-                                matches!(item.kind(), ConflictKind::Extra(_))
-                                    && set.contains(item.package(), ConflictKindRef::Project)
-                            })
-                            .cloned()
-                    })
-                    .collect(),
-            );
+            *project_conflicting_extras =
+                Arc::new(conflicts.project_conflicting_extras().cloned().collect());
         }
         self
     }
