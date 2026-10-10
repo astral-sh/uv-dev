@@ -27,10 +27,78 @@ pub struct FlatDependencyGroups(BTreeMap<GroupName, FlatDependencyGroup>);
 
 #[derive(Debug, Default, Clone)]
 pub struct FlatDependencyGroup {
-    pub requirements: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+    pub requirements: FlatGroupRequirements,
     pub requires_python: Option<VersionSpecifiers>,
     /// Workspace group references, retaining conditions added by their importing groups.
     pub workspace_includes: Vec<WorkspaceGroupReference>,
+}
+
+/// Flattened requirements with explicit ownership for workspace-group imports.
+#[derive(Debug, Default, Clone)]
+pub struct FlatGroupRequirements(Vec<FlatGroupRequirement>);
+
+#[derive(Debug, Clone)]
+struct FlatGroupRequirement {
+    requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
+    owner: Option<(PackageName, GroupName)>,
+}
+
+/// An imported requirement and the member group whose sources apply to it.
+#[derive(Debug, Clone)]
+pub struct ImportedGroupRequirement {
+    pub requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
+    pub package: PackageName,
+    pub group: GroupName,
+}
+
+impl FlatGroupRequirements {
+    /// Iterate over every requirement, including workspace imports.
+    pub fn iter(&self) -> impl Iterator<Item = &uv_pep508::Requirement<VerbatimParsedUrl>> {
+        self.0.iter().map(|entry| &entry.requirement)
+    }
+
+    /// Consume every requirement, including workspace imports.
+    pub fn into_requirements(
+        self,
+    ) -> impl Iterator<Item = uv_pep508::Requirement<VerbatimParsedUrl>> {
+        self.0.into_iter().map(|entry| entry.requirement)
+    }
+
+    /// Partition requirements by source ownership without consulting diagnostic annotations.
+    pub fn partition(
+        self,
+    ) -> (
+        Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+        Vec<ImportedGroupRequirement>,
+    ) {
+        let mut local = Vec::new();
+        let mut imported = Vec::new();
+        for entry in self.0 {
+            if let Some((package, group)) = entry.owner {
+                imported.push(ImportedGroupRequirement {
+                    requirement: entry.requirement,
+                    package,
+                    group,
+                });
+            } else {
+                local.push(entry.requirement);
+            }
+        }
+        (local, imported)
+    }
+}
+
+impl Extend<uv_pep508::Requirement<VerbatimParsedUrl>> for FlatGroupRequirements {
+    fn extend<T: IntoIterator<Item = uv_pep508::Requirement<VerbatimParsedUrl>>>(
+        &mut self,
+        iter: T,
+    ) {
+        self.0
+            .extend(iter.into_iter().map(|requirement| FlatGroupRequirement {
+                requirement,
+                owner: None,
+            }));
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, serde::Serialize)]
@@ -213,8 +281,9 @@ impl FlatDependencyGroups {
         // groups own their flattened requirements, including their transitive includes.
         if let Some(project) = &pyproject_toml.project {
             for (group, dependencies) in &mut groups.0 {
-                for requirement in &mut dependencies.requirements {
-                    requirement.origin = Some(RequirementOrigin::Group(
+                for entry in &mut dependencies.requirements.0 {
+                    entry.owner = None;
+                    entry.requirement.origin = Some(RequirementOrigin::Group(
                         path.join("pyproject.toml"),
                         Some(project.name.clone()),
                         group.clone(),
@@ -352,7 +421,10 @@ impl FlatDependencyGroups {
                 match specifier {
                     DependencyGroupSpecifier::Requirement(requirement) => {
                         match uv_pep508::Requirement::<VerbatimParsedUrl>::from_str(requirement) {
-                            Ok(requirement) => requirements.push(requirement),
+                            Ok(requirement) => requirements.push(FlatGroupRequirement {
+                                requirement,
+                                owner: None,
+                            }),
                             Err(err) => {
                                 return Err(DependencyGroupErrorInner::GroupParseError(
                                     name.clone(),
@@ -372,7 +444,7 @@ impl FlatDependencyGroups {
                             parents,
                         )?;
                         if let Some(included) = resolved.get(include_group) {
-                            requirements.extend(included.requirements.iter().cloned());
+                            requirements.extend(included.requirements.0.iter().cloned());
                             workspace_includes.extend(included.workspace_includes.iter().cloned());
 
                             // Intersect the requires-python for this group with the included group's
@@ -442,7 +514,12 @@ impl FlatDependencyGroups {
                     );
                 }
 
-                requirements.extend(included.requirements.iter().cloned());
+                requirements.extend(included.requirements.0.iter().cloned().map(|mut entry| {
+                    if let WorkspaceGroupInclude::Package(include) = include {
+                        entry.owner = Some((include.package.clone(), include.group.clone()));
+                    }
+                    entry
+                }));
                 match include {
                     WorkspaceGroupInclude::Root(_) => {
                         workspace_includes.extend(included.workspace_includes.iter().cloned());
@@ -474,8 +551,8 @@ impl FlatDependencyGroups {
                 // should already have its markers applied to these.
                 let extra_markers =
                     RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree();
-                for requirement in &mut requirements {
-                    requirement.marker = requirement.marker.and(extra_markers);
+                for entry in &mut requirements {
+                    entry.requirement.marker = entry.requirement.marker.and(extra_markers);
                 }
                 for include in &mut workspace_includes {
                     include.marker = include.marker.and(extra_markers);
@@ -487,7 +564,7 @@ impl FlatDependencyGroups {
             resolved.insert(
                 name.clone(),
                 FlatDependencyGroup {
-                    requirements,
+                    requirements: FlatGroupRequirements(requirements),
                     workspace_includes,
                     requires_python: if requires_python_intersection.is_empty() {
                         None
