@@ -653,7 +653,7 @@ impl Cache {
     /// need to keep the file object alive.
     pub fn prune_archive_files(&self) -> Result<Removal, io::Error> {
         let root = self.bucket(CacheBucket::Files);
-        if !root.exists() {
+        if !self.is_bucket_directory(&root)? {
             return Ok(self.removal());
         }
 
@@ -859,6 +859,45 @@ impl Cache {
             .rm_rf(path, false)
     }
 
+    /// Check a directory below the configured root without following links inside the cache.
+    fn is_bucket_directory(&self, path: &Path) -> io::Result<bool> {
+        let relative = path
+            .strip_prefix(&self.root)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        let mut directory = self.root.clone();
+        for component in relative.components() {
+            directory.push(component);
+            match fs_err::symlink_metadata(&directory) {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => return Ok(false),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(true)
+    }
+
+    /// Enumerate a cache namespace only when its ancestors belong to the cache.
+    fn bucket_directories(&self, path: PathBuf) -> io::Result<impl Iterator<Item = PathBuf>> {
+        let entries = if self.is_bucket_directory(&path)? {
+            Some(directories(path)?)
+        } else {
+            None
+        };
+        Ok(entries.into_iter().flatten())
+    }
+
+    /// Remove an entry without following links in its cache namespace.
+    fn remove_bucket_path(&self, path: PathBuf) -> io::Result<Removal> {
+        if let Some(parent) = path.parent()
+            && self.is_bucket_directory(parent)?
+        {
+            self.remove_path(path)
+        } else {
+            Ok(self.removal())
+        }
+    }
+
     /// Find all references to entries in the archive bucket.
     ///
     /// Archive entries are often referenced by symlinks in other cache buckets. This method
@@ -869,7 +908,7 @@ impl Cache {
         let mut references = FxHashMap::<PathBuf, Vec<PathBuf>>::default();
         for bucket in [CacheBucket::SourceDistributions, CacheBucket::Wheels] {
             let bucket_path = self.bucket(bucket);
-            if bucket_path.is_dir() {
+            if self.is_bucket_directory(&bucket_path)? {
                 let walker = walkdir::WalkDir::new(&bucket_path).into_iter();
                 for entry in walker.filter_entry(|entry| {
                     !(
@@ -1384,41 +1423,41 @@ impl CacheBucket {
             Self::Wheels => {
                 // For `pypi` wheels, we expect a directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Pypi);
-                summary += cache.remove_path(root.join(name.to_string()))?;
+                summary += cache.remove_bucket_path(root.join(name.to_string()))?;
 
                 // For alternate indices, we expect a directory for every index (under an `index`
                 // subdirectory), followed by a directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Index);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(name.to_string()))?;
+                for directory in cache.bucket_directories(root)? {
+                    summary += cache.remove_bucket_path(directory.join(name.to_string()))?;
                 }
 
                 // For direct URLs, we expect a directory for every URL, followed by a
                 // directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Url);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(name.to_string()))?;
+                for directory in cache.bucket_directories(root)? {
+                    summary += cache.remove_bucket_path(directory.join(name.to_string()))?;
                 }
             }
             Self::SourceDistributions => {
                 // For `pypi` wheels, we expect a directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Pypi);
-                summary += cache.remove_path(root.join(name.to_string()))?;
+                summary += cache.remove_bucket_path(root.join(name.to_string()))?;
 
                 // For alternate indices, we expect a directory for every index (under an `index`
                 // subdirectory), followed by a directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Index);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(name.to_string()))?;
+                for directory in cache.bucket_directories(root)? {
+                    summary += cache.remove_bucket_path(directory.join(name.to_string()))?;
                 }
 
                 // For direct URLs, we expect a directory for every URL, followed by a
                 // directory per version. To determine whether the URL is relevant, we need to
                 // search for a wheel matching the package name.
                 let root = cache.bucket(self).join(WheelCacheKind::Url);
-                for url in directories(root)? {
+                for url in cache.bucket_directories(root)? {
                     if directories(&url)?.any(|version| is_match(&version, name)) {
-                        summary += cache.remove_path(url)?;
+                        summary += cache.remove_bucket_path(url)?;
                     }
                 }
 
@@ -1426,9 +1465,9 @@ impl CacheBucket {
                 // directory per version. To determine whether the path is relevant, we need to
                 // search for a wheel matching the package name.
                 let root = cache.bucket(self).join(WheelCacheKind::Path);
-                for path in directories(root)? {
+                for path in cache.bucket_directories(root)? {
                     if directories(&path)?.any(|version| is_match(&version, name)) {
-                        summary += cache.remove_path(path)?;
+                        summary += cache.remove_bucket_path(path)?;
                     }
                 }
 
@@ -1436,10 +1475,10 @@ impl CacheBucket {
                 // directory for every SHA. To determine whether the SHA is relevant, we need to
                 // search for a wheel matching the package name.
                 let root = cache.bucket(self).join(WheelCacheKind::Git);
-                for repository in directories(root)? {
+                for repository in cache.bucket_directories(root)? {
                     for sha in directories(repository)? {
                         if is_match(&sha, name) {
-                            summary += cache.remove_path(sha)?;
+                            summary += cache.remove_bucket_path(sha)?;
                         }
                     }
                 }
@@ -1447,20 +1486,20 @@ impl CacheBucket {
             Self::Simple => {
                 // For `pypi` wheels, we expect a rkyv file per package, indexed by name.
                 let root = cache.bucket(self).join(WheelCacheKind::Pypi);
-                summary += cache.remove_path(root.join(format!("{name}.rkyv")))?;
+                summary += cache.remove_bucket_path(root.join(format!("{name}.rkyv")))?;
 
                 // For alternate indices, we expect a directory for every index (under an `index`
                 // subdirectory), followed by a directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Index);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(format!("{name}.rkyv")))?;
+                for directory in cache.bucket_directories(root)? {
+                    summary += cache.remove_bucket_path(directory.join(format!("{name}.rkyv")))?;
                 }
             }
             Self::FlatIndex => {
                 // We can't know if the flat index includes a package, so we just remove the entire
                 // cache entry.
                 let root = cache.bucket(self);
-                summary += cache.remove_path(root)?;
+                summary += cache.remove_bucket_path(root)?;
             }
             Self::Git
             | Self::Interpreter
