@@ -11,7 +11,12 @@ use assert_fs::{
 };
 use indoc::indoc;
 use predicates::prelude::predicate;
+use serde_json::json;
 use tracing::debug;
+#[cfg(unix)]
+use uv_cache_key::cache_digest;
+use uv_platform::Platform;
+use uv_test::archive::write_tar_gz;
 #[cfg(unix)]
 use uv_test::assert_link_target;
 use uv_test::{LATEST_PYTHON_3_12, assert_path_missing, uv_snapshot};
@@ -2524,6 +2529,109 @@ fn python_install_prerelease_specific() {
     Installed Python 3.14.5rc1 in [TIME]
      + cpython-3.14.5rc1-[PLATFORM] (python3.14)
     ");
+}
+
+#[test]
+fn python_install_cached_checksum_failure_evicts_archive() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .without_python_download_cache()
+        .with_managed_python_dirs()
+        .with_filtered_python_keys();
+    let platform = Platform::from_env()?;
+    let metadata = json!({
+        "cpython": {
+            "name": "cpython",
+            "arch": {"family": platform.arch.family().to_string(), "variant": null},
+            "os": platform.os.to_string(),
+            "libc": platform.libc.to_string(),
+            "major": 3, "minor": 12, "patch": 0,
+            "prerelease": null,
+            "url": "https://example.com/python.tar.gz",
+            "sha256": "0".repeat(64),
+            "variant": null,
+        }
+    });
+    context
+        .temp_dir
+        .child("downloads.json")
+        .write_str(&metadata.to_string())?;
+    let cache = context.temp_dir.child("python-cache");
+    cache.create_dir_all()?;
+    let cache_filename = "000000000-python.tar.gz";
+    let archive = cache.child(cache_filename);
+    write_tar_gz(
+        fs_err::File::create(archive.path())?,
+        &[("python/bin/python3", b"inert interpreter")],
+    )?;
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12.0", "--offline", "--python-downloads-json-url", "downloads.json"])
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, cache.path()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.12.0-[PLATFORM]
+      cause: Hash mismatch for `cpython-3.12.0-[PLATFORM]`
+
+             Expected:
+             0000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+             f28aa97c008be5c3d22c87861e9d304c7bb00231cd1faedbc2d2c143bccbabf7
+    "#);
+    assert!(!archive.exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn python_install_cached_checksum_error_survives_cleanup_failure() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .without_python_download_cache()
+        .with_managed_python_dirs()
+        .with_filtered_python_keys();
+    let platform = Platform::from_env()?;
+    let metadata = json!({
+        "cpython": {
+            "name": "cpython",
+            "arch": {"family": platform.arch.family().to_string(), "variant": null},
+            "os": platform.os.to_string(),
+            "libc": platform.libc.to_string(),
+            "major": 3, "minor": 12, "patch": 0,
+            "prerelease": null,
+            "url": "https://example.com/python.tar.gz",
+            "sha256": "0".repeat(64),
+            "variant": null,
+        }
+    });
+    context
+        .temp_dir
+        .child("downloads.json")
+        .write_str(&metadata.to_string())?;
+    let cache = context.temp_dir.child("python-cache");
+    cache.create_dir_all()?;
+    let cache_filename = "000000000-python.tar.gz";
+    let archive = cache.child(cache_filename);
+    write_tar_gz(
+        fs_err::File::create(archive.path())?,
+        &[("python/bin/python3", b"inert interpreter")],
+    )?;
+    fs_err::create_dir(cache.join(format!(".{}.lock", cache_digest(&cache_filename))))?;
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12.0", "--offline", "--python-downloads-json-url", "downloads.json"])
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, cache.path()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Failed to remove rejected Python archive `python-cache/000000000-python.tar.gz`: failed to open file `[TEMP_DIR]/python-cache/.da193ae85eb1703b.lock`: Is a directory (os error 21)
+    error: Failed to install cpython-3.12.0-[PLATFORM]
+      cause: Hash mismatch for `cpython-3.12.0-[PLATFORM]`
+
+             Expected:
+             0000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+             f28aa97c008be5c3d22c87861e9d304c7bb00231cd1faedbc2d2c143bccbabf7
+    "#);
+    assert!(archive.is_file());
+    Ok(())
 }
 
 /// A duplicate of [`python_install`] with an isolated `UV_PYTHON_CACHE_DIR`.
