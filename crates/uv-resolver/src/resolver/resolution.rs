@@ -9,7 +9,7 @@ use uv_normalize::PackageName;
 use uv_pep440::{MIN_VERSION, Version};
 use uv_pep508::MarkerTree;
 use uv_pypi_types::VerbatimParsedUrl;
-use uv_resolver_types::PackageNodeKind;
+use uv_resolver_types::{PackageNodeKind, PreferenceId};
 
 use crate::pins::FilePins;
 use crate::redirect::url_to_precise;
@@ -42,7 +42,7 @@ pub(crate) struct ResolvedFork {
 pub(crate) struct SelectedDistribution {
     version: Version,
     source: SelectedSource,
-    preferences: Vec<usize>,
+    preferences: Vec<PreferenceId>,
 }
 
 #[derive(Debug)]
@@ -122,7 +122,7 @@ impl SelectedDistribution {
         &self.version
     }
 
-    pub(crate) fn preferences(&self) -> &[usize] {
+    pub(crate) fn preferences(&self) -> &[PreferenceId] {
         &self.preferences
     }
 
@@ -133,7 +133,7 @@ impl SelectedDistribution {
         Version,
         ResolvedDist,
         Option<Arc<MetadataResponse>>,
-        Vec<usize>,
+        Vec<PreferenceId>,
     ) {
         match self.source {
             SelectedSource::Url { dist, metadata, .. } => {

@@ -16,6 +16,7 @@ pub struct Options {
     pub exclude_newer: ExcludeNewer,
     pub index_strategy: IndexStrategy,
     pub artifact_environments: SupportedEnvironments,
+    pub wheel_preference_environments: SupportedEnvironments,
     pub minimum_libc_version: Option<MinimumLibcVersion>,
     pub flexibility: Flexibility,
     pub build_options: BuildOptions,
@@ -32,6 +33,7 @@ pub struct OptionsBuilder {
     exclude_newer: ExcludeNewer,
     index_strategy: IndexStrategy,
     artifact_environments: SupportedEnvironments,
+    wheel_preference_environments: SupportedEnvironments,
     minimum_libc_version: Option<MinimumLibcVersion>,
     flexibility: Flexibility,
     build_options: BuildOptions,
@@ -93,6 +95,13 @@ impl OptionsBuilder {
         self
     }
 
+    /// Sets the environments in which input preferences should provide wheels.
+    #[must_use]
+    pub fn wheel_preference_environments(mut self, environments: SupportedEnvironments) -> Self {
+        self.wheel_preference_environments = environments;
+        self
+    }
+
     /// Sets the libc implementation and minimum version to support.
     #[must_use]
     pub fn minimum_libc_version(
@@ -134,6 +143,7 @@ impl OptionsBuilder {
             exclude_newer: self.exclude_newer,
             index_strategy: self.index_strategy,
             artifact_environments: self.artifact_environments,
+            wheel_preference_environments: self.wheel_preference_environments,
             minimum_libc_version: self.minimum_libc_version,
             flexibility: self.flexibility,
             build_options: self.build_options,

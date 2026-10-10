@@ -564,6 +564,24 @@ impl PrioritizedDist {
             })
     }
 
+    /// Return current wheel coverage for one selected registry, excluding filtered artifacts.
+    pub(crate) fn wheel_markers(
+        &self,
+        index: &IndexUrl,
+        minimum_libc_version: Option<MinimumLibcVersion>,
+    ) -> MarkerTree {
+        implied_markers_for_wheels(
+            self.0
+                .wheels
+                .iter()
+                .filter(|(wheel, compatibility)| {
+                    wheel.index == *index && !compatibility.is_excluded()
+                })
+                .map(|(wheel, _)| &wheel.filename),
+            minimum_libc_version,
+        )
+    }
+
     /// Return the hashes for each distribution.
     pub(crate) fn hashes(&self) -> &[HashDigest] {
         &self.0.hashes
