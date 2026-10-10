@@ -478,6 +478,7 @@ pub async fn add(
                 LoweredExtraBuildDependencies::from_workspace(
                     settings.resolver.extra_build_dependencies.clone(),
                     project.workspace(),
+                    None,
                     &settings.resolver.index_locations,
                     &settings.resolver.sources,
                     cache,

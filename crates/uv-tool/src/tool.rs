@@ -1,12 +1,18 @@
+use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use toml_edit::{Array, Item, Table, Value, value};
 
-use uv_configuration::ExcludeDependency;
-use uv_distribution_types::{NameRequirementSpecification, Requirement};
+use uv_configuration::{ExcludeDependency, Override};
+use uv_distribution_types::{
+    ExtraBuildRequires, GitDirectorySourceUrl, IndexUrl, NameRequirementSpecification, Requirement,
+    RequirementSource,
+};
 use uv_fs::{PortablePath, Simplified};
+use uv_git_types::GitUrl;
+use uv_pep508::VerbatimUrl;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_types::PythonRequest;
 use uv_settings::{ToolOptions, ToolOptionsWire};
@@ -23,11 +29,15 @@ pub struct Tool {
     /// The constraints requested by the user during installation.
     constraints: Vec<Requirement>,
     /// The overrides requested by the user during installation.
-    overrides: Vec<Requirement>,
+    overrides: Vec<Override<Requirement>>,
     /// The excludes requested by the user during installation.
     excludes: Vec<ExcludeDependency>,
     /// The build constraints requested by the user during installation.
     build_constraints: Vec<NameRequirementSpecification>,
+    /// Build sources resolved from the source project during installation.
+    extra_build_requires: ExtraBuildRequires,
+    /// Source trees for repository-local indexes persisted in the tool options.
+    index_sources: Vec<ToolIndexSource>,
     /// The Python requested by the user during installation.
     python: Option<PythonRequest>,
     /// A mapping of entry point names to their metadata.
@@ -44,11 +54,15 @@ struct ToolWire {
     #[serde(default)]
     constraints: Vec<Requirement>,
     #[serde(default)]
-    overrides: Vec<Requirement>,
+    overrides: Vec<Override<Requirement>>,
     #[serde(default)]
     excludes: Vec<ExcludeDependency>,
     #[serde(default)]
     build_constraint_dependencies: Vec<NameRequirementSpecification>,
+    #[serde(default)]
+    extra_build_requires: ExtraBuildRequires,
+    #[serde(default)]
+    index_sources: Vec<ToolIndexSource>,
     python: Option<PythonRequest>,
     entrypoints: Vec<ToolEntrypoint>,
     #[serde(default)]
@@ -77,6 +91,8 @@ impl From<Tool> for ToolWire {
             overrides: tool.overrides,
             excludes: tool.excludes,
             build_constraint_dependencies: tool.build_constraints,
+            extra_build_requires: tool.extra_build_requires,
+            index_sources: tool.index_sources,
             python: tool.python,
             entrypoints: tool.entrypoints,
             options: tool.options.into(),
@@ -101,6 +117,8 @@ impl TryFrom<ToolWire> for Tool {
             overrides: tool.overrides,
             excludes: tool.excludes,
             build_constraints: tool.build_constraint_dependencies,
+            extra_build_requires: tool.extra_build_requires,
+            index_sources: tool.index_sources,
             python: tool.python,
             entrypoints: tool.entrypoints,
             options: tool.options.into(),
@@ -142,6 +160,84 @@ impl Display for ToolEntrypoint {
     }
 }
 
+/// The durable source of an index whose on-disk location belongs to a Git checkout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "ToolIndexSourceWire", into = "ToolIndexSourceWire")]
+pub struct ToolIndexSource {
+    index: IndexUrl,
+    git: GitUrl,
+    subdirectory: Option<Box<Path>>,
+    url: VerbatimUrl,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ToolIndexSourceWire {
+    index: IndexUrl,
+    source: RequirementSource,
+}
+
+impl ToolIndexSource {
+    pub fn new(
+        index: IndexUrl,
+        source: RequirementSource,
+    ) -> Result<Self, serde::de::value::Error> {
+        let RequirementSource::GitDirectory {
+            git,
+            subdirectory,
+            url,
+        } = source
+        else {
+            return Err(serde::de::Error::custom(
+                "tool index provenance must be a Git directory",
+            ));
+        };
+        Ok(Self {
+            index,
+            git,
+            subdirectory,
+            url,
+        })
+    }
+
+    pub fn index(&self) -> &IndexUrl {
+        &self.index
+    }
+
+    pub fn source(&self) -> GitDirectorySourceUrl<'_> {
+        GitDirectorySourceUrl {
+            git: &self.git,
+            subdirectory: self.subdirectory.as_deref(),
+            url: &self.url,
+        }
+    }
+
+    #[must_use]
+    pub fn with_index(self, index: IndexUrl) -> Self {
+        Self { index, ..self }
+    }
+}
+
+impl TryFrom<ToolIndexSourceWire> for ToolIndexSource {
+    type Error = serde::de::value::Error;
+
+    fn try_from(source: ToolIndexSourceWire) -> Result<Self, Self::Error> {
+        Self::new(source.index, source.source)
+    }
+}
+
+impl From<ToolIndexSource> for ToolIndexSourceWire {
+    fn from(source: ToolIndexSource) -> Self {
+        Self {
+            index: source.index,
+            source: RequirementSource::GitDirectory {
+                git: source.git,
+                subdirectory: source.subdirectory,
+                url: source.url,
+            },
+        }
+    }
+}
+
 /// Format an array so that each element is on its own line and has a trailing comma.
 ///
 /// Example:
@@ -174,7 +270,7 @@ impl Tool {
     pub fn new(
         requirements: Vec<Requirement>,
         constraints: Vec<Requirement>,
-        overrides: Vec<Requirement>,
+        overrides: Vec<Override<Requirement>>,
         excludes: Vec<ExcludeDependency>,
         build_constraints: Vec<NameRequirementSpecification>,
         python: Option<PythonRequest>,
@@ -189,6 +285,8 @@ impl Tool {
             overrides,
             excludes,
             build_constraints,
+            extra_build_requires: ExtraBuildRequires::default(),
+            index_sources: Vec::new(),
             python,
             entrypoints,
             options,
@@ -199,6 +297,65 @@ impl Tool {
     #[must_use]
     pub fn with_options(self, options: ToolOptions) -> Self {
         Self { options, ..self }
+    }
+
+    /// Retain source-project build dependencies for subsequent upgrades.
+    #[must_use]
+    pub fn with_extra_build_requires(self, extra_build_requires: ExtraBuildRequires) -> Self {
+        Self {
+            extra_build_requires,
+            ..self
+        }
+    }
+
+    /// Build requirements whose source mappings were resolved during installation.
+    pub fn extra_build_requires(&self) -> &ExtraBuildRequires {
+        &self.extra_build_requires
+    }
+
+    /// Retain index sources for subsequent upgrades.
+    #[must_use]
+    pub fn with_index_sources(self, index_sources: Vec<ToolIndexSource>) -> Self {
+        Self {
+            index_sources,
+            ..self
+        }
+    }
+
+    pub fn index_sources(&self) -> &[ToolIndexSource] {
+        &self.index_sources
+    }
+
+    /// Update repository-local index bindings in every persisted requirement.
+    pub fn replace_requirement_indexes(&mut self, replacements: &BTreeMap<IndexUrl, IndexUrl>) {
+        let requirements = self
+            .requirements
+            .iter_mut()
+            .chain(self.constraints.iter_mut())
+            .chain(self.overrides.iter_mut().flat_map(|entry| match entry {
+                Override::Requirement(requirement) => std::slice::from_mut(requirement),
+                Override::Package(package) => package.dependencies.as_mut(),
+            }))
+            .chain(
+                self.build_constraints
+                    .iter_mut()
+                    .map(|entry| &mut entry.requirement),
+            )
+            .chain(
+                self.extra_build_requires
+                    .values_mut()
+                    .flatten()
+                    .map(|entry| &mut entry.requirement),
+            );
+        for requirement in requirements {
+            if let RequirementSource::Registry {
+                index: Some(index), ..
+            } = &mut requirement.source
+                && let Some(url) = replacements.get(&index.url)
+            {
+                index.url = url.clone();
+            }
+        }
     }
 
     /// Returns the TOML table for this tool.
@@ -315,6 +472,26 @@ impl Tool {
             });
         }
 
+        if !self.extra_build_requires.is_empty() {
+            table.insert(
+                "extra-build-requires",
+                value(serde::Serialize::serialize(
+                    &self.extra_build_requires,
+                    toml_edit::ser::ValueSerializer::new(),
+                )?),
+            );
+        }
+
+        if !self.index_sources.is_empty() {
+            table.insert(
+                "index-sources",
+                value(serde::Serialize::serialize(
+                    &self.index_sources,
+                    toml_edit::ser::ValueSerializer::new(),
+                )?),
+            );
+        }
+
         if let Some(ref python) = self.python {
             table.insert(
                 "python",
@@ -363,7 +540,7 @@ impl Tool {
         &self.constraints
     }
 
-    pub fn overrides(&self) -> &[Requirement] {
+    pub fn overrides(&self) -> &[Override<Requirement>] {
         &self.overrides
     }
 

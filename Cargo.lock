@@ -8140,6 +8140,7 @@ dependencies = [
  "uv-dirs",
  "uv-distribution-types",
  "uv-fs",
+ "uv-git-types",
  "uv-install-wheel",
  "uv-installer",
  "uv-normalize",

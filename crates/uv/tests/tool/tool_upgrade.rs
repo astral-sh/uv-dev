@@ -1585,6 +1585,67 @@ async fn tool_upgrade_invalid_auth() -> Result<()> {
 }
 
 #[test]
+fn tool_upgrade_preserves_existing_lock_without_preview() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.scripts]
+        foo = "foo:main"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project
+        .child("src")
+        .child("foo")
+        .child("__init__.py")
+        .write_str("def main(): pass\n")?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .assert()
+        .success();
+
+    context
+        .tool_install()
+        .arg(project.as_os_str())
+        .arg("--locked")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let lock_path = tool_dir.child("foo").child("uv.lock");
+    lock_path.assert(predicate::path::exists());
+
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["foo", "--reinstall"])
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified foo environment
+     ~ foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    "#);
+
+    lock_path.assert(predicate::path::exists());
+
+    Ok(())
+}
+
+#[test]
 fn tool_upgrade_writes_preview_lock() {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -1927,4 +1988,26 @@ fn new_tool_index() -> PackseServer {
     "#})
     .expect("new tool scenario should parse");
     PackseServer::from_scenario(&scenario)
+}
+
+/// Invalid index provenance is rejected when the receipt is loaded.
+#[test]
+fn tool_upgrade_rejects_non_git_index_provenance() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    context
+        .temp_dir
+        .child("tools/foo/uv-receipt.toml")
+        .write_str(indoc! {r#"
+        [tool]
+        requirements = [{ name = "foo", specifier = "==1.0.0" }]
+        index-sources = [{ index = "https://example.org/simple", source = { specifier = ">=1" } }]
+        entrypoints = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("foo"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade foo
+      cause: `foo` is missing a valid receipt; run `uv tool install --force foo` to reinstall
+    "#);
+    Ok(())
 }

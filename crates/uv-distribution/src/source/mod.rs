@@ -47,10 +47,11 @@ use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, PyProjectToml, Resol
 use uv_redacted::DisplaySafeUrl;
 use uv_types::{BuildContext, BuildKey, BuildStack, SourceBuildTrait};
 use uv_workspace::pyproject::ToolUvSources;
+use uv_workspace::{DiscoveryOptions, ProjectWorkspace, WorkspaceCache};
 
 use crate::distribution_database::ManagedClient;
 use crate::error::Error;
-use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata};
+use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata, MetadataError};
 use crate::source::built_wheel_metadata::{BuiltWheelFile, BuiltWheelMetadata};
 use crate::source::revision::Revision;
 use crate::source::validated_archive::{ArchiveValidation, ValidatedSourceArchive};
@@ -71,13 +72,15 @@ pub struct StaticMetadataDatabase<'a, 'client> {
 }
 
 /// A direct source tree materialized on disk for static metadata inspection.
-#[derive(Debug)]
-struct MaterializedSourceTree(Box<Path>);
+struct MaterializedSourceTree {
+    path: Box<Path>,
+    git: Option<Fetch>,
+}
 
 impl MaterializedSourceTree {
     /// Return the on-disk path for this source tree.
     fn path(&self) -> &Path {
-        &self.0
+        &self.path
     }
 }
 
@@ -95,6 +98,24 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
         }
     }
 
+    /// Fetch a Git source without requiring a project or a build interpreter.
+    pub async fn fetch_git_source(
+        &self,
+        source: GitDirectorySourceUrl<'_>,
+    ) -> Result<Fetch, Error> {
+        let client = self.client_builder.build()?;
+        fetch_git_source_tree(
+            self.git,
+            source.git,
+            source.url.to_url(),
+            source.subdirectory,
+            client.git_http_settings(source.git.url()),
+            self.cache,
+            None,
+        )
+        .await
+    }
+
     /// Materialize a direct source tree, if the requirement identifies one.
     ///
     /// Directory requirements are already materialized. Git source trees are fetched into the
@@ -104,34 +125,31 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
         source: &RequirementSource,
     ) -> Result<Option<MaterializedSourceTree>, Error> {
         match source {
-            RequirementSource::Directory { install_path, .. } => Ok(Some(MaterializedSourceTree(
-                install_path.to_path_buf().into_boxed_path(),
-            ))),
+            RequirementSource::Directory { install_path, .. } => Ok(Some(MaterializedSourceTree {
+                path: install_path.to_path_buf().into_boxed_path(),
+                git: None,
+            })),
             RequirementSource::GitDirectory {
                 git,
                 subdirectory,
                 url,
             } => {
-                let client = self.client_builder.build()?;
-                let fetch = fetch_git_source_tree(
-                    self.git,
-                    git,
-                    url.to_url(),
-                    subdirectory.as_deref(),
-                    client.git_http_settings(git.url()),
-                    self.cache,
-                    None,
-                )
-                .await?;
+                let fetch = self
+                    .fetch_git_source(GitDirectorySourceUrl {
+                        git,
+                        url,
+                        subdirectory: subdirectory.as_deref(),
+                    })
+                    .await?;
 
-                if let Some(subdirectory) = subdirectory {
-                    let source_tree = fetch.path().join(subdirectory);
-                    Ok(Some(MaterializedSourceTree(source_tree.into_boxed_path())))
-                } else {
-                    Ok(Some(MaterializedSourceTree(
-                        fetch.path().to_path_buf().into_boxed_path(),
-                    )))
-                }
+                let path = subdirectory.as_ref().map_or_else(
+                    || fetch.path().to_path_buf(),
+                    |subdirectory| fetch.path().join(subdirectory),
+                );
+                Ok(Some(MaterializedSourceTree {
+                    path: path.into_boxed_path(),
+                    git: Some(fetch),
+                }))
             }
             _ => Ok(None),
         }
@@ -168,6 +186,39 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
             return Ok(None);
         };
         self.source_tree_requires_python(&source_tree).await
+    }
+
+    /// Discover a [`ProjectWorkspace`] from a direct source-tree requirement.
+    ///
+    /// Git source trees are materialized into the Git cache before project discovery. Returns
+    /// `None` when the requirement does not identify a source tree defining a project. Git metadata accompanies
+    /// the project so repository-local requirements can retain their original source.
+    pub async fn source_tree_project(
+        &self,
+        source: &RequirementSource,
+        workspace_cache: &WorkspaceCache,
+    ) -> Result<Option<(ProjectWorkspace, Option<Fetch>)>, Error> {
+        let Some(source_tree) = self.materialize_source_tree(source).await? else {
+            return Ok(None);
+        };
+        let project = ProjectWorkspace::from_maybe_project_root(
+            source_tree.path(),
+            &DiscoveryOptions {
+                stop_discovery_at: source_tree.git.as_ref().map(|fetch| {
+                    fetch
+                        .path()
+                        .parent()
+                        .expect("git checkout has a parent")
+                        .to_path_buf()
+                }),
+                ..DiscoveryOptions::default()
+            },
+            self.cache,
+            workspace_cache,
+        )
+        .await
+        .map_err(MetadataError::from)?;
+        Ok(project.map(|project| (project, source_tree.git)))
     }
 }
 

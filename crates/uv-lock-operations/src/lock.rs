@@ -7,9 +7,7 @@ use tracing::debug;
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
-use uv_configuration::{
-    Concurrency, ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
-};
+use uv_configuration::{Concurrency, ExtrasSpecification, Reinstall, Upgrade};
 use uv_dispatch::{BuildDispatch, UniversalState};
 use uv_distribution::{DistributionDatabase, FirstPartyPackages, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
@@ -355,9 +353,7 @@ async fn do_lock(
         LockTarget::Script(_) => FirstPartyPackages::default(),
     };
     let requirements = target.requirements();
-    let overrides = target.overrides();
     let excludes = target.exclude_dependencies();
-    let constraints = target.constraints();
     let dependency_groups = target.dependency_groups()?;
     let workspace_group_metadata = dependency_groups
         .iter()
@@ -385,49 +381,17 @@ async fn do_lock(
             client_builder.credentials_cache(),
         )
         .await?;
-    let overrides = {
-        let mut lowered_overrides = Vec::new();
-        for entry in overrides {
-            match entry {
-                Override::Requirement(requirement) => {
-                    lowered_overrides.extend(
-                        target
-                            .lower(
-                                vec![requirement],
-                                index_locations,
-                                sources,
-                                cache,
-                                workspace_cache,
-                                client_builder.credentials_cache(),
-                            )
-                            .await?
-                            .into_iter()
-                            .map(Override::Requirement),
-                    );
-                }
-                Override::Package(package) => {
-                    lowered_overrides.push(Override::Package(PackageOverride {
-                        package: package.package,
-                        dependencies: target
-                            .lower(
-                                package.dependencies.into_vec(),
-                                index_locations,
-                                sources,
-                                cache,
-                                workspace_cache,
-                                client_builder.credentials_cache(),
-                            )
-                            .await?
-                            .into_boxed_slice(),
-                    }));
-                }
-            }
-        }
-        lowered_overrides
-    };
+    let overrides = target
+        .lower_overrides(
+            index_locations,
+            sources,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        )
+        .await?;
     let constraints = target
-        .lower(
-            constraints,
+        .lower_constraints(
             index_locations,
             sources,
             cache,
@@ -716,6 +680,7 @@ async fn do_lock(
             LoweredExtraBuildDependencies::from_workspace(
                 extra_build_dependencies.clone(),
                 workspace,
+                None,
                 index_locations,
                 sources,
                 cache,

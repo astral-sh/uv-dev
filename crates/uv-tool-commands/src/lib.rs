@@ -10,6 +10,7 @@ pub mod audit;
 mod common;
 pub mod dir;
 mod error;
+mod indexes;
 pub mod install;
 pub mod list;
 mod requirements;

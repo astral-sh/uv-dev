@@ -2819,6 +2819,80 @@ impl Lock {
         Ok(lock)
     }
 
+    /// Make local package sources independent of their original lockfile location.
+    ///
+    /// Project locks describe local sources relative to the project root. Tool locks live next to
+    /// their receipts instead, so those sources must be made absolute before copying a project lock
+    /// into a tool environment. The provided manifest replaces the project manifest. Sources under
+    /// `non_editable_root` are installed as wheels because that directory can be temporary.
+    pub fn into_absolute_paths(
+        mut self,
+        root: &Path,
+        project_name: &PackageName,
+        editable: bool,
+        required_members: &BTreeMap<PackageName, Editability>,
+        non_editable_root: Option<&Path>,
+        manifest: ResolverManifest,
+    ) -> Result<Self, LockError> {
+        for package in &mut self.packages {
+            let package_editable = if &package.id.name == project_name {
+                Some(editable)
+            } else {
+                required_members
+                    .get(&package.id.name)
+                    .map(|explicit| explicit.unwrap_or(editable))
+            };
+            package
+                .id
+                .source
+                .make_absolute(root, package_editable, non_editable_root)?;
+
+            for dependency in package
+                .dependencies
+                .iter_mut()
+                .chain(package.optional_dependencies.values_mut().flatten())
+                .chain(package.dependency_groups.values_mut().flatten())
+            {
+                let dependency_editable = if &dependency.package_id.name == project_name {
+                    Some(editable)
+                } else {
+                    required_members
+                        .get(&dependency.package_id.name)
+                        .map(|explicit| explicit.unwrap_or(editable))
+                };
+                dependency.package_id.source.make_absolute(
+                    root,
+                    dependency_editable,
+                    non_editable_root,
+                )?;
+            }
+
+            package.metadata.requires_dist = std::mem::take(&mut package.metadata.requires_dist)
+                .into_iter()
+                .map(|requirement| requirement.into_absolute(root))
+                .collect();
+            for requirements in package.metadata.dependency_groups.values_mut() {
+                *requirements = std::mem::take(requirements)
+                    .into_iter()
+                    .map(|requirement| requirement.into_absolute(root))
+                    .collect();
+            }
+        }
+
+        Self::new(
+            self.version,
+            self.revision,
+            self.packages,
+            self.requires_python,
+            self.options,
+            manifest,
+            self.conflicts,
+            self.supported_environments,
+            self.required_environments,
+            self.fork_markers,
+        )
+    }
+
     /// Record the conflicting groups that were used to generate this lock.
     #[must_use]
     pub fn with_conflicts(mut self, conflicts: Conflicts) -> Self {
@@ -7704,6 +7778,37 @@ enum Source {
 }
 
 impl Source {
+    /// Resolve local sources against the root of their original lockfile.
+    fn make_absolute(
+        &mut self,
+        root: &Path,
+        editable: Option<bool>,
+        non_editable_root: Option<&Path>,
+    ) -> Result<(), LockError> {
+        let default_editable = matches!(self, Self::Editable(_));
+        match self {
+            Self::Registry(RegistrySource::Path(path)) | Self::Path(path) => {
+                *path = absolute_path(root, path)?.into_boxed_path();
+            }
+            Self::Directory(path) | Self::Editable(path) => {
+                let path = absolute_path(root, path)?.into_boxed_path();
+                // Cached Git checkouts cannot back an editable installation that outlives them.
+                let editable = editable.unwrap_or(default_editable)
+                    && !non_editable_root.is_some_and(|root| path.starts_with(root));
+                *self = if editable {
+                    Self::Editable(path)
+                } else {
+                    Self::Directory(path)
+                };
+            }
+            Self::Virtual(path) => {
+                *path = absolute_path(root, path)?.into_boxed_path();
+            }
+            Self::Registry(RegistrySource::Url(_)) | Self::Git(..) | Self::Direct(..) => {}
+        }
+        Ok(())
+    }
+
     fn from_resolved_dist(resolved_dist: &ResolvedDist, root: &Path) -> Result<Self, LockError> {
         match *resolved_dist {
             // We pass empty installed packages for locking.

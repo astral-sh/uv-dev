@@ -10,7 +10,8 @@ use tracing::info_span;
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::{
-    Constraints, DependencyGroupsWithDefaults, ExcludeDependency, NoSources, Upgrade,
+    Constraints, DependencyGroupsWithDefaults, ExcludeDependency, NoSources, Override,
+    PackageOverride, Upgrade,
 };
 use uv_distribution::LoweredRequirement;
 use uv_distribution_types::{
@@ -61,7 +62,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of overrides for the [`LockTarget`].
-    pub(crate) fn overrides(self) -> Vec<OverrideDependency> {
+    fn overrides(self) -> Vec<OverrideDependency> {
         match self {
             Self::Workspace(workspace) => workspace.overrides(),
             Self::Script(script) => script
@@ -95,7 +96,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of constraints for the [`LockTarget`].
-    pub(crate) fn constraints(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
+    fn constraints(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
         match self {
             Self::Workspace(workspace) => workspace.constraints(),
             Self::Script(script) => script
@@ -404,6 +405,74 @@ impl<'lock> LockTarget<'lock> {
         let encoded = lock.to_toml()?;
         fs_err::tokio::write(self.lock_path(), encoded).await?;
         Ok(())
+    }
+
+    /// Lower every declared runtime constraint before lockfile pruning.
+    pub async fn lower_constraints(
+        self,
+        locations: &IndexLocations,
+        sources: &NoSources,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<Vec<Requirement>, uv_distribution::MetadataError> {
+        self.lower(
+            self.constraints(),
+            locations,
+            sources,
+            cache,
+            workspace_cache,
+            credentials_cache,
+        )
+        .await
+    }
+
+    /// Lower every declared override while retaining its parent scope.
+    pub async fn lower_overrides(
+        self,
+        locations: &IndexLocations,
+        sources: &NoSources,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<Vec<Override<Requirement>>, uv_distribution::MetadataError> {
+        let mut overrides = Vec::new();
+        for entry in self.overrides() {
+            match entry {
+                Override::Requirement(requirement) => {
+                    overrides.extend(
+                        self.lower(
+                            vec![requirement],
+                            locations,
+                            sources,
+                            cache,
+                            workspace_cache,
+                            credentials_cache,
+                        )
+                        .await?
+                        .into_iter()
+                        .map(Override::Requirement),
+                    );
+                }
+                Override::Package(package) => {
+                    overrides.push(Override::Package(PackageOverride {
+                        package: package.package,
+                        dependencies: self
+                            .lower(
+                                package.dependencies.into_vec(),
+                                locations,
+                                sources,
+                                cache,
+                                workspace_cache,
+                                credentials_cache,
+                            )
+                            .await?
+                            .into_boxed_slice(),
+                    }));
+                }
+            }
+        }
+        Ok(overrides)
     }
 
     /// Lower build constraints without losing hashes when a source expands into multiple requirements.

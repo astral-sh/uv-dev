@@ -1643,7 +1643,12 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: ToolCommand::Install(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ToolInstallSettings::resolve(args, filesystem, environment)?;
+            let args = settings::ToolInstallSettings::resolve(
+                args,
+                filesystem,
+                environment,
+                config_discovery.enabled() && cli.top_level.config_file.is_none(),
+            )?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -1719,6 +1724,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 &excludes,
                 &build_constraints,
                 &entrypoints,
+                args.locked,
                 args.lfs,
                 args.python,
                 args.python_platform,
