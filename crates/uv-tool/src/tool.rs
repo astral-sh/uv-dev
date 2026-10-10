@@ -1,11 +1,13 @@
 use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use toml_edit::{Array, Item, Table, Value, value};
 
 use uv_configuration::{ExcludeDependency, Override};
-use uv_distribution_types::{ExtraBuildRequires, NameRequirementSpecification, Requirement};
+use uv_distribution_types::{
+    ExtraBuildRequires, IndexUrl, NameRequirementSpecification, Requirement, RequirementSource,
+};
 use uv_fs::{PortablePath, Simplified};
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_types::PythonRequest;
@@ -30,6 +32,8 @@ pub struct Tool {
     build_constraints: Vec<NameRequirementSpecification>,
     /// Build sources resolved from the source project during installation.
     extra_build_requires: ExtraBuildRequires,
+    /// Source trees for repository-local indexes persisted in the tool options.
+    index_sources: Vec<ToolIndexSource>,
     /// The Python requested by the user during installation.
     python: Option<PythonRequest>,
     /// A mapping of entry point names to their metadata.
@@ -53,6 +57,8 @@ struct ToolWire {
     build_constraint_dependencies: Vec<NameRequirementSpecification>,
     #[serde(default)]
     extra_build_requires: ExtraBuildRequires,
+    #[serde(default)]
+    index_sources: Vec<ToolIndexSource>,
     python: Option<PythonRequest>,
     entrypoints: Vec<ToolEntrypoint>,
     #[serde(default)]
@@ -82,6 +88,7 @@ impl From<Tool> for ToolWire {
             excludes: tool.excludes,
             build_constraint_dependencies: tool.build_constraints,
             extra_build_requires: tool.extra_build_requires,
+            index_sources: tool.index_sources,
             python: tool.python,
             entrypoints: tool.entrypoints,
             options: tool.options.into(),
@@ -107,6 +114,7 @@ impl TryFrom<ToolWire> for Tool {
             excludes: tool.excludes,
             build_constraints: tool.build_constraint_dependencies,
             extra_build_requires: tool.extra_build_requires,
+            index_sources: tool.index_sources,
             python: tool.python,
             entrypoints: tool.entrypoints,
             options: tool.options.into(),
@@ -145,6 +153,27 @@ impl Display for ToolEntrypoint {
                 )
             },
         }
+    }
+}
+
+/// The durable source of an index whose on-disk location belongs to a Git checkout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolIndexSource {
+    index: IndexUrl,
+    source: RequirementSource,
+}
+
+impl ToolIndexSource {
+    pub fn new(index: IndexUrl, source: RequirementSource) -> Self {
+        Self { index, source }
+    }
+
+    pub fn index(&self) -> &IndexUrl {
+        &self.index
+    }
+
+    pub fn source(&self) -> &RequirementSource {
+        &self.source
     }
 }
 
@@ -196,6 +225,7 @@ impl Tool {
             excludes,
             build_constraints,
             extra_build_requires: ExtraBuildRequires::default(),
+            index_sources: Vec::new(),
             python,
             entrypoints,
             options,
@@ -220,6 +250,19 @@ impl Tool {
     /// Build requirements whose source mappings were resolved during installation.
     pub fn extra_build_requires(&self) -> &ExtraBuildRequires {
         &self.extra_build_requires
+    }
+
+    /// Retain index sources for subsequent upgrades.
+    #[must_use]
+    pub fn with_index_sources(self, index_sources: Vec<ToolIndexSource>) -> Self {
+        Self {
+            index_sources,
+            ..self
+        }
+    }
+
+    pub fn index_sources(&self) -> &[ToolIndexSource] {
+        &self.index_sources
     }
 
     /// Returns the TOML table for this tool.
@@ -341,6 +384,16 @@ impl Tool {
                 "extra-build-requires",
                 value(serde::Serialize::serialize(
                     &self.extra_build_requires,
+                    toml_edit::ser::ValueSerializer::new(),
+                )?),
+            );
+        }
+
+        if !self.index_sources.is_empty() {
+            table.insert(
+                "index-sources",
+                value(serde::Serialize::serialize(
+                    &self.index_sources,
                     toml_edit::ser::ValueSerializer::new(),
                 )?),
             );

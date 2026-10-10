@@ -34,7 +34,6 @@ use uv_installer::SitePackages;
 use uv_lock::{Installable, Lock, ResolverManifest};
 use uv_normalize::{DefaultExtras, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
-use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
 use uv_python_discovery::ConfigDiscovery;
@@ -52,7 +51,7 @@ use uv_settings::{
     LockedSource, PythonInstallMirrors, ResolverInstallerSettings, ResolverSettings, ToolOptions,
 };
 use uv_shell::Shell;
-use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
+use uv_tool::{InstalledTools, Tool, ToolEntrypoint, ToolIndexSource, entrypoint_paths};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user_once;
 use uv_workspace::{ProjectWorkspace, WorkspaceCache};
@@ -121,7 +120,7 @@ impl Hinted for NoExecutablesError {
 use uv_command_support::Printer;
 use uv_environment_operations::install_target::InstallTarget;
 use uv_environment_operations::{
-    EnvironmentError, EnvironmentSpecification, PreferenceLocation, apply_no_virtual_project,
+    EnvironmentSpecification, PreferenceLocation, apply_no_virtual_project,
     store_credentials_from_target,
 };
 use uv_lock_operations::{LockMode, LockOperation, LockTarget, ValidatedLock};
@@ -716,33 +715,8 @@ impl ToolLock {
         }
 
         let markers = resolution_markers(None, python_platform, interpreter);
-        if !self
-            .lock
-            .requires_python()
-            .contains(interpreter.python_version())
-        {
-            return Err(EnvironmentError::LockedPythonIncompatibility(
-                interpreter.python_version().clone(),
-                self.lock.requires_python().clone(),
-            )
-            .into());
-        }
-        let environments = self.lock.supported_environments();
-        if !environments.is_empty()
-            && !environments
-                .iter()
-                .any(|environment| environment.evaluate(&markers, &[]))
-        {
-            return Err(EnvironmentError::LockedPlatformIncompatibility(
-                self.lock
-                    .simplified_supported_environments()
-                    .into_iter()
-                    .filter_map(MarkerTree::contents)
-                    .map(|environment| format!("`{environment}`"))
-                    .join(", "),
-            )
-            .into());
-        }
+        uv_environment_operations::validate_lock_python(&self.lock, interpreter)?;
+        uv_environment_operations::validate_lock_platform(&self.lock, &markers)?;
         let tags = resolution_tags(None, python_platform, interpreter)?;
         let resolution = ToolLockInstallTarget {
             tool_lock: self,
@@ -896,6 +870,7 @@ pub(super) fn finalize_tool_install(
     excludes: Vec<ExcludeDependency>,
     build_constraints: Vec<NameRequirementSpecification>,
     extra_build_requires: Option<&ExtraBuildRequires>,
+    index_sources: &[ToolIndexSource],
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
@@ -1094,7 +1069,8 @@ pub(super) fn finalize_tool_install(
         installed_entrypoints,
         options.clone(),
     )
-    .with_extra_build_requires(extra_build_requires.cloned().unwrap_or_default());
+    .with_extra_build_requires(extra_build_requires.cloned().unwrap_or_default())
+    .with_index_sources(index_sources.to_vec());
     ToolLock::write(&installed_tools.tool_dir(name), lock)?;
     installed_tools.add_tool_receipt(name, tool)?;
 
