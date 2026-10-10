@@ -79,7 +79,7 @@ pub(super) async fn collect_module_owners(
             &groups,
             None,
             InstallOptions::default(),
-            modifications,
+            modifications.into(),
             None,
             installer_settings,
             client_builder,

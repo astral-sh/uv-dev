@@ -5,14 +5,16 @@ use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
 use uv_configuration::{
     Concurrency, DependencyGroupsWithDefaults, DryRun, EditableMode,
-    ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions, Modifications, TargetTriple,
+    ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions, TargetTriple,
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{Dist, Resolution, ResolvedDist, SourceDist};
 use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::InstallLogger;
-use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
+use uv_install_operations::{
+    BytecodeCompilation, Changelog, InstallationModifications, InstallationPlan,
+};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_lock::Installable;
 use uv_pep508::{MarkerTree, VersionOrUrl};
@@ -41,7 +43,7 @@ pub async fn sync_from_lock(
     groups: &DependencyGroupsWithDefaults,
     editable: Option<EditableMode>,
     install_options: InstallOptions,
-    modifications: Modifications,
+    modifications: InstallationModifications,
     python_platform: Option<&TargetTriple>,
     settings: InstallerSettingsRef<'_>,
     client_builder: &BaseClientBuilder<'_>,
@@ -230,6 +232,7 @@ pub async fn sync_from_lock(
         &resolution,
         site_packages,
         InstallationStrategy::Strict,
+        modifications,
         reinstall,
         build_options,
         &hasher,
@@ -245,7 +248,7 @@ pub async fn sync_from_lock(
 
     // Avoid constructing an HTTP client and build dispatch when planning shows that there is no
     // installation work to perform.
-    if installation_plan.is_noop(modifications, bytecode_compilation, dry_run) {
+    if installation_plan.is_noop(bytecode_compilation, dry_run) {
         maybe_check_malware(
             &target,
             &resolution,
@@ -259,7 +262,6 @@ pub async fn sync_from_lock(
 
         return Ok(installation_plan.finish_noop(
             &resolution,
-            modifications,
             bytecode_compilation,
             logger.as_ref(),
             dry_run,
@@ -344,7 +346,6 @@ pub async fn sync_from_lock(
     let changelog = installation_plan
         .execute(
             &resolution,
-            modifications,
             build_options,
             link_mode,
             bytecode_compilation,
