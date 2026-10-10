@@ -2203,7 +2203,7 @@ fn sync_jsonl_resolver_reporter_late_progress() -> Result<()> {
         (r"finished in [0-9.]+s", "finished in [TIME]"),
         (r"[0-9]+ filtered out", "[N] filtered out"),
     ], Command::new(env::current_exe()?)
-        .args(["--exact", "sync::sync_jsonl_resolver_reporter_late_progress", "--nocapture", "--color", "never"])
+        .args(["--exact", "sync::sync_jsonl_resolver_reporter_late_progress", "--nocapture", "--color", "never", "--test-threads", "2"])
         .env(WORKER, "1"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
