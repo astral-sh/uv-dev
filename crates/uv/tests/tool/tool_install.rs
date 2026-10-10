@@ -7033,6 +7033,134 @@ fn tool_install_locked_git_workspace_member() -> Result<()> {
     Ok(())
 }
 
+/// An imported workspace lock can require a newer Python than the selected member alone.
+#[test]
+fn tool_install_locked_workspace_python_ignores_incompatible_global_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_tool_dirs()
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let project = context.temp_dir.child("foo");
+    let bin = context.temp_dir.child("bin");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.10"
+        [project.scripts]
+        foo = "foo:main"
+        [tool.uv.workspace]
+        members = ["child"]
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project.child("src/foo/__init__.py").write_str(indoc! {r#"
+        import sys
+        def main():
+            print(f"{sys.version_info.major}.{sys.version_info.minor}")
+    "#})?;
+    project.child("child/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .args(["--python", "3.12"])
+        .assert()
+        .success();
+    context
+        .python_pin()
+        .args(["--global", "3.11"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(project.path()).args(["--locked", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    "#);
+    uv_snapshot!(context.filters(), context.external_command("foo")
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12
+    ");
+    Ok(())
+}
+
+/// Broad global pins must also honor the imported workspace Python range.
+#[test]
+fn tool_install_locked_workspace_python_filters_broad_global_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_tool_dirs()
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let project = context.temp_dir.child("foo");
+    let bin = context.temp_dir.child("bin");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.10"
+        [project.scripts]
+        foo = "foo:main"
+        [tool.uv.workspace]
+        members = ["child"]
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project.child("src/foo/__init__.py").write_str(indoc! {r#"
+        import sys
+        def main():
+            print(f"{sys.version_info.major}.{sys.version_info.minor}")
+    "#})?;
+    project.child("child/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .args(["--python", "3.12"])
+        .assert()
+        .success();
+    context
+        .python_pin()
+        .args(["--global", ">=3.10"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(project.path()).args(["--locked", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    "#);
+    uv_snapshot!(context.filters(), context.external_command("foo")
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12
+    ");
+    Ok(())
+}
+
 #[test]
 fn tool_install_locked_rejects_outdated_lockfile() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_counts();
@@ -8489,6 +8617,10 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
     repository
         .child("pyproject.toml")
         .write_str(&formatdoc! {r#"
+        [tool.uv]
+        constraint-dependencies = ["wheel-helper"]
+        override-dependencies = ["wheel-helper"]
+        build-constraint-dependencies = ["directory-helper"]
         [tool.uv.workspace]
         members = ["foo", "directory-helper"]
         [tool.uv.extra-build-dependencies]
@@ -8502,6 +8634,7 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
         name = "foo"
         version = "0.1.0"
         requires-python = ">=3.12"
+        dependencies = ["wheel-helper==1.0.0"]
         [project.scripts]
         foo = "foo.cli:main"
         [build-system]
@@ -8512,7 +8645,7 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
     let (filename, wheel) = generate_wheel(
         &"foo".parse()?,
         &"0.1.0".parse()?,
-        &[],
+        &["wheel-helper==1.0.0".parse()?],
         &BTreeMap::new(),
         None,
         "py3-none-any",
@@ -8597,12 +8730,16 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/foo)
+     + wheel-helper==1.0.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/wheel_helper-1.0.0-py3-none-any.whl)
     Installed 1 executable: foo
     "#);
     insta::with_settings!({ filters => filters.clone() }, {
         assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
     [tool]
     requirements = [{ name = "foo", git = "file://[TEMP_DIR]/repository/?subdirectory=foo&rev=[COMMIT]" }]
+    constraints = [{ name = "wheel-helper", git = "file://[TEMP_DIR]/repository/?path=wheel_helper-1.0.0-py3-none-any.whl&rev=[COMMIT]#[COMMIT]" }]
+    overrides = [{ name = "wheel-helper", git = "file://[TEMP_DIR]/repository/?path=wheel_helper-1.0.0-py3-none-any.whl&rev=[COMMIT]#[COMMIT]" }]
+    build-constraint-dependencies = [{ name = "directory-helper", git = "file://[TEMP_DIR]/repository/?subdirectory=directory-helper&rev=[COMMIT]#[COMMIT]" }]
     extra-build-requires = { foo = [{ requirement = { name = "wheel-helper", git = "file://[TEMP_DIR]/repository/?path=wheel_helper-1.0.0-py3-none-any.whl&rev=[COMMIT]#[COMMIT]" }, match_runtime = false }, { requirement = { name = "directory-helper", git = "file://[TEMP_DIR]/repository/?subdirectory=directory-helper&rev=[COMMIT]#[COMMIT]" }, match_runtime = false }] }
     entrypoints = [
         { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
@@ -8622,6 +8759,8 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
     Reinstalled foo v0.1.0
      - foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/foo)
      + foo==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT]#subdirectory=foo)
+     - wheel-helper==1.0.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/wheel_helper-1.0.0-py3-none-any.whl)
+     + wheel-helper==1.0.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT]#path=wheel_helper-1.0.0-py3-none-any.whl)
     Installed 1 executable: foo
     "#);
     assert_snapshot!(context.read("builds"), @"

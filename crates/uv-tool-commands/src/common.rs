@@ -184,6 +184,8 @@ pub(super) struct ToolPython {
     /// The selected Python request, computed by considering an explicit request, a global
     /// version file, and static `requires-python` metadata from the source requirement.
     pub(super) python_request: Option<PythonRequest>,
+    /// Static requirement used to check an implicitly selected interpreter.
+    pub(super) requires_python: Option<RequiresPython>,
 }
 
 impl ToolPython {
@@ -196,6 +198,7 @@ impl ToolPython {
         git_resolver: &GitResolver,
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
+        workspace_cache: Option<&WorkspaceCache>,
     ) -> Result<Self, io::Error> {
         let requires_python = if python_request.is_none() {
             match requirement {
@@ -206,6 +209,7 @@ impl ToolPython {
                         git_resolver,
                         client_builder,
                         cache,
+                        workspace_cache,
                     )
                     .await
                 }
@@ -253,6 +257,7 @@ impl ToolPython {
         Ok(Self {
             source,
             python_request,
+            requires_python,
         })
     }
 
@@ -262,7 +267,7 @@ impl ToolPython {
     }
 }
 
-/// Infer [`RequiresPython`] from a direct source requirement by reading its `pyproject.toml`.
+/// Infer [`RequiresPython`] from a direct source requirement or its imported workspace.
 ///
 /// Returns `None` when the requirement is not a directory or Git source, its metadata is not
 /// statically available, or the Git source cannot be fetched.
@@ -272,16 +277,31 @@ async fn infer_requires_python_from_requirement(
     git_resolver: &GitResolver,
     client_builder: &BaseClientBuilder<'_>,
     cache: &Cache,
+    workspace_cache: Option<&WorkspaceCache>,
 ) -> Option<RequiresPython> {
     let requirement = requirement
         .clone()
         .augment_requirement(None, None, None, lfs.into(), None);
     let source = requirement.source();
 
-    match StaticMetadataDatabase::new(client_builder, git_resolver, cache)
-        .requires_python(source.as_ref())
-        .await
-    {
+    let database = StaticMetadataDatabase::new(client_builder, git_resolver, cache);
+    if let Some(workspace_cache) = workspace_cache {
+        match database
+            .source_tree_project(source.as_ref(), workspace_cache)
+            .await
+        {
+            Ok(Some((project, _))) => {
+                match LockTarget::Workspace(project.workspace()).requires_python() {
+                    Ok(requires_python) => return requires_python,
+                    Err(err) => debug!("Failed to infer workspace `requires-python`: {err}"),
+                }
+            }
+            Ok(None) => {}
+            Err(err) => debug!("Failed to discover the tool workspace: {err}"),
+        }
+    }
+
+    match database.requires_python(source.as_ref()).await {
         Ok(requires_python) => requires_python,
         Err(err) => {
             debug!(

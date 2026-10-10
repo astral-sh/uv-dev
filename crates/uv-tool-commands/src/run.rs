@@ -816,6 +816,7 @@ async fn get_or_create_environment(
         state.git(),
         client_builder,
         cache,
+        None,
     )
     .await?
     .python_request;

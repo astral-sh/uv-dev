@@ -19,8 +19,7 @@ use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerTree, VerbatimUrl, VersionOrUrl, looks_like_git_repository};
 use uv_pypi_types::{
-    ConflictItem, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl, ParsedUrlError,
-    VerbatimParsedUrl,
+    ConflictItem, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrlError, VerbatimParsedUrl,
 };
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_workspace::pyproject::{PyProjectToml, Source, Sources, WorkspaceReference};
@@ -154,7 +153,7 @@ impl LoweredRequirement {
 
         let Some(sources) = sources else {
             return Either::Left(std::iter::once(Self::preserve_git_source(
-                requirement,
+                requirement.into(),
                 git_member,
             )));
         };
@@ -505,45 +504,33 @@ impl LoweredRequirement {
         )
     }
 
-    /// Preserve the Git origin for direct path dependencies discovered while lowering metadata from
-    /// a checked-out Git repository.
-    pub(crate) fn preserve_git_source(
-        requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
+    /// Retain Git origins for local requirements belonging to a checked-out repository.
+    pub fn preserve_git_source(
+        mut requirement: Requirement,
         git_member: Option<&GitWorkspaceMember>,
     ) -> Result<Self, LoweringError> {
         let Some(git_member) = git_member else {
-            return Ok(Self(Requirement::from(requirement)));
+            return Ok(Self(requirement));
         };
-
-        let Some(VersionOrUrl::Url(url)) = &requirement.version_or_url else {
-            return Ok(Self(Requirement::from(requirement)));
+        let (install_path, is_archive) = match &requirement.source {
+            RequirementSource::Directory { install_path, .. } => (install_path.as_ref(), false),
+            RequirementSource::Path { install_path, .. } => (install_path.as_ref(), true),
+            RequirementSource::Registry { .. }
+            | RequirementSource::Url { .. }
+            | RequirementSource::GitDirectory { .. }
+            | RequirementSource::GitPath { .. } => return Ok(Self(requirement)),
         };
-
-        let (install_path, is_archive) = match &url.parsed_url {
-            ParsedUrl::Directory(directory) => (directory.install_path.as_ref(), false),
-            ParsedUrl::Path(path) => (path.install_path.as_ref(), true),
-            _ => return Ok(Self(Requirement::from(requirement))),
-        };
-
         let install_path = git_path(install_path)?;
         let fetch_root = git_path(git_member.fetch_root)?;
         if !install_path.starts_with(&fetch_root) {
-            return Ok(Self(Requirement::from(requirement)));
+            return Ok(Self(requirement));
         }
-
-        Ok(Self(Requirement {
-            name: requirement.name,
-            groups: Box::new([]),
-            extras: requirement.extras,
-            marker: requirement.marker,
-            source: if is_archive {
-                git_archive_source_from_path(&install_path, git_member)?
-            } else {
-                git_directory_source_from_path(&install_path, git_member)?
-            },
-            scope: RequirementScope::Global,
-            origin: requirement.origin,
-        }))
+        requirement.source = if is_archive {
+            git_archive_source_from_path(&install_path, git_member)?
+        } else {
+            git_directory_source_from_path(&install_path, git_member)?
+        };
+        Ok(Self(requirement))
     }
 
     /// Convert back into a [`Requirement`].
