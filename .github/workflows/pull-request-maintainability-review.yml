@@ -1,0 +1,168 @@
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  review:
+    name: "maintainability review"
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      result: ${{ steps.review.outputs.final-message }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.33"
+
+      - name: "Collect pull request context"
+        run: |
+          set -o pipefail
+
+          gh pr view "$PULL_REQUEST_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json number,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,isDraft,labels,files,additions,deletions,changedFiles \
+            > .pull-request-review-event.json
+
+          gh pr diff "$PULL_REQUEST_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            > .pull-request-review.diff
+
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER/comments?per_page=100" \
+            | jq '[.[][] | {author: .user.login, body, path, line, original_line, side, start_line, original_start_line, start_side, commit_id, original_commit_id, in_reply_to_id, created_at, html_url}]' \
+            > .pull-request-review-comments.json
+
+          {
+            printf 'Pull request maintainability review for #%s: %s\n\n' \
+              "$(jq -r '.number' .pull-request-review-event.json)" \
+              "$(jq -r '.title | gsub("[\r\n]+"; " ")' .pull-request-review-event.json)"
+            cat agents/prompts/pull-request-maintainability-review.md
+          } > "$RUNNER_TEMP/pull-request-maintainability-review-prompt.md"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+
+      - name: "Install cargo nextest"
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
+        with:
+          tool: cargo-nextest
+
+      - name: "Review pull request"
+        id: review
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: "0.144.4"
+          codex-home: "agents/codex"
+          permission-profile: "pull-request-review"
+          safety-strategy: drop-sudo
+          allow-bot-users: "astral-automations-bot[bot],renovate[bot]"
+          prompt-file: "${{ runner.temp }}/pull-request-maintainability-review-prompt.md"
+          output-schema-file: "agents/schemas/pull-request-maintainability-review.json"
+
+      - name: "Upload Codex thread"
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-thread-pull-request-maintainability-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: agents/codex/sessions
+          if-no-files-found: warn
+
+  prepare:
+    needs: review
+    if: needs.review.outputs.result != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.comments.outputs.result }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.33"
+
+      - name: "Prepare review findings"
+        id: comments
+        run: |
+          delimiter="review-$(openssl rand -hex 16)"
+          {
+            printf 'result<<%s\n' "$delimiter"
+            printf '%s\n' "$REVIEW_RESULT" \
+              | ./agents/scripts/agent-review-to-github-comments.py --commit-id "$HEAD_SHA"
+            printf '%s\n' "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_RESULT: ${{ needs.review.outputs.result }}
+
+  report:
+    needs: prepare
+    if: needs.prepare.outputs.result != '' && fromJSON(needs.prepare.outputs.result).comments[0] != null
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 5
+    permissions:
+      id-token: write # for the credential broker
+    steps:
+      - name: "Get uv-dev token"
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv-dev
+          permissions: |
+            pull_requests: write
+
+      - name: "Publish review findings"
+        run: |
+          printf '%s\n' "$REVIEW_RESULT" > "$RUNNER_TEMP/review.json"
+
+          if jq --exit-status '.comments | length == 0' "$RUNNER_TEMP/review.json" > /dev/null; then
+            echo "No actionable findings to publish."
+            exit 0
+          fi
+
+          current_head_sha="$(
+            gh pr view "$PULL_REQUEST_NUMBER" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json headRefOid \
+              --jq '.headRefOid'
+          )"
+          if [ "$current_head_sha" != "$HEAD_SHA" ]; then
+            echo "The pull request head changed; skipping stale review findings."
+            exit 0
+          fi
+
+          jq --compact-output '.comments[]' "$RUNNER_TEMP/review.json" |
+          while IFS= read -r comment; do
+            printf '%s\n' "$comment" |
+              gh api \
+                --method POST \
+                "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER/comments" \
+                --input - \
+                --silent
+          done
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_RESULT: ${{ needs.prepare.outputs.result }}
