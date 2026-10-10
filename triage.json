@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 20587,
+        "title": "Add audit malware-check configuration settings",
+        "url": "https://github.com/astral-sh/uv/pull/20587",
+        "state": "merged",
+        "reason": "Added both requested settings and their generated schema definitions, merged July 21, 2026, and included in uv 0.11.31. Confirms these are existing supported settings; it did not update SchemaStore's separate copy."
+      },
+      {
+        "kind": "issue",
+        "number": 20497,
+        "title": "Add a `malware-check` boolean setting as the configuration equivalent of the `UV_MALWARE_CHECK` environment variable",
+        "url": "https://github.com/astral-sh/uv/issues/20497",
+        "state": "closed",
+        "reason": "Original request for file-based malware-check configuration, closed by astral-sh/uv#20587. That runtime capability is implemented; the new report concerns publishing its schema definitions."
+      },
+      {
+        "kind": "issue",
+        "number": 17173,
+        "title": "Update UV's JSON Schema on JSON Schema Store (0.9.18)",
+        "url": "https://github.com/astral-sh/uv/issues/17173",
+        "state": "closed",
+        "reason": "Earlier SchemaStore lag caused editor validation errors for relative-time settings. A maintainer linked SchemaStore/schemastore#5232, merged December 18, 2025. This establishes the refresh workflow, but predates both malware settings and does not track their omission."
+      },
+      {
+        "kind": "issue",
+        "number": 16545,
+        "title": "Update UV's JSON Schema on JSON Schema Store",
+        "url": "https://github.com/astral-sh/uv/issues/16545",
+        "state": "closed",
+        "reason": "Earlier stale-schema report affecting Even Better TOML, resolved through SchemaStore/schemastore#5091 in November 2025. Its linked discussion concerned torch-backend; it is historical publication context rather than a duplicate of the current audit-property omission."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered each malware setting, dotted audit names, AuditOptions, uv.json, and SchemaStore; conceptual searches covered schema validation, autocomplete/completion, editor support, outdated schemas, and audit configuration; fix-oriented searches covered schema updates and update_schemastore. Inspected candidate bodies and comments, the implementation diff, and linked SchemaStore/schemastore#5091 and SchemaStore/schemastore#5232. Also searched SchemaStore PRs for uv. PR searches omitted the directly retrievable astral-sh/uv#20587, so negative PR results are not conclusive. Ruled out astral-sh/uv#11180 (incorrect conflicts representation), astral-sh/uv#3549 (repeated editor completions), astral-sh/uv#21484 (lockfile integrity), and astral-sh/uv#18506 (broader audit roadmap) as duplicate targets."
+  },
+  "type": "bug",
+  "type_reason": "Both settings shipped in uv 0.11.31 and exist in the source and generated schema, but SchemaStore's current source and published AuditOptions omit them. This is incomplete schema coverage for supported configuration, affecting completion and type validation. The original feature request is already implemented, and earlier schema refreshes predate these fields; no existing item was found tracking this specific omission or a prior fix for it.",
+  "summary": "astral-sh/uv#20587 implemented the settings requested in astral-sh/uv#20497. astral-sh/uv#17173 and astral-sh/uv#16545 document earlier SchemaStore refreshes. The current omission is confirmed; none of these items is a duplicate target.",
+  "draft_response": "Your example uses settings supported since uv 0.11.31, added in astral-sh/uv#20587. Both are present in uv.schema.json, but SchemaStore's current uv.json omits them from AuditOptions. The next step is to refresh src/schemas/json/uv.json in SchemaStore/schemastore from uv's generated schema, including the Boolean and URI definitions. The repository's scripts/update_schemastore.py provides the existing update workflow."
+}
