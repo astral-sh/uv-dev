@@ -909,7 +909,7 @@ mod tests {
 
     use serde::Deserialize;
 
-    use super::super::{LockParseError, WORKSPACE_GROUPS_VERSION};
+    use super::super::{LockErrorKind, LockParseError, WORKSPACE_GROUPS_VERSION};
     use super::{Cursor, Error, Lock, ValueDeserializer, from_str};
 
     const CANONICAL_LOCK: &str = r#"version = 1
@@ -1178,6 +1178,29 @@ version = "1.0.0"
     }
 
     #[test]
+    fn invalid_graph_retains_validation_error() {
+        let input = CANONICAL_LOCK.replace("{ name = \"dependency\" }", "{ name = \"missing\" }");
+        let expected = toml::from_str::<Lock>(&input).expect_err("missing dependency is invalid");
+        let error = Lock::from_toml(&input).expect_err("invalid graph is rejected");
+
+        assert_eq!(error.to_string(), expected.message());
+        assert_matches!(error, LockParseError::Validation(error)
+            if matches!(*error.kind, LockErrorKind::MissingDependencySource { .. }));
+    }
+
+    #[test]
+    fn missing_member_identity_retains_recoverable_error() {
+        let input = LOCAL_MEMBER_LOCK.replace(
+            "workspace-member-ids = [{ name = \"leaf\", version = \"1.0.0\", source = { virtual = \"leaf\" } }]\n",
+            "",
+        );
+        let error = Lock::from_toml(&input).expect_err("ambiguous member identity is rejected");
+
+        assert_matches!(error, LockParseError::MissingWorkspaceMemberIdentity(error)
+            if matches!(*error.kind, LockErrorKind::MissingWorkspaceMemberIdentity(_)));
+    }
+
+    #[test]
     fn unsupported_lock_version_is_rejected() {
         let version = WORKSPACE_GROUPS_VERSION + 1;
         let input = CANONICAL_LOCK.replacen("version = 1", &format!("version = {version}"), 1);
@@ -1209,6 +1232,22 @@ version = "1.0.0"
                 ..
             } if actual == version
         );
+    }
+
+    #[test]
+    fn invalid_graph_with_unsupported_version_is_identified() {
+        let version = WORKSPACE_GROUPS_VERSION + 1;
+        let input = CANONICAL_LOCK
+            .replacen("version = 1", &format!("version = {version}"), 1)
+            .replace("{ name = \"dependency\" }", "{ name = \"missing\" }");
+        let expected = toml::from_str::<Lock>(&input).expect_err("missing dependency is invalid");
+        let error = Lock::from_toml(&input).expect_err("invalid unsupported graph is rejected");
+
+        assert_matches!(error, LockParseError::UnparsableVersion {
+            supported: WORKSPACE_GROUPS_VERSION,
+            version: actual,
+            source,
+        } if actual == version && source.to_string() == expected.to_string());
     }
 
     #[test]

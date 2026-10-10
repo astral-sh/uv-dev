@@ -104,7 +104,7 @@ pub enum LockError {
     EmptyEnvironment,
 
     #[error("Failed to parse `uv.lock`")]
-    UvLockParse(#[source] toml::de::Error),
+    UvLockParse(#[source] LockParseError),
 
     #[error("Group `{0}` is not defined in the project's `dependency-groups` table")]
     MissingGroupProject(GroupName),
@@ -181,7 +181,9 @@ impl From<LockParseError> for LockError {
                 version,
                 source,
             } => Self::UnparsableLockVersion(supported, version, source),
-            LockParseError::Toml(source) => Self::UvLockParse(source),
+            source @ (LockParseError::Toml(_) | LockParseError::Validation(_)) => {
+                Self::UvLockParse(source)
+            }
             LockParseError::MissingWorkspaceMemberIdentity(source) => Self::Lock(source),
         }
     }

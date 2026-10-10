@@ -16,6 +16,7 @@ use owo_colors::OwoColorize;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::de::Error as _;
 use tracing::{debug, instrument, trace};
 use url::Url;
 
@@ -123,6 +124,10 @@ pub enum LockParseError {
     /// An older lockfile does not distinguish a workspace member from another local package.
     #[error(transparent)]
     MissingWorkspaceMemberIdentity(LockError),
+
+    /// The lockfile contains an invalid package graph.
+    #[error(transparent)]
+    Validation(LockError),
 
     /// The lockfile is not valid TOML or cannot be deserialized.
     #[error(transparent)]
@@ -3877,33 +3882,38 @@ impl Lock {
     /// TOML parser, preserving its compatibility and error reporting. Lockfiles
     /// that use an unsupported schema version are rejected.
     pub fn from_toml(input: &str) -> Result<Self, LockParseError> {
-        let lock = match Self::from_canonical_toml(input) {
-            Ok(lock) => lock,
-            Err(_) => match toml::from_str(input) {
-                Ok(lock) => lock,
-                Err(source) => {
-                    if let Ok(lock) = toml::from_str::<LockVersion>(input)
-                        && lock.version() != VERSION
-                        && lock.version() != WORKSPACE_GROUPS_VERSION
-                    {
-                        return Err(LockParseError::UnparsableVersion {
-                            supported: WORKSPACE_GROUPS_VERSION,
-                            version: lock.version(),
-                            source,
-                        });
-                    }
-                    // Older locks can omit the identity needed to distinguish two local
-                    // packages with the same name. Keep this recoverable data error typed so
-                    // an unlocked command can regenerate the lock from its manifests.
-                    if let Ok(wire) = toml::from_str::<LockWire>(input)
-                        && let Err(error) = Self::try_from(wire)
-                        && let LockErrorKind::MissingWorkspaceMemberIdentity(_) = &*error.kind
-                    {
-                        return Err(LockParseError::MissingWorkspaceMemberIdentity(error));
-                    }
-                    return Err(LockParseError::Toml(source));
+        let lock = if let Ok(lock) = Self::from_canonical_toml(input) {
+            lock
+        } else {
+            let wire = toml::from_str::<LockWire>(input).map_err(|source| {
+                if let Ok(lock) = toml::from_str::<LockVersion>(input)
+                    && lock.version() != VERSION
+                    && lock.version() != WORKSPACE_GROUPS_VERSION
+                {
+                    return LockParseError::UnparsableVersion {
+                        supported: WORKSPACE_GROUPS_VERSION,
+                        version: lock.version(),
+                        source,
+                    };
                 }
-            },
+                LockParseError::Toml(source)
+            })?;
+            let version = wire.version;
+            Self::try_from(wire).map_err(|error| {
+                if version != VERSION && version != WORKSPACE_GROUPS_VERSION {
+                    LockParseError::UnparsableVersion {
+                        supported: WORKSPACE_GROUPS_VERSION,
+                        version,
+                        source: toml::de::Error::custom(error),
+                    }
+                } else if let LockErrorKind::MissingWorkspaceMemberIdentity(_) = &*error.kind {
+                    // Older locks can omit the identity needed to distinguish two local
+                    // packages. Unlocked commands can regenerate these from their manifests.
+                    LockParseError::MissingWorkspaceMemberIdentity(error)
+                } else {
+                    LockParseError::Validation(error)
+                }
+            })?
         };
 
         if lock.version() != VERSION && lock.version() != WORKSPACE_GROUPS_VERSION {

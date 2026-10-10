@@ -185,6 +185,7 @@ pub async fn audit(
             }
             Err(
                 error @ (LockParseError::Toml(_)
+                | LockParseError::Validation(_)
                 | LockParseError::MissingWorkspaceMemberIdentity(_)),
             ) => {
                 if explicit_tool {

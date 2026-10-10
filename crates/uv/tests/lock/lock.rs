@@ -886,6 +886,41 @@ fn lock_sdist_registry() -> Result<()> {
     Ok(())
 }
 
+/// An invalid package graph is fatal even when an unlocked command could regenerate the lock.
+#[test]
+fn lock_rejects_invalid_package_graph() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "missing" }]
+    "#})?;
+    let locked = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse `uv.lock`
+      cause: Dependency `missing` has missing `source` field but has more than one matching package
+    "#);
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
 /// Reject a locked Git source when its exact revision differs from the pinned commit.
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
