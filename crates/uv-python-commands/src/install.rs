@@ -539,14 +539,20 @@ async fn perform_install(
                     debug!("No installation found for request `{}`", request);
                     unsatisfied.push(Cow::Borrowed(request));
                 }
-            } else if let Some(installation) = existing_installations
-                .iter()
-                .find(|inst| request.matches_installation(inst))
-            {
+            } else if let Some(installation) = existing_installations.iter().find(|installation| {
+                request.matches_installation(installation)
+                    && matches_build(request.download_request.build(), installation.build())
+            }) {
                 debug!("Found `{}` for request `{}`", installation.key(), request);
                 satisfied.push(installation);
             } else {
-                debug!("No installation found for request `{}`", request);
+                if existing_installations
+                    .iter()
+                    .any(|installation| request.download.key() == installation.key())
+                {
+                    changelog.existing.insert(request.download.key().clone());
+                }
+                debug!("No installation satisfies request `{}`", request);
                 unsatisfied.push(Cow::Borrowed(request));
             }
         }
