@@ -7,6 +7,7 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::Path;
 use uv_fs::copy_dir_all;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
@@ -14,6 +15,7 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::{TestContext, packse::PackseServer, site_packages_path, uv_snapshot, venv_bin_path};
 
 #[test]
@@ -650,8 +652,47 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
     assert_eq!(first_base, second_base);
     assert_eq!(first_import, second_import);
 
+    Ok(())
+}
+
+/// Reusing an unchanged script overlay does not rewrite its import-path configuration.
+#[test]
+fn run_pep723_script_overlay_preserves_pth_timestamp() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("first.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+
+        import iniconfig
+        import sys
+
+        print(sys.prefix)
+        print(iniconfig.__file__)
+    "#})?;
+
+    let output = uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "first.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-first-[HASH]
+    [CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    let stdout = std::str::from_utf8(&output.stdout)?;
+    let script_root = stdout
+        .lines()
+        .next()
+        .context("script did not report its virtual environment")?;
+
     let overlay_path =
-        site_packages_path(Path::new(first_root), "python3.12").join("_uv_ephemeral_overlay.pth");
+        site_packages_path(Path::new(script_root), "python3.12").join("_uv_ephemeral_overlay.pth");
     let original_contents = context.read(&overlay_path);
     let original_time = filetime::FileTime::from_unix_time(1_700_000_000, 0);
     filetime::set_file_mtime(&overlay_path, original_time)?;
@@ -671,11 +712,49 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
         original_time
     );
 
-    // Installed overlay packages take precedence over the immutable shared dependency set.
+    Ok(())
+}
+
+/// Installed overlay packages satisfy `--with` before the immutable shared dependency set.
+#[test]
+fn run_pep723_script_overlay_with_precedence() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("first.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+
+        import iniconfig
+        import sys
+
+        print(sys.prefix)
+        print(iniconfig.__file__)
+    "#})?;
+
+    let output = uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "first.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-first-[HASH]
+    [CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    let stdout = std::str::from_utf8(&output.stdout)?;
+    let script_root = stdout
+        .lines()
+        .next()
+        .context("script did not report its virtual environment")?;
+
     context
         .pip_install()
         .arg("--python")
-        .arg(venv_bin_path(first_root).join(format!("python{}", std::env::consts::EXE_SUFFIX)))
+        .arg(venv_bin_path(script_root).join(format!("python{}", std::env::consts::EXE_SUFFIX)))
         .arg("iniconfig==1.1.1")
         .assert()
         .success();
@@ -8214,9 +8293,6 @@ fn run_pep723_shared_mode_replaces_normal_installations() -> Result<()> {
 /// Shared dependency entrypoints run in the writable overlay and track changed dependencies.
 #[test]
 fn run_pep723_shared_entrypoints_follow_dependency_changes() -> Result<()> {
-    use std::collections::BTreeMap;
-    use uv_test::packse::generate_wheel_with_files;
-
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
@@ -8424,5 +8500,515 @@ fn run_pep723_shared_script_with_constraints() -> Result<()> {
      + example==1.0.0 (from file://[TEMP_DIR]/)
      + iniconfig==1.1.1
     "#);
+    Ok(())
+}
+
+/// Overlay-installed commands retain precedence when the shared dependency environment changes.
+#[test]
+fn run_pep723_shared_entrypoints_preserve_overlay_installations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let cli = indoc! {r#"
+        def main():
+            from importlib.metadata import version
+            import overlay_value
+            import sys
+            print(version("shared-cli"), overlay_value.VALUE)
+            print(sys.prefix)
+    "#};
+    let (first_name, first) = generate_wheel_with_files(
+        &"shared-cli".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_cli/cli.py", cli),
+            (
+                "shared_cli-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nuv-shared-command = shared_cli.cli:main\nuv-shared-old = shared_cli.cli:main\n",
+            ),
+        ],
+    );
+    let (second_name, second) = generate_wheel_with_files(
+        &"shared-cli".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "shared_cli/cli.py",
+                "def replacement():\n    print('shared replacement')\n",
+            ),
+            (
+                "shared_cli-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nuv-shared-command = shared_cli.cli:replacement\n",
+            ),
+        ],
+    );
+    wheels.child(first_name).write_binary(&first)?;
+    wheels.child(second_name).write_binary(&second)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-cli==1.0.0"]
+        # ///
+        from pathlib import Path
+        import shutil
+        import subprocess
+        import sysconfig
+        Path(sysconfig.get_path("purelib"), "overlay_value.py").write_text("VALUE = 'overlay'\n")
+        subprocess.run(["uv-shared-command"], check=True)
+        print(shutil.which("uv-shared-old") is None)
+    "#})?;
+    let first_run = uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels"]).arg("script.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0 overlay
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+    False
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-cli==1.0.0
+    ");
+    let first_stdout = std::str::from_utf8(&first_run.stdout)?;
+    let overlay_root = first_stdout
+        .lines()
+        .nth(1)
+        .context("shared command did not report its overlay environment")?;
+    context
+        .pip_install()
+        .arg("--python")
+        .arg(venv_bin_path(overlay_root).join(format!("python{}", std::env::consts::EXE_SUFFIX)))
+        .args(["--no-index", "--find-links", "wheels", "shared-cli==1.0.0"])
+        .assert()
+        .success();
+    script.write_str(
+        &context
+            .read("script.py")
+            .replace("shared-cli==1.0.0", "shared-cli==2.0.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels"]).arg("script.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0 overlay
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+    False
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-cli==2.0.0
+    ");
+    Ok(())
+}
+
+/// Shared data files are refreshed and removed when the dependency environment changes.
+#[test]
+fn run_pep723_shared_data_follows_dependency_changes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (first_name, first) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-1.0.0.data/data/etc/jupyter/config.txt",
+                "one\n",
+            ),
+            (
+                "shared_data-1.0.0.data/data/share/jupyter/value.txt",
+                "one\n",
+            ),
+        ],
+    );
+    wheels.child(first_name).write_binary(&first)?;
+    let (second_name, second) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-2.0.0.data/data/etc/jupyter/config.txt",
+                "two\n",
+            ),
+            (
+                "shared_data-2.0.0.data/data/share/jupyter/value.txt",
+                "two\n",
+            ),
+        ],
+    );
+    wheels.child(second_name).write_binary(&second)?;
+    let (third_name, third) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"3.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-3.0.0.data/data/etc/jupyter/config.txt",
+                "three\n",
+            ),
+        ],
+    );
+    wheels.child(third_name).write_binary(&third)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-data==1.0.0"]
+        # ///
+        from pathlib import Path
+        import sys
+        configuration = Path(sys.prefix, "etc/jupyter/config.txt")
+        data = Path(sys.prefix, "share/jupyter/value.txt")
+        print(configuration.read_text().strip())
+        print(data.read_text().strip() if data.exists() else "missing")
+        print(configuration.parent.is_symlink(), data.parent.is_symlink())
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    one
+    one
+    False False
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==1.0.0
+    ");
+    script.write_str(
+        &context
+            .read("script.py")
+            .replace("shared-data==1.0.0", "shared-data==2.0.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    two
+    two
+    False False
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==2.0.0
+    ");
+    script.write_str(
+        &context
+            .read("script.py")
+            .replace("shared-data==2.0.0", "shared-data==3.0.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    three
+    missing
+    False False
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==3.0.0
+    ");
+    Ok(())
+}
+
+/// Overlay data installations retain precedence without modifying the immutable shared data.
+#[test]
+fn run_pep723_shared_data_preserves_overlay_installations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (first_name, first) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-1.0.0.data/data/share/jupyter/value.txt",
+                "one\n",
+            ),
+        ],
+    );
+    wheels.child(first_name).write_binary(&first)?;
+    let (second_name, second) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-2.0.0.data/data/share/jupyter/value.txt",
+                "two\n",
+            ),
+        ],
+    );
+    wheels.child(second_name).write_binary(&second)?;
+    let (overlay_name, overlay) = generate_wheel_with_files(
+        &"overlay-data".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("overlay_data/__init__.py", ""),
+            (
+                "overlay_data-1.0.0.data/data/share/jupyter/value.txt",
+                "overlay\n",
+            ),
+        ],
+    );
+    wheels.child(overlay_name).write_binary(&overlay)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-data==1.0.0"]
+        # ///
+        from pathlib import Path
+        import shared_data
+        import sys
+        print(sys.prefix)
+        print(next(parent for parent in Path(shared_data.__file__).parents if parent.joinpath("pyvenv.cfg").is_file()))
+        print(Path(sys.prefix, "share/jupyter/value.txt").read_text().strip())
+    "#})?;
+    let first_run = uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+    [CACHE_DIR]/archive-v0/[HASH]
+    one
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==1.0.0
+    ");
+    let first_stdout = std::str::from_utf8(&first_run.stdout)?;
+    let mut first_lines = first_stdout.lines();
+    let overlay_root = first_lines
+        .next()
+        .context("script did not report its overlay")?;
+    let first_base = first_lines
+        .next()
+        .context("script did not report its shared base")?;
+    let python =
+        venv_bin_path(overlay_root).join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    context
+        .pip_install()
+        .arg("--python")
+        .arg(&python)
+        .args([
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "overlay-data==1.0.0",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        context.read(Path::new(first_base).join("share/jupyter/value.txt")),
+        "one\n"
+    );
+    script.write_str(
+        &context
+            .read("script.py")
+            .replace("shared-data==1.0.0", "shared-data==2.0.0"),
+    )?;
+    let second_run = uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+    [CACHE_DIR]/archive-v0/[HASH]
+    overlay
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==2.0.0
+    ");
+    let second_stdout = std::str::from_utf8(&second_run.stdout)?;
+    let second_base = second_stdout
+        .lines()
+        .nth(1)
+        .context("script did not report its shared base")?;
+    assert_eq!(
+        context.read(Path::new(second_base).join("share/jupyter/value.txt")),
+        "two\n"
+    );
+    context
+        .pip_uninstall()
+        .arg("--python")
+        .arg(&python)
+        .arg("overlay-data")
+        .assert()
+        .success();
+    assert_eq!(
+        context.read(Path::new(second_base).join("share/jupyter/value.txt")),
+        "two\n"
+    );
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+    [CACHE_DIR]/archive-v0/[HASH]
+    two
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// Local edits to copied shared data survive a dependency environment change.
+#[test]
+fn run_pep723_shared_data_preserves_local_edits() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (first_name, first) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-1.0.0.data/data/etc/jupyter/config.txt",
+                "one\n",
+            ),
+            (
+                "shared_data-1.0.0.data/data/share/jupyter/value.txt",
+                "one\n",
+            ),
+        ],
+    );
+    wheels.child(first_name).write_binary(&first)?;
+    let (second_name, second) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-2.0.0.data/data/etc/jupyter/config.txt",
+                "two\n",
+            ),
+            (
+                "shared_data-2.0.0.data/data/share/jupyter/value.txt",
+                "two\n",
+            ),
+        ],
+    );
+    wheels.child(second_name).write_binary(&second)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-data==1.0.0"]
+        # ///
+        from pathlib import Path
+        import sys
+        configuration = Path(sys.prefix, "etc/jupyter/config.txt")
+        data = Path(sys.prefix, "share/jupyter/value.txt")
+        print(sys.prefix)
+        print(configuration.read_text().strip())
+        print(data.read_text().strip() if data.exists() else "missing")
+        print(configuration.parent.is_symlink(), data.parent.is_symlink())
+    "#})?;
+    let first_run = uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+    one
+    one
+    False False
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==1.0.0
+    ");
+    let first_stdout = std::str::from_utf8(&first_run.stdout)?;
+    let overlay_root = first_stdout
+        .lines()
+        .next()
+        .context("script did not report its overlay")?;
+    fs_err::write(
+        Path::new(overlay_root).join("etc/jupyter/config.txt"),
+        "local\n",
+    )?;
+    script.write_str(
+        &context
+            .read("script.py")
+            .replace("shared-data==1.0.0", "shared-data==2.0.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+    local
+    two
+    False False
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==2.0.0
+    ");
     Ok(())
 }
