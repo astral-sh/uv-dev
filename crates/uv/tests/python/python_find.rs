@@ -344,6 +344,29 @@ fn python_find_pin() {
 }
 
 #[test]
+fn python_find_pin_utf8_bom() {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("\u{feff}3.12\n")
+        .unwrap();
+
+    uv_snapshot!(context.filters(), context.python_find(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.12]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.11"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `3.12` -> `3.11`
+    ");
+}
+
+#[test]
 fn python_find_pin_arbitrary_name() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
