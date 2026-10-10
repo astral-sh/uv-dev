@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 use url::Url;
 use zstd::stream::read::Decoder;
 
@@ -37,7 +37,7 @@ use uv_client::{
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
-use uv_fs::{Simplified, rename_with_retry};
+use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, rename_with_retry};
 use uv_macros::DebugNoInline;
 use uv_platform::{Arch, Libc, Os, Platform};
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
@@ -91,6 +91,8 @@ pub enum Error {
     InvalidUrlFormat(DisplaySafeUrl),
     #[error("Invalid path in file URL: {0}")]
     InvalidFileUrl(String),
+    #[error(transparent)]
+    CacheLock(#[from] LockedFileError),
     #[error("Failed to create download directory")]
     DownloadDirError(#[source] io::Error),
     #[error("Failed to copy to: {0}", to.user_display())]
@@ -536,6 +538,25 @@ impl ManagedPythonDownload {
                 None => "none",
             };
             let target_cache_file = python_builds_dir.join(format!("{hash_prefix}-{filename}"));
+            let cache_lock = match LockedFile::acquire(
+                python_builds_dir.join(format!("{hash_prefix}-{filename}.lock")),
+                LockedFileMode::Exclusive,
+                target_cache_file.display(),
+            )
+            .await
+            {
+                Ok(lock) => Ok(lock),
+                // A read-only cache can still supply an archive, but cannot publish or evict one.
+                Err(err)
+                    if err.as_io_error().is_some_and(|err| {
+                        err.kind() == io::ErrorKind::PermissionDenied
+                            || err.kind() == io::ErrorKind::ReadOnlyFilesystem
+                    }) =>
+                {
+                    Err(err)
+                }
+                Err(err) => return Err(err.into()),
+            };
 
             // Download the archive to the cache, or return a reader if we have it in cache.
             // TODO(konsti): We should "tee" the write so we can do the download-to-cache and unpacking
@@ -561,6 +582,10 @@ impl ManagedPythonDownload {
                             });
                         }
 
+                        if let Err(err) = cache_lock {
+                            return Err(err.into());
+                        }
+
                         self.download_archive(
                             &url,
                             client,
@@ -580,17 +605,34 @@ impl ManagedPythonDownload {
                 };
 
             // Extract the downloaded archive into a temporary directory.
-            self.extract_reader(
-                reader,
-                temp_dir,
-                &filename,
-                ext,
-                size,
-                reporter,
-                Direction::Extract,
-                tar_backend,
-            )
-            .await?
+            let result = self
+                .extract_reader(
+                    reader,
+                    temp_dir,
+                    &filename,
+                    ext,
+                    size,
+                    reporter,
+                    Direction::Extract,
+                    tar_backend,
+                )
+                .await;
+
+            if let Err(Error::HashMismatch { .. }) = &result {
+                if cache_lock.is_ok() {
+                    match fs_err::tokio::remove_file(&target_cache_file).await {
+                        Ok(()) => {}
+                        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                        Err(err) => warn!(
+                            "Failed to remove corrupt Python archive `{}`: {err}",
+                            target_cache_file.simplified_display()
+                        ),
+                    }
+                } else if let Err(err) = &cache_lock {
+                    warn!("Cannot evict corrupt Python archive from read-only cache: {err}");
+                }
+            }
+            result?
         } else {
             // Avoid overlong log lines
             debug!("Downloading `{url}`");
@@ -1184,11 +1226,11 @@ async fn read_url(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     #[cfg(target_arch = "aarch64")]
     use uv_python_types::ArchRequest;
     use uv_python_types::VersionRequest;
-
-    use std::collections::HashSet;
 
     use uv_platform::{Arch, Libc, Os, Platform};
     use uv_python_types::{LenientImplementationName, PythonInstallationKey};
@@ -1252,6 +1294,54 @@ mod tests {
             },
         ]
         "#);
+    }
+
+    #[test]
+    fn cached_python_archive_waits_for_entry_lock() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let cache_dir = temp_dir.path().join("cache");
+        fs_err::create_dir_all(&cache_dir).expect("cache directory should be created");
+        // Cached readers must wait before opening or decoding an existing archive.
+        fs_err::write(cache_dir.join("ababababa-python.zip"), b"cached archive")
+            .expect("cached archive should be written");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should be created");
+        let lock = runtime
+            .block_on(LockedFile::acquire(
+                cache_dir.join("ababababa-python.zip.lock"),
+                LockedFileMode::Exclusive,
+                "cached Python archive",
+            ))
+            .expect("cache lock should be acquired");
+        let download = cpython_download_for_url("file:///missing/python.zip");
+        let client = BaseClientBuilder::default()
+            .build()
+            .expect("client should be created");
+        let result = temp_env::with_var(EnvVars::UV_PYTHON_CACHE_DIR, Some(&cache_dir), || {
+            runtime.block_on(async {
+                tokio::time::timeout(
+                    Duration::from_millis(100),
+                    download.fetch_from_url(
+                        DisplaySafeUrl::parse("file:///missing/python.zip")
+                            .expect("URL should parse"),
+                        &client,
+                        temp_dir.path(),
+                        temp_dir.path(),
+                        false,
+                        None,
+                        TarBackend::default(),
+                    ),
+                )
+                .await
+            })
+        });
+        drop(lock);
+        assert!(
+            result.is_err(),
+            "archive access should wait for the cache entry lock"
+        );
     }
 
     /// Test that build filtering works correctly

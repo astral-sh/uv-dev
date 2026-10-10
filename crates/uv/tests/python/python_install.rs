@@ -4172,3 +4172,91 @@ fn python_install_compile_bytecode_pypy() {
     Bytecode compiled [COUNT] files in [TIME]
     ");
 }
+
+/// A valid cached archive reaches digest validation before its cache entry is evicted.
+#[test]
+fn python_install_corrupt_cached_archive() -> anyhow::Result<()> {
+    use assert_fs::prelude::FileWriteBin;
+    use sha2::{Digest as _, Sha256};
+    use uv_python_types::PythonInstallationKey;
+
+    let context = uv_test::test_context_with_versions!(&[])
+        .without_python_download_cache()
+        .with_managed_python_dirs()
+        .with_filtered_python_keys()
+        .with_empty_python_install_mirror();
+    let key: PythonInstallationKey =
+        format!("cpython-3.12.4-{}", platform_key_from_env()?).parse()?;
+    let mut archive = Vec::new();
+    uv_test::archive::write_tar_gz(&mut archive, &[("python/python", b"")])?;
+    // The archive must extract successfully; only its expected digest is deliberately incorrect.
+    let expected = "ab".repeat(32);
+    let actual = hex::encode(Sha256::digest(&archive));
+    assert_ne!(actual, expected);
+    let context = context.with_filter((actual, "[ACTUAL_SHA256]"));
+    let cache = context.temp_dir.child("python-cache");
+    cache.create_dir_all()?;
+    let cached_archive = cache.child("ababababa-python.tar.gz");
+    cached_archive.write_binary(&archive)?;
+    let missing_archive = context.temp_dir.child("missing/python.tar.gz");
+    let url = url::Url::from_file_path(missing_archive.path()).expect("absolute archive path");
+    let downloads = context.temp_dir.child("downloads.json");
+    downloads.write_str(&serde_json::to_string(&serde_json::json!({
+        (key.to_string()): {
+            "name": "cpython",
+            "arch": { "family": key.arch().family().to_string(), "variant": null },
+            "os": key.os().to_string(), "libc": key.libc().to_string(),
+            "major": 3, "minor": 12, "patch": 4, "prerelease": "", "variant": null,
+            "url": url, "sha256": expected, "build": "20240713"
+        }
+    }))?)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs_err::set_permissions(cache.path(), std::fs::Permissions::from_mode(0o555))?;
+        let (snapshot, _) = uv_test::run_and_format(
+            context
+                .python_install()
+                .arg("3.12.4")
+                .arg("--offline")
+                .arg("--python-downloads-json-url")
+                .arg(downloads.path())
+                .env(EnvVars::UV_PYTHON_CACHE_DIR, cache.path()),
+            context.filters(),
+            "python_install_corrupt_cached_archive",
+            None,
+            None,
+        );
+        fs_err::set_permissions(cache.path(), std::fs::Permissions::from_mode(0o755))?;
+        insta::assert_snapshot!(snapshot, @r#"
+        exit_code: 1 (failure)
+        ----- stderr -----
+        error: Failed to install cpython-3.12.4-[PLATFORM]
+          cause: Hash mismatch for `cpython-3.12.4-[PLATFORM]`
+
+                 Expected:
+                 abababababababababababababababababababababababababababababababab
+
+                 Computed:
+                 [ACTUAL_SHA256]
+        "#);
+        cached_archive.assert(predicate::path::exists());
+    }
+    uv_snapshot!(context.filters(), context.python_install().arg("3.12.4").arg("--offline")
+        .arg("--python-downloads-json-url").arg(downloads.path())
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, cache.path()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.12.4-[PLATFORM]
+      cause: Hash mismatch for `cpython-3.12.4-[PLATFORM]`
+
+             Expected:
+             abababababababababababababababababababababababababababababababab
+
+             Computed:
+             [ACTUAL_SHA256]
+    "#);
+    cached_archive.assert(predicate::path::missing());
+    Ok(())
+}
