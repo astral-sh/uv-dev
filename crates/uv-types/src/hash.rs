@@ -709,6 +709,7 @@ mod tests {
     use std::slice;
     use std::str::FromStr;
     use std::sync::Arc;
+    use uv_distribution_types::RequirementSelection;
 
     use rustc_hash::FxHashMap;
     use uv_configuration::HashCheckingMode;
@@ -727,8 +728,7 @@ mod tests {
     fn requirement(url: &str) -> Requirement {
         Requirement {
             name: "anyio".parse().unwrap(),
-            extras: Box::default(),
-            groups: Box::default(),
+            selection: RequirementSelection::Extras(Box::default()),
             marker: "python_version >= '3.8'".parse().unwrap(),
             source: RequirementSource::Url {
                 location: "https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl"

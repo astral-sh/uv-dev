@@ -9,7 +9,7 @@ use std::fmt::Display;
 use std::hash::BuildHasherDefault;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use uv_distribution_types::RequirementScope;
+use uv_distribution_types::{RequirementScope, RequirementSelection};
 
 use glob::{GlobError, MatchOptions, Pattern, PatternError, glob};
 use itertools::Itertools;
@@ -655,8 +655,7 @@ impl Workspace {
             let url = VerbatimUrl::from_absolute_path(&member.root).expect("path is valid URL");
             Some(Requirement {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
-                extras: Box::new([]),
-                groups: Box::new([]),
+                selection: RequirementSelection::Extras(Box::new([])),
                 marker: MarkerTree::TRUE,
                 source: if member
                     .pyproject_toml()
@@ -800,8 +799,7 @@ impl Workspace {
 
             Some(Requirement {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
-                extras: Box::new([]),
-                groups: groups.into_boxed_slice(),
+                selection: RequirementSelection::Groups(groups.into_boxed_slice()),
                 marker: MarkerTree::TRUE,
                 source: if member.pyproject_toml().is_package(!is_required_member) {
                     RequirementSource::Directory {

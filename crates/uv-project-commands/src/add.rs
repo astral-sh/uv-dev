@@ -23,7 +23,7 @@ use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     Identifier, Index, IndexLocations, IndexName, IndexUrl, NameRequirementSpecification,
-    Requirement, RequirementSource, UnresolvedRequirement,
+    Requirement, RequirementSelection, RequirementSource, UnresolvedRequirement,
 };
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
@@ -894,11 +894,11 @@ fn edits(
         let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
 
         // Add the specified extras.
-        let mut ex = requirement.extras.to_vec();
+        let mut ex = requirement.extras().to_vec();
         ex.extend(extras.iter().cloned());
         ex.sort_unstable();
         ex.dedup();
-        requirement.extras = ex.into_boxed_slice();
+        requirement.selection = RequirementSelection::Extras(ex.into_boxed_slice());
 
         let (requirement, source) = match target {
             EditTarget::Script(_) | EditTarget::Project(_) if raw => {

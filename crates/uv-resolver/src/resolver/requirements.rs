@@ -102,7 +102,7 @@ impl<'a> RequirementExpander<'a> {
         };
         if !dependencies
             .iter()
-            .any(|requirement| name == &requirement.name && !requirement.extras.is_empty())
+            .any(|requirement| name == &requirement.name && !requirement.extras().is_empty())
         {
             // If the project doesn't define any recursive dependencies, take the fast path.
             return Either::Left(requirements);
@@ -118,7 +118,12 @@ impl<'a> RequirementExpander<'a> {
         let mut queue: VecDeque<_> = requirements
             .iter()
             .filter(|req| name == &req.name)
-            .flat_map(|req| req.extras.iter().cloned().map(|extra| (extra, req.marker)))
+            .flat_map(|req| {
+                req.extras()
+                    .iter()
+                    .cloned()
+                    .map(|extra| (extra, req.marker))
+            })
             .collect();
         while let Some((extra, marker)) = queue.pop_front() {
             if !seen.insert((extra.clone(), marker)) {
@@ -142,8 +147,7 @@ impl<'a> RequirementExpander<'a> {
                         marker = marker.and(requirement.marker);
                         Requirement {
                             name: requirement.name.clone(),
-                            extras: requirement.extras.clone(),
-                            groups: requirement.groups.clone(),
+                            selection: requirement.selection.clone(),
                             source: requirement.source.clone(),
                             scope: requirement.scope.clone(),
                             origin: requirement.origin.clone(),
@@ -166,7 +170,7 @@ impl<'a> RequirementExpander<'a> {
                     // Add each transitively included extra.
                     queue.extend(
                         requirement
-                            .extras
+                            .extras()
                             .iter()
                             .cloned()
                             .map(|extra| (extra, requirement.marker)),
@@ -183,21 +187,15 @@ impl<'a> RequirementExpander<'a> {
         // transitively expanding `project[bar]`.
         let mut self_constraints = vec![];
         for req in &requirements {
-            if name == &req.name && !req.extras.is_empty() && !req.source.is_empty() {
-                self_constraints.push(Requirement {
-                    name: req.name.clone(),
-                    extras: Box::new([]),
-                    groups: req.groups.clone(),
-                    source: req.source.clone(),
-                    scope: req.scope.clone(),
-                    origin: req.origin.clone(),
-                    marker: req.marker,
-                });
+            if name == &req.name && !req.extras().is_empty() && !req.source.is_empty() {
+                let mut constraint = req.clone().into_owned();
+                constraint.selection.clear_extras();
+                self_constraints.push(constraint);
             }
         }
 
         // Drop all the self-requirements now that we flattened them out.
-        requirements.retain(|req| name != &req.name || req.extras.is_empty());
+        requirements.retain(|req| name != &req.name || req.extras().is_empty());
         requirements.extend(self_constraints.into_iter().map(Cow::Owned));
 
         Either::Right(requirements.into_iter())
@@ -342,8 +340,7 @@ impl<'a> RequirementExpander<'a> {
 
                         Cow::Owned(Requirement {
                             name: constraint.name.clone(),
-                            extras: constraint.extras.clone(),
-                            groups: constraint.groups.clone(),
+                            selection: constraint.selection.clone(),
                             source: constraint.source.clone(),
                             scope: constraint.scope.clone(),
                             origin: constraint.origin.clone(),
@@ -380,8 +377,7 @@ impl<'a> RequirementExpander<'a> {
                     } else {
                         Cow::Owned(Requirement {
                             name: constraint.name.clone(),
-                            extras: constraint.extras.clone(),
-                            groups: constraint.groups.clone(),
+                            selection: constraint.selection.clone(),
                             source: constraint.source.clone(),
                             scope: constraint.scope.clone(),
                             origin: constraint.origin.clone(),

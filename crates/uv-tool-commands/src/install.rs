@@ -18,7 +18,7 @@ use uv_configuration::{
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirementSpecification,
+    RequirementSelection, RequirementSource, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -237,8 +237,7 @@ pub async fn install(
 
             Requirement {
                 name: name.clone(),
-                extras: extras.clone(),
-                groups: Box::new([]),
+                selection: RequirementSelection::Extras(extras.clone()),
                 marker: MarkerTree::default(),
                 source: RequirementSource::Registry {
                     specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(
@@ -262,8 +261,7 @@ pub async fn install(
 
             Requirement {
                 name: name.clone(),
-                extras: extras.clone(),
-                groups: Box::new([]),
+                selection: RequirementSelection::Extras(extras.clone()),
                 marker: MarkerTree::default(),
                 source: RequirementSource::Registry {
                     specifier: VersionSpecifiers::empty(),
@@ -329,8 +327,7 @@ pub async fn install(
             // The constraint pins the version during resolution to prevent backtracking.
             Some(Requirement {
                 name: name.clone(),
-                extras: vec![].into_boxed_slice(),
-                groups: Box::new([]),
+                selection: RequirementSelection::Extras(vec![].into_boxed_slice()),
                 marker: MarkerTree::default(),
                 source: RequirementSource::Registry {
                     specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),

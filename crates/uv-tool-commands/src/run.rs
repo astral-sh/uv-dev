@@ -25,7 +25,8 @@ use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
     IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    RequirementSelection, RequirementSource, UnresolvedRequirement,
+    UnresolvedRequirementSpecification,
 };
 use uv_errors::HintOrdering;
 use uv_installer::{BuildSettings, InstallationStrategy, SatisfiesResult, SitePackages};
@@ -911,8 +912,7 @@ async fn get_or_create_environment(
                         .unwrap_or_else(|| (*executable).to_string());
                     let requirement = Requirement {
                         name: name.clone(),
-                        extras: extras.clone(),
-                        groups: Box::new([]),
+                        selection: RequirementSelection::Extras(extras.clone()),
                         marker: MarkerTree::default(),
                         source: RequirementSource::Registry {
                             specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(
@@ -934,8 +934,7 @@ async fn get_or_create_environment(
                         .unwrap_or_else(|| (*executable).to_string());
                     let requirement = Requirement {
                         name: name.clone(),
-                        extras: extras.clone(),
-                        groups: Box::new([]),
+                        selection: RequirementSelection::Extras(extras.clone()),
                         marker: MarkerTree::default(),
                         source: RequirementSource::Registry {
                             specifier: VersionSpecifiers::empty(),
@@ -1002,8 +1001,7 @@ async fn get_or_create_environment(
             // The constraint pins the version during resolution to prevent backtracking.
             Some(Requirement {
                 name: name.clone(),
-                extras: vec![].into_boxed_slice(),
-                groups: Box::new([]),
+                selection: RequirementSelection::Extras(vec![].into_boxed_slice()),
                 marker: MarkerTree::default(),
                 source: RequirementSource::Registry {
                     specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),

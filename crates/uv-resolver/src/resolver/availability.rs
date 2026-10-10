@@ -51,7 +51,7 @@ impl UnsatisfiableRequirement {
         };
         (Range::from(specifier.clone()) == Range::empty()).then(|| Self {
             name: requirement.name.clone(),
-            extras: requirement.extras.clone(),
+            extras: requirement.extras().into(),
             version_specifiers: specifier.clone(),
         })
     }

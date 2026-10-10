@@ -259,7 +259,7 @@ impl<'env> TreeDisplay<'env> {
                         root,
                         index,
                         Edge::Prod(
-                            Some(RequestedExtras::Requirement(requirement.extras.as_ref())),
+                            Some(RequestedExtras::Requirement(requirement.extras())),
                             UniversalMarker::from_combined(marker),
                         ),
                     );
@@ -268,7 +268,7 @@ impl<'env> TreeDisplay<'env> {
                     if seen.insert((package_index, None)) {
                         queue.push_back((package_index, None));
                     }
-                    for extra in &*requirement.extras {
+                    for extra in requirement.extras() {
                         if seen.insert((package_index, Some(extra))) {
                             queue.push_back((package_index, Some(extra)));
                         }
@@ -312,7 +312,7 @@ impl<'env> TreeDisplay<'env> {
                             index,
                             Edge::Dev(
                                 group,
-                                Some(RequestedExtras::Requirement(requirement.extras.as_ref())),
+                                Some(RequestedExtras::Requirement(requirement.extras())),
                                 UniversalMarker::from_combined(marker),
                             ),
                         );
@@ -321,7 +321,7 @@ impl<'env> TreeDisplay<'env> {
                         if seen.insert((package_index, None)) {
                             queue.push_back((package_index, None));
                         }
-                        for extra in &*requirement.extras {
+                        for extra in requirement.extras() {
                             if seen.insert((package_index, Some(extra))) {
                                 queue.push_back((package_index, Some(extra)));
                             }

@@ -400,7 +400,7 @@ impl<'lock> SelectedDependency<'lock> {
     fn from_requirement(package: &'lock Package, requirement: &'lock Requirement) -> Self {
         Self {
             package,
-            extras: requirement.extras.iter().collect(),
+            extras: requirement.extras().iter().collect(),
             context: DependencySelectionContext::None,
         }
     }
@@ -410,7 +410,7 @@ impl<'lock> SelectedDependency<'lock> {
     }
 
     fn extend_requirement(&mut self, requirement: &'lock Requirement) {
-        self.extras.extend(&requirement.extras);
+        self.extras.extend(requirement.extras());
     }
 
     /// Returns the selected package.
@@ -619,8 +619,8 @@ impl<'a> LockedDependencyBuilder<'a> {
             // Keep conflicting extras of the same dependency in separate marker branches. A
             // declaration that explicitly requests the selected extra owns its marker range.
             if let DependencyContext::Extra(selected) = context
-                && !requirement.extras.contains(selected)
-                && requirement.extras.iter().any(|extra| {
+                && !requirement.extras().contains(selected)
+                && requirement.extras().iter().any(|extra| {
                     expected.lock.conflicts.iter().any(|conflicts| {
                         conflicts.contains(&requirement.name, selected)
                             && conflicts.contains(&requirement.name, extra)
@@ -630,7 +630,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 let selected_marker = requirements
                     .iter()
                     .filter(|candidate| {
-                        candidate.name == requirement.name && candidate.extras.contains(selected)
+                        candidate.name == requirement.name && candidate.extras().contains(selected)
                     })
                     .fold(MarkerTree::FALSE, |marker, candidate| {
                         marker.or(context.requirement_marker(candidate.marker))
@@ -660,7 +660,10 @@ impl<'a> LockedDependencyBuilder<'a> {
                     .root()
                     .is_some_and(|root| root.id == expected.package.id)
                 && expected.lock.members().contains(&requirement.name)
-                && requirement.extras.iter().any(&project_conflicts_with_extra);
+                && requirement
+                    .extras()
+                    .iter()
+                    .any(&project_conflicts_with_extra);
             let item_conflicts_with_project = |item: &ConflictItem| {
                 expected.lock.conflicts.iter().any(|conflicts| {
                     conflicts.contains(&requirement.name, ConflictKindRef::Project)
@@ -668,7 +671,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 })
             };
             let project_conflict_marker = requirement
-                .extras
+                .extras()
                 .iter()
                 .any(|extra| {
                     expected.lock.conflicts.iter().any(|conflicts| {
@@ -692,7 +695,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 DependencyContext::Group(_) => true,
             };
             let selected_context_has_project_compatible_alternative = parent_has_selected_conflict
-                && requirement.extras.iter().any(|extra| {
+                && requirement.extras().iter().any(|extra| {
                     expected
                         .lock
                         .conflicts
@@ -717,7 +720,10 @@ impl<'a> LockedDependencyBuilder<'a> {
                 });
             let project_conflict_marker = project_conflict_marker.filter(|_| {
                 !parent_has_selected_conflict
-                    || requirement.extras.iter().any(&project_conflicts_with_extra)
+                    || requirement
+                        .extras()
+                        .iter()
+                        .any(&project_conflicts_with_extra)
                         && !selected_context_has_project_compatible_alternative
             });
             let project_implies_extra = |extra: &ExtraName| {
@@ -778,7 +784,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                         MarkerTree::TRUE,
                         ConflictMarker::from_conflict_item(alternative).negate(),
                     ));
-                    if !requirement.extras.contains(extra) {
+                    if !requirement.extras().contains(extra) {
                         requested_base_marker.and(UniversalMarker::new(
                             MarkerTree::TRUE,
                             ConflictMarker::from_conflict_item(alternative).negate(),
@@ -790,7 +796,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 && !matches!(context, DependencyContext::Production)
             {
                 let root_extra_has_external_conflict = root_extra_project_conflict
-                    && requirement.extras.iter().any(|extra| {
+                    && requirement.extras().iter().any(|extra| {
                         expected
                             .lock
                             .conflicts
@@ -806,7 +812,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 };
                 if root_extra_has_external_conflict {
                     for extra in requirement
-                        .extras
+                        .extras()
                         .iter()
                         .filter(|extra| project_conflicts_with_extra(extra))
                     {
@@ -821,7 +827,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                     }
                 } else if !root_extra_project_conflict {
                     for extra in requirement
-                        .extras
+                        .extras()
                         .iter()
                         .filter(|extra| project_conflicts_with_extra(extra))
                     {
@@ -942,7 +948,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                             selected
                         });
                     for extra in requirement
-                        .extras
+                        .extras()
                         .iter()
                         .filter(|extra| !dependency.has_extra_payload(extra))
                     {
@@ -970,7 +976,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 }
                 if matches!(dependency.id.source, Source::Registry(_))
                     && requirement
-                        .extras
+                        .extras()
                         .iter()
                         .any(|extra| !dependency.optional_dependencies.contains_key(extra))
                 {
@@ -981,7 +987,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 covered_marker = covered_marker.or(marker.combined());
 
                 let activated = activated_extras.entry(dependency.id.clone()).or_default();
-                for extra in &requirement.extras {
+                for extra in requirement.extras() {
                     let mut activation = if dependency.has_extra_payload(extra) {
                         base_edge_marker
                     } else {
@@ -1011,7 +1017,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 }
 
                 let extras = requirement
-                    .extras
+                    .extras()
                     .iter()
                     .filter(|extra| {
                         if root_extra_project_conflict && project_conflicts_with_extra(extra) {
@@ -1033,7 +1039,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 let mut standalone_base_edge_marker = base_edge_marker;
                 if has_source_forks
                     && matches!(context, DependencyContext::Extra(_))
-                    && !requirement.extras.is_empty()
+                    && !requirement.extras().is_empty()
                 {
                     let mut competing_activations = activated.clone();
                     for (parent_extra, parent_activation) in &expected.activated_extras {
@@ -1049,7 +1055,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                             if marker_is_unreachable(self.requires_python, activation.combined()) {
                                 continue;
                             }
-                            for alternative in &candidate.extras {
+                            for alternative in candidate.extras() {
                                 competing_activations
                                     .entry(alternative.clone())
                                     .and_modify(|existing| existing.or(activation))
@@ -1057,7 +1063,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                             }
                         }
                     }
-                    for extra in &requirement.extras {
+                    for extra in requirement.extras() {
                         let selected =
                             ConflictItem::from((dependency.id.name.clone(), extra.clone()));
                         for (alternative, activation) in &competing_activations {
@@ -1067,7 +1073,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                                 .any(|(parent_extra, parent_activation)| {
                                     requirements.iter().any(|candidate| {
                                         if candidate.name != dependency.id.name
-                                            || !candidate.extras.contains(alternative)
+                                            || !candidate.extras().contains(alternative)
                                         {
                                             return false;
                                         }
@@ -1158,7 +1164,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                         .or_insert(standalone_base_edge_marker);
                 }
                 if extras.is_empty() {
-                    if !requirement.extras.is_empty()
+                    if !requirement.extras().is_empty()
                         && (has_source_forks
                             || self.has_unselected_base_edge(
                                 expected,
@@ -1220,7 +1226,7 @@ impl<'a> LockedDependencyBuilder<'a> {
             coverage_marker.and(self.activation_marker);
             if matches!(context, DependencyContext::Group(_))
                 && requirement
-                    .extras
+                    .extras()
                     .iter()
                     .all(|extra| !project_conflicts_with_extra(extra))
             {
@@ -1231,7 +1237,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                     .filter(|candidate| candidate.name == requirement.name)
                 {
                     for extra in candidate
-                        .extras
+                        .extras()
                         .iter()
                         .filter(|extra| project_conflicts_with_extra(extra))
                     {
@@ -1314,7 +1320,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 marker
             });
         let mut required_marker = base_marker;
-        for extra in &requirement.extras {
+        for extra in requirement.extras() {
             let selected = ConflictItem::from((package_id.name.clone(), extra.clone()));
             let mut competing_marker = MarkerTree::FALSE;
             for conflicts in expected
@@ -1338,7 +1344,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                     for parent_extra in expected.provides_extra {
                         for candidate in requirements.iter().filter(|candidate| {
                             candidate.name == package_id.name
-                                && candidate.extras.contains(alternative_extra)
+                                && candidate.extras().contains(alternative_extra)
                         }) {
                             competing_marker = competing_marker
                                 .or(DependencyContext::Extra(parent_extra)
@@ -1466,7 +1472,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 let mut marker = dependency.complexified_marker;
                 marker.and(base_marker);
                 marker.and(self.activation_marker);
-                for extra in &requirement.extras {
+                for extra in requirement.extras() {
                     if expected.lock.conflicts.contains(&package_id.name, extra) {
                         marker.assume_not_conflict_item(&ConflictItem::from((
                             package_id.name.clone(),
@@ -1592,7 +1598,7 @@ impl<'lock> DependencySourceReachability<'lock> {
             .deferred_package_markers
             .merge(&package.id, None, marker)
             .is_some();
-        for extra in &requirement.extras {
+        for extra in requirement.extras() {
             let Some((extra, _)) = package.optional_dependencies.get_key_value(extra) else {
                 continue;
             };
@@ -1840,13 +1846,13 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
             _ => None,
         };
         let requested_conflicts = requirement
-            .extras
+            .extras()
             .iter()
             .filter(|extra| {
                 include_requested_extras && self.lock.conflicts.contains(&requirement.name, *extra)
             })
             .map(|extra| ConflictItem::from((requirement.name.clone(), extra.clone())));
-        let requested_project = (requirement.extras.is_empty()
+        let requested_project = (requirement.extras().is_empty()
             && self
                 .lock
                 .conflicts
@@ -1862,7 +1868,7 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
         let has_source_forks =
             Lock::has_source_forks(self.lock.packages_for_name(&requirement.name));
         let selected_conflict_is_relevant =
-            selected.is_some() && (!requirement.extras.is_empty() || has_source_forks);
+            selected.is_some() && (!requirement.extras().is_empty() || has_source_forks);
         if conflicts.peek().is_none() && !selected_conflict_is_relevant {
             return None;
         }
@@ -3589,7 +3595,7 @@ impl Lock {
                 if seen.insert((index, None)) {
                     queue.push_back((index, None));
                 }
-                for extra in &*requirement.extras {
+                for extra in requirement.extras() {
                     if seen.insert((index, Some(extra))) {
                         queue.push_back((index, Some(extra)));
                     }
@@ -3614,7 +3620,7 @@ impl Lock {
                     if seen.insert((index, None)) {
                         queue.push_back((index, None));
                     }
-                    for extra in &*requirement.extras {
+                    for extra in requirement.extras() {
                         if seen.insert((index, Some(extra))) {
                             queue.push_back((index, Some(extra)));
                         }
@@ -4636,7 +4642,7 @@ impl Lock {
 
                     let activated = activated_extras.entry(package.id.clone()).or_default();
                     let activation = UniversalMarker::from_combined(marker);
-                    for extra in &requirement.extras {
+                    for extra in requirement.extras() {
                         activated
                             .entry(extra.clone())
                             .and_modify(|existing| existing.or(activation))
@@ -5379,7 +5385,7 @@ impl Lock {
                                 }
                             }
                             for requested_extra in
-                                iter::once(None).chain(requirement.extras.iter().map(Some))
+                                iter::once(None).chain(requirement.extras().iter().map(Some))
                             {
                                 refreshed_dependencies
                                     .entry((
@@ -5589,7 +5595,7 @@ impl Lock {
                 reachability
                     .package_queue
                     .push_back((package, None, marker));
-                for extra in &requirement.extras {
+                for extra in requirement.extras() {
                     if let Some((extra, _)) = package.optional_dependencies.get_key_value(extra) {
                         let marker = marker.and(
                             DependencyContext::Extra(extra)
@@ -5704,7 +5710,7 @@ impl Lock {
                             .package_queue
                             .push_back((package, None, deferred_marker));
                     }
-                    for extra in &requirement.extras {
+                    for extra in requirement.extras() {
                         let Some((extra, _)) = package.optional_dependencies.get_key_value(extra)
                         else {
                             continue;

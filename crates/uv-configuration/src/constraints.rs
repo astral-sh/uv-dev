@@ -47,14 +47,13 @@ impl Constraints {
                 continue;
             }
 
+            // We add and apply constraints independent of their extras.
+            let mut requirement = requirement.clone();
+            requirement.selection.clear_extras();
             constraints
                 .entry(requirement.name.clone())
                 .or_default()
-                .push(Requirement {
-                    // We add and apply constraints independent of their extras.
-                    extras: Box::new([]),
-                    ..requirement.clone()
-                });
+                .push(requirement);
         }
         Self {
             recorder: None,
