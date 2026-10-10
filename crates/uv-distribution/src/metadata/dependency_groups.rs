@@ -6,8 +6,7 @@ use uv_cache::Cache;
 use uv_configuration::NoSources;
 use uv_distribution_types::{IndexLocations, Requirement};
 use uv_normalize::{GroupName, PackageName};
-use uv_pep508::RequirementOrigin;
-use uv_workspace::dependency_groups::FlatDependencyGroups;
+use uv_workspace::dependency_groups::{FlatDependencyGroups, ImportedGroupRequirement};
 use uv_workspace::pyproject::{Sources, ToolUvSources};
 use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache, WorkspaceError,
@@ -121,7 +120,7 @@ impl SourcedDependencyGroups {
                     .map(|(name, group)| {
                         let requirements = group
                             .requirements
-                            .into_iter()
+                            .into_requirements()
                             .map(Requirement::from)
                             .collect();
                         (name, requirements)
@@ -149,7 +148,18 @@ impl SourcedDependencyGroups {
         let mut lowered_dependency_groups = BTreeMap::new();
         for (name, group) in dependency_groups {
             let mut requirements = Vec::new();
-            for requirement in group.requirements {
+            let (local, imported) = group.requirements.partition();
+            let owned_requirements = local
+                .into_iter()
+                .map(|requirement| (requirement, None))
+                .chain(imported.into_iter().map(
+                    |ImportedGroupRequirement {
+                         requirement,
+                         package,
+                         group,
+                     }| { (requirement, Some((package, group))) },
+                ));
+            for (requirement, owner) in owned_requirements {
                 if no_sources.for_package(&requirement.name) {
                     requirements.push(Requirement::from(requirement));
                     continue;
@@ -158,8 +168,7 @@ impl SourcedDependencyGroups {
                 // Non-project imports retain the member and group that own their source mappings.
                 // The flattened requirement already contains every inclusion marker.
                 let (owner_name, owner_root, owner_pyproject, source_group) =
-                    if let Some(RequirementOrigin::Group(_, Some(package), source_group)) =
-                        &requirement.origin
+                    if let Some((package, source_group)) = &owner
                         && let Some(member) = project.workspace().packages().get(package)
                     {
                         (

@@ -19,7 +19,6 @@ use uv_distribution_types::{
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{GroupMetadata, Lock, ResolverManifest, RootDependencyGroup};
 use uv_normalize::PackageName;
-use uv_pep508::RequirementOrigin;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
@@ -450,16 +449,7 @@ async fn do_lock(
     for (name, group) in dependency_groups {
         // Imported requirements are resolved by their member group, whose sources may differ
         // from the root's. Retain the references without lowering their flattened copies here.
-        let requirements = group
-            .requirements
-            .into_iter()
-            .filter(|requirement| {
-                !matches!(
-                    requirement.origin,
-                    Some(RequirementOrigin::Group(_, Some(_), _))
-                )
-            })
-            .collect();
+        let (requirements, _) = group.requirements.partition();
         let requirements = target
             .lower(
                 requirements,

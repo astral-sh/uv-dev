@@ -174,7 +174,7 @@ impl RequiresDist {
         let mut lowered_dependency_groups = BTreeMap::new();
         for (name, flat_group) in dependency_groups {
             let mut requirements = Vec::new();
-            for requirement in flat_group.requirements {
+            for requirement in flat_group.requirements.into_requirements() {
                 if no_sources.for_package(&requirement.name) {
                     requirements.push(Requirement::from(requirement));
                     continue;

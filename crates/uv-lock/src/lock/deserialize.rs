@@ -1008,8 +1008,21 @@ dev = [{ name = "dependency", specifier = ">=1" }]
             ),
             (
                 2,
-                r#"[manifest.dependency-group-includes]
+                r#"[manifest.dependency-groups]
+dev = []
+
+[manifest.dependency-group-includes]
 dev = [{ package = "member", group = "test" }]
+
+[[package]]
+name = "member"
+version = "1.0.0"
+source = { virtual = "." }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+test = []
 "#,
             ),
             (
@@ -1619,6 +1632,33 @@ version = "1.0.0"
         let actual = from_str(&input).expect("the direct parser supports 80 nested containers");
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn unknown_workspace_group_include_is_rejected() {
+        let input = r#"version = 2
+revision = 5
+requires-python = ">=3.12"
+
+[manifest]
+members = ["tools"]
+
+[manifest.dependency-groups]
+lint = []
+
+[manifest.dependency-group-includes]
+lint = [{ package = "tools", group = "typo" }]
+
+[[package]]
+name = "tools"
+version = "0.1.0"
+source = { virtual = "tools" }
+
+[package.metadata.requires-dev]
+test = []
+"#;
+        let error = Lock::from_toml(input).expect_err("undeclared groups cannot be included");
+        insta::assert_snapshot!(error, @"Workspace dependency group `lint` includes unknown member group `tools:typo`");
     }
 
     #[test]
