@@ -38,6 +38,20 @@ If you're running into caching issues, uv includes a few escape hatches:
 As a special case, uv will always rebuild and reinstall any local directory dependencies passed
 explicitly on the command-line (e.g., `uv pip install .`).
 
+## Installing from the cache
+
+When installing packages, uv links files from unpacked wheels in the global cache into the target
+environment. By default, uv uses copy-on-write clones on macOS and Linux, and hardlinks on Windows.
+This allows environments to share package data with the cache instead of storing a separate copy of
+every file. Cloned files share their data until a file is changed; hardlinks refer to the same
+underlying file. As a result, a package can appear to occupy its full size in each environment even
+when its data is shared.
+
+If the filesystem does not support cloning, uv falls back to hardlinks, then to copying. Keeping the
+cache and environment on the same filesystem allows uv to use these more efficient operations. The
+[`link-mode`](../reference/settings.md#link-mode) setting can be used to select a different
+installation method.
+
 ## Dynamic metadata
 
 By default, uv will _only_ rebuild and reinstall local directory dependencies (e.g., editables) if
