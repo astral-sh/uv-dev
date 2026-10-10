@@ -159,7 +159,11 @@ impl FilesystemOptions {
 
                 tracing::debug!("Found workspace configuration at `{}`", path.display());
                 validate_uv_toml(&path, &options)?;
-                return Ok(Some(Self(options.with_origin(Origin::Project))));
+                return Ok(Some(Self(
+                    options
+                        .with_config_source(&path.clone().into(), "")
+                        .with_origin(Origin::Project),
+                )));
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => return Err(err.into()),
@@ -191,7 +195,9 @@ impl FilesystemOptions {
                     return Ok(None);
                 };
 
-                let options = options.relative_to(&std::path::absolute(dir)?)?;
+                let options = options
+                    .relative_to(&std::path::absolute(dir)?)?
+                    .with_config_source(&path.clone().into(), "tool.uv.");
 
                 tracing::debug!("Found workspace configuration at `{}`", path.display());
                 return Ok(Some(Self(options)));
@@ -237,7 +243,7 @@ fn read_file(path: &Path) -> Result<Options, Error> {
     } else {
         options
     };
-    Ok(options)
+    Ok(options.with_config_source(&path.into(), ""))
 }
 
 /// If `required_version` is set and incompatible with the running uv, return the corresponding

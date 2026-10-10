@@ -1470,6 +1470,8 @@ fn install_require_hashes_in_requirements_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: iniconfig
+
+    hint: `--require-hashes` was enabled by `requirements.txt` at line 1
     "
     );
 
@@ -1486,8 +1488,171 @@ fn install_require_hashes_in_requirements_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled by `requirements.txt` at line 1
     "
     );
+
+    // Command-line hash checking does not attribute the mode to a requirements file.
+    requirements_txt.write_str("iniconfig==2.0.0")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--require-hashes"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
+/// Identify each directive through mixed, transitive requirements and constraints includes.
+#[test]
+fn install_require_hashes_in_nested_requirements_txt() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        -r nested/requirements.txt
+        iniconfig==2.0.0
+    "})?;
+    context
+        .temp_dir
+        .child("nested/requirements.txt")
+        .write_str(indoc! {r"
+        -c constraints.txt
+        --require-hashes
+    "})?;
+    context
+        .temp_dir
+        .child("nested/constraints.txt")
+        .write_str(indoc! {r"
+        -r hashes.txt
+    "})?;
+    context
+        .temp_dir
+        .child("nested/hashes.txt")
+        .write_str("--require-hashes")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--no-verify-hashes"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled by `nested/hashes.txt` at line 1 (included from `requirements.txt` at line 1 -> `nested/requirements.txt` at line 1 -> `nested/constraints.txt` at line 1)
+
+    hint: `--require-hashes` was enabled by `nested/requirements.txt` at line 2 (included from `requirements.txt` at line 1)
+    ");
+
+    Ok(())
+}
+
+/// Identify hash checking enabled by a separate constraints or overrides input.
+#[test]
+fn install_require_hashes_in_constraints_and_overrides() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==2.0.0")?;
+    context
+        .temp_dir
+        .child("hashes.txt")
+        .write_str("--require-hashes")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--constraint")
+        .arg("hashes.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled by `hashes.txt` at line 1
+    ");
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--override")
+        .arg("hashes.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled by `hashes.txt` at line 1
+    ");
+
+    Ok(())
+}
+
+/// Identify hash checking enabled by requirements on stdin.
+#[test]
+fn install_require_hashes_in_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str(indoc! {r"
+        --require-hashes
+        iniconfig==2.0.0
+    "})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("-")
+        .stdin(File::open(requirements_txt.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled by stdin at line 1
+    ");
+
+    Ok(())
+}
+
+/// Identify remote hash directives without exposing credentials.
+#[tokio::test]
+async fn install_require_hashes_in_remote_requirements_txt() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/requirements.txt"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("-c nested/hashes.txt\niniconfig==2.0.0"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/nested/hashes.txt"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("--require-hashes"))
+        .mount(&server)
+        .await;
+
+    let mut requirements_url = Url::parse(&format!("{}/requirements.txt", server.uri()))?;
+    let _ = requirements_url.set_username("user");
+    let _ = requirements_url.set_password(Some("password"));
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg(requirements_url.as_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled by `http://user:****@[LOCALHOST]/nested/hashes.txt` at line 1 (included from `http://user:****@[LOCALHOST]/requirements.txt` at line 1)
+    ");
 
     Ok(())
 }
@@ -1515,6 +1680,8 @@ fn install_require_hashes_in_nested_constraints_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled by `constraints.txt` at line 1 (included from `requirements.txt` at line 1)
     "
     );
 
@@ -14479,6 +14646,18 @@ fn pep_751_install_require_hashes_directory() -> Result<()> {
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: foo
     "
     );
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("pylock.toml")
+        .arg("--preview-features").arg("pylock")
+        .env(EnvVars::UV_REQUIRE_HASHES, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: foo
+
+    hint: `--require-hashes` was enabled by environment variable `UV_REQUIRE_HASHES`
+    ");
 
     Ok(())
 }

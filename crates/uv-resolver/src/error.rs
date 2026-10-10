@@ -12,6 +12,7 @@ use tracing::trace;
 
 use uv_distribution_types::{
     DerivationChain, DistErrorKind, IndexCapabilities, IndexLocations, IndexUrl, RequestedDist,
+    SettingSources,
 };
 use uv_normalize::PackageName;
 use uv_pep440::{LowerBound, Version};
@@ -120,7 +121,7 @@ pub enum ResolveError {
     #[error(
         "In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `{0}`"
     )]
-    UnhashedPackage(PackageName),
+    UnhashedPackage(PackageName, SettingSources),
 
     #[error("found conflicting distribution in resolution: {0}")]
     ConflictingDistribution(ConflictingDistributionError),
@@ -152,7 +153,7 @@ impl ResolveError {
             | Self::DisallowedUrl { .. }
             | Self::DistributionType(_)
             | Self::NoSolution(_)
-            | Self::UnhashedPackage(_)
+            | Self::UnhashedPackage(..)
             | Self::PackageUnavailable(_)
             | Self::ConflictMarker(_)
             | Self::MismatchedPackageName { .. } => true,
@@ -169,6 +170,9 @@ impl ResolveError {
 impl uv_errors::Hinted for ResolveError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
+            Self::UnhashedPackage(_, sources) => {
+                sources.enabled_hints("--require-hashes").collect()
+            }
             Self::NoSolution(no_solution) => uv_errors::Hinted::hints(no_solution.as_ref()),
             Self::Client(error) => uv_errors::Hinted::hints(error),
             Self::Distribution(error) => uv_errors::Hinted::hints(error),
@@ -905,10 +909,30 @@ impl std::error::Error for NoSolutionError {}
 
 impl uv_errors::Hinted for NoSolutionError {
     fn hints(&self) -> uv_errors::Hints<'_> {
-        self.pubgrub_hints()
+        let mut hints: uv_errors::Hints<'_> = self
+            .pubgrub_hints()
             .iter()
             .map(ToString::to_string)
-            .collect()
+            .collect();
+        if self.index_locations.no_index()
+            && derivation_tree_packages(&self.error)
+                .filter_map(PubGrubPackage::name_no_root)
+                .any(|name| {
+                    matches!(
+                        self.unavailable_packages.get(name),
+                        Some(UnavailablePackage::NoIndex)
+                    )
+                })
+        {
+            for hint in self
+                .index_locations
+                .no_index_sources()
+                .enabled_hints("--no-index")
+            {
+                hints.push(hint);
+            }
+        }
+        hints
     }
 }
 

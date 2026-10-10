@@ -3409,6 +3409,26 @@ requires-python = ">=3.13"
     Ok(())
 }
 
+/// Hash-policy errors retain the environment variable that enabled the policy.
+#[test]
+fn require_hashes_environment_provenance() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig")?;
+
+    uv_snapshot!(context.pip_sync().arg("requirements.txt")
+        .env(EnvVars::UV_REQUIRE_HASHES, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: iniconfig
+
+    hint: `--require-hashes` was enabled by environment variable `UV_REQUIRE_HASHES`
+    ");
+    Ok(())
+}
+
 /// Use an unknown hash algorithm with `--require-hashes`.
 #[test]
 fn require_hashes_unknown_algorithm() -> Result<()> {
@@ -3480,6 +3500,8 @@ fn require_hashes_in_requirements_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: anyio
+
+    hint: `--require-hashes` was enabled by `requirements.txt` at line 1
     "
     );
 
@@ -3494,8 +3516,43 @@ fn require_hashes_in_requirements_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled by `requirements.txt` at line 1
     "
     );
+
+    Ok(())
+}
+
+/// Identify the declaring file when hash checking is enabled through nested constraints.
+#[test]
+fn require_hashes_in_nested_requirements_txt() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        -c constraints.txt
+        iniconfig==2.0.0
+    "})?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("-c nested/hashes.txt")?;
+    context
+        .temp_dir
+        .child("nested/hashes.txt")
+        .write_str("--require-hashes")?;
+
+    uv_snapshot!(context.pip_sync()
+        .arg("requirements.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled by `nested/hashes.txt` at line 1 (included from `requirements.txt` at line 1 -> `constraints.txt` at line 1)
+    ");
 
     Ok(())
 }

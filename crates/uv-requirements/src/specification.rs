@@ -41,7 +41,7 @@ use uv_configuration::{
     DependencyGroups, ExcludeDependency, NoBinary, NoBuild, Override, PackageOverride,
     RequirementsInput,
 };
-use uv_distribution_types::{Index, Requirement};
+use uv_distribution_types::{Index, Requirement, SettingSource, Sourced};
 use uv_distribution_types::{
     IndexUrl, NameRequirementSpecification, UnresolvedRequirement,
     UnresolvedRequirementSpecification,
@@ -84,9 +84,9 @@ pub struct RequirementsSpecification {
     /// The extra index URLs to use for fetching packages.
     pub extra_index_urls: Vec<IndexUrl>,
     /// Whether to disallow index usage.
-    pub no_index: bool,
-    /// Whether all requirements must be hashed.
-    pub require_hashes: bool,
+    pub no_index: Sourced<bool>,
+    /// Whether hashes are required, with every enabling declaration.
+    pub require_hashes: Sourced<bool>,
     /// The `--find-links` locations to use for fetching packages.
     pub find_links: Vec<IndexUrl>,
     /// The `--no-binary` flags to enforce when selecting distributions.
@@ -106,7 +106,7 @@ impl RequirementsSpecification {
     }
 
     /// Create a [`RequirementsSpecification`] from PEP 723 script metadata.
-    fn from_pep723_metadata(metadata: &Pep723Metadata) -> Self {
+    fn from_pep723_metadata(metadata: &Pep723Metadata, input: &RequirementsInput) -> Self {
         let requirements = metadata
             .dependencies
             .as_ref()
@@ -176,7 +176,18 @@ impl RequirementsSpecification {
                     .into_iter()
                     .flat_map(|urls| urls.iter().map(|index| Index::from(index.clone()).url))
                     .collect(),
-                no_index: tool_uv.top_level.no_index.unwrap_or_default(),
+                no_index: tool_uv
+                    .top_level
+                    .no_index
+                    .clone()
+                    .map(|mut value| {
+                        value.set_source(SettingSource::Configuration {
+                            input: input.clone(),
+                            key: "tool.uv.no-index".to_string(),
+                        });
+                        value
+                    })
+                    .unwrap_or_default(),
                 find_links: tool_uv
                     .top_level
                     .find_links
@@ -335,7 +346,7 @@ impl RequirementsSpecification {
                     Err(err) => return Err(err.into()),
                 };
 
-                Self::from_pep723_metadata(&metadata)
+                Self::from_pep723_metadata(&metadata, input)
             }
             RequirementsSource::SetupPy(path) => {
                 if !path.is_file() {
@@ -386,7 +397,7 @@ impl RequirementsSpecification {
 
                 // Detect if it's a PEP 723 script.
                 if let Some(metadata) = Pep723Metadata::parse(content.as_bytes())? {
-                    Self::from_pep723_metadata(&metadata)
+                    Self::from_pep723_metadata(&metadata, input)
                 } else {
                     // If it's not a PEP 723 script, assume it's a `requirements.txt` file.
                     let requirements_txt = RequirementsTxt::parse_str(
@@ -595,12 +606,12 @@ impl RequirementsSpecification {
                 }
                 spec.index_url = Some(index_url);
             }
-            spec.no_index |= source.no_index;
+            spec.no_index = spec.no_index.or(source.no_index);
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
-            spec.require_hashes |= source.require_hashes;
+            spec.require_hashes = spec.require_hashes.or(source.require_hashes);
         }
 
         // Read all constraints, treating both requirements _and_ constraints as constraints.
@@ -635,12 +646,12 @@ impl RequirementsSpecification {
                 }
                 spec.index_url = Some(index_url);
             }
-            spec.no_index |= source.no_index;
+            spec.no_index = spec.no_index.or(source.no_index);
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
-            spec.require_hashes |= source.require_hashes;
+            spec.require_hashes = spec.require_hashes.or(source.require_hashes);
         }
 
         // Read all overrides, treating both requirements _and_ overrides as overrides.
@@ -663,12 +674,12 @@ impl RequirementsSpecification {
                 }
                 spec.index_url = Some(index_url);
             }
-            spec.no_index |= source.no_index;
+            spec.no_index = spec.no_index.or(source.no_index);
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
-            spec.require_hashes |= source.require_hashes;
+            spec.require_hashes = spec.require_hashes.or(source.require_hashes);
         }
 
         // Collect excludes.
