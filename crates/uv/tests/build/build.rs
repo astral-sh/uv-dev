@@ -3382,6 +3382,230 @@ fn build_name_mismatch() -> Result<()> {
     Ok(())
 }
 
+/// A backend must declare the name from the wheel filename.
+#[test]
+fn build_wheel_metadata_name_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "alpha-1.0.0-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "alpha-1.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: other\nVersion: 9.0.0\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: Failed to validate the built wheel
+      cause: Package metadata name `other` does not match `alpha` from the wheel filename
+    ");
+
+    // The compatibility escape hatch permits known-bad third-party wheels.
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1").current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/alpha-1.0.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
+/// A backend must declare the version from the wheel filename.
+#[test]
+fn build_wheel_metadata_version_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "alpha-1.0.0-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "alpha-1.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: alpha\nVersion: 9.0.0\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: Failed to validate the built wheel
+      cause: Package metadata version `9.0.0` does not match `1.0.0` from the wheel filename
+    ");
+
+    Ok(())
+}
+
+/// A filename can carry a local version omitted from embedded metadata.
+#[test]
+fn build_wheel_metadata_filename_local_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "alpha-1.0.0+local-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "alpha-1.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: alpha\nVersion: 1.0.0\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/alpha-1.0.0+local-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
+/// Building a wheel checks identity without resolving its dependency URLs.
+#[test]
+fn build_wheel_metadata_unsupported_resolver_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "alpha-1.0.0-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "alpha-1.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: alpha\nVersion: 1.0.0\nRequires-Dist: dep @ hg+https://example.com/dep\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/alpha-1.0.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
+/// Setuptools can omit the name when a source tree has no project metadata.
+#[test]
+fn build_wheel_metadata_unnamed() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "UNKNOWN-0.0.0-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "UNKNOWN-0.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nVersion: 0.0.0\nRequires-Dist: dep @ hg+https://example.com/dep\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/UNKNOWN-0.0.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
+/// An unnamed wheel must still declare the version from its filename.
+#[test]
+fn build_wheel_metadata_unnamed_version_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "UNKNOWN-0.0.0-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "UNKNOWN-0.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nVersion: 9.0.0\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: Failed to validate the built wheel
+      cause: Package metadata version `9.0.0` does not match `0.0.0` from the wheel filename
+    ");
+
+    Ok(())
+}
+
 #[cfg(unix)] // Symlinks aren't universally available on windows.
 #[test]
 fn build_with_symlink() -> Result<()> {

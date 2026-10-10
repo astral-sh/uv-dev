@@ -43,7 +43,10 @@ use uv_metadata::read_archive_metadata;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, release_specifiers_to_ranges};
 use uv_platform_tags::Tags;
-use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, PyProjectToml, ResolutionMetadata};
+use uv_pypi_types::{
+    HashAlgorithm, HashDigest, HashDigests, Metadata10, MetadataError, PyProjectToml,
+    ResolutionMetadata,
+};
 use uv_redacted::DisplaySafeUrl;
 use uv_types::{BuildContext, BuildKey, BuildStack, SourceBuildTrait};
 use uv_workspace::pyproject::ToolUvSources;
@@ -3476,16 +3479,24 @@ fn validate_metadata(
 
 /// Validate that the source distribution matches the built filename.
 fn validate_filename(filename: &WheelFilename, metadata: &ResolutionMetadata) -> Result<(), Error> {
-    if metadata.name != filename.name {
+    validate_filename_identity(filename, &metadata.name, &metadata.version)
+}
+
+fn validate_filename_identity(
+    filename: &WheelFilename,
+    name: &PackageName,
+    version: &Version,
+) -> Result<(), Error> {
+    if *name != filename.name {
         return Err(Error::WheelFilenameNameMismatch {
-            metadata: metadata.name.clone(),
+            metadata: name.clone(),
             filename: filename.name.clone(),
         });
     }
 
-    if metadata.version != filename.version {
+    if *version != filename.version && *version != filename.version.clone().without_local() {
         return Err(Error::WheelFilenameVersionMismatch {
-            metadata: metadata.version.clone(),
+            metadata: version.clone(),
             filename: filename.version.clone(),
         });
     }
@@ -3683,14 +3694,41 @@ impl From<CachedMetadata> for ResolutionMetadata {
     }
 }
 
+/// Read the raw metadata from a built wheel.
+fn read_wheel_metadata_bytes(filename: &WheelFilename, wheel: &Path) -> Result<Vec<u8>, Error> {
+    let file = fs_err::File::open(wheel).map_err(Error::CacheRead)?;
+    let reader = std::io::BufReader::new(file);
+    read_archive_metadata(filename, reader)
+        .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))
+}
+
 /// Read the [`ResolutionMetadata`] from a built wheel.
 fn read_wheel_metadata(
     filename: &WheelFilename,
     wheel: &Path,
 ) -> Result<ResolutionMetadata, Error> {
-    let file = fs_err::File::open(wheel).map_err(Error::CacheRead)?;
-    let reader = std::io::BufReader::new(file);
-    let dist_info = read_archive_metadata(filename, reader)
-        .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
-    Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+    Ok(ResolutionMetadata::parse_metadata(
+        &read_wheel_metadata_bytes(filename, wheel)?,
+    )?)
+}
+
+/// Validate that a built wheel's filename matches its embedded metadata.
+pub fn validate_wheel_metadata(filename: &WheelFilename, wheel: &Path) -> Result<(), Error> {
+    let contents = read_wheel_metadata_bytes(filename, wheel)?;
+    let metadata = match Metadata10::parse_pkg_info(&contents) {
+        Ok(metadata) => metadata,
+        Err(MetadataError::FieldNotFound("Name")) if filename.name.as_str() == "unknown" => {
+            // Setuptools can omit the name for source trees without project metadata. The version
+            // must still match the filename.
+            let mut metadata = b"Name: unknown\n".to_vec();
+            metadata.extend_from_slice(&contents);
+            Metadata10::parse_pkg_info(&metadata)?
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let version = metadata
+        .version
+        .parse()
+        .map_err(MetadataError::Pep440VersionError)?;
+    validate_filename_identity(filename, &metadata.name, &version)
 }
