@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fmt::Write;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -31,7 +30,7 @@ use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
 use uv_fs::{PortablePath, Simplified};
 use uv_install_wheel::validate_and_heal_record;
 use uv_static::EnvVars;
-use uv_test::archive::write_tar_gz;
+use uv_test::archive::{RecordHashes, generate_wheel_from_entries, write_tar_gz};
 #[cfg(feature = "test-git")]
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
@@ -45,15 +44,18 @@ use uv_test::{
 };
 
 fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
-    let mut writer = ZipFileWriter::new(Vec::new());
-    let mut record = String::new();
-
-    for index in 0..source_files {
-        let name = format!("large_wheel/module_{index:05}.py");
-        let entry = ZipEntryBuilder::new(name.clone().into(), Compression::Stored);
-        block_on(writer.write_entry_whole(entry, b"VALUE = 1\n"))?;
-        writeln!(record, "{name},,")?;
-    }
+    let mut entries = (0..source_files)
+        .map(|index| {
+            (
+                ZipEntryBuilder::new(
+                    format!("large_wheel/module_{index:05}.py").into(),
+                    Compression::Stored,
+                )
+                .build(),
+                b"VALUE = 1\n".as_slice(),
+            )
+        })
+        .collect::<Vec<_>>();
 
     let metadata = indoc! {"
         Metadata-Version: 2.1
@@ -70,23 +72,23 @@ fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
         ("large_wheel-1.0.0.dist-info/METADATA", metadata),
         ("large_wheel-1.0.0.dist-info/WHEEL", wheel),
     ] {
-        let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
-        writeln!(record, "{name},,")?;
+        entries.push((
+            ZipEntryBuilder::new(name.into(), Compression::Stored).build(),
+            contents.as_bytes(),
+        ));
     }
-    record.push_str("large_wheel-1.0.0.dist-info/RECORD,,\n");
     let entry = ZipEntryBuilder::new(
         "large_wheel-1.0.0.dist-info/RECORD".into(),
         Compression::Stored,
     );
-    block_on(writer.write_entry_whole(entry, record.as_bytes()))?;
-
-    fs_err::write(path, block_on(writer.close())?)?;
+    fs_err::write(
+        path,
+        generate_wheel_from_entries(entries, entry.build(), RecordHashes::Omit)?,
+    )?;
     Ok(())
 }
 
 fn write_crlf_script_wheel(path: &Path) -> Result<()> {
-    let mut writer = ZipFileWriter::new(Vec::new());
     let metadata = indoc! {"
         Metadata-Version: 2.1
         Name: encoded-script
@@ -110,19 +112,20 @@ fn write_crlf_script_wheel(path: &Path) -> Result<()> {
             b"#!python\r\n# coding: latin-1\r\nprint('\x63\x61\x66\xe9')\r\n",
         ),
     ];
-    let mut record = String::new();
-    for (entry_name, contents) in entries {
-        let entry = ZipEntryBuilder::new(entry_name.into(), Compression::Stored);
-        block_on(writer.write_entry_whole(entry, contents))?;
-        writeln!(record, "{entry_name},,")?;
-    }
-    record.push_str("encoded_script-1.0.0.dist-info/RECORD,,\n");
+    let entries = entries.into_iter().map(|(name, contents)| {
+        (
+            ZipEntryBuilder::new(name.into(), Compression::Stored).build(),
+            contents,
+        )
+    });
     let entry = ZipEntryBuilder::new(
         "encoded_script-1.0.0.dist-info/RECORD".into(),
         Compression::Stored,
     );
-    block_on(writer.write_entry_whole(entry, record.as_bytes()))?;
-    fs_err::write(path, block_on(writer.close())?)?;
+    fs_err::write(
+        path,
+        generate_wheel_from_entries(entries, entry.build(), RecordHashes::Omit)?,
+    )?;
     Ok(())
 }
 
