@@ -20030,3 +20030,76 @@ fn overrides_preserve_alternative_optional_extras() -> Result<()> {
 
     Ok(())
 }
+
+/// A backend returning another project version makes that release unavailable, not resolution fatal.
+#[tokio::test]
+async fn compile_backtracks_from_built_project_identity_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let (filename, wheel) = generate_wheel(
+        &"identity-package".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let mut source = Vec::new();
+    write_tar_gz(&mut source, &[
+        ("identity_package-2.0.0/pyproject.toml", indoc! {r#"
+            [project]
+            name = "identity-package"
+            version = "2.0.0"
+            dynamic = ["dependencies"]
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#}.as_bytes()),
+        ("identity_package-2.0.0/backend.py", indoc! {r#"
+            from pathlib import Path
+            import shutil
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                filename = "identity_package-1.0.0-py3-none-any.whl"
+                shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+                return filename
+        "#}.as_bytes()),
+        ("identity_package-2.0.0/identity_package-1.0.0-py3-none-any.whl", wheel.as_slice()),
+    ])?;
+    Mock::given(method("GET"))
+        .and(path("/simple/identity-package/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(format!(
+            "<a href=\"../../identity_package-2.0.0.tar.gz\">identity_package-2.0.0.tar.gz</a><a href=\"../../{filename}\">{filename}</a>",
+        ), "text/html"))
+        .mount(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/identity_package-2.0.0.tar.gz"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(source))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("identity-package")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--no-header", "--no-annotate", "--index-url"])
+        .arg(format!("{}/simple", server.uri()))
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    identity-package==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    server.verify().await;
+    Ok(())
+}

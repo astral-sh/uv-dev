@@ -33,7 +33,7 @@ use uv_distribution_types::{
     NameRequirementSpecification, PackageConfigSettings, Requirement, SourceDist,
 };
 use uv_errors::{Hinted, Hints};
-use uv_fs::{Simplified, normalize_path, relative_to};
+use uv_fs::{Simplified, normalize_path, relative_to, rename_with_retry};
 use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -1304,12 +1304,19 @@ async fn build_wheel(
                     .check(&builder, source.path(), sources.clone())
                     .await?;
             }
-            let filename = builder.build(output_dir).await?;
+            // Keep the built wheel out of the output directory until its identity is validated.
+            let temp_dir = tempfile::tempdir_in(output_dir)?;
+            let raw_filename = builder.build(temp_dir.path()).await?;
+            let filename =
+                WheelFilename::from_str(&raw_filename).map_err(Error::InvalidBuiltWheelFilename)?;
+            rename_with_retry(
+                temp_dir.path().join(&raw_filename),
+                output_dir.join(&raw_filename),
+            )
+            .await?;
             BuildMessage::Build {
-                normalized_filename: DistFilename::WheelFilename(
-                    WheelFilename::from_str(&filename).map_err(Error::InvalidBuiltWheelFilename)?,
-                ),
-                raw_filename: filename,
+                normalized_filename: DistFilename::WheelFilename(filename),
+                raw_filename,
                 output_dir: output_dir.to_path_buf(),
             }
         }

@@ -3382,6 +3382,216 @@ fn build_name_mismatch() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn build_wheel_project_name_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "configured-name"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"different-name".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        import shutil
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = {filename:?}
+            shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+            return filename
+    "})?;
+
+    let dist = project.child("dist");
+    dist.create_dir_all()?;
+    let existing = dist.child("existing.txt");
+    existing.write_binary(b"existing artifact")?;
+
+    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: The project declares name `configured-name`, but the wheel declares name `different-name`, which indicates a malformed wheel. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+    ");
+    dist.child("different_name-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::missing());
+    assert_eq!(
+        context.read("project/dist/existing.txt"),
+        "existing artifact"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn build_wheel_project_version_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "configured-name"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"configured-name".parse()?,
+        &"9.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        import shutil
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = {filename:?}
+            shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+            return filename
+    "})?;
+
+    let dist = project.child("dist");
+    dist.create_dir_all()?;
+    let existing = dist.child("existing.txt");
+    existing.write_binary(b"existing artifact")?;
+
+    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: The project declares version 1.0.0, but the wheel declares version 9.0.0, which indicates a malformed wheel. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+    ");
+    dist.child("configured_name-9.0.0-py3-none-any.whl")
+        .assert(predicate::path::missing());
+    assert_eq!(
+        context.read("project/dist/existing.txt"),
+        "existing artifact"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn build_wheel_project_skip_filename_check() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "configured-name"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"different-name".parse()?,
+        &"9.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        import shutil
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = {filename:?}
+            shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+            return filename
+    "})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel").env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built project/dist/different_name-9.0.0-py3-none-any.whl
+    ");
+    project
+        .child("dist/different_name-9.0.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+
+    Ok(())
+}
+
+#[test]
+fn build_wheel_project_local_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "configured-name"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"configured-name".parse()?,
+        &"1.0.0+local".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        import shutil
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = {filename:?}
+            shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+            return filename
+    "})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built project/dist/configured_name-1.0.0+local-py3-none-any.whl
+    ");
+    project
+        .child("dist/configured_name-1.0.0+local-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+
+    Ok(())
+}
+
 #[cfg(unix)] // Symlinks aren't universally available on windows.
 #[test]
 fn build_with_symlink() -> Result<()> {

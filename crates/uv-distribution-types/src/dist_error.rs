@@ -22,6 +22,13 @@ pub trait IsBuildBackendError:
 
     /// Return whether this is an expected user-facing failure.
     fn is_user_failure(&self) -> bool;
+
+    /// Return whether the built artifact contradicts its declared project identity.
+    ///
+    /// Resolvers may reject this candidate and try another distribution version.
+    fn is_metadata_inconsistent(&self) -> bool {
+        false
+    }
 }
 
 /// The operation(s) that failed when reporting an error with a distribution.
