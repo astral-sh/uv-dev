@@ -23,9 +23,8 @@ use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, Dist, ExtraBuildVariables, HashCollection, Identifier,
-    Index, IndexLocations, MinimumLibcVersion, Name, NameRequirementSpecification, Origin,
-    PackageConfigSettings, Requirement, RequirementScope, RequirementSource, RequiresPython,
-    ResolvedDist, Verbatim,
+    Index, IndexLocations, MinimumLibcVersion, NameRequirementSpecification, Origin,
+    PackageConfigSettings, Requirement, RequiresPython, ResolvedDist, Verbatim,
 };
 use uv_fs::{CWD, Simplified};
 use uv_git::ResolvedRepositoryReference;
@@ -33,7 +32,6 @@ use uv_install_wheel::LinkMode;
 use uv_lock::PylockToml;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{Conflicts, SupportedEnvironments};
 use uv_python_discovery::PythonInstallation;
@@ -664,15 +662,7 @@ pub async fn pip_compile(
             let mut active_seen = FxHashSet::default();
             let selection = resolution
                 .distributions()
-                .map(|distribution| Requirement {
-                    name: distribution.name().clone(),
-                    extras: Box::new([]),
-                    groups: Box::new([]),
-                    marker: MarkerTree::TRUE,
-                    source: RequirementSource::from(distribution),
-                    scope: RequirementScope::Global,
-                    origin: None,
-                })
+                .map(Identifier::distribution_id)
                 .collect::<FxHashSet<_>>();
             let discovery_constraints =
                 Constraints::from_specifications(constraints.iter().cloned());
