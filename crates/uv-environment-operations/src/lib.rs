@@ -63,6 +63,8 @@ use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_r
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::{InstallerSettingsRef, ResolverInstallerSettings, ResolverSettings};
 
+mod compatibility;
+pub use compatibility::{validate_lock_platform, validate_lock_python};
 pub mod environment;
 mod error;
 pub use error::EnvironmentError;

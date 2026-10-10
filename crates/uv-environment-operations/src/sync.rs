@@ -1,4 +1,3 @@
-use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
@@ -15,7 +14,7 @@ use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_lock::Installable;
-use uv_pep508::{MarkerTree, VersionOrUrl};
+use uv_pep508::VersionOrUrl;
 use uv_preview::Preview;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
 use uv_python_interpreter::PythonEnvironment;
@@ -28,7 +27,7 @@ use uv_workspace::{DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache}
 
 use crate::install_target::InstallTarget;
 use crate::malware::{MalwareCheckContext, maybe_check_malware};
-use crate::{EnvironmentError, detect_conflicts};
+use crate::{EnvironmentError, detect_conflicts, validate_lock_platform, validate_lock_python};
 use uv_requirements::script_extra_build_requires;
 
 /// Install the selected packages from a lockfile into an environment.
@@ -151,17 +150,7 @@ pub async fn sync_from_lock(
     // primary builder into the registry client below.
     let malware_check_client_builder = client_builder.clone();
 
-    // Validate that the Python version is supported by the lockfile.
-    if !target
-        .lock()
-        .requires_python()
-        .contains(venv.interpreter().python_version())
-    {
-        return Err(EnvironmentError::LockedPythonIncompatibility(
-            venv.interpreter().python_version().clone(),
-            target.lock().requires_python().clone(),
-        ));
-    }
+    validate_lock_python(target.lock(), venv.interpreter())?;
 
     // Validate that the set of requested extras and development groups are compatible.
     detect_conflicts(&target, extras, groups)?;
@@ -173,29 +162,7 @@ pub async fn sync_from_lock(
     // Determine the markers to use for resolution.
     let marker_env = resolution_markers(None, python_platform, venv.interpreter());
 
-    // Validate that the platform is supported by the lockfile.
-    let environments = target.lock().supported_environments();
-    if !environments.is_empty() {
-        if !environments
-            .iter()
-            .any(|env| env.evaluate(&marker_env, &[]))
-        {
-            return Err(EnvironmentError::LockedPlatformIncompatibility(
-                // For error reporting, we use the "simplified"
-                // supported environments, because these correspond to
-                // what the end user actually wrote. The non-simplified
-                // environments, by contrast, are explicitly
-                // constrained by `requires-python`.
-                target
-                    .lock()
-                    .simplified_supported_environments()
-                    .into_iter()
-                    .filter_map(MarkerTree::contents)
-                    .map(|env| format!("`{env}`"))
-                    .join(", "),
-            ));
-        }
-    }
+    validate_lock_platform(target.lock(), &marker_env)?;
 
     // Determine the tags to use for the resolution.
     let tags = resolution_tags(None, python_platform, venv.interpreter())

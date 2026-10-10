@@ -100,9 +100,13 @@ impl ToolInstallOptions {
     }
 
     /// Resolve options using CLI/environment, source-project, then user/system precedence.
-    pub fn for_project(&self, project_root: &Path) -> Result<ResolverInstallerOptions, Error> {
+    pub fn for_project(
+        &self,
+        project_root: &Path,
+        stop_discovery_at: Option<&Path>,
+    ) -> Result<ResolverInstallerOptions, Error> {
         let project = if self.discover_project {
-            FilesystemOptions::find(project_root)?
+            FilesystemOptions::find_up_to(project_root, stop_discovery_at)?
                 .map(FilesystemOptions::into_options)
                 .map(|options| ResolverInstallerOptions::from(options.top_level))
                 .unwrap_or_default()
@@ -181,7 +185,15 @@ impl FilesystemOptions {
     /// The search starts at the given path and goes up the directory tree until a `uv.toml` file or
     /// `pyproject.toml` file is found.
     pub fn find(path: &Path) -> Result<Option<Self>, Error> {
-        for ancestor in path.ancestors() {
+        Self::find_up_to(path, None)
+    }
+
+    /// Search ancestors without crossing the optional discovery boundary.
+    fn find_up_to(path: &Path, stop_discovery_at: Option<&Path>) -> Result<Option<Self>, Error> {
+        for ancestor in path
+            .ancestors()
+            .take_while(|ancestor| Some(*ancestor) != stop_discovery_at)
+        {
             match Self::from_directory(ancestor) {
                 Ok(Some(options)) => {
                     return Ok(Some(options));
