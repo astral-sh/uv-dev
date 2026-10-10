@@ -11,7 +11,9 @@ use uv_distribution_types::{
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
-use uv_pep508::{MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString};
+use uv_pep508::{
+    MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString, MarkerValueVersion,
+};
 use uv_platform_tags::{
     AbiTag, BinaryFormat, IncompatibleTag, LanguageTag, PlatformTag, TagPriority, Tags,
 };
@@ -536,6 +538,46 @@ impl PrioritizedDist {
     /// Return the hashes for each distribution.
     pub(crate) fn hashes(&self) -> &[HashDigest] {
         &self.0.hashes
+    }
+
+    /// Return the set of environments supported by the compatible wheels in this distribution.
+    ///
+    /// Unlike the distribution markers, this does not treat a source distribution as support for
+    /// every environment.
+    pub(crate) fn implied_wheel_markers(
+        &self,
+        minimum_libc_version: Option<MinimumLibcVersion>,
+    ) -> MarkerTree {
+        let mut markers = [MarkerTree::FALSE; 2];
+        for (wheel, compatibility) in &self.0.wheels {
+            if !compatibility.is_compatible() {
+                continue;
+            }
+
+            let requires_python = wheel.file.requires_python.as_ref().map(|requires_python| {
+                requires_python
+                    .iter()
+                    .fold(MarkerTree::TRUE, |marker, specifier| {
+                        marker.and(MarkerTree::expression(MarkerExpression::Version {
+                            key: MarkerValueVersion::PythonFullVersion,
+                            specifier: specifier.clone(),
+                        }))
+                    })
+            });
+            let python = implied_python_markers(&wheel.filename);
+            for (coverage, mut marker) in markers.iter_mut().zip(implied_libc_markers(
+                &wheel.filename,
+                python,
+                minimum_libc_version,
+            )) {
+                if let Some(requires_python) = requires_python {
+                    marker = marker.and(requires_python);
+                }
+                *coverage = coverage.or(marker);
+            }
+        }
+        let [glibc, musl] = markers;
+        glibc.and(musl)
     }
 
     /// Returns true if and only if this distribution does not contain any
