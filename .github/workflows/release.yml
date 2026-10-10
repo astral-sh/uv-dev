@@ -28,6 +28,12 @@ on:
         default: false
         type: boolean
 
+# Serialize production releases through their final publishing jobs.
+# Dry-runs do not replace or cancel a production release.
+concurrency:
+  group: release-${{ inputs.dry-run && format('dry-run-{0}', github.run_id) || 'production' }}
+  cancel-in-progress: false
+
 env:
   # Release actions must not consume shared GitHub Actions caches.
   ACTIONS_CACHE_MODE: none
