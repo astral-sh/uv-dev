@@ -50294,3 +50294,79 @@ fn lock_required_environment_unlocked_parent_preserves_disjoint_domain() -> Resu
     ");
     Ok(())
 }
+
+/// Registry replacements can expand activation through successive platform domains.
+/// The Linux child precedes the Windows parent whose replacement makes it active on Windows.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_cascading_activation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "cascading-activation-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.linux-root.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.linux-root.versions."2.0.0"]
+        requires = ["windows-parent"]
+        [packages.windows-parent.versions."1.0.0"]
+        wheel_tags = ["cp313-cp313-win_amd64"]
+        [packages.windows-parent.versions."2.0.0"]
+        requires = ["linux-child"]
+        [packages.linux-child.versions."1.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+        [packages.linux-child.versions."2.0.0"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "linux-root; sys_platform == 'linux'",
+            "linux-child; sys_platform == 'linux'",
+            "windows-parent; sys_platform == 'win32'",
+        ]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args([
+            "--upgrade-package", "linux-root==1", "--upgrade-package", "windows-parent==1",
+            "--upgrade-package", "linux-child==1",
+        ])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "linux-root; sys_platform == 'linux'",
+            "linux-child; sys_platform == 'linux'",
+            "windows-parent; sys_platform == 'win32'",
+        ]
+        [tool.uv]
+        required-environments = [
+            "python_version == '3.13' and sys_platform == 'linux'",
+            "python_version == '3.13' and sys_platform == 'win32'",
+        ]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Updated linux-child v1.0.0 -> v2.0.0
+    Updated linux-root v1.0.0 -> v2.0.0
+    Updated windows-parent v1.0.0 -> v2.0.0
+    ");
+    Ok(())
+}

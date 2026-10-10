@@ -138,13 +138,15 @@ pub fn read_lock_requirements(
 
         // Map each entry in the lockfile to a preference.
         if let Some(version) = package.version() {
+            let index = package.index(install_path)?;
             candidates.push((
                 package,
                 activation,
+                index.is_some(),
                 Preference::from_locked(
                     package.name().clone(),
                     version.clone(),
-                    package.index(install_path)?,
+                    index,
                     package.fork_markers().to_vec(),
                 ),
             ));
@@ -154,13 +156,26 @@ pub fn read_lock_requirements(
     // A replacement release can introduce edges to any locked package. Old adjacency cannot
     // prove those packages inactive, so reconsider their preferences within the unlocked parents'
     // activation domain. Required environments outside that domain retain their existing pins.
+    // Newly unlocked registry packages can expand that domain again, so revisit retained candidates
+    // until it stops growing. Each expansion removes at least one candidate.
+    while !changed_activation.is_false() {
+        let previous_activation = changed_activation;
+        candidates.retain(|(package, activation, is_registry, _)| {
+            if !missing_wheels(package, activation.or(changed_activation)) {
+                return true;
+            }
+            if *is_registry {
+                changed_activation = changed_activation.or(*activation);
+            }
+            false
+        });
+        if changed_activation == previous_activation {
+            break;
+        }
+    }
     let preferences = candidates
         .into_iter()
-        .filter_map(|(package, activation, preference)| {
-            (changed_activation.is_false()
-                || !missing_wheels(package, activation.or(changed_activation)))
-            .then_some(preference)
-        })
+        .map(|(_, _, _, preference)| preference)
         .collect();
     Ok(LockedRequirements { preferences, git })
 }
