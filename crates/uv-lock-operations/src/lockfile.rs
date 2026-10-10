@@ -1,13 +1,40 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
-
 use uv_configuration::{DependencyGroups, DependencyGroupsWithDefaults};
-use uv_lock::{Lock, Package};
+use uv_lock::{Lock, LockParseError, Package};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_warnings::warn_user;
 use uv_workspace::pyproject::PyProjectToml;
+
+/// A failure while discovering or selecting packages from a frozen workspace lockfile.
+#[derive(Debug, thiserror::Error)]
+pub enum FrozenWorkspaceError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("The lockfile path has no parent directory")]
+    MissingParent,
+    #[error("Failed to read lockfile `{}`", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Failed to parse lockfile `{}`", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: Box<LockParseError>,
+    },
+    #[error(
+        "Frozen lockfile discovery requires a lockfile with revision 5 or later; run `uv lock` to update it"
+    )]
+    MissingMemberDefaultGroups,
+    #[error("The lockfile does not record default dependency groups")]
+    MissingDefaultGroups,
+    #[error("Package `{0}` not found in lockfile workspace")]
+    MissingPackage(PackageName),
+}
 
 /// A frozen workspace resolution and the root used to interpret its relative paths.
 #[derive(Debug, Clone)]
@@ -21,7 +48,10 @@ impl FrozenWorkspace {
     ///
     /// A remaining member manifest is identified by its path in the lockfile. Other nested manifests
     /// take precedence, so an unrelated project cannot use an ancestor's lockfile.
-    pub(crate) async fn discover(project_dir: &Path, preview: Preview) -> Result<Option<Self>> {
+    pub(crate) async fn discover(
+        project_dir: &Path,
+        preview: Preview,
+    ) -> Result<Option<Self>, FrozenWorkspaceError> {
         let absolute = std::path::absolute(project_dir)?;
         let project_dir = uv_fs::normalize_path(&absolute);
         let mut manifest_root = None;
@@ -64,9 +94,7 @@ impl FrozenWorkspace {
                     }
                 }
                 if workspace.lock.configured_member_default_groups().is_none() {
-                    bail!(
-                        "Frozen lockfile discovery requires a lockfile with revision 5 or later; run `uv lock` to update it"
-                    );
+                    return Err(FrozenWorkspaceError::MissingMemberDefaultGroups);
                 }
                 if !preview.is_enabled(PreviewFeature::FrozenLockfile) {
                     warn_user!(
@@ -81,18 +109,23 @@ impl FrozenWorkspace {
     }
 
     /// Read a lockfile, using its parent as the base for relative sources.
-    async fn read(path: &Path) -> Result<Self> {
+    async fn read(path: &Path) -> Result<Self, FrozenWorkspaceError> {
         let absolute = std::path::absolute(path)?;
         let path = uv_fs::normalize_path(&absolute);
         let root = path
             .parent()
-            .context("The lockfile path has no parent directory")?
+            .ok_or(FrozenWorkspaceError::MissingParent)?
             .to_path_buf();
         let contents = fs_err::tokio::read_to_string(&path)
             .await
-            .with_context(|| format!("Failed to read lockfile `{}`", path.display()))?;
-        let lock = Lock::from_toml(&contents)
-            .with_context(|| format!("Failed to parse lockfile `{}`", path.display()))?;
+            .map_err(|source| FrozenWorkspaceError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        let lock = Lock::from_toml(&contents).map_err(|source| FrozenWorkspaceError::Parse {
+            path: path.to_path_buf(),
+            source: Box::new(source),
+        })?;
         Ok(Self { root, lock })
     }
 
@@ -129,23 +162,23 @@ impl FrozenWorkspace {
         &self,
         groups: &DependencyGroups,
         project: Option<&PackageName>,
-    ) -> Result<DependencyGroupsWithDefaults> {
+    ) -> Result<DependencyGroupsWithDefaults, FrozenWorkspaceError> {
         let defaults = match project {
             Some(name) => self.lock.member_default_groups(name),
             None => self.lock.workspace_default_groups(),
         }
-        .context("The lockfile does not record default dependency groups")?;
+        .ok_or(FrozenWorkspaceError::MissingDefaultGroups)?;
         Ok(groups.with_defaults(defaults))
     }
 
     /// Validate the selected packages against the workspace recorded in the lockfile.
-    pub fn validate_packages(&self, names: &[PackageName]) -> Result<()> {
+    pub fn validate_packages(&self, names: &[PackageName]) -> Result<(), FrozenWorkspaceError> {
         for name in names {
             if !(self.lock.members().contains(name)
                 || self.lock.members().is_empty()
                     && self.lock.root().is_some_and(|root| root.name() == name))
             {
-                bail!("Package `{name}` not found in lockfile workspace");
+                return Err(FrozenWorkspaceError::MissingPackage(name.clone()));
             }
         }
         Ok(())
