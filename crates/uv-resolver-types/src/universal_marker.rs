@@ -507,6 +507,9 @@ impl ConflictMarker {
         conflicts: &Conflicts,
         markers: impl IntoIterator<Item = UniversalMarker>,
     ) -> Self {
+        if conflicts.is_empty() {
+            return Self::TRUE;
+        }
         let mut referenced = BTreeSet::new();
         for marker in markers {
             marker.marker.visit_extras(|_, extra| {

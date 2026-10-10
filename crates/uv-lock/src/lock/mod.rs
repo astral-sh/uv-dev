@@ -455,14 +455,20 @@ enum DependencyContext<'a> {
 impl DependencyContext<'_> {
     /// Specialize a requirement to the dependency section that can activate it.
     fn requirement_marker(self, marker: MarkerTree) -> MarkerTree {
-        let production_marker = marker.simplify_not_extras_with(|_| true);
         match self {
-            Self::Production | Self::Group(_) => production_marker,
-            Self::Extra(extra) => marker
-                .simplify_extras(slice::from_ref(extra))
-                .simplify_not_extras_with(|candidate| candidate != extra)
-                // Production requirements already belong to the base distribution.
-                .and(production_marker.negate()),
+            Self::Production | Self::Group(_) => marker.simplify_not_extras_with(|_| true),
+            Self::Extra(extra) => {
+                let marker = marker.simplify_not_extras_with(|candidate| candidate != extra);
+                // A constant is either inactive or already belongs to the base distribution.
+                if marker.is_false() || marker.is_true() {
+                    return MarkerTree::FALSE;
+                }
+                let production_marker = marker.simplify_not_extras_with(|_| true);
+                marker
+                    .simplify_extras(slice::from_ref(extra))
+                    // Production requirements already belong to the base distribution.
+                    .and(production_marker.negate())
+            }
         }
     }
 
@@ -1847,6 +1853,9 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
             let mut required =
                 UniversalMarker::from_combined(context.requirement_marker(requirement.marker));
             required.and(parent_marker);
+            if required.combined().is_false() {
+                continue;
+            }
             for extra in &requirement.extras {
                 if lock.conflicts.contains(&requirement.name, extra)
                     && !context.omits_conflicting_extra(lock, package, &requirement.name, extra)
