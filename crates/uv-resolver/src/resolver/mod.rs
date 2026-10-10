@@ -19,12 +19,13 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, info, instrument, trace, warn};
 
-use uv_configuration::{Constraints, DependencyModifiers};
+use uv_configuration::{Constraints, DependencyModifiers, RequiredEnvironmentsMode};
 use uv_distribution::{ArchiveMetadata, DistributionDatabase};
 use uv_distribution_types::{
     BuiltDist, DerivationChain, Dist, DistErrorKind, Identifier, IndexCapabilities, IndexLocations,
-    IndexMetadata, IndexUrl, InstalledDist, Name, RemoteSource, Requirement, RequiresPython,
-    ResolutionRecorder, ResolvedDist, SourceDist, VersionOrUrlRef,
+    IndexMetadata, IndexUrl, InstalledDist, Name, RegistryBuiltDist, RegistryBuiltWheel,
+    RemoteSource, Requirement, RequiresPython, ResolutionRecorder, ResolvedDist, SourceDist,
+    VersionOrUrlRef,
 };
 use uv_git::GitResolver;
 use uv_normalize::PackageName;
@@ -46,6 +47,7 @@ use crate::error::{NoSolutionError, ResolveError, derivation_tree_packages};
 use crate::fork_indexes::ForkIndexes;
 use crate::fork_urls::ForkUrls;
 use crate::manifest::Manifest;
+use crate::marker::requires_python_marker;
 use crate::pins::FilePins;
 use crate::preferences::{PreferenceSource, Preferences};
 use crate::prioritized_distribution::{
@@ -88,6 +90,13 @@ use crate::universal_marker::UniversalMarker;
 use crate::yanks::AllowedYanks;
 use crate::{DependencyMode, Exclusions, FlatIndex, Options, ResolutionMode, VersionMap, marker};
 pub(crate) use provider::MetadataUnavailable;
+
+/// Whether a wheel's metadata established its Python coverage.
+enum WheelMetadataMarker {
+    Available(MarkerTree),
+    Unavailable(MetadataUnavailable),
+}
+
 pub(crate) use resolution::{
     Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, ResolvedFork,
     SelectedDistribution,
@@ -1219,6 +1228,27 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             return Ok(None);
         }
 
+        // Workspace projects are built locally; external sources must satisfy the wheel policy.
+        if matches!(&dist, Dist::Source(_))
+            && !self.workspace_members.contains(name)
+            && !matches!(&dist, Dist::Source(SourceDist::Directory(directory)) if self.options.workspace_wheel_exemptions.contains(directory.install_path.as_ref()))
+            && env.marker_environment().is_none()
+            && self.options.required_environments_mode
+                == Some(RequiredEnvironmentsMode::RequireWheels)
+        {
+            let applicable = find_environments(id, pubgrub);
+            for marker in self.options.required_environments.iter().copied() {
+                if env.included_by_marker(applicable.and(marker)) {
+                    return Ok(Some(ResolverVersion::Unavailable(
+                        version.clone(),
+                        UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
+                            IncompatibleWheel::MissingPlatform(marker),
+                        )),
+                    )));
+                }
+            }
+        }
+
         // If the URL points to a pre-built wheel, and the wheel's supported Python versions don't
         // match our `Requires-Python`, mark it as incompatible.
         if let Dist::Built(dist) = &dist {
@@ -1233,24 +1263,45 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             if env.marker_environment().is_none() && !self.options.artifact_environments.is_empty()
             {
                 let wheel_marker = implied_markers(filename, self.options.minimum_libc_version);
+                let python_marker = metadata
+                    .requires_python
+                    .as_ref()
+                    .map_or(MarkerTree::TRUE, requires_python_marker);
                 // If the caller marked an environment as requiring artifact coverage, ensure it
                 // has coverage.
+                let applicable = find_environments(id, pubgrub);
                 for environment_marker in self.options.artifact_environments.iter().copied() {
-                    // If the platform is part of the current environment...
-                    if env.included_by_marker(environment_marker)
-                        && env.included_by_marker(
-                            find_environments(id, pubgrub).and(environment_marker),
-                        )
+                    let required_markers = applicable.and(environment_marker);
+                    let (required_markers, wheel_marker) =
+                        if self.options.required_environments_mode
+                            == Some(RequiredEnvironmentsMode::RequireWheels)
+                            && self
+                                .options
+                                .required_environments
+                                .iter()
+                                .any(|required| *required == environment_marker)
+                        {
+                            // Wheel support and dependency applicability must overlap within the
+                            // project's Python range as well as the current resolver fork.
+                            let required_markers = required_markers.and(requires_python_marker(
+                                self.python_requirement.target().specifiers(),
+                            ));
+                            (
+                                required_markers,
+                                wheel_marker.and(python_marker).and(required_markers),
+                            )
+                        } else {
+                            (required_markers, wheel_marker.and(environment_marker))
+                        };
+                    if env.included_by_marker(required_markers)
+                        && !env.included_by_marker(wheel_marker)
                     {
-                        // ...but the wheel doesn't support it in this fork, it's incompatible.
-                        if !env.included_by_marker(wheel_marker.and(environment_marker)) {
-                            return Ok(Some(ResolverVersion::Unavailable(
-                                version.clone(),
-                                UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
-                                    IncompatibleWheel::MissingPlatform(environment_marker),
-                                )),
-                            )));
-                        }
+                        return Ok(Some(ResolverVersion::Unavailable(
+                            version.clone(),
+                            UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
+                                IncompatibleWheel::MissingPlatform(environment_marker),
+                            )),
+                        )));
                     }
                 }
             }
@@ -1468,8 +1519,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
     /// Determine whether a candidate covers all supported platforms; and, if not, generate a fork.
     ///
-    /// This only ever applies to versions that lack source distributions And, for now, we only
-    /// apply it in two cases:
+    /// This applies to versions that lack source distributions and to environments that explicitly
+    /// require wheel coverage. For now, we only apply it in two cases:
     ///
     /// 1. Local versions, where the non-local version has greater platform coverage. The intent is
     ///    such that, if we're resolving PyTorch, and we choose `torch==2.5.2+cpu`, we want to
@@ -1500,19 +1551,64 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         };
 
         let artifact_markers = dist.implied_markers();
-        if artifact_markers.is_true() {
+        // If no environment requires artifact coverage and the package is already compatible
+        // with all environments (as is the case for packages that include a source
+        // distribution), we don't need to fork.
+        let require_wheels = match self.options.required_environments_mode {
+            Some(RequiredEnvironmentsMode::RequireWheels) => true,
+            None => false,
+        };
+        if (!require_wheels || self.options.required_environments.is_empty())
+            && artifact_markers.is_true()
+        {
             return Ok(None);
         }
 
         // If the caller marked an environment as requiring artifact coverage, ensure it has
         // coverage.
         for marker in self.options.artifact_environments.iter().copied() {
-            // If the platform is part of the current environment...
-            if env.included_by_marker(marker) {
+            let require_wheel_coverage = require_wheels
+                && self
+                    .options
+                    .required_environments
+                    .iter()
+                    .any(|required| *required == marker);
+            // Check the dependency's applicability before requesting metadata for this coverage.
+            let required_markers = marker.and(find_environments(id, pubgrub));
+            let required_markers = if require_wheel_coverage {
+                required_markers.and(requires_python_marker(
+                    self.python_requirement.target().specifiers(),
+                ))
+            } else {
+                required_markers
+            };
+            if env.included_by_marker(required_markers) {
+                let mut unavailable_wheel = None;
                 // But isn't supported by the distribution in this fork...
-                if !env.included_by_marker(artifact_markers.and(marker))
-                    && env.included_by_marker(find_environments(id, pubgrub).and(marker))
-                {
+                let supported = if require_wheel_coverage {
+                    if let Some(prioritized) = dist.prioritized() {
+                        prioritized.has_wheel_coverage(
+                            self.options.minimum_libc_version,
+                            required_markers.and(fork_markers),
+                            |wheel| match self
+                                .wheel_metadata_marker(wheel, id, pubgrub, requests)?
+                            {
+                                WheelMetadataMarker::Available(marker) => {
+                                    Ok::<_, ResolveError>(marker)
+                                }
+                                WheelMetadataMarker::Unavailable(reason) => {
+                                    unavailable_wheel.get_or_insert(reason);
+                                    Ok(MarkerTree::FALSE)
+                                }
+                            },
+                        )?
+                    } else {
+                        true
+                    }
+                } else {
+                    env.included_by_marker(artifact_markers.and(marker))
+                };
+                if !supported {
                     // Separate the required environment from the candidate's wheel coverage in
                     // this fork, allowing environments in neither set to fall on either side.
                     // For example, Darwin == 24 becomes Darwin < 25 when the wheels require
@@ -1520,11 +1616,16 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     let coverage = dist.implied_markers().and(fork_markers);
                     let split = marker.restrict(marker.or(coverage));
                     let Some((left, right)) = fork_version_by_marker(env, split) else {
-                        return Ok(Some(ResolverVersion::Unavailable(
-                            candidate.version().clone(),
+                        let reason = if let Some(reason) = unavailable_wheel.as_ref() {
+                            self.record_incomplete_package(name, candidate.version(), reason)
+                        } else {
                             UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
                                 IncompatibleWheel::MissingPlatform(marker),
-                            )),
+                            ))
+                        };
+                        return Ok(Some(ResolverVersion::Unavailable(
+                            candidate.version().clone(),
+                            reason,
                         )));
                     };
 
@@ -1671,22 +1772,98 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        self.visit_candidate(candidate, dist, package, name, pins, requests)?;
-        self.visit_candidate(&base_candidate, base_dist, package, name, pins, requests)?;
+        let (base_version, local_version) =
+            if require_wheels && !self.options.required_environments.is_empty() {
+                // Each platform fork must validate wheel coverage before selecting a version.
+                (None, None)
+            } else {
+                self.visit_candidate(candidate, dist, package, name, pins, requests)?;
+                self.visit_candidate(&base_candidate, base_dist, package, name, pins, requests)?;
+                (
+                    Some(base_candidate.version().clone()),
+                    Some(candidate.version().clone()),
+                )
+            };
 
         let forks = vec![
             VersionFork {
-                env: base_env.clone(),
+                env: base_env,
                 id,
-                version: Some(base_candidate.version().clone()),
+                version: base_version,
             },
             VersionFork {
-                env: local_env.clone(),
+                env: local_env,
                 id,
-                version: Some(candidate.version().clone()),
+                version: local_version,
             },
         ];
         Ok(Some(ResolverVersion::Forked(forks)))
+    }
+
+    /// Keep metadata failure reasons available to the final resolution diagnostic.
+    fn record_incomplete_package(
+        &self,
+        name: &PackageName,
+        version: &Version,
+        reason: &MetadataUnavailable,
+    ) -> UnavailableVersion {
+        let unavailable_version = UnavailableVersion::from(reason);
+        let message = unavailable_version.singular_message();
+        if let Some(err) = reason.source() {
+            warn!("{name} {message}: {err}");
+        } else {
+            warn!("{name} {message}");
+        }
+        let incomplete_packages = self.incomplete_packages.pin();
+        let versions = incomplete_packages.get_or_insert(
+            name.clone(),
+            HashMap::builder().resize_mode(ResizeMode::Blocking).build(),
+        );
+        versions.pin().insert(version.clone(), reason.clone());
+        unavailable_version
+    }
+
+    /// Read wheel metadata when its index record omits the supported Python versions.
+    fn wheel_metadata_marker(
+        &self,
+        wheel: &RegistryBuiltWheel,
+        id: Id<PubGrubPackage>,
+        pubgrub: &State<UvDependencyProvider>,
+        requests: &MetadataRequests,
+    ) -> Result<WheelMetadataMarker, ResolveError> {
+        let request = MetadataRequest::Dist(Dist::Built(BuiltDist::Registry(RegistryBuiltDist {
+            wheels: vec![wheel.clone()],
+            best_wheel_index: 0,
+            sdist: None,
+        })));
+        let registered = requests.request_metadata(request, |_| {
+            if !self
+                .hasher
+                .allows_package(wheel.name(), &wheel.filename.version)
+            {
+                return Err(ResolveError::UnhashedPackage(wheel.name().clone()));
+            }
+            Ok(())
+        })?;
+        match &*registered.wait() {
+            MetadataResponse::Found(archive) => Ok(WheelMetadataMarker::Available(
+                archive
+                    .metadata
+                    .requires_python
+                    .as_ref()
+                    .map_or(MarkerTree::TRUE, requires_python_marker),
+            )),
+            MetadataResponse::Unavailable(reason) => {
+                Ok(WheelMetadataMarker::Unavailable(reason.clone()))
+            }
+            MetadataResponse::Error(dist, err) => Err(ResolveError::Dist(
+                DistErrorKind::from_requested_dist(dist, &**err),
+                dist.clone(),
+                DerivationChainBuilder::from_state(id, &wheel.filename.version, pubgrub)
+                    .unwrap_or_default(),
+                err.clone(),
+            )),
+        }
     }
 
     /// Visit a selected candidate.
@@ -1848,21 +2025,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 let metadata = match &*response {
                     MetadataResponse::Found(archive) => &archive.metadata,
                     MetadataResponse::Unavailable(reason) => {
-                        let unavailable_version = UnavailableVersion::from(reason);
-                        let message = unavailable_version.singular_message();
-                        if let Some(err) = reason.source() {
-                            // Show the detailed error for metadata parse errors.
-                            warn!("{name} {message}: {err}");
-                        } else {
-                            warn!("{name} {message}");
-                        }
-                        let incomplete_packages = self.incomplete_packages.pin();
-                        let versions = incomplete_packages.get_or_insert(
-                            name.clone(),
-                            HashMap::builder().resize_mode(ResizeMode::Blocking).build(),
-                        );
-                        versions.pin().insert(version.clone(), reason.clone());
-                        return Ok(Dependencies::Unavailable(unavailable_version));
+                        return Ok(Dependencies::Unavailable(
+                            self.record_incomplete_package(name, version, reason),
+                        ));
                     }
                     MetadataResponse::Error(dist, err) => {
                         let chain = DerivationChainBuilder::from_state(id, version, pubgrub)

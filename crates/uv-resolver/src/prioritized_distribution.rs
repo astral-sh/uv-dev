@@ -18,6 +18,7 @@ use uv_platform_tags::{
 use uv_pypi_types::{HashDigest, Yanked};
 
 use crate::known_platform::KnownPlatform;
+use crate::marker::requires_python_marker;
 use crate::resolved::ResolvedDistRef;
 
 /// A collection of distributions that have been filtered by relevance.
@@ -536,6 +537,61 @@ impl PrioritizedDist {
     /// Return the hashes for each distribution.
     pub(crate) fn hashes(&self) -> &[HashDigest] {
         &self.0.hashes
+    }
+
+    /// Check whether compatible wheels cover a required environment, without treating a source
+    /// distribution as wheel coverage. Prefer index metadata, then the best wheel's metadata.
+    pub(crate) fn has_wheel_coverage<E>(
+        &self,
+        minimum_libc_version: Option<MinimumLibcVersion>,
+        required_markers: MarkerTree,
+        mut metadata_markers: impl FnMut(&RegistryBuiltWheel) -> Result<MarkerTree, E>,
+    ) -> Result<bool, E> {
+        let indexed_wheels = self
+            .0
+            .wheels
+            .iter()
+            .filter(|(wheel, _)| wheel.file.requires_python.is_some());
+        let metadata_wheels = self
+            .best_wheel()
+            .into_iter()
+            .chain(
+                self.0
+                    .wheels
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| Some(*index) != self.0.best_wheel_index)
+                    .map(|(_, wheel)| wheel),
+            )
+            .filter(|(wheel, _)| wheel.file.requires_python.is_none());
+        let mut markers = [MarkerTree::FALSE; 2];
+        for (wheel, compatibility) in indexed_wheels.chain(metadata_wheels) {
+            if !compatibility.is_compatible() {
+                continue;
+            }
+
+            let python = implied_python_markers(&wheel.filename);
+            let wheel_markers = implied_libc_markers(&wheel.filename, python, minimum_libc_version)
+                .map(|marker| marker.and(required_markers));
+            if wheel_markers.iter().all(|marker| marker.is_false()) {
+                continue;
+            }
+
+            let requires_python = if let Some(requires_python) = wheel.file.requires_python.as_ref()
+            {
+                requires_python_marker(requires_python)
+            } else {
+                metadata_markers(wheel)?
+            };
+            for (coverage, marker) in markers.iter_mut().zip(wheel_markers) {
+                *coverage = coverage.or(marker.and(requires_python));
+            }
+            let [glibc, musl] = markers;
+            if !glibc.and(musl).is_false() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Returns true if and only if this distribution does not contain any

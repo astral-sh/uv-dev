@@ -11,7 +11,7 @@ use uv_client::{BaseClientBuilder, RegistryClient};
 use uv_command_support::Printer;
 use uv_configuration::{
     Concurrency, Constraints, DependencyGroups, DependencyModifiers, ExcludeDependency, Excludes,
-    ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
+    ExtrasSpecification, Override, Overrides, Reinstall, RequiredEnvironmentsMode, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
@@ -27,7 +27,7 @@ use uv_platform_tags::Tags;
 use uv_pypi_types::Conflicts;
 use uv_requirements::{
     GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
-    RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
+    RequirementsSpecification, SourceTree, SourceTreeResolver,
 };
 use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
@@ -118,12 +118,17 @@ pub async fn resolve(
     index: &InMemoryIndex,
     build_dispatch: &BuildDispatch<'_>,
     concurrency: &Concurrency,
-    options: Options,
+    mut options: Options,
     recorder: Option<ResolutionRecorder>,
     logger: Box<dyn ResolveLogger>,
     printer: Printer,
 ) -> Result<(ResolverOutput, HashStrategy), Error> {
     let start = std::time::Instant::now();
+
+    // Only explicit source-tree and group inputs grant workspace wheel exemptions.
+    let require_wheels =
+        options.required_environments_mode == Some(RequiredEnvironmentsMode::RequireWheels);
+    let mut workspace_memberships = BTreeMap::new();
 
     // Resolve the requirements from the provided sources.
     let requirements = {
@@ -203,11 +208,15 @@ pub async fn resolve(
             }
 
             // Extend the requirements with the resolved source trees.
-            requirements.extend(
-                resolutions
-                    .into_iter()
-                    .flat_map(SourceTreeResolution::into_requirements),
-            );
+            for resolution in resolutions {
+                let (source_requirements, workspace_members) = resolution.into_parts();
+                if require_wheels && let Some(members) = workspace_members {
+                    workspace_memberships
+                        .entry(Arc::as_ptr(&members).addr())
+                        .or_insert(members);
+                }
+                requirements.extend(source_requirements);
+            }
         }
 
         for (pyproject_path, groups) in groups {
@@ -225,6 +234,12 @@ pub async fn resolve(
                 path: pyproject_path.clone(),
                 source: Box::new(source),
             })?;
+
+            if require_wheels && let Some(members) = metadata.workspace_members {
+                workspace_memberships
+                    .entry(Arc::as_ptr(&members).addr())
+                    .or_insert(members);
+            }
 
             // Complain if dependency groups are named that don't appear.
             for name in groups.explicit_names() {
@@ -263,6 +278,17 @@ pub async fn resolve(
 
         requirements
     };
+
+    // Keep each shared membership alive while deduplicating by its allocation identity, then
+    // collect paths once per discovered membership using the current source policy.
+    for members in workspace_memberships.into_values() {
+        options.workspace_wheel_exemptions.extend(
+            members
+                .iter()
+                .filter(|(name, _)| !build_dispatch.sources().for_package(name))
+                .map(|(_, member)| member.root().clone()),
+        );
+    }
 
     // Incorporate hashes from requirements discovered while resolving source trees and groups.
     let mut hasher = hasher

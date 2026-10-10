@@ -20,6 +20,7 @@ use uv_pypi_types::PyProjectToml;
 use uv_redacted::DisplaySafeUrl;
 use uv_resolver::{InMemoryIndex, MetadataResponse};
 use uv_types::{BuildContext, HashStrategy, HashVerification};
+use uv_workspace::WorkspaceMembers;
 
 #[derive(Debug, Clone)]
 pub enum SourceTree {
@@ -55,6 +56,8 @@ pub struct SourceTreeResolution {
     project: PackageName,
     /// The extras used when resolving the requirements.
     extras: Box<[ExtraName]>,
+    /// Shared workspace membership discovered while lowering the source tree.
+    workspace_members: Option<WorkspaceMembers>,
 }
 
 impl SourceTreeResolution {
@@ -68,9 +71,9 @@ impl SourceTreeResolution {
         &self.extras
     }
 
-    /// Return the requirements sourced from the source tree.
-    pub fn into_requirements(self) -> Box<[Requirement]> {
-        self.requirements
+    /// Return the lowered requirements and the discovered local workspace members.
+    pub fn into_parts(self) -> (Box<[Requirement]>, Option<WorkspaceMembers>) {
+        (self.requirements, self.workspace_members)
     }
 }
 
@@ -162,6 +165,7 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
             requirements,
             project,
             extras,
+            workspace_members: metadata.workspace_members,
         })
     }
 

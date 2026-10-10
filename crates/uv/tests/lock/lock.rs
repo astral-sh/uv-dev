@@ -175,6 +175,235 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
     Ok(())
 }
 
+/// Keep legacy required-environment behavior by default, then opt in to requiring Python 3.13
+/// wheels and allow a known holdout to remain active only on Python 3.12.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_requires_matching_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario: Scenario = toml::from_str(
+        r#"
+        name = "required-environment-hard-ranking"
+
+        [root]
+        requires = ["upgradeable", "holdout"]
+
+        [expected]
+        satisfiable = true
+
+        [packages.upgradeable.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+
+        [packages.upgradeable.versions."2.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+
+        [packages.holdout.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = context.with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable<2", "holdout"]
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable<2", "holdout"]
+
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable<2", "holdout"]
+
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: The `required-environments-mode` setting is experimental and may change without warning. Pass `--preview-features required-environments-mode` to disable this warning.
+    error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*')
+      cause: Because holdout==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels and only holdout==1.0.0 is available, we can conclude that all versions of holdout cannot be used.
+             And because your project depends on holdout, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable<2", "holdout"]
+
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*')
+      cause: Because holdout==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels and only holdout==1.0.0 is available, we can conclude that all versions of holdout cannot be used.
+             And because your project depends on holdout, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "upgradeable",
+            "holdout; python_version < '3.13'",
+        ]
+
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Updated upgradeable v1.0.0 -> v1.0.0, v2.0.0
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+    resolution-markers = [
+        "python_full_version != '3.13.*'",
+        "python_full_version == '3.13.*'",
+    ]
+    required-markers = [
+        "python_full_version == '3.13.*'",
+    ]
+
+    [options]
+    required-environments-mode = "require-wheels"
+
+    [[package]]
+    name = "holdout"
+    version = "1.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    sdist = { url = "http://[LOCALHOST]/files/holdout-1.0.0.tar.gz", hash = "sha256:[SHA256:holdout-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/holdout-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:holdout-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "holdout", marker = "python_full_version < '3.13'" },
+        { name = "upgradeable", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version != '3.13.*'" },
+        { name = "upgradeable", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version == '3.13.*'" },
+    ]
+
+    [package.metadata]
+    requires-dist = [
+        { name = "holdout", marker = "python_full_version < '3.13'" },
+        { name = "upgradeable" },
+    ]
+
+    [[package]]
+    name = "upgradeable"
+    version = "1.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    resolution-markers = [
+        "python_full_version != '3.13.*'",
+    ]
+    sdist = { url = "http://[LOCALHOST]/files/upgradeable-1.0.0.tar.gz", hash = "sha256:[SHA256:upgradeable-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/upgradeable-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:upgradeable-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "upgradeable"
+    version = "2.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    resolution-markers = [
+        "python_full_version == '3.13.*'",
+    ]
+    sdist = { url = "http://[LOCALHOST]/files/upgradeable-2.0.0.tar.gz", hash = "sha256:[SHA256:upgradeable-2.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/upgradeable-2.0.0-cp313-cp313-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:upgradeable-2.0.0-cp313-cp313-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+    "#);
+    });
+
+    Ok(())
+}
+
 /// Equivalent dependency declarations should reuse metadata already stored in a lockfile.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -48680,5 +48909,392 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
+    Ok(())
+}
+
+/// Interior Requires-Python exclusions cannot count as wheel coverage for a required version.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_rejects_excluded_python_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheel-python-exclusion"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-any"]
+        requires_python = ">=3.12"
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["py3-none-any"]
+        requires_python = ">=3.12,!=3.13.*"
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = context.with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        environments = ["python_version == '3.13'"]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+        supported-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+        required-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+
+        [options]
+        required-environments-mode = "require-wheels"
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/example-1.0.0.tar.gz", hash = "sha256:[SHA256:example-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:example-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example" }]
+        "#);
+    });
+    Ok(())
+}
+
+/// Direct source archives cannot satisfy an external package's required-wheel policy.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_required_environment_rejects_source_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let archive = generate_source_archive(&"provider".parse()?, &"1.0.0".parse()?, "", None)?;
+    Mock::given(method("GET"))
+        .and(path("/provider-1.0.0.tar.gz"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["provider @ {}/provider-1.0.0.tar.gz"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#, server.uri()})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because only provider==1.0.0 is available and provider==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels, we can conclude that all versions of provider cannot be used.
+             And because your project depends on provider, we can conclude that your project's requirements are unsatisfiable.
+    ");
+    Ok(())
+}
+
+/// Workspace source packages are exempt from the external wheel requirement.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_allows_workspace_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["member"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        [tool.uv.workspace]
+        members = ["member"]
+        [tool.uv.sources]
+        member = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Local wheel metadata constrains required Python coverage when no index metadata exists.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_local_wheel_python_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12,<3.13".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--no-index", "--find-links", "wheels"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*')
+      cause: Because example==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels and only example==1.0.0 is available, we can conclude that all versions of example cannot be used.
+             And because your project depends on example, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    "#);
+    Ok(())
+}
+
+/// Direct wheel tags do not override upper bounds in the wheel's Python metadata.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_direct_wheel_python_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12,<3.13".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        [tool.uv.sources]
+        example = {{ path = "wheels/{filename}" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because only example==1.0.0 is available and example==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels, we can conclude that all versions of example cannot be used.
+             And because your project depends on example, we can conclude that your project's requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
+
+/// Required wheel coverage must overlap the project's patch-level Python range.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_wheel_target_python_range() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12,<3.13.2".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13.2,<3.14"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--no-index", "--find-links", "wheels"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*')
+      cause: Because example==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels and only example==1.0.0 is available, we can conclude that all versions of example cannot be used.
+             And because your project depends on example, we can conclude that your project's requirements are unsatisfiable.
+
+    "#);
+    Ok(())
+}
+
+/// Direct wheels must cover the project's patch-level Python range.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_direct_wheel_target_python_range() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12,<3.13.2".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13.2,<3.14"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        [tool.uv.sources]
+        example = {{ path = "wheels/{filename}" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because only example==1.0.0 is available and example==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels, we can conclude that all versions of example cannot be used.
+             And because your project depends on example, we can conclude that your project's requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
+
+/// Compound dependency markers can retain Linux applicability without a Python fork.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_direct_wheel_dependency_applicability() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12,<3.13".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example; python_version == '3.13' or sys_platform == 'win32'"]
+        [tool.uv]
+        required-environments = ["sys_platform == 'linux'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        [tool.uv.sources]
+        example = {{ path = "wheels/{filename}" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because only example{python_full_version == '3.13.*' or sys_platform == 'win32'}==1.0.0 is available and example{python_full_version == '3.13.*' or sys_platform == 'win32'}==1.0.0 has no Linux-compatible wheels, we can conclude that all versions of example{python_full_version == '3.13.*' or sys_platform == 'win32'} cannot be used.
+             And because your project depends on example{python_full_version == '3.13.*' or sys_platform == 'win32'}, we can conclude that your project's requirements are unsatisfiable.
+    "#);
     Ok(())
 }
