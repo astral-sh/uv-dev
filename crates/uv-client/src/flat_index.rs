@@ -15,6 +15,7 @@ use uv_small_str::SmallString;
 
 use crate::cached_client::{CacheControl, CachedClientError};
 use crate::html::SimpleDetailHTML;
+use crate::index_parser::IndexParser;
 use crate::{CachedClient, Connectivity, Error, ErrorKind, OwnedArchive, RetryState};
 
 #[derive(Debug, thiserror::Error)]
@@ -126,15 +127,27 @@ pub struct FlatIndexClient<'a> {
     client: &'a CachedClient,
     connectivity: Connectivity,
     cache: &'a Cache,
+    parser: IndexParser,
 }
 
 impl<'a> FlatIndexClient<'a> {
     /// Create a new [`FlatIndexClient`].
     pub fn new(client: &'a CachedClient, connectivity: Connectivity, cache: &'a Cache) -> Self {
+        Self::new_with_parser(client, connectivity, cache, IndexParser::default())
+    }
+
+    /// Share parsing budgets with the registry client that owns these flat indexes.
+    pub(crate) fn new_with_parser(
+        client: &'a CachedClient,
+        connectivity: Connectivity,
+        cache: &'a Cache,
+        parser: IndexParser,
+    ) -> Self {
         Self {
             client,
             connectivity,
             cache,
+            parser,
         }
     }
 
@@ -236,9 +249,13 @@ impl<'a> FlatIndexClient<'a> {
                 let text = response.text().await.map_err(|err| {
                     ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
                 })?;
-                let unarchived = Self::parse_html(&text, &url)
-                    .map_err(|err| Error::from_html_err(err, url.clone()))?;
-                OwnedArchive::from_unarchived(&unarchived)
+                self.parser
+                    .parse(text.len(), move || {
+                        let unarchived = Self::parse_html(&text, &url)
+                            .map_err(|err| Error::from_html_err(err, url.clone()))?;
+                        OwnedArchive::from_unarchived(&unarchived)
+                    })
+                    .await
             }
             .boxed_local()
             .instrument(info_span!("parse_flat_index_html", url = % url))
@@ -276,9 +293,14 @@ impl<'a> FlatIndexClient<'a> {
         let text = fs_err::tokio::read_to_string(path)
             .await
             .map_err(ErrorKind::Io)?;
-        let files = Self::parse_html(&text, flat_index.url())
-            .map_err(|err| Error::from_html_err(err, flat_index.url().clone()))?;
-        Ok(Self::entries_from_files(files, flat_index))
+        let flat_index = flat_index.clone();
+        self.parser
+            .parse(text.len(), move || {
+                let files = Self::parse_html(&text, flat_index.url())
+                    .map_err(|err| Error::from_html_err(err, flat_index.url().clone()))?;
+                Ok(Self::entries_from_files(files, &flat_index))
+            })
+            .await
     }
 
     /// Parse distributions from a flat HTML index.
@@ -405,6 +427,61 @@ mod tests {
     use fs_err::File;
     use std::io::Write;
     use tempfile::tempdir;
+    use wiremock::matchers::path;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn large_local_and_redirected_flat_html() -> Result<(), Box<dyn std::error::Error>> {
+        let server = MockServer::start().await;
+        let cache = Cache::temp()?.init().await?;
+        let http = CachedClient::new(crate::BaseClientBuilder::default().build()?);
+        let client = FlatIndexClient::new(&http, Connectivity::Online, &cache);
+        let directory = tempdir()?;
+        for padding in [0, 512 * 1024] {
+            let text = format!(
+                "<!--{}--><a href=\"demo-1.0.tar.gz\">demo</a>",
+                " ".repeat(padding)
+            );
+            let local = directory.path().join(format!("{padding}.html"));
+            fs_err::write(&local, &text)?;
+            let local_index = IndexUrl::parse(&local.to_string_lossy(), None)?;
+            let local_entries = client.fetch_index(&local_index).await?;
+            assert_eq!(local_entries.entries.len(), 1);
+            assert_eq!(
+                local_entries.entries[0].filename.to_string(),
+                "demo-1.0.tar.gz"
+            );
+            assert_eq!(
+                local_entries.entries[0].file.url.to_url()?,
+                DisplaySafeUrl::from_file_path(directory.path().join("demo-1.0.tar.gz"))
+                    .map_err(|()| "invalid local fixture URL")?
+            );
+
+            Mock::given(path(format!("/redirect/{padding}")))
+                .respond_with(
+                    ResponseTemplate::new(302)
+                        .insert_header("Location", format!("/files/{padding}/index.html")),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(path(format!("/files/{padding}/index.html")))
+                .respond_with(ResponseTemplate::new(200).set_body_string(text))
+                .mount(&server)
+                .await;
+            let index = IndexUrl::parse(&format!("{}/redirect/{padding}", server.uri()), None)?;
+            let remote_entries = client.fetch_index(&index).await?;
+            assert_eq!(remote_entries.entries.len(), 1);
+            assert_eq!(
+                remote_entries.entries[0].filename.to_string(),
+                "demo-1.0.tar.gz"
+            );
+            assert_eq!(
+                remote_entries.entries[0].file.url.to_url()?.as_str(),
+                format!("{}/files/{padding}/demo-1.0.tar.gz", server.uri())
+            );
+        }
+        Ok(())
+    }
 
     /// Round-trip a synthetic flat-index cache entry and preserve sidecar hashes.
     #[test]
