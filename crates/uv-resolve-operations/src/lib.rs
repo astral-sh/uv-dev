@@ -146,12 +146,8 @@ pub async fn resolve(
                 NamedRequirementsResolver::new(
                     hasher,
                     index,
-                    DistributionDatabase::new(
-                        client,
-                        build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
-                    )
-                    .with_recorder(recorder.clone()),
+                    DistributionDatabase::new(client, build_dispatch, concurrency)
+                        .with_recorder(recorder.clone()),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
                 .resolve(unnamed.into_iter())
@@ -165,12 +161,8 @@ pub async fn resolve(
                 extras,
                 hasher,
                 index,
-                DistributionDatabase::new(
-                    client,
-                    build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
-                )
-                .with_recorder(recorder.clone()),
+                DistributionDatabase::new(client, build_dispatch, concurrency)
+                    .with_recorder(recorder.clone()),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
             .resolve(source_trees.iter())
@@ -290,12 +282,8 @@ pub async fn resolve(
                 NamedRequirementsResolver::new(
                     &hasher,
                     index,
-                    DistributionDatabase::new(
-                        client,
-                        build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
-                    )
-                    .with_recorder(recorder.clone()),
+                    DistributionDatabase::new(client, build_dispatch, concurrency)
+                        .with_recorder(recorder.clone()),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
                 .resolve(unnamed.into_iter())
@@ -334,12 +322,8 @@ pub async fn resolve(
                 &modifiers,
                 &hasher,
                 index,
-                DistributionDatabase::new(
-                    client,
-                    build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
-                )
-                .with_recorder(recorder.clone()),
+                DistributionDatabase::new(client, build_dispatch, concurrency)
+                    .with_recorder(recorder.clone()),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
             .resolve(&resolver_env)
@@ -389,12 +373,8 @@ pub async fn resolve(
             &hasher,
             build_dispatch,
             installed_packages,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            )
-            .with_recorder(recorder.clone()),
+            DistributionDatabase::new(client, build_dispatch, concurrency)
+                .with_recorder(recorder.clone()),
         )?
         .with_reporter(Arc::new(reporter));
 

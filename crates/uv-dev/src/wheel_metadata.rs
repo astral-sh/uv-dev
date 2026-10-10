@@ -3,6 +3,7 @@ use std::str::FromStr;
 use anstream::println;
 use anyhow::{Result, bail};
 use clap::Parser;
+use tokio::sync::Semaphore;
 
 use uv_cache::{Cache, CacheArgs};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
@@ -57,6 +58,7 @@ pub(crate) async fn wheel_metadata(
             }),
             &resolver,
             &capabilities,
+            &Semaphore::new(1),
             None,
         )
         .await?;

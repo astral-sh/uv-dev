@@ -512,11 +512,7 @@ impl ToolLock {
             concurrency.clone(),
             preview,
         );
-        let database = DistributionDatabase::new(
-            &client,
-            &build_dispatch,
-            concurrency.downloads_semaphore.clone(),
-        );
+        let database = DistributionDatabase::new(&client, &build_dispatch, concurrency);
 
         let requires_python =
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());

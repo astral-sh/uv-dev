@@ -23,6 +23,7 @@ use uv_client::{
     CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, RegistryClient,
     RequestBuilder, RetryState,
 };
+use uv_configuration::Concurrency;
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     ArchiveHashPolicy, BuildInfo, BuildableSource, BuiltDist, Dist, DistRef, HashCollection,
@@ -68,6 +69,7 @@ pub struct DistributionDatabase<'a, Context: BuildContext> {
     recorder: Option<ResolutionRecorder>,
     builder: SourceDistributionBuilder<'a, Context>,
     client: ManagedClient<'a>,
+    metadata_concurrency: Arc<Semaphore>,
     reporter: Option<Arc<dyn Reporter>>,
     content_addressed_cache: bool,
     first_party_packages: Option<&'a FirstPartyPackages>,
@@ -77,7 +79,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
     pub fn new(
         client: &'a RegistryClient,
         build_context: &'a Context,
-        downloads_semaphore: Arc<Semaphore>,
+        concurrency: &Concurrency,
     ) -> Self {
         // When ZIP validation is disabled, the extracted tree can contain files that aren't
         // represented in the central directory and therefore aren't included in its digest.
@@ -88,7 +90,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             recorder: None,
             build_context,
             builder: SourceDistributionBuilder::new(build_context),
-            client: ManagedClient::new(client, downloads_semaphore),
+            client: ManagedClient::new(client, concurrency.downloads_semaphore.clone()),
+            metadata_concurrency: concurrency.metadata_semaphore.clone(),
             reporter: None,
             content_addressed_cache,
             first_party_packages: None,
@@ -605,6 +608,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: MetadataHashPolicy<'_>,
     ) -> Result<ArchiveMetadata, Error> {
+        // Bound open cache locks independently of download permits. Metadata reads do not
+        // recursively request metadata, including when they fall back to a full-wheel download.
+        let _metadata_permit = self.metadata_concurrency.acquire().await;
         let hash_policy = match hashes.validation {
             HashValidation::None => {
                 let compute_hashes = match hashes.collection {
@@ -652,12 +658,13 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         let result = self
             .client
-            .managed(|client| {
+            .manual(|client, download_concurrency| {
                 client
                     .wheel_metadata(
                         dist,
                         self.build_context.git(),
                         self.build_context.capabilities(),
+                        download_concurrency,
                         self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
                     )
                     .boxed_local()

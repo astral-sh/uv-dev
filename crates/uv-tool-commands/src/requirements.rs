@@ -169,11 +169,7 @@ pub(super) async fn resolve_names(
         NamedRequirementsResolver::new(
             &hasher,
             state.index(),
-            DistributionDatabase::new(
-                &client,
-                &build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            ),
+            DistributionDatabase::new(&client, &build_dispatch, concurrency),
         )
         .with_reporter(Arc::new(ResolverReporter::from(printer)))
         .resolve(unnamed.into_iter())
