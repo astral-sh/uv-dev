@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env::consts::EXE_SUFFIX;
 
 use anyhow::Result;
@@ -7,14 +8,15 @@ use assert_fs::prelude::*;
 use fs_err as fs;
 use indoc::{formatdoc, indoc};
 use predicates::Predicate;
+use sha2::{Digest, Sha256};
 use url::Url;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{basic_auth, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_fs::{Simplified, copy_dir_all};
 use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
-use uv_test::packse::PackseServer;
+use uv_test::packse::{PackseServer, generate_wheel};
 use uv_test::{download_to_disk, site_packages_path, uv_snapshot};
 
 #[test]
@@ -7011,5 +7013,302 @@ fn sync_with_target_installs_missing_python() -> Result<()> {
      + anyio==4.3.0
     "
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn pep_751_remote_sync_uses_index_url_credentials_before_planning() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let hash = hex::encode(Sha256::digest(&wheel));
+    let lock = formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "foo"
+        version = "1.0.0"
+        wheels = [{{ url = "{url}/{filename}", size = {size}, hashes = {{ sha256 = "{hash}" }} }}]
+    "#, url = server.uri(), size = wheel.len()};
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(lock))
+        .with_priority(1)
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/unused"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    context
+        .pip_sync()
+        .arg(format!("{}/pylock.toml", server.uri()))
+        .arg("--preview")
+        .arg("--index-url")
+        .arg(format!(
+            "{}/simple",
+            server.uri().replace("http://", "http://user:password@")
+        ))
+        .assert()
+        .success();
+    context.assert_installed("foo", "1.0.0");
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg(format!("{}/pylock.toml", server.uri()))
+        .arg("--preview")
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri().replace("http://", "http://user:password@")))
+        .arg("--find-links")
+        .arg(format!("{}/unused", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn pep_751_remote_sync_uses_named_index_credentials_before_planning() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let hash = hex::encode(Sha256::digest(&wheel));
+    let lock = formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "foo"
+        version = "1.0.0"
+        wheels = [{{ url = "{url}/{filename}", size = {size}, hashes = {{ sha256 = "{hash}" }} }}]
+    "#, url = server.uri(), size = wheel.len()};
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(lock))
+        .with_priority(1)
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/unused"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    context
+        .pip_sync()
+        .arg(format!("{}/pylock.toml", server.uri()))
+        .arg("--preview")
+        .arg("--index")
+        .arg(format!("private={}/simple", server.uri()))
+        .env("UV_INDEX_PRIVATE_USERNAME", "user")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .assert()
+        .success();
+    context.assert_installed("foo", "1.0.0");
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg(format!("{}/pylock.toml", server.uri()))
+        .arg("--preview")
+        .arg("--index")
+        .arg(format!("private={}/simple", server.uri()))
+        .env("UV_INDEX_PRIVATE_USERNAME", "user")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .arg("--find-links")
+        .arg(format!("{}/unused", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn pep_751_sync_noop_skips_build_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("foo/pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        dependencies = ["missing"]
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#};
+    pyproject.write_str(project)?;
+    context.temp_dir.child("foo/src/foo/__init__.py").touch()?;
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "foo"
+        version = "1.0.0"
+        directory = { path = "foo" }
+    "#})?;
+    context
+        .pip_install()
+        .arg("--preview")
+        .arg("--no-index")
+        .arg("-r")
+        .arg("pylock.toml")
+        .assert()
+        .success();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/links"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let links = format!("{}/links", server.uri());
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("pylock.toml")
+        .arg("--preview")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    warning: The package `foo` requires `missing`, but it's not installed
+    ");
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("pylock.toml")
+        .arg("--preview")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .arg("--dry-run").arg("--compile-bytecode"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    Would make no changes
+    ");
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("pylock.toml")
+        .arg("--preview")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .arg("--check").arg("--output-format").arg("json"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "changes": [],
+      "dry_run": true
+    }
+
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    Would make no changes
+    "#);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.is_empty())
+    );
+    let bytecode = context
+        .site_packages()
+        .join("foo/__pycache__/__init__.cpython-312.pyc");
+    assert!(!bytecode.exists());
+    context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .arg("--compile-bytecode")
+        .assert()
+        .success();
+    assert!(bytecode.exists());
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("pylock.toml")
+        .arg("--preview")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .arg("--reinstall"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to read `--find-links` URL: http://[LOCALHOST]/links
+      cause: Failed to fetch: http://[LOCALHOST]/links
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/links)
+    ");
+
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        description = "updated"
+        dependencies = ["missing"]
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("pylock.toml")
+        .arg("--preview")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to read `--find-links` URL: http://[LOCALHOST]/links
+      cause: Failed to fetch: http://[LOCALHOST]/links
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/links)
+    ");
+    server.verify().await;
     Ok(())
 }

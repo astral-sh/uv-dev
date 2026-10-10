@@ -146,8 +146,8 @@ impl<'a> RegistryClientBuilder<'a> {
         self
     }
 
-    /// Add all authenticated sources to the cache.
-    fn cache_index_credentials(&mut self) -> Result<(), ClientBuildError> {
+    /// Cache configured index credentials without constructing an HTTP client.
+    pub fn cache_index_credentials(&mut self) -> Result<(), ClientBuildError> {
         for index in self.index_locations.known_indexes() {
             if let Some(credentials) = index.credentials()? {
                 trace!(
