@@ -2,18 +2,20 @@ use assert_cmd::assert::OutputAssertExt;
 
 use uv_test::uv_snapshot;
 
-/// Test that `cache size` returns 0 for an empty cache directory (raw output).
+/// An empty cache can retain filesystem space in its coordination directory.
 #[test]
 fn cache_size_empty_raw() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
 
-    // Clean cache first to ensure truly empty state
+    // Remove entries while retaining the root coordination lock.
     context.clean().assert().success();
 
-    uv_snapshot!(context.cache_size().arg("--preview"), @"
+    assert!(context.cache_dir.join(".lock").is_file());
+
+    uv_snapshot!(context.filters(), context.cache_size().arg("--preview"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    0
+    [SIZE]
     ");
 }
 
@@ -51,9 +53,11 @@ fn cache_size_with_packages_human() {
 
 /// Explicit output formats override terminal detection.
 #[test]
-fn cache_size_output_formats() {
+fn cache_size_output_formats() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     context.clean().assert().success();
+    // Use a missing cache so directory accounting cannot affect the format assertions.
+    fs_err::remove_dir_all(context.cache_dir.path())?;
 
     uv_snapshot!(context.cache_size().arg("--preview").arg("--output-format").arg("auto"), @"
     exit_code: 0 (success)
@@ -72,13 +76,16 @@ fn cache_size_output_formats() {
     ----- stdout -----
     0
     ");
+    Ok(())
 }
 
 /// Existing human-readable flags remain equivalent to `--output-format human`.
 #[test]
-fn cache_size_human_aliases() {
+fn cache_size_human_aliases() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     context.clean().assert().success();
+    // Use a missing cache so directory accounting cannot affect the format assertions.
+    fs_err::remove_dir_all(context.cache_dir.path())?;
 
     uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("--human"), @"
     exit_code: 0 (success)
@@ -97,6 +104,7 @@ fn cache_size_human_aliases() {
     ----- stdout -----
     0B
     ");
+    Ok(())
 }
 
 /// Legacy human-readable flags cannot be combined with an explicit output format.

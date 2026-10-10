@@ -47,13 +47,9 @@ impl Remover {
 
     /// Remove a file or directory and all its contents, returning a [`Removal`] with
     /// the number of files and directories removed, along with a total byte count.
-    pub(crate) fn rm_rf(
-        &self,
-        path: impl AsRef<Path>,
-        skip_locked_file: bool,
-    ) -> io::Result<Removal> {
+    pub(crate) fn rm_rf(&self, path: impl AsRef<Path>, preserve_root: bool) -> io::Result<Removal> {
         let mut removal = Removal::new(self.removal_accounting);
-        removal.rm_rf(path.as_ref(), self.reporter.as_deref(), skip_locked_file)?;
+        removal.rm_rf(path.as_ref(), self.reporter.as_deref(), preserve_root)?;
         Ok(removal)
     }
 }
@@ -134,7 +130,7 @@ impl Removal {
         &mut self,
         path: &Path,
         reporter: Option<&dyn CleanReporter>,
-        skip_locked_file: bool,
+        preserve_root: bool,
     ) -> io::Result<()> {
         let path = uv_fs::verbatim_path(path);
 
@@ -184,7 +180,7 @@ impl Removal {
                         if set_readable(dir).unwrap_or(false) {
                             // Retry the operation; if we _just_ `self.rm_rf(dir)` and continue,
                             // `walkdir` may give us duplicate entries for the directory.
-                            return self.rm_rf(&path, reporter, skip_locked_file);
+                            return self.rm_rf(&path, reporter, preserve_root);
                         }
                     }
                 }
@@ -192,13 +188,11 @@ impl Removal {
 
             let entry = entry?;
 
-            // Remove the exclusive lock last.
-            if skip_locked_file
-                && entry.file_name() == ".lock"
-                && entry
-                    .path()
-                    .strip_prefix(&path)
-                    .is_ok_and(|suffix| suffix == Path::new(".lock"))
+            // Retain the coordination lock and the marker that hides it from Git worktrees.
+            if preserve_root
+                && entry.path().strip_prefix(&path).is_ok_and(|suffix| {
+                    suffix == Path::new(".lock") || suffix == Path::new(".gitignore")
+                })
             {
                 continue;
             }
@@ -217,8 +211,8 @@ impl Removal {
                 self.num_files += 1;
                 remove_dir(entry.path())?;
             } else if entry.file_type().is_dir() {
-                // Remove the directory with the exclusive lock last.
-                if skip_locked_file && entry.path() == path.as_ref() {
+                // Retain the directory containing the coordination lock.
+                if preserve_root && entry.path() == path.as_ref() {
                     continue;
                 }
 

@@ -139,7 +139,9 @@ Note that it's _never_ safe to modify the cache directly (e.g., by removing a fi
 
 uv provides a few different mechanisms for removing entries from the cache:
 
-- `uv cache clean` removes _all_ cache entries from the cache directory, clearing it out entirely.
+- `uv cache clean` removes _all_ cache entries from the cache directory. The directory, its empty
+  `.lock` file, and `.gitignore` remain so concurrent commands use the same lock and Git ignores the
+  retained files.
 - `uv cache clean ruff` removes all cache entries for the `ruff` package, useful for invalidating
   the cache for a single or finite set of packages.
 - `uv cache prune` removes all _unused_ cache entries and all centralized project environments. For
