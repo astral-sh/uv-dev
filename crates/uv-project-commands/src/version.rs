@@ -10,8 +10,8 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroups, DryRun, ExtrasSpecification, InstallOptions,
-    Modifications, VersionBump, VersionBumpSpec, VersionFormat,
+    ActiveEnvironment, ConcurrencyState, DependencyGroups, DryRun, ExtrasSpecification,
+    InstallOptions, Modifications, VersionBump, VersionBumpSpec, VersionFormat,
 };
 use uv_dispatch::UniversalState;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
@@ -94,7 +94,7 @@ pub async fn project_version(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -510,7 +510,7 @@ async fn lock_and_sync(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     printer: Printer,

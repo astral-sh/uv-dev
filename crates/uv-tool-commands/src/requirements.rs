@@ -5,7 +5,7 @@ use itertools::Itertools;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
-use uv_configuration::{Concurrency, Constraints, GitLfsSetting};
+use uv_configuration::{ConcurrencyState, Constraints, GitLfsSetting};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
@@ -31,7 +31,7 @@ pub(super) async fn resolve_names(
     build_constraints: &Constraints,
     client_builder: &BaseClientBuilder<'_>,
     state: &SharedState,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -169,11 +169,7 @@ pub(super) async fn resolve_names(
         NamedRequirementsResolver::new(
             &hasher,
             state.index(),
-            DistributionDatabase::new(
-                &client,
-                &build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            ),
+            DistributionDatabase::new(&client, &build_dispatch, concurrency.downloads_semaphore()),
         )
         .with_reporter(Arc::new(ResolverReporter::from(printer)))
         .resolve(unnamed.into_iter())

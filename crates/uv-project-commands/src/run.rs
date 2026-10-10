@@ -23,8 +23,8 @@ use uv_command_support::{
     ExitStatus, Printer, UvError, child::read_env_files, child::run_to_completion,
 };
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DryRun, EditableMode, EnvFile,
-    ExtrasSpecification, InstallOptions, Modifications, RequirementsInput, TargetTriple,
+    ActiveEnvironment, ConcurrencyState, Constraints, DependencyGroups, DryRun, EditableMode,
+    EnvFile, ExtrasSpecification, InstallOptions, Modifications, RequirementsInput, TargetTriple,
 };
 use uv_dispatch::UniversalState;
 use uv_distribution::LoweredExtraBuildDependencies;
@@ -116,7 +116,7 @@ pub async fn run(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,

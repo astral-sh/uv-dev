@@ -4,7 +4,7 @@ use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
 use uv_configuration::{
-    Concurrency, DependencyGroupsWithDefaults, DryRun, EditableMode,
+    ConcurrencyState, DependencyGroupsWithDefaults, DryRun, EditableMode,
     ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions, Modifications, TargetTriple,
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
@@ -48,7 +48,7 @@ pub async fn sync_from_lock(
     state: &PlatformState,
     logger: Box<dyn InstallLogger>,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     dry_run: DryRun,

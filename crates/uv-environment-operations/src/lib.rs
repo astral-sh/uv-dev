@@ -12,7 +12,7 @@ use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
+    ActiveEnvironment, ConcurrencyState, Constraints, DependencyGroupsWithDefaults, DryRun,
     ExtrasSpecification, Modifications, Reinstall, TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, SharedState};
@@ -1359,7 +1359,7 @@ pub async fn resolve_environment(
     client_builder: &BaseClientBuilder<'_>,
     state: &PlatformState,
     logger: Box<dyn ResolveLogger>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -1603,7 +1603,7 @@ pub async fn sync_environment(
     state: &PlatformState,
     logger: Box<dyn InstallLogger>,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     printer: Printer,
     preview: Preview,
@@ -1753,7 +1753,7 @@ pub async fn update_environment(
     resolve: Box<dyn ResolveLogger>,
     install: Box<dyn InstallLogger>,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     dry_run: DryRun,

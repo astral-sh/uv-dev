@@ -539,7 +539,7 @@ mod resolver {
 
     use uv_cache::Cache;
     use uv_client::RegistryClient;
-    use uv_configuration::{BuildOptions, Concurrency, Constraints, IndexStrategy, NoSources};
+    use uv_configuration::{BuildOptions, ConcurrencyState, Constraints, IndexStrategy, NoSources};
     use uv_dispatch::{BuildDispatch, SharedState};
     use uv_distribution::DistributionDatabase;
     use uv_distribution_types::{
@@ -608,7 +608,7 @@ mod resolver {
         let extra_build_requires = ExtraBuildRequires::default();
         let extra_build_variables = ExtraBuildVariables::default();
         let build_options = BuildOptions::default();
-        let concurrency = Concurrency::default();
+        let concurrency = ConcurrencyState::default();
         let config_settings = ConfigSettings::default();
         let config_settings_package = PackageConfigSettings::default();
         let exclude_newer = ExcludeNewer::global(
@@ -687,11 +687,7 @@ mod resolver {
             &hashes,
             &build_context,
             installed_packages,
-            DistributionDatabase::new(
-                client,
-                &build_context,
-                concurrency.downloads_semaphore.clone(),
-            ),
+            DistributionDatabase::new(client, &build_context, concurrency.downloads_semaphore()),
         )?;
 
         Ok(resolver.resolve().await?)
