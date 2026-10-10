@@ -9639,6 +9639,403 @@ fn run_pep723_shared_data_follows_dependency_changes() -> Result<()> {
     Ok(())
 }
 
+/// Recover command and data ownership when a later shared data copy fails.
+#[test]
+#[cfg(unix)]
+fn run_pep723_shared_data_recovers_after_copy_failure() -> Result<()> {
+    use uv_test::ReadOnlyDirectoryGuard;
+
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (first_name, first) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-1.0.0.data/data/share/jupyter/value.txt",
+                "one\n",
+            ),
+            (
+                "shared_data-1.0.0.data/data/share/jupyter/edited.txt",
+                "original one\n",
+            ),
+        ],
+    );
+    wheels.child(first_name).write_binary(&first)?;
+    let (second_name, second) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "shared_data/__init__.py",
+                "def main():\n    print('shared command')\n",
+            ),
+            (
+                "shared_data-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nuv-shared-transient = shared_data:main\n",
+            ),
+            (
+                "shared_data-2.0.0.data/data/share/jupyter/value.txt",
+                "two\n",
+            ),
+            (
+                "shared_data-2.0.0.data/data/share/jupyter/edited.txt",
+                "original two\n",
+            ),
+            (
+                "shared_data-2.0.0.data/data/share/jupyter/obsolete.txt",
+                "version two only\n",
+            ),
+            (
+                "shared_data-2.0.0.data/data/etc/jupyter/later.txt",
+                "later two\n",
+            ),
+        ],
+    );
+    wheels.child(second_name).write_binary(&second)?;
+    let (third_name, third) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"3.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-3.0.0.data/data/share/jupyter/value.txt",
+                "three\n",
+            ),
+            (
+                "shared_data-3.0.0.data/data/share/jupyter/edited.txt",
+                "original three\n",
+            ),
+            (
+                "shared_data-3.0.0.data/data/etc/jupyter/later.txt",
+                "later three\n",
+            ),
+        ],
+    );
+    wheels.child(third_name).write_binary(&third)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-data==1.0.0"]
+        # ///
+        from pathlib import Path
+        import sys
+        Path("overlay-root").write_text(sys.prefix)
+        root = Path(sys.prefix)
+        print(root.joinpath("share/jupyter/value.txt").read_text().strip())
+        print(root.joinpath("share/jupyter/edited.txt").read_text().strip())
+        unrelated = root.joinpath("share/jupyter/unrelated.txt")
+        obsolete = root.joinpath("share/jupyter/obsolete.txt")
+        later = root.joinpath("etc/jupyter/later.txt")
+        print(unrelated.read_text().strip() if unrelated.exists() else "missing")
+        print(obsolete.read_text().strip() if obsolete.exists() else "missing")
+        print(later.read_text().strip() if later.exists() else "missing")
+    "#})?;
+    uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    one
+    original one
+    missing
+    missing
+    missing
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==1.0.0
+    ");
+    let overlay_root = context.read("overlay-root");
+    let overlay = Path::new(&overlay_root);
+    fs_err::write(overlay.join("share/jupyter/edited.txt"), "local edit\n")?;
+    fs_err::write(
+        overlay.join("share/jupyter/unrelated.txt"),
+        "unrelated file\n",
+    )?;
+    fs_err::create_dir_all(overlay.join("etc/jupyter"))?;
+    script.write_str(
+        &context
+            .read("script.py")
+            .replace("shared-data==1.0.0", "shared-data==2.0.0"),
+    )?;
+    let failed = {
+        let _readonly = ReadOnlyDirectoryGuard::new(overlay.join("etc/jupyter"))?;
+        uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r#"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + shared-data==2.0.0
+        error: Permission denied (os error 13) at path "[CACHE_DIR]/environments-v2/shared-script-[HASH]/etc/jupyter/[TMP]"
+        "#)
+    };
+    let stderr = std::str::from_utf8(&failed.stderr)?;
+    assert!(stderr.contains(&format!("{}/.tmp", overlay.join("etc/jupyter").display())));
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/value.txt")),
+        "two\n"
+    );
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/obsolete.txt")),
+        "version two only\n"
+    );
+    ChildPath::new(overlay.join("bin/uv-shared-transient")).assert(predicate::path::is_file());
+    uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    two
+    local edit
+    unrelated file
+    version two only
+    later two
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    script.write_str(
+        &context
+            .read("script.py")
+            .replace("shared-data==2.0.0", "shared-data==3.0.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    three
+    local edit
+    unrelated file
+    missing
+    later three
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==3.0.0
+    ");
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/value.txt")),
+        "three\n"
+    );
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/edited.txt")),
+        "local edit\n"
+    );
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/unrelated.txt")),
+        "unrelated file\n"
+    );
+    ChildPath::new(overlay.join("share/jupyter/obsolete.txt")).assert(predicate::path::missing());
+    ChildPath::new(overlay.join("bin/uv-shared-transient")).assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Recover ownership when the environment manifest cannot be persisted.
+#[test]
+#[cfg(unix)]
+fn run_pep723_shared_data_recovers_after_manifest_failure() -> Result<()> {
+    use uv_test::ReadOnlyDirectoryGuard;
+
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (first_name, first) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-1.0.0.data/data/share/jupyter/value.txt",
+                "one\n",
+            ),
+            (
+                "shared_data-1.0.0.data/data/share/jupyter/edited.txt",
+                "original one\n",
+            ),
+        ],
+    );
+    wheels.child(first_name).write_binary(&first)?;
+    let (second_name, second) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-2.0.0.data/data/share/jupyter/value.txt",
+                "two\n",
+            ),
+            (
+                "shared_data-2.0.0.data/data/share/jupyter/edited.txt",
+                "original two\n",
+            ),
+            (
+                "shared_data-2.0.0.data/data/share/jupyter/obsolete.txt",
+                "version two only\n",
+            ),
+            (
+                "shared_data-2.0.0.data/data/etc/jupyter/later.txt",
+                "later two\n",
+            ),
+        ],
+    );
+    wheels.child(second_name).write_binary(&second)?;
+    let (third_name, third) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"3.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("shared_data/__init__.py", ""),
+            (
+                "shared_data-3.0.0.data/data/share/jupyter/value.txt",
+                "three\n",
+            ),
+            (
+                "shared_data-3.0.0.data/data/share/jupyter/edited.txt",
+                "original three\n",
+            ),
+            (
+                "shared_data-3.0.0.data/data/etc/jupyter/later.txt",
+                "later three\n",
+            ),
+        ],
+    );
+    wheels.child(third_name).write_binary(&third)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-data==1.0.0"]
+        # ///
+        from pathlib import Path
+        import sys
+        Path("overlay-root").write_text(sys.prefix)
+        root = Path(sys.prefix)
+        print(root.joinpath("share/jupyter/value.txt").read_text().strip())
+        print(root.joinpath("share/jupyter/edited.txt").read_text().strip())
+        unrelated = root.joinpath("share/jupyter/unrelated.txt")
+        obsolete = root.joinpath("share/jupyter/obsolete.txt")
+        later = root.joinpath("etc/jupyter/later.txt")
+        print(unrelated.read_text().strip() if unrelated.exists() else "missing")
+        print(obsolete.read_text().strip() if obsolete.exists() else "missing")
+        print(later.read_text().strip() if later.exists() else "missing")
+    "#})?;
+    uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    one
+    original one
+    missing
+    missing
+    missing
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==1.0.0
+    ");
+    let overlay_root = context.read("overlay-root");
+    let overlay = Path::new(&overlay_root);
+    fs_err::write(overlay.join("share/jupyter/edited.txt"), "local edit\n")?;
+    fs_err::write(
+        overlay.join("share/jupyter/unrelated.txt"),
+        "unrelated file\n",
+    )?;
+    fs_err::create_dir_all(overlay.join("etc/jupyter"))?;
+    script.write_str(
+        &context
+            .read("script.py")
+            .replace("shared-data==1.0.0", "shared-data==2.0.0"),
+    )?;
+    let failed = {
+        let _readonly = ReadOnlyDirectoryGuard::new(overlay.to_path_buf())?;
+        uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r#"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + shared-data==2.0.0
+        error: Permission denied (os error 13) at path "[CACHE_DIR]/environments-v2/shared-script-[HASH]/[TMP]"
+        "#)
+    };
+    let stderr = std::str::from_utf8(&failed.stderr)?;
+    assert!(stderr.contains(&format!("{}/.tmp", overlay.to_path_buf().display())));
+    uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    two
+    local edit
+    unrelated file
+    version two only
+    later two
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    script.write_str(
+        &context
+            .read("script.py")
+            .replace("shared-data==2.0.0", "shared-data==3.0.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    three
+    local edit
+    unrelated file
+    missing
+    later three
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==3.0.0
+    ");
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/value.txt")),
+        "three\n"
+    );
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/edited.txt")),
+        "local edit\n"
+    );
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/unrelated.txt")),
+        "unrelated file\n"
+    );
+    ChildPath::new(overlay.join("share/jupyter/obsolete.txt")).assert(predicate::path::missing());
+    Ok(())
+}
+
 /// Overlay data installations retain precedence without modifying the immutable shared data.
 #[test]
 fn run_pep723_shared_data_preserves_overlay_installations() -> Result<()> {
