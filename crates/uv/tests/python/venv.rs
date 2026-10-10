@@ -57,6 +57,46 @@ fn venv_platform_missing_global_pin() -> Result<()> {
     Ok(())
 }
 
+/// Warning-only platform checks still select the original global request after a generic probe.
+#[cfg(target_os = "linux")]
+#[test]
+fn venv_unsupported_platform_retains_global_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .python_pin()
+        .args(["--global", "3.13"])
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12,<3.14"
+        [tool.uv]
+        package = false
+        environments = ["sys_platform == 'win32'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.venv(), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The selected Python environment is not compatible with the project's supported environments: `sys_platform == 'win32'`
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    "#);
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
+        .success();
+    assert_eq!(
+        context.read(context.user_config_dir.child("uv/.python-version")),
+        "3.13\n"
+    );
+    Ok(())
+}
+
 #[test]
 fn create_venv() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);

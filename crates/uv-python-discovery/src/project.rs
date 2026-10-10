@@ -461,12 +461,49 @@ impl ProjectPythonRequest {
         reporter: &PythonDownloadReporter,
         install_mirrors: &PythonInstallMirrors,
     ) -> Result<CompatibleProjectPython, PythonSelectionError> {
+        let (selected, installation) = self
+            .find_or_download_for_environment(
+                environment_preference,
+                python_preference,
+                python_arch,
+                python_platform,
+                python_downloads,
+                client_builder,
+                cache,
+                reporter,
+                install_mirrors,
+                Err,
+            )
+            .await?;
+        selected.validate(installation.into_interpreter())
+    }
+
+    /// Search for a platform-compatible installation and retain the request that selected it.
+    ///
+    /// The handler determines whether an unsupported environment is fatal or the original request
+    /// can still be used. Strict callers stop before retrying the original request. Callers
+    /// validate or warn about the returned installation's Python requirement separately.
+    pub async fn find_or_download_for_environment(
+        &self,
+        environment_preference: EnvironmentPreference,
+        python_preference: PythonPreference,
+        python_arch: Option<PythonArchitecture>,
+        python_platform: Option<&TargetTriple>,
+        python_downloads: PythonDownloads,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        reporter: &PythonDownloadReporter,
+        install_mirrors: &PythonInstallMirrors,
+        on_unsupported_environment: impl FnOnce(
+            PythonSelectionError,
+        ) -> Result<(), PythonSelectionError>,
+    ) -> Result<(Self, PythonInstallation), PythonSelectionError> {
         let probe_request = if self.has_environment_constraints() {
             self.environment_probe()
         } else {
             self.clone()
         };
-        let interpreter = PythonInstallation::find_or_download(
+        let probe = PythonInstallation::find_or_download(
             probe_request.python_request.as_ref(),
             environment_preference,
             python_preference,
@@ -478,24 +515,31 @@ impl ProjectPythonRequest {
             install_mirrors.mirrors(),
             install_mirrors.python_downloads_json_url.as_deref(),
         )
-        .await?
-        .into_interpreter();
+        .await?;
         if !self.has_environment_constraints() {
-            return self.validate(interpreter);
+            return Ok((self.clone(), probe));
         }
         let markers = python_platform.map_or_else(
-            || interpreter.markers().clone(),
-            |platform| platform.markers(interpreter.markers().clone()),
+            || probe.interpreter().markers().clone(),
+            |platform| platform.markers(probe.interpreter().markers().clone()),
         );
-        let mut requests = self.clone().for_environment(&markers)?;
-        Self::prefer_existing(
-            &mut requests,
-            &interpreter,
-            environment_preference,
-            python_preference,
-            python_arch,
-            cache,
-        )?;
+        let requests = match self.clone().for_environment(&markers) {
+            Ok(mut requests) => {
+                Self::prefer_existing(
+                    &mut requests,
+                    probe.interpreter(),
+                    environment_preference,
+                    python_preference,
+                    python_arch,
+                    cache,
+                )?;
+                requests
+            }
+            Err(error) => {
+                on_unsupported_environment(error)?;
+                vec![self.clone()]
+            }
+        };
         let mut missing = None;
         for selected in requests {
             match PythonInstallation::find_or_download(
@@ -512,7 +556,7 @@ impl ProjectPythonRequest {
             )
             .await
             {
-                Ok(installation) => return selected.validate(installation.into_interpreter()),
+                Ok(installation) => return Ok((selected, installation)),
                 Err(error) if error.can_try_another_request() => missing = Some(error),
                 Err(error) => return Err(error.into()),
             }
