@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uv_pep440::{VersionSpecifiers, VersionSpecifiersParseError};
 use uv_pep508::split_scheme;
 use uv_pypi_types::{CoreMetadata, HashDigests, Yanked};
-use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
+use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError, DisplaySafeUrlInput};
 use uv_small_str::SmallString;
 
 /// Error converting [`uv_pypi_types::PypiFile`] to [`File`].
@@ -115,12 +115,12 @@ impl FileLocation {
             Self::RelativeUrl(base, path) => {
                 let base_url =
                     DisplaySafeUrl::parse(base).map_err(|err| ToUrlError::InvalidBase {
-                        base: base.to_string(),
+                        base: base.to_string().into(),
                         err,
                     })?;
                 let joined = base_url.join(path).map_err(|err| ToUrlError::InvalidJoin {
-                    base: base.to_string(),
-                    path: path.to_string(),
+                    base: base.to_string().into(),
+                    path: path.to_string().into(),
                     err,
                 })?;
                 Ok(joined)
@@ -169,7 +169,7 @@ impl UrlString {
     /// Converts a [`UrlString`] to a [`DisplaySafeUrl`].
     pub fn to_url(&self) -> Result<DisplaySafeUrl, ToUrlError> {
         DisplaySafeUrl::from_str(&self.0).map_err(|err| ToUrlError::InvalidAbsolute {
-            absolute: self.0.to_string(),
+            absolute: self.0.to_string().into(),
             err,
         })
     }
@@ -224,7 +224,7 @@ pub enum ToUrlError {
     #[error("Could not parse base URL `{base}` as a valid URL")]
     InvalidBase {
         /// The base URL that could not be parsed as a valid URL.
-        base: String,
+        base: DisplaySafeUrlInput,
         /// The underlying URL parse error.
         #[source]
         err: DisplaySafeUrlError,
@@ -234,9 +234,9 @@ pub enum ToUrlError {
     #[error("Could not join base URL `{base}` to relative path `{path}`")]
     InvalidJoin {
         /// The base URL that could not be parsed as a valid URL.
-        base: String,
+        base: DisplaySafeUrlInput,
         /// The relative path segment.
-        path: String,
+        path: DisplaySafeUrlInput,
         /// The underlying URL parse error.
         #[source]
         err: DisplaySafeUrlError,
@@ -246,7 +246,7 @@ pub enum ToUrlError {
     #[error("Could not parse absolute URL `{absolute}` as a valid URL")]
     InvalidAbsolute {
         /// The absolute URL that could not be parsed as a valid URL.
-        absolute: String,
+        absolute: DisplaySafeUrlInput,
         /// The underlying URL parse error.
         #[source]
         err: DisplaySafeUrlError,
@@ -258,6 +258,27 @@ mod tests {
     use std::assert_matches;
 
     use super::*;
+
+    #[test]
+    fn invalid_url_context_is_redacted() -> Result<(), Box<dyn std::error::Error>> {
+        let input = "https://user:password@example.com:invalid/package.whl?sig=signature";
+        let url = UrlString(input.into());
+        let error = url.to_url().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Could not parse absolute URL `[invalid URL]` as a valid URL"
+        );
+        assert_eq!(
+            format!("{error:?}"),
+            r#"InvalidAbsolute { absolute: DisplaySafeUrlInput("[invalid URL]"), err: Url(InvalidPort) }"#
+        );
+        let ToUrlError::InvalidAbsolute { absolute, err } = error else {
+            return Err("expected an absolute URL error".into());
+        };
+        assert_eq!(absolute.as_ref(), input);
+        assert_eq!(err, DisplaySafeUrlError::Url(url::ParseError::InvalidPort));
+        Ok(())
+    }
 
     #[test]
     fn raw_filename() {
