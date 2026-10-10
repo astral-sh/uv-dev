@@ -11074,6 +11074,239 @@ fn lock_conflicting_workspace_member_transitive_version() -> Result<()> {
     Ok(())
 }
 
+/// An extra fork cannot reactivate its project when a later conflict set excludes the project.
+/// Dependency groups remain independent of their project's production selection.
+#[test]
+fn project_level_conflict_with_extra_and_group_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "project-extra-group-conflicts"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.extra-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.extra-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.group-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.group-leaf.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        conflicts = [
+            [{ package = "root-a", extra = "legacy" }, { package = "root-a", extra = "modern" }],
+            [{ package = "root-a", group = "legacy" }, { package = "root-a", group = "modern" }],
+            [{ package = "root-a" }, { package = "root-b" }],
+        ]
+        [tool.uv.workspace]
+        members = ["members/*"]
+    "#})?;
+    context
+        .temp_dir
+        .child("members/root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf<2"]
+        [project.optional-dependencies]
+        legacy = ["extra-leaf<2"]
+        modern = ["extra-leaf>=2"]
+        [dependency-groups]
+        legacy = ["group-leaf<2"]
+        modern = ["group-leaf>=2"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("members/root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf>=2"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--locked", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "root-a", "--extra", "legacy", "--group", "modern",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    extra-leaf==1.0.0
+    group-leaf==2.0.0
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "root-a", "--extra", "modern", "--group", "legacy",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    extra-leaf==2.0.0
+    group-leaf==1.0.0
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "root-b", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "root-a", "--only-group", "modern",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    group-leaf==2.0.0
+    ");
+    Ok(())
+}
+
+/// An extra declared as an alternative production selection still requires its base package.
+#[test]
+fn project_level_conflict_with_own_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "project-own-extra-conflict"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf<2"]
+        [project.optional-dependencies]
+        modern = ["shared-leaf>=2"]
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "project" }, { package = "project", extra = "modern" }]]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (included: project[modern]; excluded: project)
+      cause: Because project[modern] depends on shared-leaf>=2 and your project depends on shared-leaf<2, we can conclude that your project and project[modern] are incompatible.
+             And because your project requires project[modern], we can conclude that your project's requirements are unsatisfiable.
+    ");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("shared-leaf>=2", "shared-leaf<2"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--locked", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+    Ok(())
+}
+
+/// Dependency groups can be selected without their project's production dependencies.
+#[test]
+fn project_level_conflict_with_own_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "project-own-group-conflict"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf<2"]
+        [dependency-groups]
+        modern = ["shared-leaf>=2"]
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "project" }, { package = "project", group = "modern" }]]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--only-group", "modern", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==2.0.0
+    ");
+    Ok(())
+}
+
 /// Test that a project-level conflict (i.e., `{ package = "pkg-a" }` without
 /// extra or group) properly excludes the package's extras from the conflicting
 /// fork.
