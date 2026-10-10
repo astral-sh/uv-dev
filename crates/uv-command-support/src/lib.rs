@@ -45,12 +45,21 @@ pub enum UvError {
     /// An unexpected internal or environmental error.
     #[error(transparent)]
     Unexpected(anyhow::Error),
+
+    /// Independent failures that should each be rendered by the entrypoint.
+    #[error("Multiple operations failed")]
+    Batch(Vec<Self>),
 }
 
 impl UvError {
     /// Create a user-facing error.
     pub fn user(error: impl Into<anyhow::Error>) -> Self {
         Self::User(error.into())
+    }
+
+    /// Create a batch of independently classified errors.
+    pub fn batch(errors: impl IntoIterator<Item = Self>) -> Self {
+        Self::Batch(errors.into_iter().collect())
     }
 
     /// Create an argument error.
@@ -63,13 +72,32 @@ impl UvError {
         Self::Unexpected(error)
     }
 
-    /// Add command-specific context to a user error without changing unexpected errors.
+    /// Select the process status, preferring user failures in a mixed batch.
+    pub fn exit_status(&self) -> ExitStatus {
+        match self {
+            Self::User(_) => ExitStatus::Failure,
+            Self::Argument(_) | Self::Unexpected(_) => ExitStatus::Error,
+            Self::Batch(errors) => {
+                if errors.iter().any(|error| match error.exit_status() {
+                    ExitStatus::Failure => true,
+                    ExitStatus::Success | ExitStatus::Error | ExitStatus::External(_) => false,
+                }) {
+                    ExitStatus::Failure
+                } else {
+                    ExitStatus::Error
+                }
+            }
+        }
+    }
+
+    /// Add command-specific context to a single user error without changing other failures.
     #[must_use]
     pub fn map_user(self, context: impl FnOnce(anyhow::Error) -> anyhow::Error) -> Self {
         match self {
             Self::User(error) => Self::User(context(error)),
             Self::Argument(error) => Self::Argument(error),
             Self::Unexpected(error) => Self::Unexpected(error),
+            Self::Batch(errors) => Self::Batch(errors),
         }
     }
 }
