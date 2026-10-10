@@ -112,6 +112,9 @@ pub enum Error {
     #[error("Invalid version request: {0}")]
     InvalidVersionRequest(String),
 
+    #[error(transparent)]
+    UnsupportedVersionRequest(#[from] uv_python_types::UnsupportedVersionRequest),
+
     /// The @latest version request was given
     #[error("Requesting the 'latest' Python version is not yet supported")]
     LatestVersionRequest,
@@ -1058,7 +1061,7 @@ fn find_python_installations_with_strategy<'a>(
         }),
         PythonRequest::Version(version) => {
             if let Err(err) = version.check_supported() {
-                return Box::new(iter::once(Err(Error::InvalidVersionRequest(err))));
+                return Box::new(iter::once(Err(Error::UnsupportedVersionRequest(err))));
             }
             Box::new({
                 debug!("Searching for {request} in {sources}");
@@ -1094,7 +1097,7 @@ fn find_python_installations_with_strategy<'a>(
         }),
         PythonRequest::ImplementationVersion(implementation, version) => {
             if let Err(err) = version.check_supported() {
-                return Box::new(iter::once(Err(Error::InvalidVersionRequest(err))));
+                return Box::new(iter::once(Err(Error::UnsupportedVersionRequest(err))));
             }
             Box::new({
                 debug!("Searching for {request} in {sources}");
@@ -1119,7 +1122,7 @@ fn find_python_installations_with_strategy<'a>(
             if let Some(version) = request.version()
                 && let Err(err) = version.check_supported()
             {
-                return Box::new(iter::once(Err(Error::InvalidVersionRequest(err))));
+                return Box::new(iter::once(Err(Error::UnsupportedVersionRequest(err))));
             }
 
             Box::new({
