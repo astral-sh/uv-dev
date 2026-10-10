@@ -12,6 +12,8 @@ The issue was opened on October 10, 2026, at 14:10 UTC. The reporter expected st
 
 astral-sh/uv#22421 promoted the Python 3.15 Docker tags, but astral-sh/uv#22435 deliberately reverted them because upstream stable images were unavailable. The current registry results corroborate that publication dependency. Reproducing the RC references does not establish that retaining them while upstream stable tags are unavailable is incorrect.
 
+At 15:00 UTC on October 10, maintainer zanieb confirmed that the requisite upstream images were still unpublished and identified docker-library/python#1134 as the upstream change to follow. That pull request is open and proposes the Python 3.15 GA image definitions; its status does not establish registry publication.
+
 ## Classification
 
 The bug classification tracks the incomplete stable Docker-image transition. The stable mappings were merged and then rolled back; there is no evidence that stable uv Python 3.15 Docker images were successfully published before the rollback. This is a known Docker publication gap with an intentional temporary RC configuration, not evidence of a uv CLI resolver or managed-Python installation failure.
@@ -95,6 +97,7 @@ This reproduces the published RC tags and their declared Python version. Image l
 
 ## Related
 
+- docker-library/python#1134 — Add Python 3.15 GA release (open upstream pull request). Linked by maintainer zanieb in the issue discussion as the pending upstream image change. Direct inspection confirms that it changes the `versions.json` entry from `3.15-rc` / `3.15.0rc3` to `3.15` / `3.15.0`, renames image definitions into `3.15/` directories including Alpine 3.23, Trixie, and slim-Trixie, and changes the Trixie Dockerfile to `PYTHON_VERSION 3.15.0`. This tracks the external prerequisite for restoring uv's stable mappings, not the uv rollback itself. It was unmerged when inspected; merge and successful image publication must be verified separately.
 - astral-sh/uv#22421 — Promote Python 3.15 Docker images to stable tags (merged pull request). Merged on October 9, 2026, replacing all three Python 3.15 RC base-image mappings and four documented tags with stable equivalents. Its changes were subsequently reversed, so it is the historical fix for the reported regression, not a completed resolution.
 - astral-sh/uv#22435 — Restore Python 3.15 release-candidate Docker images (merged pull request). Merged about 25 minutes after astral-sh/uv#22421 and reversed its stable mappings and documentation. The PR explains that upstream stable base images were unavailable and Docker builds could not resolve them; this rollback directly explains the current RC references.
 - astral-sh/uv#22438 — Require planned Docker builds to pass (merged pull request). Explicitly cites astral-sh/uv#22421 as an image change that merged before its Docker builds finished. Adds Docker builds to the required CI dependencies; it addresses the validation gap, not restoration of stable Python 3.15 tags.
@@ -123,4 +126,4 @@ astral-sh/uv#16652 requests aliases that follow the latest Python and Debian ver
 
 ## Maintainer next step
 
-Once upstream `python:3.15-alpine3.23`, `python:3.15-trixie`, and `python:3.15-slim-trixie` become available, verify both configured architectures, restore the stable mappings and documentation, require the planned Docker builds to pass, and verify the resulting uv tags in the public registries. Current evidence supports the temporary rollback explanation; it does not show that stable images were published and subsequently regressed at runtime.
+Monitor docker-library/python#1134 for the upstream GA image transition, then verify actual Docker Hub publication; a merged source change alone is insufficient. Once upstream `python:3.15-alpine3.23`, `python:3.15-trixie`, and `python:3.15-slim-trixie` become available, verify both configured architectures, restore the stable mappings and documentation, require the planned Docker builds to pass, and verify the resulting uv tags in the public registries. Current evidence supports the temporary rollback explanation; it does not show that stable images were published and subsequently regressed at runtime.
