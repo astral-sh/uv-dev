@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
@@ -76,8 +77,8 @@ pub enum TomlCredentialError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     LockedFile(#[from] LockedFileError),
-    #[error("Failed to parse TOML credential file: {0}")]
-    ParseError(#[from] toml::de::Error),
+    #[error(transparent)]
+    ParseError(#[from] CredentialFileParseError),
     #[error("Failed to serialize credentials to TOML")]
     SerializeError(#[from] toml::ser::Error),
     #[error(transparent)]
@@ -89,6 +90,66 @@ pub enum TomlCredentialError {
     #[error("Token is not valid unicode")]
     TokenNotUnicode(#[from] std::string::FromUtf8Error),
 }
+
+/// A credential-file parse error with safe diagnostic formatting.
+///
+/// The original typed error remains accessible through [`Deref`]. Its messages and source excerpts
+/// can contain credential values, so they are omitted from diagnostic formatting and error chains.
+pub struct CredentialFileParseError {
+    error: toml::de::Error,
+    location: Option<(usize, usize)>,
+}
+
+impl CredentialFileParseError {
+    fn new(error: toml::de::Error, input: &str) -> Self {
+        let location = error.span().map(|span| {
+            let mut line = 1;
+            let mut column = 1;
+            for (_, character) in input
+                .char_indices()
+                .take_while(|(offset, _)| *offset < span.start)
+            {
+                if character == '\n' {
+                    line += 1;
+                    column = 1;
+                } else {
+                    column += 1;
+                }
+            }
+            (line, column)
+        });
+        Self { error, location }
+    }
+}
+
+impl Deref for CredentialFileParseError {
+    type Target = toml::de::Error;
+
+    fn deref(&self) -> &Self::Target {
+        &self.error
+    }
+}
+
+impl fmt::Display for CredentialFileParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Failed to parse TOML credential file")?;
+        if let Some((line, column)) = self.location {
+            write!(formatter, " at line {line}, column {column}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for CredentialFileParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CredentialFileParseError")
+            .field("location", &self.location)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::error::Error for CredentialFileParseError {}
 
 impl TomlCredentialError {
     pub(crate) fn as_io_error(&self) -> Option<&std::io::Error> {
@@ -272,7 +333,8 @@ impl TextCredentialStore {
     /// Read credentials from a file.
     fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, TomlCredentialError> {
         let content = fs::read_to_string(path)?;
-        let credentials: TomlCredentials = toml::from_str(&content)?;
+        let credentials: TomlCredentials = toml::from_str(&content)
+            .map_err(|error| CredentialFileParseError::new(error, &content))?;
 
         let credentials: FxHashMap<(Service, Username), Credentials> = credentials
             .credentials
@@ -422,6 +484,49 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
+
+    #[test]
+    fn credential_parse_error_omits_source() -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = NamedTempFile::new()?;
+        write!(
+            file,
+            "[[credential]]\nservice = \"https://example.com\"\nusername = \"user\"\npassword = \"secret\" invalid\n"
+        )?;
+        let error = TextCredentialStore::from_file(file.path()).unwrap_err();
+        insta::assert_snapshot!(error, @"Failed to parse TOML credential file at line 4, column 21");
+        insta::assert_debug_snapshot!(error, @r#"
+        ParseError(
+            CredentialFileParseError {
+                location: Some(
+                    (
+                        4,
+                        21,
+                    ),
+                ),
+                ..
+            },
+        )
+        "#);
+        assert!(std::error::Error::source(&error).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn credential_parse_error_omits_schema_values() -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = NamedTempFile::new()?;
+        write!(
+            file,
+            "[[credential]]\nservice = \"https://example.com\"\nusername = \"user\"\nscheme = \"synthetic-token\"\n"
+        )?;
+        let error = TextCredentialStore::from_file(file.path()).unwrap_err();
+        insta::assert_snapshot!(error, @"Failed to parse TOML credential file at line 4, column 10");
+        let TomlCredentialError::ParseError(error) = error else {
+            return Err("expected a credential-file parse error".into());
+        };
+        assert!(error.message().contains("synthetic-token"));
+        assert!(std::error::Error::source(&error).is_none());
+        Ok(())
+    }
 
     #[test]
     fn test_toml_serialization() {
