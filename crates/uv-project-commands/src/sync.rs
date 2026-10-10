@@ -50,6 +50,19 @@ use uv_types::SourceTreeEditablePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache};
 
+/// An outdated environment checked by a sync invocation.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct SyncCheckError(uv_install_operations::Error);
+
+impl uv_errors::Hinted for SyncCheckError {
+    fn hints(&self) -> uv_errors::Hints<'_> {
+        uv_errors::Hints::from(
+            "Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.",
+        )
+    }
+}
+
 /// Sync the project environment.
 pub async fn sync(
     project_dir: &Path,
@@ -408,6 +421,7 @@ pub async fn sync(
                             output_format,
                             printer,
                         )?;
+                        return Err(UvError::user(SyncCheckError(error)).into());
                     }
                     return Err(UvError::from(error).into());
                 }
@@ -559,6 +573,7 @@ pub async fn sync(
                     output_format,
                     printer,
                 )?;
+                return Err(UvError::user(SyncCheckError(error)).into());
             }
             return Err(UvError::from(error).into());
         }

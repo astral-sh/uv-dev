@@ -2048,7 +2048,9 @@ fn sync_json_check_outdated_environment() -> Result<()> {
     Would download 1 package
     Would install 1 package
      + iniconfig==2.0.0
-    error: The environment is outdated; run `uv sync` to update the environment
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
     "#);
 
     Ok(())
@@ -2591,6 +2593,177 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
 }
 
 #[test]
+fn check_script_recovery_keeps_invocation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    fs_err::write(&wheel_path, wheel)?;
+    let wheel_url =
+        Url::from_file_path(wheel_path.path()).map_err(|()| anyhow!("absolute wheel path"))?;
+    let script = context.temp_dir.child("script with spaces.py");
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["demo @ {wheel_url}"]
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet", "--check"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
+    ");
+    context
+        .sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet", "--check"]), @"exit_code: 0 (success)");
+    Ok(())
+}
+
+#[test]
+fn check_locked_script_recovery_keeps_invocation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    fs_err::write(&wheel_path, wheel)?;
+    let wheel_url =
+        Url::from_file_path(wheel_path.path()).map_err(|()| anyhow!("absolute wheel path"))?;
+    let script = context.temp_dir.child("script with spaces.py");
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["demo @ {wheel_url}"]
+        # ///
+    "#})?;
+    context
+        .lock()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet", "--check"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
+    ");
+    context
+        .sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet", "--check"]), @"exit_code: 0 (success)");
+    Ok(())
+}
+
+#[test]
+fn check_project_group_recovery_keeps_invocation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    fs_err::write(&wheel_path, wheel)?;
+    let wheel_url =
+        Url::from_file_path(wheel_path.path()).map_err(|()| anyhow!("absolute wheel path"))?;
+    let project = context.temp_dir.child("project with spaces");
+    project.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        selected = ["demo @ {wheel_url}"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--project")
+        .arg(project.path())
+        .args(["--only-group", "selected", "--offline", "--quiet"]).args(["--check", "--dry-run"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
+    ");
+    // Removing only `--check` still leaves the environment unchanged.
+    context
+        .sync()
+        .arg("--project")
+        .arg(project.path())
+        .args(["--only-group", "selected", "--offline", "--quiet"])
+        .arg("--dry-run")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--project")
+        .arg(project.path())
+        .args(["--only-group", "selected", "--offline", "--quiet"]).arg("--check"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
+    ");
+
+    context
+        .sync()
+        .arg("--project")
+        .arg(project.path())
+        .args(["--only-group", "selected", "--offline", "--quiet"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--project")
+        .arg(project.path())
+        .args(["--only-group", "selected", "--offline", "--quiet"]).arg("--check"), @"exit_code: 0 (success)");
+    Ok(())
+}
+
+#[test]
 fn check() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -2615,7 +2788,9 @@ fn check() -> Result<()> {
     Would download 1 package
     Would install 1 package
      + iniconfig==2.0.0
-    error: The environment is outdated; run `uv sync` to update the environment
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
     ");
 
     // Sync the environment.
