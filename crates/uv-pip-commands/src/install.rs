@@ -35,7 +35,7 @@ use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
     PythonRequest, PythonVersion, Target,
 };
-use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{GroupsSpecification, RequirementsSource};
 use uv_resolver::{
     DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
     ResolutionMode, ResolverEnvironment,
@@ -48,6 +48,7 @@ use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
 use crate::install_report::write_install_report;
+use crate::install_requirements::{InstallRequirements, InstallSource, ResolveRequirements};
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
 use crate::resolve_build_hash_checking;
@@ -146,17 +147,9 @@ pub async fn pip_install(
     let client_builder = client_builder.clone().keyring(keyring_provider);
 
     // Read all requirements from the provided sources.
-    let RequirementsSpecification {
-        project,
-        requirements,
-        constraints,
-        overrides,
-        mut override_dependencies,
+    let InstallRequirements {
+        mut source,
         excludes,
-        pylock,
-        pylock_groups,
-        source_trees,
-        groups,
         index_url,
         extra_index_urls,
         no_index,
@@ -164,7 +157,6 @@ pub async fn pip_install(
         find_links,
         no_binary,
         no_build,
-        extras: _,
     } = uv_resolve_operations::read_requirements(
         requirements,
         constraints,
@@ -174,14 +166,13 @@ pub async fn pip_install(
         Some(groups),
         &client_builder,
     )
-    .await?;
-
-    override_dependencies.extend(overrides_from_workspace);
+    .await?
+    .try_into()?;
 
     let hash_checking = HashCheckingMode::from_requirements_txt(hash_checking, require_hashes);
     let build_hash_checking = resolve_build_hash_checking(hash_checking, build_hash_checking);
 
-    if pylock.is_some() {
+    if source.is_locked() {
         if !preview.is_enabled(PreviewFeature::Pylock) {
             warn_user!(
                 "The `--pylock` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
@@ -190,15 +181,18 @@ pub async fn pip_install(
         }
     }
 
-    let constraints: Vec<NameRequirementSpecification> = constraints
-        .iter()
-        .cloned()
-        .chain(
-            constraints_from_workspace
-                .into_iter()
-                .map(NameRequirementSpecification::from),
-        )
+    let constraints_from_workspace: Vec<NameRequirementSpecification> = constraints_from_workspace
+        .into_iter()
+        .map(NameRequirementSpecification::from)
         .collect();
+    if let InstallSource::Resolve(requirements) = &mut source {
+        requirements
+            .constraints
+            .extend(constraints_from_workspace.iter().cloned());
+        requirements
+            .override_dependencies
+            .extend(overrides_from_workspace);
+    }
 
     let excludes: Vec<ExcludeDependency> = excludes
         .into_iter()
@@ -323,7 +317,7 @@ pub async fn pip_install(
     // transitive dependencies. Delay the environment scan in either case, then restrict it to the
     // resolved package names.
     let defer_site_packages = matches!(modifications, Modifications::Sufficient)
-        && (pylock.is_some() || matches!(&reinstall, Reinstall::All));
+        && (source.is_locked() || matches!(&reinstall, Reinstall::All));
 
     let site_packages = if defer_site_packages {
         None
@@ -336,17 +330,17 @@ pub async fn pip_install(
     // it's an order of magnitude faster to validate the environment than to resolve the requirements.
     if reinstall.is_none()
         && upgrade.is_none()
-        && source_trees.is_empty()
-        && groups.is_empty()
-        && pylock.is_none()
+        && let InstallSource::Resolve(requirements) = &source
+        && requirements.source_trees.is_empty()
+        && requirements.groups.is_empty()
         && matches!(modifications, Modifications::Sufficient)
         && let Some(site_packages) = &site_packages
     {
         match site_packages.satisfies_spec(
-            &requirements,
-            &constraints,
-            &overrides,
-            &override_dependencies,
+            &requirements.requirements,
+            &requirements.constraints,
+            &requirements.overrides,
+            &requirements.override_dependencies,
             &excludes,
             &dependency_metadata,
             dependency_mode,
@@ -371,7 +365,12 @@ pub async fn pip_install(
                         debug!("Requirement satisfied: {requirement}");
                     }
                 }
-                DefaultInstallLogger.on_check(requirements.len(), start, printer, dry_run)?;
+                DefaultInstallLogger.on_check(
+                    requirements.requirements.len(),
+                    start,
+                    printer,
+                    dry_run,
+                )?;
 
                 if strict && !dry_run.enabled() {
                     uv_install_operations::diagnose_environment(
@@ -404,17 +403,30 @@ pub async fn pip_install(
 
     // Collect the set of required hashes.
     let hasher = if let Some(hash_checking) = hash_checking {
-        HashStrategy::from_requirements(
-            requirements
-                .iter()
-                .chain(overrides.iter())
-                .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
-            constraints
-                .iter()
-                .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
-            Some(&marker_env),
-            hash_checking,
-        )?
+        match &source {
+            InstallSource::Resolve(requirements) => HashStrategy::from_requirements(
+                requirements
+                    .requirements
+                    .iter()
+                    .chain(requirements.overrides.iter())
+                    .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
+                requirements
+                    .constraints
+                    .iter()
+                    .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
+                Some(&marker_env),
+                hash_checking,
+            )?,
+            // Workspace constraints participate in hash validation even for a locked resolution.
+            InstallSource::Pylock { .. } => HashStrategy::from_requirements(
+                std::iter::empty(),
+                constraints_from_workspace
+                    .iter()
+                    .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
+                Some(&marker_env),
+                hash_checking,
+            )?,
+        }
     } else {
         HashStrategy::default()
     };
@@ -510,96 +522,110 @@ pub async fn pip_install(
         preview,
     );
 
-    let (resolution, hasher) = if let Some(pylock) = pylock {
-        let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
+    let (resolution, hasher) = match source {
+        InstallSource::Pylock {
+            input: pylock,
+            groups: pylock_groups,
+        } => {
+            let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
 
-        // Convert the extras and groups specifications into a concrete form.
-        let extras = extras.with_defaults(DefaultExtras::default());
-        let extras = extras
-            .extra_names(lock.extras.iter())
-            .cloned()
-            .collect::<Vec<_>>();
+            // Convert the extras and groups specifications into a concrete form.
+            let extras = extras.with_defaults(DefaultExtras::default());
+            let extras = extras
+                .extra_names(lock.extras.iter())
+                .cloned()
+                .collect::<Vec<_>>();
 
-        let groups =
-            pylock_groups.with_defaults(DefaultGroups::from_groups(lock.default_groups.clone()));
-        let groups = groups
-            .group_names(lock.dependency_groups.iter())
-            // PEP 751 allows synthetic default groups that aren't publicly selectable.
-            .chain(
-                lock.default_groups
-                    .iter()
-                    .filter(|group| groups.contains_because_default(group)),
-            )
-            .unique()
-            .cloned()
-            .collect::<Vec<_>>();
+            let groups = pylock_groups
+                .with_defaults(DefaultGroups::from_groups(lock.default_groups.clone()));
+            let groups = groups
+                .group_names(lock.dependency_groups.iter())
+                // PEP 751 allows synthetic default groups that aren't publicly selectable.
+                .chain(
+                    lock.default_groups
+                        .iter()
+                        .filter(|group| groups.contains_because_default(group)),
+                )
+                .unique()
+                .cloned()
+                .collect::<Vec<_>>();
 
-        resolve_pylock_toml(
-            lock,
-            &install_path,
-            interpreter,
-            python_version.as_ref(),
-            python_platform.as_ref(),
-            &extras,
-            &groups,
-            &build_options,
-            hash_checking,
-        )?
-    } else {
-        // When resolving, don't take any external preferences into account.
-        let preferences = Vec::default();
-
-        let options = OptionsBuilder::new()
-            .resolution_mode(resolution_mode)
-            .prerelease(prerelease)
-            .dependency_mode(dependency_mode)
-            .exclude_newer(exclude_newer.clone())
-            .index_strategy(index_strategy)
-            .torch_backend(torch_backend)
-            .build_options(build_options.clone())
-            .build();
-
-        // Resolve the requirements.
-        let (resolution, hasher) = match uv_resolve_operations::resolve(
+            resolve_pylock_toml(
+                lock,
+                &install_path,
+                interpreter,
+                python_version.as_ref(),
+                python_platform.as_ref(),
+                &extras,
+                &groups,
+                &build_options,
+                hash_checking,
+            )?
+        }
+        InstallSource::Resolve(ResolveRequirements {
+            project,
             requirements,
             constraints,
             overrides,
             override_dependencies,
-            excludes,
             source_trees,
-            project,
-            BTreeMap::default(),
-            extras,
-            &groups,
-            preferences,
-            site_packages.clone(),
-            &hasher,
-            &reinstall,
-            &upgrade,
-            Some(&tags),
-            ResolverEnvironment::specific(marker_env.clone()),
-            python_requirement,
-            interpreter.markers(),
-            Conflicts::empty(),
-            &client,
-            &flat_index,
-            state.index(),
-            &build_dispatch,
-            &concurrency,
-            options,
-            None,
-            Box::new(DefaultResolveLogger),
-            printer,
-        )
-        .await
-        {
-            Ok((graph, hasher)) => (Resolution::from(graph), hasher),
-            Err(err) => {
-                return Err(UvError::from(err).into());
-            }
-        };
+            groups,
+        }) => {
+            // When resolving, don't take any external preferences into account.
+            let preferences = Vec::default();
 
-        (resolution, hasher)
+            let options = OptionsBuilder::new()
+                .resolution_mode(resolution_mode)
+                .prerelease(prerelease)
+                .dependency_mode(dependency_mode)
+                .exclude_newer(exclude_newer.clone())
+                .index_strategy(index_strategy)
+                .torch_backend(torch_backend)
+                .build_options(build_options.clone())
+                .build();
+
+            // Resolve the requirements.
+            let (resolution, hasher) = match uv_resolve_operations::resolve(
+                requirements,
+                constraints,
+                overrides,
+                override_dependencies,
+                excludes,
+                source_trees,
+                project,
+                BTreeMap::default(),
+                extras,
+                &groups,
+                preferences,
+                site_packages.clone(),
+                &hasher,
+                &reinstall,
+                &upgrade,
+                Some(&tags),
+                ResolverEnvironment::specific(marker_env.clone()),
+                python_requirement,
+                interpreter.markers(),
+                Conflicts::empty(),
+                &client,
+                &flat_index,
+                state.index(),
+                &build_dispatch,
+                &concurrency,
+                options,
+                None,
+                Box::new(DefaultResolveLogger),
+                printer,
+            )
+            .await
+            {
+                Ok((graph, hasher)) => (Resolution::from(graph), hasher),
+                Err(err) => {
+                    return Err(UvError::from(err).into());
+                }
+            };
+
+            (resolution, hasher)
+        }
     };
 
     // If necessary, convert editable distributions to non-editable.
