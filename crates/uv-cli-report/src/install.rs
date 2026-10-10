@@ -65,13 +65,12 @@ impl PackageChangesReport {
     pub fn from_changelog(changelog: &Changelog) -> Self {
         let mut changes: Vec<_> =
             changelog
-                .uninstalled
-                .iter()
+                .uninstalled()
                 .map(|dist| PackageChangeReport::from_dist(dist, PackageChangeAction::Uninstalled))
-                .chain(changelog.installed.iter().map(|dist| {
+                .chain(changelog.installed().map(|dist| {
                     PackageChangeReport::from_dist(dist, PackageChangeAction::Installed)
                 }))
-                .chain(changelog.reinstalled.iter().map(|dist| {
+                .chain(changelog.reinstalled().map(|dist| {
                     PackageChangeReport::from_dist(dist, PackageChangeAction::Reinstalled)
                 }))
                 .collect();
