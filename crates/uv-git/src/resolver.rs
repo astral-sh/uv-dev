@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -6,6 +5,7 @@ use std::sync::Arc;
 use fs_err::tokio as fs;
 use papaya::{HashMap, ResizeMode};
 use reqwest_middleware::ClientWithMiddleware;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tracing::debug;
 
 use uv_cache_key::{RepositoryUrl, cache_digest};
@@ -84,25 +84,47 @@ impl GitHttpSettings {
 
 /// A resolver for Git repositories.
 #[derive(Clone)]
-pub struct GitResolver(Arc<HashMap<RepositoryReference, GitOid>>);
+pub struct GitResolver(Arc<GitResolverState>);
+
+struct GitResolverState {
+    references: HashMap<RepositoryReference, GitOid>,
+    claims: HashMap<RepositoryReference, Arc<Mutex<()>>>,
+}
 
 impl Default for GitResolver {
     fn default() -> Self {
-        Self(Arc::new(
-            HashMap::builder().resize_mode(ResizeMode::Blocking).build(),
-        ))
+        Self(Arc::new(GitResolverState {
+            references: HashMap::builder().resize_mode(ResizeMode::Blocking).build(),
+            claims: HashMap::builder().resize_mode(ResizeMode::Blocking).build(),
+        }))
     }
 }
 
 impl GitResolver {
     /// Inserts a new [`GitOid`] for the given [`RepositoryReference`].
     pub fn insert(&self, reference: RepositoryReference, sha: GitOid) {
-        self.0.pin().insert(reference, sha);
+        self.0.references.pin().insert(reference, sha);
     }
 
     /// Returns the [`GitOid`] for the given [`RepositoryReference`], if it exists.
     fn get(&self, reference: &RepositoryReference) -> Option<GitOid> {
-        self.0.pin().get(reference).copied()
+        self.0.references.pin().get(reference).copied()
+    }
+
+    /// Claim a mutable reference independently of the repository's filesystem lock.
+    async fn claim(&self, reference: &RepositoryReference) -> OwnedMutexGuard<()> {
+        let claim = self
+            .0
+            .claims
+            .pin()
+            .get_or_insert_with(reference.clone(), || Arc::new(Mutex::new(())))
+            .clone();
+        claim.lock_owned().await
+    }
+
+    /// Publish a discovered commit without replacing an authoritative seeded pin.
+    fn publish(&self, reference: RepositoryReference, precise: GitOid) -> GitOid {
+        *self.0.references.pin().get_or_insert(reference, precise)
     }
 
     /// Return the [`GitOid`] for the given [`GitUrl`], if it is already known.
@@ -144,6 +166,12 @@ impl GitResolver {
         else {
             return Ok(None);
         };
+
+        let reference_key = RepositoryReference::from(url);
+        let _claim = self.claim(&reference_key).await;
+        if let Some(precise) = self.get_precise(url) {
+            return Ok(Some(precise));
+        }
 
         // Check if we're rate-limited by GitHub, before determining the Git reference
         if GITHUB_RATE_LIMIT_STATUS.is_active() {
@@ -198,9 +226,7 @@ impl GitResolver {
 
         // Insert the resolved URL into the in-memory cache. This ensures that subsequent fetches
         // resolve to the same precise commit.
-        self.insert(RepositoryReference::from(&url), precise);
-
-        Ok(Some(precise))
+        Ok(Some(self.publish(RepositoryReference::from(&url), precise)))
     }
 
     /// Fetch a remote Git repository.
@@ -215,57 +241,65 @@ impl GitResolver {
 
         let reference = RepositoryReference::from(url);
 
-        // If we know the precise commit already, reuse it, to ensure that all fetches within a
-        // single process are consistent.
-        let url = {
-            if let Some(precise) = self.get(&reference) {
-                Cow::Owned(
-                    url.clone()
-                        .with_precise(precise)
-                        .map_err(|error| GitResolverError::Git(error.into()))?,
-                )
-            } else {
-                Cow::Borrowed(url)
-            }
-        };
+        // Resolution claims precede repository filesystem locks on every checkout path.
+        let claim = self.claim(&reference).await;
 
         // Avoid races between different processes, too.
         let lock_dir = cache.join("locks");
         fs::create_dir_all(&lock_dir).await?;
         let repository_url = url.repository().clone();
-        let _lock = LockedFile::acquire(
+        let lock = LockedFile::acquire(
             lock_dir.join(cache_digest(&repository_url)),
             LockedFileMode::Exclusive,
             &repository_url,
         )
         .await?;
 
-        // Fetch the Git repository.
-        let source = if let Some(reporter) = reporter {
-            GitSource::new(url.as_ref().clone(), cache, http_settings.offline)
-                .with_reporter(reporter)
+        // Recheck after waiting, preferring an explicit precise URL over shared preferences.
+        let mut selected = if let Some(precise) = self.get_precise(url) {
+            url.clone()
+                .with_precise(precise)
+                .map_err(|error| GitResolverError::Git(error.into()))?
         } else {
-            GitSource::new(url.as_ref().clone(), cache, http_settings.offline)
+            url.clone()
         };
 
-        // If necessary, disable SSL.
-        let source = if http_settings.disable_ssl {
-            source.dangerous()
-        } else {
-            source
-        };
+        let resolver = self.clone();
+        let url = url.clone();
+        tokio::task::spawn_blocking(move || {
+            // Keep admission through Git work and publication even if the async waiter is cancelled.
+            let _claim = claim;
+            let _lock = lock;
+            loop {
+                let source = if let Some(reporter) = reporter.clone() {
+                    GitSource::new(selected.clone(), cache.clone(), http_settings.offline)
+                        .with_reporter(reporter)
+                } else {
+                    GitSource::new(selected.clone(), cache.clone(), http_settings.offline)
+                };
+                let source = if http_settings.disable_ssl {
+                    source.dangerous()
+                } else {
+                    source
+                };
+                let fetch = source.fetch().map_err(GitResolverError::Git)?;
 
-        let fetch = tokio::task::spawn_blocking(move || source.fetch())
-            .await?
-            .map_err(GitResolverError::Git)?;
-
-        // Insert the resolved URL into the in-memory cache. This ensures that subsequent fetches
-        // resolve to the same precise commit.
-        if let Some(precise) = fetch.git().precise() {
-            self.insert(reference, precise);
-        }
-
-        Ok(fetch)
+                if let Some(precise) = fetch.git().precise() {
+                    let published = resolver.publish(reference.clone(), precise);
+                    // A lockfile preference can be seeded while Git is running. A mutable request
+                    // must return the checkout for that pin, not the discarded discovery result.
+                    if url.precise().is_none() && published != precise {
+                        selected = url
+                            .clone()
+                            .with_precise(published)
+                            .map_err(|error| GitResolverError::Git(error.into()))?;
+                        continue;
+                    }
+                }
+                return Ok(fetch);
+            }
+        })
+        .await?
     }
 
     /// Given a remote source distribution, return a precise variant, if possible.
@@ -277,12 +311,10 @@ impl GitResolver {
     /// layer. For example: removing `#subdirectory=pkg_dir`-like fragments, and removing `git+`
     /// prefix kinds.
     ///
-    /// This method will only return precise URLs for URLs that have already been resolved via
-    /// [`resolve_precise`], and will return `None` for URLs that have not been resolved _or_
-    /// already have a precise reference.
+    /// The precise commit can be carried by the URL itself or recorded in this resolver.
+    /// Returns `None` when neither is available.
     pub fn precise(&self, url: GitUrl) -> Option<GitUrl> {
-        let reference = RepositoryReference::from(&url);
-        let precise = self.get(&reference)?;
+        let precise = self.get_precise(&url)?;
         url.with_precise(precise).ok()
     }
 
@@ -342,3 +374,6 @@ impl From<&GitUrl> for RepositoryReference {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
