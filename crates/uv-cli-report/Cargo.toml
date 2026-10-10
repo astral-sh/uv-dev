@@ -1,0 +1,25 @@
+[package]
+name = "uv-cli-report"
+version = "0.0.92"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+uv-cli-arguments = { workspace = true }
+uv-cli-output = { workspace = true }
+uv-configuration = { workspace = true }
+uv-distribution-types = { workspace = true }
+uv-normalize = { workspace = true }
+uv-operations = { workspace = true }
+uv-pep440 = { workspace = true }
+
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -5,26 +5,41 @@ use std::str::FromStr;
 use std::time::Duration;
 use tracing::info_span;
 use uv_client::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT, DEFAULT_READ_TIMEOUT_UPLOAD};
-use uv_configuration::{RequiredVersion, RequirementsInput, RequirementsInputError};
+use uv_configuration::{
+    HashCheckingMode, RequiredVersion, RequirementsInput, RequirementsInputError,
+};
 use uv_dirs::{system_config_file, user_config_dir};
 use uv_distribution_types::{IndexUrlError, Origin};
 use uv_flags::EnvironmentFlags;
 use uv_fs::Simplified;
 use uv_normalize::{GroupName, PackageName};
 use uv_pep440::Version;
+use uv_preview::PreviewFeature;
 use uv_python_types::PythonArchitecture;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::{EnvVars, InvalidEnvironmentVariable, parse_boolish_environment_variable};
 use uv_torch::AmdGpuArchitecture;
-use uv_warnings::warn_user;
+use uv_warnings::{warn_user, warn_user_once};
 
 pub use crate::combine::*;
-pub use crate::resolved::*;
 pub use crate::settings::*;
 
 mod combine;
-mod resolved;
 mod settings;
+
+/// Resolve whether hashes are required for build dependencies, warning if the feature is experimental.
+pub fn resolve_build_hash_checking(require_build_hashes: Option<bool>) -> HashCheckingMode {
+    if !require_build_hashes.unwrap_or_default() {
+        return HashCheckingMode::Verify;
+    }
+    if !uv_preview::is_enabled(PreviewFeature::BuildDependencyHashes) {
+        warn_user_once!(
+            "The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::BuildDependencyHashes
+        );
+    }
+    HashCheckingMode::Require
+}
 
 /// The [`Options`] as loaded from a configuration file on disk.
 #[derive(Debug, Clone)]

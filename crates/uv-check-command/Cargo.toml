@@ -1,0 +1,46 @@
+[package]
+name = "uv-check-command"
+version = "0.0.92"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+uv-bin-install = { workspace = true }
+uv-cache = { workspace = true }
+uv-child-process = { workspace = true }
+uv-cli-arguments = { workspace = true }
+uv-cli-error = { workspace = true }
+uv-cli-output = { workspace = true }
+uv-cli-settings = { workspace = true }
+uv-cli-types = { workspace = true }
+uv-client = { workspace = true }
+uv-configuration = { workspace = true }
+uv-dispatch = { workspace = true }
+uv-fs = { workspace = true }
+uv-normalize = { workspace = true }
+uv-operations = { workspace = true }
+uv-pep440 = { workspace = true }
+uv-preview = { workspace = true }
+uv-project = { workspace = true }
+uv-python-discovery = { workspace = true }
+uv-python-interpreter = { workspace = true }
+uv-python-types = { workspace = true }
+uv-scripts = { workspace = true }
+uv-settings = { workspace = true }
+uv-shell = { workspace = true }
+uv-static = { workspace = true }
+uv-virtualenv = { workspace = true }
+uv-warnings = { workspace = true }
+uv-workspace = { workspace = true }
+
+anyhow = { workspace = true }
+jiff = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

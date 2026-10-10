@@ -1,0 +1,25 @@
+[package]
+name = "uv-help-command"
+version = "0.0.92"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+uv-cli-arguments = { workspace = true }
+uv-cli-output = { workspace = true }
+uv-cli-types = { workspace = true }
+uv-static = { workspace = true }
+
+anstream = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+itertools = { workspace = true }
+owo-colors = { workspace = true }
+which = { workspace = true }

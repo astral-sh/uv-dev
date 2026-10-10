@@ -1,0 +1,44 @@
+[package]
+name = "uv-venv-command"
+version = "0.0.92"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+uv-cache = { workspace = true }
+uv-cli-output = { workspace = true }
+uv-cli-types = { workspace = true }
+uv-client = { workspace = true }
+uv-configuration = { workspace = true }
+uv-dispatch = { workspace = true }
+uv-distribution-types = { workspace = true }
+uv-fs = { workspace = true }
+uv-install-wheel = { workspace = true }
+uv-normalize = { workspace = true }
+uv-operations = { workspace = true }
+uv-pep508 = { workspace = true }
+uv-preview = { workspace = true }
+uv-project = { workspace = true }
+uv-python-discovery = { workspace = true }
+uv-python-types = { workspace = true }
+uv-resolver = { workspace = true }
+uv-settings = { workspace = true }
+uv-shell = { workspace = true }
+uv-types = { workspace = true }
+uv-virtualenv = { workspace = true }
+uv-warnings = { workspace = true }
+uv-workspace = { workspace = true }
+
+anyhow = { workspace = true }
+fs-err = { workspace = true }
+owo-colors = { workspace = true }
+textwrap = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,31 @@
+[package]
+name = "uv-cache-command"
+version = "0.0.92"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+uv-cache = { workspace = true }
+uv-cli-arguments = { workspace = true }
+uv-cli-output = { workspace = true }
+uv-cli-types = { workspace = true }
+uv-console = { workspace = true }
+uv-distribution = { workspace = true }
+uv-fs = { workspace = true }
+uv-normalize = { workspace = true }
+uv-preview = { workspace = true }
+uv-warnings = { workspace = true }
+
+anstream = { workspace = true }
+anyhow = { workspace = true }
+diskus = { workspace = true }
+owo-colors = { workspace = true }
+tracing = { workspace = true }
+walkdir = { workspace = true }

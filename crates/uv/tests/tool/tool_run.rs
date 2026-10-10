@@ -771,6 +771,25 @@ fn tool_run_cache() {
     ");
 }
 
+/// HTTP client setup errors for an unnamed primary source retain their own diagnostic context.
+#[test]
+fn tool_run_unnamed_source_client_build_error() {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+
+    uv_snapshot!(context.filters(), context.tool_run().args([
+        "--offline",
+        "--from", "https://example.com/unnamed.tar.gz",
+        "--index-url", "https://user:%FF@example.com/simple",
+        "tool",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse credentials in index URL: https://user:****@example.com/simple
+      cause: URL password contains invalid UTF-8
+      cause: invalid utf-8 sequence of 1 bytes from index 0
+    ");
+}
+
 #[test]
 fn tool_run_url() {
     let context = uv_test::test_context!("3.12")

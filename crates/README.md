@@ -42,7 +42,7 @@ previously known as [PEP 508](https://peps.python.org/pep-0508/).
 Functionality for parsing and inferring Python platform tags as per
 [PEP 425](https://peps.python.org/pep-0425/).
 
-## [uv-cli](./uv-cli)
+## [uv-cli-arguments](./uv-cli-arguments)
 
 Command-line interface for the uv package manager.
 

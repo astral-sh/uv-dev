@@ -1,0 +1,31 @@
+[package]
+name = "uv-auth-command"
+version = "0.0.92"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+uv-auth = { workspace = true }
+uv-cli-output = { workspace = true }
+uv-cli-types = { workspace = true }
+uv-console = { workspace = true }
+uv-distribution-types = { workspace = true }
+uv-fs = { workspace = true }
+uv-pep508 = { workspace = true }
+uv-preview = { workspace = true }
+uv-redacted = { workspace = true }
+uv-warnings = { workspace = true }
+
+anyhow = { workspace = true }
+console = { workspace = true }
+owo-colors = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

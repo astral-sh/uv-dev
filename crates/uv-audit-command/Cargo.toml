@@ -1,0 +1,37 @@
+[package]
+name = "uv-audit-command"
+version = "0.0.92"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+uv-audit = { workspace = true }
+uv-cache = { workspace = true }
+uv-cli-arguments = { workspace = true }
+uv-cli-error = { workspace = true }
+uv-cli-output = { workspace = true }
+uv-cli-settings = { workspace = true }
+uv-cli-types = { workspace = true }
+uv-client = { workspace = true }
+uv-configuration = { workspace = true }
+uv-dispatch = { workspace = true }
+uv-normalize = { workspace = true }
+uv-operations = { workspace = true }
+uv-preview = { workspace = true }
+uv-project = { workspace = true }
+uv-python-discovery = { workspace = true }
+uv-python-types = { workspace = true }
+uv-redacted = { workspace = true }
+uv-scripts = { workspace = true }
+uv-settings = { workspace = true }
+uv-warnings = { workspace = true }
+uv-workspace = { workspace = true }
+
+anyhow = { workspace = true }

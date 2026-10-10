@@ -11,7 +11,7 @@ use pretty_assertions::StrComparison;
 use crate::ROOT_DIR;
 use crate::generate_all::Mode;
 
-use uv_cli::Cli;
+use uv_cli_arguments::Cli;
 
 const REPLACEMENTS: &[(&str, &str)] = &[
     // Replace suggestions to use `uv help python` with a link to the

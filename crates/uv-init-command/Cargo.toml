@@ -1,0 +1,44 @@
+[package]
+name = "uv-init-command"
+version = "0.0.92"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+uv-cache = { workspace = true }
+uv-cli-arguments = { workspace = true }
+uv-cli-output = { workspace = true }
+uv-cli-types = { workspace = true }
+uv-client = { workspace = true }
+uv-configuration = { workspace = true }
+uv-distribution-types = { workspace = true }
+uv-fs = { workspace = true }
+uv-git = { workspace = true }
+uv-install-wheel = { workspace = true }
+uv-normalize = { workspace = true }
+uv-pep440 = { workspace = true }
+uv-project = { workspace = true }
+uv-project-edit = { workspace = true }
+uv-python-discovery = { workspace = true }
+uv-python-interpreter = { workspace = true }
+uv-python-types = { workspace = true }
+uv-scripts = { workspace = true }
+uv-settings = { workspace = true }
+uv-static = { workspace = true }
+uv-version = { workspace = true }
+uv-warnings = { workspace = true }
+uv-workspace = { workspace = true }
+
+anyhow = { workspace = true }
+fs-err = { workspace = true }
+indoc = { workspace = true }
+owo-colors = { workspace = true }
+toml_edit = { workspace = true }
+tracing = { workspace = true }
