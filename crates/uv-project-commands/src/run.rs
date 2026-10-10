@@ -413,7 +413,7 @@ pub async fn run(
                 let environment_mode = ScriptEnvironmentMode::from_script(
                     (&script).into(),
                     active,
-                    Some(&settings.resolver.build_isolation),
+                    &settings.resolver.build_isolation,
                     preview,
                 );
                 let environment = ScriptEnvironment::get_or_init(
@@ -2189,6 +2189,37 @@ struct SharedEnvironmentFiles {
     owned_data: BTreeSet<PathBuf>,
 }
 
+impl SharedEnvironmentFiles {
+    /// Load and validate paths before any managed files are synchronized.
+    fn load(path: &Path) -> anyhow::Result<Option<Self>> {
+        let bytes = match fs_err::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        let manifest: Self = serde_json::from_slice(&bytes)?;
+        for name in &manifest.names {
+            if name.components().count() != 1 || name.file_name().is_none() {
+                bail!("Invalid shared entrypoint name: {}", name.display());
+            }
+        }
+        for relative in manifest.data.iter().flat_map(BTreeMap::keys) {
+            if !relative.components().all(|component| match component {
+                Component::Normal(_) => true,
+                Component::Prefix(_)
+                | Component::RootDir
+                | Component::CurDir
+                | Component::ParentDir => false,
+            }) || !SHARED_DATA_DIRECTORIES.iter().any(|directory| {
+                relative.starts_with(directory) && relative != Path::new(directory)
+            }) {
+                bail!("Invalid shared data path: {}", relative.display());
+            }
+        }
+        Ok(Some(manifest))
+    }
+}
+
 /// Read files owned by distributions installed directly into the writable overlay.
 fn installed_environment_files(
     environment: &PythonEnvironment,
@@ -2218,19 +2249,10 @@ fn sync_shared_environment_files(
     shared: &Interpreter,
 ) -> anyhow::Result<()> {
     let manifest = environment.root().join(".uv-shared-entrypoints.json");
-    let previous: Option<SharedEnvironmentFiles> = match fs_err::read(&manifest) {
-        Ok(bytes) => Some(serde_json::from_slice(&bytes)?),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-        Err(err) => return Err(err.into()),
-    };
+    let previous = SharedEnvironmentFiles::load(&manifest)?;
     let names = previous
         .as_ref()
         .map_or(&[][..], |previous| previous.names.as_slice());
-    for name in names {
-        if name.components().count() != 1 || name.file_name().is_none() {
-            bail!("Invalid shared entrypoint name: {}", name.display());
-        }
-    }
     let source_changed = previous
         .as_ref()
         .is_none_or(|previous| previous.source != shared.sys_prefix());
@@ -2309,17 +2331,6 @@ const SHARED_DATA_DIRECTORIES: [&str; 2] = ["etc/jupyter", "share/jupyter"];
 
 /// Resolve a managed data path without following directory links out of the overlay.
 fn shared_data_path(root: &Path, relative: &Path) -> anyhow::Result<Option<PathBuf>> {
-    if !relative.components().all(|component| match component {
-        Component::Normal(_) => true,
-        Component::Prefix(_) | Component::RootDir | Component::CurDir | Component::ParentDir => {
-            false
-        }
-    }) || !SHARED_DATA_DIRECTORIES
-        .iter()
-        .any(|directory| relative.starts_with(directory) && relative != Path::new(directory))
-    {
-        bail!("Invalid shared data path: {}", relative.display());
-    }
     let mut directory = root.to_path_buf();
     if let Some(parent) = relative.parent() {
         for component in parent.components() {

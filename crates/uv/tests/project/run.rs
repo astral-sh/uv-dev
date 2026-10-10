@@ -10040,3 +10040,392 @@ fn run_pep723_shared_build_isolation_override() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Invalid manifest paths must fail before earlier managed files are removed.
+#[test]
+fn run_pep723_shared_manifest_validates_before_cleanup() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (first_name, first) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("shared_data-1.0.0.data/data/etc/jupyter/value.txt", "one\n")],
+    );
+    wheels.child(first_name).write_binary(&first)?;
+    let (second_name, second) = generate_wheel_with_files(
+        &"shared-data".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(second_name).write_binary(&second)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-data==1.0.0"]
+        # ///
+        from pathlib import Path
+        import sys
+        Path("overlay-root").write_text(sys.prefix)
+        print(Path(sys.prefix, "etc/jupyter/value.txt").read_text().strip())
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    one
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==1.0.0
+    ");
+    let overlay = context.read("overlay-root");
+    let manifest_path = Path::new(&overlay).join(".uv-shared-entrypoints.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&context.read(&manifest_path))?;
+    manifest["data"]["share/jupyter/../invalid.txt"] = json!("invalid");
+    fs_err::write(manifest_path, serde_json::to_vec(&manifest)?)?;
+    script.write_str(
+        &context
+            .read("script.py")
+            .replace("shared-data==1.0.0", "shared-data==2.0.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-data==2.0.0
+    error: Invalid shared data path: share/jupyter/../invalid.txt
+    ");
+    assert_eq!(
+        context.read(Path::new(&overlay).join("etc/jupyter/value.txt")),
+        "one\n"
+    );
+    Ok(())
+}
+
+/// Shared source installations distinguish global build configuration.
+#[test]
+fn run_pep723_shared_build_config_settings() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let source = context.temp_dir.child("example");
+    source.create_dir_all()?;
+    source.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1.0.0"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    source.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        import os
+        import shutil
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            flavor = (config_settings or {}).get("flavor", os.environ.get("BUILD_FLAVOR", "first"))
+            if isinstance(flavor, list):
+                flavor = flavor[0]
+            name = "example-1.0.0-py3-none-any.whl"
+            shutil.copyfile(Path(flavor) / name, Path(wheel_directory) / name)
+            return name
+    "#})?;
+    let first = source.child("first");
+    first.create_dir_all()?;
+    let (first_name, first_wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("example/value.py", "VALUE = 'first'\n")],
+    );
+    first.child(first_name).write_binary(&first_wheel)?;
+    let second = source.child("second");
+    second.create_dir_all()?;
+    let (second_name, second_wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("example/value.py", "VALUE = 'second'\n")],
+    );
+    second.child(second_name).write_binary(&second_wheel)?;
+    context.temp_dir.child("first.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["example"]
+        # [tool.uv.sources]
+        # example = { path = "example" }
+        # [tool.uv.config-settings]
+        # flavor = "first"
+        # ///
+        from example.value import VALUE
+        print(VALUE)
+    "#})?;
+    context.temp_dir.child("second.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["example"]
+        # [tool.uv.sources]
+        # example = { path = "example" }
+        # [tool.uv.config-settings]
+        # flavor = "second"
+        # ///
+        from example.value import VALUE
+        print(VALUE)
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "first.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0 (from file://[TEMP_DIR]/example)
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "second.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    second
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0 (from file://[TEMP_DIR]/example)
+    ");
+    Ok(())
+}
+
+/// Package build configuration takes precedence over global values in shared installations.
+#[test]
+fn run_pep723_shared_build_package_config_settings() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let source = context.temp_dir.child("example");
+    source.create_dir_all()?;
+    source.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1.0.0"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    source.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        import os
+        import shutil
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            flavor = (config_settings or {}).get("flavor", os.environ.get("BUILD_FLAVOR", "first"))
+            if isinstance(flavor, list):
+                flavor = flavor[0]
+            name = "example-1.0.0-py3-none-any.whl"
+            shutil.copyfile(Path(flavor) / name, Path(wheel_directory) / name)
+            return name
+    "#})?;
+    let first = source.child("first");
+    first.create_dir_all()?;
+    let (first_name, first_wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("example/value.py", "VALUE = 'first'\n")],
+    );
+    first.child(first_name).write_binary(&first_wheel)?;
+    let second = source.child("second");
+    second.create_dir_all()?;
+    let (second_name, second_wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("example/value.py", "VALUE = 'second'\n")],
+    );
+    second.child(second_name).write_binary(&second_wheel)?;
+    context.temp_dir.child("first.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["example"]
+        # [tool.uv.sources]
+        # example = { path = "example" }
+        # [tool.uv.config-settings]
+        # flavor = "global"
+        # [tool.uv.config-settings-package]
+        # example = { flavor = "first" }
+        # ///
+        from example.value import VALUE
+        print(VALUE)
+    "#})?;
+    context.temp_dir.child("second.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["example"]
+        # [tool.uv.sources]
+        # example = { path = "example" }
+        # [tool.uv.config-settings]
+        # flavor = "global"
+        # [tool.uv.config-settings-package]
+        # example = { flavor = "second" }
+        # ///
+        from example.value import VALUE
+        print(VALUE)
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "first.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0 (from file://[TEMP_DIR]/example)
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "second.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    second
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0 (from file://[TEMP_DIR]/example)
+    ");
+    Ok(())
+}
+
+/// Shared source installations distinguish package-specific build environment variables.
+#[test]
+fn run_pep723_shared_build_variables() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let source = context.temp_dir.child("example");
+    source.create_dir_all()?;
+    source.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1.0.0"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    source.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        import os
+        import shutil
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            flavor = (config_settings or {}).get("flavor", os.environ.get("BUILD_FLAVOR", "first"))
+            if isinstance(flavor, list):
+                flavor = flavor[0]
+            name = "example-1.0.0-py3-none-any.whl"
+            shutil.copyfile(Path(flavor) / name, Path(wheel_directory) / name)
+            return name
+    "#})?;
+    let first = source.child("first");
+    first.create_dir_all()?;
+    let (first_name, first_wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("example/value.py", "VALUE = 'first'\n")],
+    );
+    first.child(first_name).write_binary(&first_wheel)?;
+    let second = source.child("second");
+    second.create_dir_all()?;
+    let (second_name, second_wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("example/value.py", "VALUE = 'second'\n")],
+    );
+    second.child(second_name).write_binary(&second_wheel)?;
+    context.temp_dir.child("first.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["example"]
+        # [tool.uv.sources]
+        # example = { path = "example" }
+        # [tool.uv.extra-build-variables]
+        # example = { BUILD_FLAVOR = "first" }
+        # ///
+        from example.value import VALUE
+        print(VALUE)
+    "#})?;
+    context.temp_dir.child("second.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["example"]
+        # [tool.uv.sources]
+        # example = { path = "example" }
+        # [tool.uv.extra-build-variables]
+        # example = { BUILD_FLAVOR = "second" }
+        # ///
+        from example.value import VALUE
+        print(VALUE)
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "first.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0 (from file://[TEMP_DIR]/example)
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "second.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    second
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0 (from file://[TEMP_DIR]/example)
+    ");
+    Ok(())
+}
