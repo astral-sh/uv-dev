@@ -79,11 +79,11 @@ pub enum Error {
     ExtractError(String, #[source] uv_extract::Error),
     #[error("Failed to hash installation")]
     HashExhaustion(#[source] io::Error),
-    #[error("Hash mismatch for `{installation}`\n\nExpected:\n{expected}\n\nComputed:\n{actual}")]
+    #[error("Hash mismatch for `{installation}`\n\nExpected:\n{expected}\n\nComputed:\n{actual}", expected = expected.as_str(), actual = actual.digest())]
     HashMismatch {
         installation: String,
-        expected: String,
-        actual: String,
+        expected: Digest<32>,
+        actual: HashDigest,
     },
     #[error("Invalid download URL")]
     InvalidUrl(#[from] DisplaySafeUrlError),
@@ -773,8 +773,8 @@ impl ManagedPythonDownload {
             if actual.digest() != expected.as_str() {
                 return Err(Error::HashMismatch {
                     installation: self.key.to_string(),
-                    expected: expected.as_str().to_string(),
-                    actual: actual.digest().to_string(),
+                    expected: expected.clone(),
+                    actual,
                 });
             }
         }
@@ -1212,8 +1212,8 @@ mod tests {
             },
             Error::HashMismatch {
                 installation: "cpython-3.12.0-linux-x86_64-gnu".to_owned(),
-                expected: "abc".to_owned(),
-                actual: "def".to_owned(),
+                expected: Digest::from_bytes([0xab; 32]),
+                actual: HashDigest::Sha256(Digest::from_bytes([0xcd; 32])),
             },
         ];
 
@@ -1247,8 +1247,10 @@ mod tests {
             },
             HashMismatch {
                 installation: "cpython-3.12.0-linux-x86_64-gnu",
-                expected: "abc",
-                actual: "def",
+                expected: "abababababababababababababababababababababababababababababababab",
+                actual: Sha256(
+                    "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                ),
             },
         ]
         "#);
@@ -1472,10 +1474,19 @@ mod tests {
     fn test_should_try_next_url_hash_mismatch() {
         let err = Error::HashMismatch {
             installation: "cpython-3.12.0".to_string(),
-            expected: "abc".to_string(),
-            actual: "def".to_string(),
+            expected: Digest::from_bytes([0xab; 32]),
+            actual: HashDigest::Sha256(Digest::from_bytes([0xcd; 32])),
         };
         assert!(!err.should_try_next_url());
+        insta::assert_snapshot!(err, @"
+        Hash mismatch for `cpython-3.12.0`
+
+        Expected:
+        abababababababababababababababababababababababababababababababab
+
+        Computed:
+        cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
+        ");
     }
 
     /// A local filesystem error during extraction (e.g. permission denied writing to disk) is not

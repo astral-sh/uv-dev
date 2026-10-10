@@ -166,11 +166,11 @@ pub enum Error {
     #[error("Failed to hash distribution")]
     HashExhaustion(#[source] std::io::Error),
 
-    #[error("Hash mismatch for `{distribution}`\n\nExpected:\n{expected}\n\nComputed:\n{actual}")]
+    #[error("Hash mismatch for `{distribution}`\n\nExpected:\n{expected}\n\nComputed:\n{actual}", expected = DisplayHashes(.expected), actual = DisplayHashes(.actual))]
     MismatchedHashes {
         distribution: String,
-        expected: String,
-        actual: String,
+        expected: Vec<HashDigest>,
+        actual: Vec<HashDigest>,
     },
 
     #[error(
@@ -206,19 +206,19 @@ pub enum Error {
     MissingHashes { distribution: String },
 
     #[error(
-        "Hash-checking is enabled, but no hashes were computed for `{distribution}`\n\nExpected:\n{expected}"
+        "Hash-checking is enabled, but no hashes were computed for `{distribution}`\n\nExpected:\n{expected}", expected = DisplayHashes(.expected)
     )]
     MissingActualHashes {
         distribution: String,
-        expected: String,
+        expected: Vec<HashDigest>,
     },
 
     #[error(
-        "Hash-checking is enabled, but no hashes were provided for `{distribution}`\n\nComputed:\n{actual}"
+        "Hash-checking is enabled, but no hashes were provided for `{distribution}`\n\nComputed:\n{actual}", actual = DisplayHashes(.actual)
     )]
     MissingExpectedHashes {
         distribution: String,
-        actual: String,
+        actual: Vec<HashDigest>,
     },
 
     #[error("Hash-checking is not supported for local directories: {0}")]
@@ -355,50 +355,35 @@ impl Error {
     ) -> Self {
         match (expected.is_empty(), actual.is_empty()) {
             (true, true) => Self::MissingHashes { distribution },
-            (true, false) => {
-                let actual = actual
-                    .iter()
-                    .map(|hash| format!("  {hash}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                Self::MissingExpectedHashes {
-                    distribution,
-                    actual,
-                }
-            }
-            (false, true) => {
-                let expected = expected
-                    .iter()
-                    .map(|hash| format!("  {hash}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                Self::MissingActualHashes {
-                    distribution,
-                    expected,
-                }
-            }
-            (false, false) => {
-                let expected = expected
-                    .iter()
-                    .map(|hash| format!("  {hash}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                let actual = actual
-                    .iter()
-                    .map(|hash| format!("  {hash}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                Self::MismatchedHashes {
-                    distribution,
-                    expected,
-                    actual,
-                }
-            }
+            (true, false) => Self::MissingExpectedHashes {
+                distribution,
+                actual: actual.to_vec(),
+            },
+            (false, true) => Self::MissingActualHashes {
+                distribution,
+                expected: expected.to_vec(),
+            },
+            (false, false) => Self::MismatchedHashes {
+                distribution,
+                expected: expected.to_vec(),
+                actual: actual.to_vec(),
+            },
         }
+    }
+}
+
+/// Render hashes as an indented list without changing their order or removing duplicates.
+struct DisplayHashes<'a>(&'a [HashDigest]);
+
+impl fmt::Display for DisplayHashes<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, hash) in self.0.iter().enumerate() {
+            if index > 0 {
+                writeln!(f)?;
+            }
+            write!(f, "  {hash}")?;
+        }
+        Ok(())
     }
 }
 
@@ -408,7 +393,63 @@ mod tests {
     use std::str::FromStr;
     use uv_distribution_filename::WheelFilename;
     use uv_platform_tags::{Arch, Os, Platform};
+    use uv_pypi_types::{Digest, HashDigest};
     use uv_python_types::PythonVariant;
+
+    #[test]
+    fn hash_mismatch_retains_digests() -> Result<(), Box<dyn std::error::Error>> {
+        let expected = [
+            HashDigest::Sha256(Digest::from_bytes([0xab; 32])),
+            HashDigest::Md5(Digest::from_bytes([0xcd; 16])),
+            HashDigest::Sha256(Digest::from_bytes([0xab; 32])),
+        ];
+        let actual = [HashDigest::Sha256(Digest::from_bytes([0xef; 32]))];
+        let error = Error::hash_mismatch("example==1.0".to_owned(), &expected, &actual);
+        let Error::MismatchedHashes {
+            expected: expected_digests,
+            actual: actual_digests,
+            ..
+        } = &error
+        else {
+            return Err("expected a hash mismatch".into());
+        };
+        assert_eq!(expected_digests, &expected);
+        assert_eq!(actual_digests, &actual);
+        let reports = [
+            Error::hash_mismatch("example==1.0".to_owned(), &[], &[]),
+            Error::hash_mismatch("example==1.0".to_owned(), &expected, &[]),
+            Error::hash_mismatch("example==1.0".to_owned(), &[], &actual),
+            error,
+        ]
+        .map(|error| error.to_string())
+        .join("\n---\n");
+        insta::assert_snapshot!(reports, @"
+        Hash-checking is enabled, but no hashes were provided or computed for: example==1.0
+        ---
+        Hash-checking is enabled, but no hashes were computed for `example==1.0`
+
+        Expected:
+          sha256:abababababababababababababababababababababababababababababababab
+          md5:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
+          sha256:abababababababababababababababababababababababababababababababab
+        ---
+        Hash-checking is enabled, but no hashes were provided for `example==1.0`
+
+        Computed:
+          sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef
+        ---
+        Hash mismatch for `example==1.0`
+
+        Expected:
+          sha256:abababababababababababababababababababababababababababababababab
+          md5:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
+          sha256:abababababababababababababababababababababababababababababababab
+
+        Computed:
+          sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef
+        ");
+        Ok(())
+    }
 
     #[test]
     fn built_wheel_error_formats_freethreaded_python() {
