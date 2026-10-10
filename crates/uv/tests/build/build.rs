@@ -153,6 +153,68 @@ fn build_basic() -> Result<()> {
     Ok(())
 }
 
+/// Building a grouped project selects its interpreter before dependency metadata is available.
+#[test]
+fn build_workspace_group_with_dynamic_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+    "#})?;
+    let (_, wheel) = generate_wheel(
+        &"app".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context.temp_dir.child("fixture.whl").write_binary(&wheel)?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from shutil import copyfile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "app-1.0.0-py3-none-any.whl"
+            copyfile(Path(__file__).parent / "fixture.whl", Path(wheel_directory) / filename)
+            return filename
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            raise RuntimeError("wheel building does not require a metadata probe")
+    "#})?;
+    uv_snapshot!(context.filters(), context.build().args(["--wheel", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/app-1.0.0-py3-none-any.whl
+    ");
+    context
+        .temp_dir
+        .child("dist/app-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
 /// Global lazy imports are opt-in on supported build interpreters.
 #[test]
 fn build_lazy_imports() -> Result<()> {

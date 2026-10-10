@@ -421,7 +421,8 @@ pub async fn lock(
                 )
                 .await?;
                 let grouped_workspace = (!workspace_groups.is_empty())
-                    .then(|| workspace.with_workspace_groups(&workspace_groups));
+                    .then(|| workspace.with_workspace_groups(&workspace_groups))
+                    .transpose()?;
                 let workspace = grouped_workspace.as_ref().unwrap_or(workspace);
                 // Don't enable dependency groups' requires-python for interpreter discovery.
                 let groups = DependencyGroupsWithDefaults::none();

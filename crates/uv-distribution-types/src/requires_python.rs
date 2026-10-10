@@ -86,17 +86,28 @@ impl RequiresPython {
     }
 
     /// Returns the union of the given Python requirements.
+    ///
+    /// Returns `None` if the union is empty or cannot be represented exactly by PEP 440 specifiers.
     pub fn union<'a>(requirements: impl Iterator<Item = &'a Self>) -> Option<Self> {
         let range = requirements
             .map(|requires_python| release_specifiers_to_ranges(requires_python.specifiers.clone()))
             .reduce(|left, right| left.union(&right))?;
+        if range.is_empty() {
+            return None;
+        }
+        let specifiers = VersionSpecifiers::from_release_only_bounds(range.iter());
+        if release_specifiers_to_ranges(specifiers.clone()) != range {
+            return None;
+        }
         Some(Self {
-            specifiers: VersionSpecifiers::from_release_only_bounds(range.iter()),
+            specifiers,
             range: RequiresPythonRange::from_range(&range),
         })
     }
 
     /// Project an environment marker onto the Python versions it can support.
+    ///
+    /// Returns `None` if the domain is empty or cannot be represented exactly by PEP 440 specifiers.
     pub fn from_marker_tree(marker: MarkerTree) -> Option<Self> {
         fn project(
             marker: MarkerTree,
@@ -159,8 +170,12 @@ impl RequiresPython {
         if range.is_empty() {
             return None;
         }
+        let specifiers = VersionSpecifiers::from_release_only_bounds(range.iter());
+        if release_specifiers_to_ranges(specifiers.clone()) != range {
+            return None;
+        }
         Some(Self {
-            specifiers: VersionSpecifiers::from_release_only_bounds(range.iter()),
+            specifiers,
             range: RequiresPythonRange::from_range(&range),
         })
     }
@@ -749,6 +764,35 @@ mod tests {
                 .to_exact_marker_tree()
                 .is_true()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn requires_python_union_preserves_patch_gaps() -> Result<(), Box<dyn std::error::Error>> {
+        let requirements = [
+            RequiresPython::from_specifiers(">=3.12,<3.12.4".parse()?),
+            RequiresPython::from_specifiers(">=3.12.8,<3.13".parse()?),
+        ];
+        let requirement = RequiresPython::union(requirements.iter()).expect("representable union");
+        assert!(requirement.contains(&"3.12.3".parse()?));
+        assert!(!requirement.contains(&"3.12.6".parse()?));
+        assert!(requirement.contains(&"3.12.8".parse()?));
+        let marker = "(python_full_version >= '3.12' and python_full_version < '3.12.4') or (python_full_version >= '3.12.8' and python_full_version < '3.13')".parse()?;
+        assert_eq!(requirement.to_exact_marker_tree(), marker);
+        assert_eq!(RequiresPython::from_marker_tree(marker), Some(requirement));
+        Ok(())
+    }
+
+    #[test]
+    fn requires_python_union_rejects_unrepresentable_gaps() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let requirements = [
+            RequiresPython::from_specifiers(">=3.12,<3.12.3".parse()?),
+            RequiresPython::from_specifiers(">=3.13,<3.14".parse()?),
+        ];
+        assert!(RequiresPython::union(requirements.iter()).is_none());
+        let marker = "(python_full_version >= '3.12' and python_full_version < '3.12.3') or (python_full_version >= '3.13' and python_full_version < '3.14')".parse()?;
+        assert!(RequiresPython::from_marker_tree(marker).is_none());
         Ok(())
     }
 

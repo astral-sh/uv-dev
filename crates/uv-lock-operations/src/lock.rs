@@ -169,7 +169,7 @@ impl<'env> LockOperation<'env> {
             | LockMode::Locked(interpreter, _) => interpreter,
             LockMode::Frozen(_) => return Ok(()),
         };
-        let scoped = workspace.with_provisional_workspace_groups(std::slice::from_ref(group));
+        let scoped = workspace.with_provisional_workspace_groups(std::slice::from_ref(group))?;
         let target = LockTarget::Workspace(&scoped);
         let existing = match target.read_with_contents().await {
             Ok(Some((existing, contents))) => {
@@ -478,7 +478,7 @@ async fn do_lock_workspace_groups(
     let mut resolutions = Vec::new();
     let mut preference_lock = None;
     while let Some(batch) = pending.pop() {
-        let scoped = workspace.with_workspace_groups(&batch);
+        let scoped = workspace.with_workspace_groups(&batch)?;
         let previous = if let Some(existing) = &existing_lock {
             if existing.workspace_groups().is_empty() {
                 Some(existing.clone())

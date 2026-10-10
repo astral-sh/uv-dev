@@ -137,7 +137,7 @@ pub async fn audit(
                 let scoped = if frozen.is_some() {
                     workspace.with_provisional_workspace_groups(
                         &workspace.workspace_groups_with_sources(&settings.sources)?,
-                    )
+                    )?
                 } else {
                     workspace.with_workspace_groups(
                         &discover_workspace_groups(
@@ -161,7 +161,7 @@ pub async fn audit(
                             preview,
                         )
                         .await?,
-                    )
+                    )?
                 };
                 let workspace = &scoped;
                 let project_python = ProjectPythonRequest::from_request(

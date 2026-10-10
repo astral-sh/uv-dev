@@ -266,7 +266,7 @@ pub async fn remove(
                 preview,
             )
             .await?;
-            let workspace = project.workspace().with_workspace_groups(&discovered);
+            let workspace = project.workspace().with_workspace_groups(&discovered)?;
 
             if no_sync {
                 // Discover the interpreter.

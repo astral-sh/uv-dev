@@ -339,25 +339,34 @@ fn assert_pin_compatible_with_project(pin: &Pin, virtual_project: &VirtualProjec
     // Don't factor in requires-python settings on dependency-groups
     let groups = DependencyGroupsWithDefaults::none();
 
+    let workspace = virtual_project
+        .workspace()
+        .with_provisional_workspace_groups(
+            &virtual_project
+                .workspace()
+                .workspace_groups_with_sources(&NoSources::None)?,
+        )?;
     let (requires_python, project_type) = match virtual_project {
         VirtualProject::Project(project_workspace) => {
             debug!(
                 "Discovered project `{}` at: {}",
                 project_workspace.project_name(),
-                project_workspace.workspace().install_path().display()
+                workspace.install_path().display()
             );
-
-            let requires_python =
-                find_requires_python(project_workspace.workspace(), &groups, &NoSources::None)?;
-            (requires_python, "project")
+            (
+                find_requires_python(&workspace, &groups, &NoSources::None)?,
+                "project",
+            )
         }
-        VirtualProject::NonProject(workspace) => {
+        VirtualProject::NonProject(_) => {
             debug!(
                 "Discovered virtual workspace at: {}",
                 workspace.install_path().display()
             );
-            let requires_python = find_requires_python(workspace, &groups, &NoSources::None)?;
-            (requires_python, "workspace")
+            (
+                find_requires_python(&workspace, &groups, &NoSources::None)?,
+                "workspace",
+            )
         }
     };
 

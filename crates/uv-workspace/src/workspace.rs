@@ -294,6 +294,12 @@ pub enum WorkspaceErrorKind {
     DisjointWorkspaceGroupPython(GroupName),
     #[error("Workspace group `{0}` requires dynamic metadata before selecting its Python domain")]
     PendingWorkspaceGroupMetadata(GroupName),
+    #[error(
+        "Workspace group `{0}` has a Python domain that cannot be represented by `requires-python`"
+    )]
+    UnrepresentableWorkspaceGroupPython(GroupName),
+    #[error("The combined Python domain of workspace groups {} cannot be represented by `requires-python`", _0.iter().map(|group| format!("`{group}`")).join(", "))]
+    UnrepresentableWorkspaceGroupUnion(Vec<GroupName>),
     #[error("Invalid dependency in workspace group `{0}` member `{1}`")]
     InvalidWorkspaceGroupDependency(
         GroupName,

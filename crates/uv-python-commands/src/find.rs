@@ -82,7 +82,7 @@ pub async fn find(
             let workspace = project.workspace();
             workspace
                 .workspace_groups_with_sources(&NoSources::None)
-                .map(|groups| workspace.with_provisional_workspace_groups(&groups))
+                .and_then(|groups| workspace.with_provisional_workspace_groups(&groups))
         })
         .transpose()?;
     let project_python = ProjectPythonRequest::from_request(

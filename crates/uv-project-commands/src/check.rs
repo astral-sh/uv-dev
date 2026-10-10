@@ -300,7 +300,7 @@ pub async fn check(
         Some(if frozen.is_some() {
             workspace.with_provisional_workspace_groups(
                 &workspace.workspace_groups_with_sources(&settings.resolver.sources)?,
-            )
+            )?
         } else {
             let install_options = InstallOptions::new(
                 no_install_project,
@@ -341,7 +341,7 @@ pub async fn check(
                     preview,
                 )
                 .await?,
-            )
+            )?
         })
     } else {
         None

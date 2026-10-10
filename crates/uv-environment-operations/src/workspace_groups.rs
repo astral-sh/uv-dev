@@ -54,7 +54,7 @@ pub async fn discover_workspace_groups(
         let mut metadata_group = group.clone();
         metadata_group.narrow_environment(group.member_environments()[member])?;
         let scoped =
-            workspace.with_provisional_workspace_groups(std::slice::from_ref(&metadata_group));
+            workspace.with_provisional_workspace_groups(std::slice::from_ref(&metadata_group))?;
         let project_python = ProjectPythonRequest::from_request(
             python.map(PythonRequest::parse),
             Some(&scoped),

@@ -1158,6 +1158,134 @@ fn workspace_groups_ordinary_targeting() -> Result<()> {
     Ok(())
 }
 
+/// A Python installation in a patch-level gap cannot satisfy an ordinary shared-member selection.
+#[test]
+#[cfg(feature = "test-python-patch")]
+fn workspace_groups_select_python_outside_patch_gap() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12.13", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["legacy", "modern", "common"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+        [tool.uv.sources]
+        common = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "1.0.0"
+        requires-python = ">=3.12,<3.12.10"
+        dependencies = ["common"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "1.0.0"
+        requires-python = ">=3.12.15,<3.14"
+        dependencies = ["common"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("common/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "common"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--package", "common"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Resolved 3 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-sync", "--package", "common", "python", "-c", "import sys; print(sys.version_info[:2])",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 13)
+    ");
+    Ok(())
+}
+
+/// A union that cannot fit in the lock's Python declaration fails before interpreter selection.
+#[test]
+fn workspace_groups_reject_unrepresentable_python_union() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "1.0.0"
+        requires-python = ">=3.12,<3.12.3"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "1.0.0"
+        requires-python = ">=3.13,<3.14"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The combined Python domain of workspace groups `legacy`, `modern` cannot be represented by `requires-python`
+    ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child(".venv")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
 #[test]
 fn workspace_groups_shared_target_is_unambiguous() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -3697,6 +3825,90 @@ fn workspace_groups_interpreter_commands_do_not_build_metadata() -> Result<()> {
     context
         .temp_dir
         .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Pin compatibility uses provisional bounds without executing project backends.
+#[test]
+fn workspace_groups_pin_does_not_build_metadata() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        raise RuntimeError("interpreter discovery must not execute this backend")
+    "#})?;
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Pinned `.python-version` to `3.12`
+    ");
+    insta::assert_snapshot!(context.read(".python-version"), @"3.12");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Initializing a member can inherit provisional workspace bounds without building metadata.
+#[test]
+fn workspace_groups_init_does_not_build_metadata() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        raise RuntimeError("interpreter discovery must not execute this backend")
+    "#})?;
+    uv_snapshot!(context.filters(), context.init().args(["member", "--no-readme", "--vcs", "none"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Adding `member` as member of workspace `[TEMP_DIR]/`
+    Initialized project `member` at `[TEMP_DIR]/member`
+    ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child(".venv")
         .assert(predicate::path::missing());
     Ok(())
 }

@@ -652,8 +652,11 @@ async fn determine_requires_python(
     } else if let Some(requires_python) = workspace
         .as_ref()
         .map(|workspace| {
+            let workspace = workspace.with_provisional_workspace_groups(
+                &workspace.workspace_groups_with_sources(&NoSources::None)?,
+            )?;
             find_requires_python(
-                workspace,
+                &workspace,
                 &DependencyGroupsWithDefaults::none(),
                 &NoSources::None,
             )

@@ -121,14 +121,16 @@ pub async fn metadata(
                 preview,
             )
             .await?;
-            (!groups.is_empty()).then(|| workspace.with_workspace_groups(&groups))
+            (!groups.is_empty())
+                .then(|| workspace.with_workspace_groups(&groups))
+                .transpose()?
         } else {
             None
         }
     } else if let MetadataSource::Manifest(LockTarget::Workspace(workspace)) = &source {
         Some(workspace.with_provisional_workspace_groups(
             &workspace.workspace_groups_with_sources(&settings.sources)?,
-        ))
+        )?)
     } else {
         None
     };

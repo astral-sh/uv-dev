@@ -206,7 +206,7 @@ pub async fn upgrade(
         &project
             .workspace()
             .workspace_groups_with_sources(&settings.sources)?,
-    );
+    )?;
     // Locking defaults a missing `requires-python` to the discovered interpreter's minor version.
     // Use that same bound when deciding whether selected declarations and sources can apply.
     let fallback_interpreter =
@@ -417,7 +417,7 @@ pub async fn upgrade(
         preview,
     )
     .await?;
-    let workspace = project.workspace().with_workspace_groups(&discovered);
+    let workspace = project.workspace().with_workspace_groups(&discovered)?;
 
     let interpreter =
         if let Some(interpreter) = fallback_interpreter.filter(|_| discovered.is_empty()) {

@@ -554,7 +554,7 @@ async fn lock_and_sync(
         preview,
     )
     .await?;
-    let workspace = project.workspace().with_workspace_groups(&discovered);
+    let workspace = project.workspace().with_workspace_groups(&discovered)?;
 
     // Discover the interpreter or environment used to lock and sync the project.
     let python_target = if no_sync {

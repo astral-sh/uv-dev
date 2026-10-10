@@ -140,9 +140,13 @@ impl WorkspaceGroupDomain {
     fn narrow_environment(&mut self, marker: MarkerTree) -> Result<(), WorkspaceError> {
         let environments = self.environments.and(marker);
         let requires_python = RequiresPython::from_marker_tree(environments).ok_or_else(|| {
-            WorkspaceError::from(WorkspaceErrorKind::DisjointWorkspaceGroupPython(
-                self.definition.name.clone(),
-            ))
+            WorkspaceError::from(if environments.is_false() {
+                WorkspaceErrorKind::DisjointWorkspaceGroupPython(self.definition.name.clone())
+            } else {
+                WorkspaceErrorKind::UnrepresentableWorkspaceGroupPython(
+                    self.definition.name.clone(),
+                )
+            })
         })?;
         self.environments = environments;
         self.requires_python = requires_python;
@@ -299,9 +303,13 @@ impl Workspace {
             }
             let requires_python =
                 RequiresPython::from_marker_tree(environments).ok_or_else(|| {
-                    WorkspaceError::from(WorkspaceErrorKind::DisjointWorkspaceGroupPython(
-                        definition.name.clone(),
-                    ))
+                    WorkspaceError::from(if environments.is_false() {
+                        WorkspaceErrorKind::DisjointWorkspaceGroupPython(definition.name.clone())
+                    } else {
+                        WorkspaceErrorKind::UnrepresentableWorkspaceGroupPython(
+                            definition.name.clone(),
+                        )
+                    })
                 })?;
             pending_metadata.retain(|name| {
                 member_environments
@@ -594,26 +602,39 @@ impl Workspace {
     }
 
     /// Create a resolution view from completed group domains.
-    #[must_use]
-    pub fn with_workspace_groups(&self, groups: &[ResolvedWorkspaceGroup]) -> Self {
+    pub fn with_workspace_groups(
+        &self,
+        groups: &[ResolvedWorkspaceGroup],
+    ) -> Result<Self, WorkspaceError> {
         self.with_workspace_group_domains(groups.iter().map(|group| &group.domain))
     }
 
     /// Create a provisional view for metadata probes and commands that skip synchronization.
-    #[must_use]
-    pub fn with_provisional_workspace_groups(&self, groups: &[ProvisionalWorkspaceGroup]) -> Self {
+    pub fn with_provisional_workspace_groups(
+        &self,
+        groups: &[ProvisionalWorkspaceGroup],
+    ) -> Result<Self, WorkspaceError> {
         self.with_workspace_group_domains(groups.iter().map(|group| &group.domain))
     }
 
     fn with_workspace_group_domains<'a>(
         &self,
         groups: impl Iterator<Item = &'a WorkspaceGroupDomain> + Clone,
-    ) -> Self {
-        let Some(requires_python) =
-            RequiresPython::union(groups.clone().map(|group| &group.requires_python))
-        else {
-            return self.clone();
-        };
+    ) -> Result<Self, WorkspaceError> {
+        if groups.clone().next().is_none() {
+            return Ok(self.clone());
+        }
+        let requires_python = RequiresPython::union(
+            groups.clone().map(|group| &group.requires_python),
+        )
+        .ok_or_else(|| {
+            WorkspaceError::from(WorkspaceErrorKind::UnrepresentableWorkspaceGroupUnion(
+                groups
+                    .clone()
+                    .map(|group| group.definition.name.clone())
+                    .collect(),
+            ))
+        })?;
         let mut roots = BTreeMap::<PackageName, MarkerTree>::new();
         let mut environments = MarkerTree::FALSE;
         for group in groups {
@@ -623,7 +644,7 @@ impl Workspace {
                 *marker = marker.or(group.environments);
             }
         }
-        self.with_resolution(WorkspaceResolution {
+        Ok(self.with_resolution(WorkspaceResolution {
             roots,
             requires_python,
             environments: SupportedEnvironments::from_markers(match self.environments() {
@@ -634,7 +655,7 @@ impl Workspace {
                     .collect(),
                 _ => vec![environments],
             }),
-        })
+        }))
     }
 
     /// Return the Python domain of a scoped or grouped workspace.
@@ -650,9 +671,20 @@ impl Workspace {
             .into_iter()
             .map(ProvisionalWorkspaceGroup::finalize)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(RequiresPython::union(
-            groups.iter().map(ResolvedWorkspaceGroup::requires_python),
-        ))
+        if groups.is_empty() {
+            return Ok(None);
+        }
+        let requires_python =
+            RequiresPython::union(groups.iter().map(ResolvedWorkspaceGroup::requires_python))
+                .ok_or_else(|| {
+                    WorkspaceError::from(WorkspaceErrorKind::UnrepresentableWorkspaceGroupUnion(
+                        groups
+                            .iter()
+                            .map(|group| group.definition().name.clone())
+                            .collect(),
+                    ))
+                })?;
+        Ok(Some(requires_python))
     }
 }
 

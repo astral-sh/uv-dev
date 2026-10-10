@@ -318,7 +318,7 @@ pub async fn add(
             .workspace_groups_with_sources(&settings.resolver.sources)?;
         let discovery_workspace = project
             .workspace()
-            .with_provisional_workspace_groups(&provisional_groups);
+            .with_provisional_workspace_groups(&provisional_groups)?;
 
         if frozen.is_some() || no_sync || !provisional_groups.is_empty() {
             // Discover the interpreter.
@@ -846,7 +846,7 @@ pub async fn add(
             preview,
         )
         .await?;
-        let workspace = project.workspace().with_workspace_groups(&discovered);
+        let workspace = project.workspace().with_workspace_groups(&discovered)?;
         Some(if no_sync {
             let project_python = ProjectPythonRequest::from_request(
                 python.as_deref().map(PythonRequest::parse),
