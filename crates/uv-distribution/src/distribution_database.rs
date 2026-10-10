@@ -810,10 +810,18 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     .map_err(|err| self.handle_response_errors(err))
                     .into_async_read();
 
-                // Create a hasher for each hash algorithm.
+                // Count every downloaded byte, including reads needed to finish the hash after
+                // extraction has reached the end of the archive contents.
+                let reader = uv_fs::ProgressReader::new(reader.compat(), |bytes| {
+                    if let Some(progress) = progress.as_ref() {
+                        progress
+                            .reporter
+                            .on_download_progress(progress.id, bytes as u64);
+                    }
+                });
                 let algorithms = http_hash_algorithms(hashes);
                 let mut hashers = algorithms.into_iter().map(Hasher::from).collect::<Vec<_>>();
-                let mut hasher = uv_extract::hash::HashReader::new(reader.compat(), &mut hashers);
+                let mut hasher = uv_extract::hash::HashReader::new(reader, &mut hashers);
 
                 // Download and unzip the wheel to a temporary directory.
                 let extractor = WheelExtractor::new(
@@ -821,21 +829,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     self.content_addressed_cache,
                 )
                 .map_err(Error::CacheWrite)?;
-
-                let mut extracted = match progress.as_ref() {
-                    Some(progress) => {
-                        let mut reader =
-                            ProgressReader::new(&mut hasher, progress.id, progress.reporter);
-                        extractor
-                            .extract_streaming(&mut reader)
-                            .await
-                            .map_err(|err| Error::Extract(filename.to_string(), err))?
-                    }
-                    None => extractor
-                        .extract_streaming(&mut hasher)
-                        .await
-                        .map_err(|err| Error::Extract(filename.to_string(), err))?,
-                };
+                let mut extracted = extractor
+                    .extract_streaming(&mut hasher)
+                    .await
+                    .map_err(|err| Error::Extract(filename.to_string(), err))?;
                 // Exhaust the reader to compute the hashes.
                 hasher.finish().await.map_err(Error::HashExhaustion)?;
                 let actual_size = hasher.bytes_read();

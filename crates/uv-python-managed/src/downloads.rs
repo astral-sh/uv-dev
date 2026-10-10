@@ -749,26 +749,23 @@ impl ManagedPythonDownload {
         direction: Direction,
         tar_backend: TarBackend,
     ) -> Result<TempDir, Error> {
+        let progress =
+            reporter.map(|reporter| RequestGuard::new(reporter, direction, &self.key, size));
+        let reader = uv_fs::ProgressReader::new(reader, |bytes| {
+            if let Some(progress) = progress.as_ref() {
+                progress
+                    .reporter
+                    .on_request_progress(progress.id, bytes as u64);
+            }
+        });
         let mut hashers = self
             .sha256
             .as_ref()
             .map(|_| Hasher::from(HashAlgorithm::Sha256));
         let mut hasher = uv_extract::hash::HashReader::new(reader, hashers.as_mut_slice());
-
-        let progress =
-            reporter.map(|reporter| RequestGuard::new(reporter, direction, &self.key, size));
-        let target = if let Some(progress) = progress.as_ref() {
-            let mut reader = ProgressReader::new(&mut hasher, progress.id, progress.reporter);
-            let (target, _) = uv_extract::stream::archive(&mut reader, ext, target, tar_backend)
-                .await
-                .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
-            target
-        } else {
-            let (target, _) = uv_extract::stream::archive(&mut hasher, ext, target, tar_backend)
-                .await
-                .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
-            target
-        };
+        let (target, _) = uv_extract::stream::archive(&mut hasher, ext, target, tar_backend)
+            .await
+            .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
         hasher.finish().await.map_err(Error::HashExhaustion)?;
 
         // Check the hash
@@ -1228,7 +1225,7 @@ async fn read_url(
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     #[cfg(target_arch = "aarch64")]
     use uv_python_types::ArchRequest;
@@ -1244,6 +1241,7 @@ mod tests {
     #[derive(Default)]
     struct RequestReporter {
         next_id: AtomicUsize,
+        bytes: AtomicU64,
         events: Mutex<Vec<String>>,
     }
 
@@ -1262,7 +1260,9 @@ mod tests {
             id
         }
 
-        fn on_request_progress(&self, _id: usize, _inc: u64) {}
+        fn on_request_progress(&self, _id: usize, inc: u64) {
+            self.bytes.fetch_add(inc, Ordering::Relaxed);
+        }
 
         fn on_request_complete(&self, id: usize) {
             self.events
@@ -1323,6 +1323,41 @@ mod tests {
             "0: failed",
             "1: download started",
             "1: completed",
+        ]
+        "#);
+        Ok(())
+    }
+
+    /// Hash verification drains and reports bytes after archive extraction is complete.
+    #[tokio::test]
+    async fn extraction_reports_hash_drain_bytes() -> anyhow::Result<()> {
+        let mut archive = include_bytes!("../../../test/links/basic_package-0.1.0.tar.gz").to_vec();
+        archive.resize(archive.len() + 256 * 1024, 0);
+        let mut hasher = Hasher::from(HashAlgorithm::Sha256);
+        hasher.update(&archive);
+        let HashDigest::Sha256(digest) = HashDigest::from(hasher) else {
+            unreachable!("SHA-256 hasher produces SHA-256 digest");
+        };
+        let mut download = cpython_download_for_url("https://example.com/python.tar.gz");
+        download.sha256 = Some(digest);
+        let reporter = RequestReporter::default();
+        download
+            .extract_reader(
+                archive.as_slice(),
+                tempfile::tempdir()?,
+                &"python.tar.gz".to_owned(),
+                SourceDistExtension::TarGz,
+                Some(archive.len() as u64),
+                Some(&reporter),
+                Direction::Download,
+                TarBackend::default(),
+            )
+            .await?;
+        assert_eq!(reporter.bytes.load(Ordering::Relaxed), archive.len() as u64);
+        insta::assert_debug_snapshot!(*reporter.events.lock().expect("events lock"), @r#"
+        [
+            "0: download started",
+            "0: completed",
         ]
         "#);
         Ok(())

@@ -2469,6 +2469,99 @@ async fn sync_jsonl_streaming_fallback_completes_every_download() -> Result<()> 
     Ok(())
 }
 
+/// Final download byte counts include bytes drained after ZIP entries have been extracted.
+#[tokio::test]
+async fn sync_jsonl_download_counts_hash_drain() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let server = MockServer::start().await;
+    let (filename, mut wheel) = generate_wheel_with_files(
+        &"jsonl-drain".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheel.resize(wheel.len() + 2 * 1024 * 1024, 0);
+    let size = wheel.len();
+    let hash = hex::encode(Sha256::digest(&wheel));
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["jsonl-drain"]
+    "#})?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&formatdoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        [[package]]
+        name = "jsonl-drain"
+        version = "1.0.0"
+        source = {{ registry = "{url}/simple" }}
+        wheels = [{{ url = "{url}/{filename}", hash = "sha256:{hash}", size = {size} }}]
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ virtual = "." }}
+        dependencies = [{{ name = "jsonl-drain" }}]
+        [package.metadata]
+        requires-dist = [{{ name = "jsonl-drain" }}]
+    "#, url=server.uri()})?;
+    let mut filters = context.filters();
+    filters.push((
+        r#"(?m)^\{"type":"progress","phase":"download","status":"updated",[^\n]*\}\n"#,
+        "",
+    ));
+    let output = uv_snapshot!(filters, context.sync()
+        .args(["--frozen", "--output-format", "jsonl", "--preview-features", "jsonl"])
+        .env(EnvVars::UV_INSECURE_NO_ZIP_VALIDATION, "1"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"prepare","status":"started","total":1}
+    {"type":"progress","phase":"download","status":"started","id":1,"name":"jsonl-drain","total":2098179}
+    {"type":"progress","phase":"download","status":"completed","id":1,"name":"jsonl-drain","completed":2098179,"total":2098179}
+    {"type":"progress","phase":"prepare","status":"updated","name":"jsonl-drain==1.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"prepare","status":"completed","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"started","total":1}
+    {"type":"progress","phase":"install","status":"updated","name":"jsonl-drain==1.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"completed","completed":1,"total":1}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[{"name":"jsonl-drain","version":"1.0.0","action":"installed"}]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + jsonl-drain==1.0.0
+    "#);
+    let events = String::from_utf8(output.stdout)?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let completed = events
+        .iter()
+        .find(|event| event["phase"] == "download" && event["status"] == "completed")
+        .expect("completed download event");
+    assert_eq!(completed["completed"], size);
+    assert_eq!(completed["total"], size);
+    Ok(())
+}
+
 /// Concurrent downloads retain distinct, stable IDs and report every installed package.
 #[test]
 fn sync_jsonl_concurrent_download_and_install_events() -> Result<()> {
