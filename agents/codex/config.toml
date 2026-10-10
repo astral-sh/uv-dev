@@ -1,5 +1,12 @@
 default_permissions = ":read-only"
 
+[permissions.malicious-code-scan]
+description = "Static inspection of Git evidence without executing repository code or accessing the network."
+extends = ":read-only"
+
+[permissions.malicious-code-scan.network]
+enabled = false
+
 [permissions.pull-request-review]
 description = "Pull request review with workspace and GitHub API access."
 extends = ":workspace"
