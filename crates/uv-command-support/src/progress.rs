@@ -627,4 +627,28 @@ impl ProgressReporter {
         }
         progress.finish_with_message(message);
     }
+
+    /// Close a failed or abandoned checkout without reporting a successful update.
+    pub fn on_checkout_failed(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+        let ProgressMode::Multi { state, .. } = &self.mode else {
+            return;
+        };
+        let progress = {
+            let mut state = state.lock().unwrap();
+            let Some(progress) = state.bars.remove(&id) else {
+                return;
+            };
+            state.headers -= 1;
+            progress
+        };
+        if self.printer.emits_jsonl_progress() {
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Checkout, ProgressStatus::Failed);
+            event.id = Some(id);
+            event.url = Some(url.to_string());
+            event.revision = Some(rev.to_string());
+            self.emit_progress(&event);
+        }
+        progress.finish_and_clear();
+    }
 }
