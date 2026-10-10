@@ -1,7 +1,7 @@
 //! Dependency resolution workflows used by uv commands.
 
 use std::collections::BTreeMap;
-use std::fmt::Write;
+use std::fmt::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -407,10 +407,7 @@ pub async fn resolve(
 }
 
 /// Report any diagnostics on resolved distributions.
-pub fn diagnose_resolution(
-    diagnostics: &[ResolutionDiagnostic],
-    printer: Printer,
-) -> Result<(), Error> {
+pub fn diagnose_resolution(diagnostics: &[ResolutionDiagnostic], printer: Printer) -> fmt::Result {
     for diagnostic in diagnostics {
         writeln!(
             printer.stderr(),
