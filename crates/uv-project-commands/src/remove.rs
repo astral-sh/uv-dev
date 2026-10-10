@@ -40,7 +40,7 @@ use uv_workspace::pyproject::DependencyType;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
-use crate::lock::{CommandWorkspaceSelection, workspace_for_project_groups};
+use crate::lock::{CommandWorkspaceDiscovery, workspace_for_project_groups};
 
 /// Remove one or more packages from the project requirements.
 pub async fn remove(
@@ -268,79 +268,73 @@ pub async fn remove(
                 preview,
             )
             .await?;
-            let (workspace, selection) = if no_sync {
-                (
-                    project.workspace().with_workspace_groups(&discovered)?,
-                    None,
-                )
-            } else {
-                workspace_for_project_groups(project, &[], false, &discovered)?
-            };
-            let needs_lock_resolution = selection
-                .as_ref()
-                .is_some_and(CommandWorkspaceSelection::needs_lock_resolution);
-            if needs_lock_resolution {
-                pending_selection = selection;
-            }
+            let discovery =
+                workspace_for_project_groups(project, &[], false, &discovered, no_sync)?;
+            match discovery {
+                CommandWorkspaceDiscovery::Provisional {
+                    workspace,
+                    selection,
+                } => {
+                    pending_selection = selection;
+                    // Discover the interpreter.
+                    let project_python = ProjectPythonRequest::from_request(
+                        python.as_deref().map(PythonRequest::parse),
+                        Some(&workspace),
+                        &groups,
+                        &settings.resolver.sources,
+                        project_dir,
+                        config_discovery,
+                    )
+                    .await?;
+                    let interpreter = ProjectInterpreter::discover(
+                        ProjectEnvironmentTarget::from(&workspace),
+                        project_python,
+                        &client_builder,
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        ProjectEnvironmentPolicy::Optional,
+                        // Suppress warnings about the active environment when we won't modify it.
+                        active.without_warning(),
+                        cache,
+                        if no_sync || printer == Printer::Verbose {
+                            printer
+                        } else {
+                            Printer::Silent
+                        },
+                    )
+                    .await?
+                    .into_interpreter();
 
-            if no_sync || needs_lock_resolution {
-                // Discover the interpreter.
-                let project_python = ProjectPythonRequest::from_request(
-                    python.as_deref().map(PythonRequest::parse),
-                    Some(&workspace),
-                    &groups,
-                    &settings.resolver.sources,
-                    project_dir,
-                    config_discovery,
-                )
-                .await?;
-                let interpreter = ProjectInterpreter::discover(
-                    ProjectEnvironmentTarget::from(&workspace),
-                    project_python,
-                    &client_builder,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    &install_mirrors,
-                    ProjectEnvironmentPolicy::Optional,
-                    // Suppress warnings about the active environment when we won't modify it.
-                    active.without_warning(),
-                    cache,
-                    if no_sync || printer == Printer::Verbose {
-                        printer
-                    } else {
-                        Printer::Silent
-                    },
-                )
-                .await?
-                .into_interpreter();
+                    PythonTarget::Interpreter(interpreter)
+                }
+                CommandWorkspaceDiscovery::Finalized(workspace) => {
+                    // Discover or create the virtual environment.
+                    let environment = ProjectEnvironment::get_or_init(
+                        ProjectEnvironmentTarget::from(&workspace),
+                        None,
+                        &groups,
+                        &settings.resolver.sources,
+                        python.as_deref().map(PythonRequest::parse),
+                        &install_mirrors,
+                        &client_builder,
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        no_sync,
+                        config_discovery,
+                        active,
+                        cache,
+                        DryRun::Disabled,
+                        LinkErrorReporting::User,
+                        printer,
+                    )
+                    .await?
+                    .into_environment()?;
 
-                PythonTarget::Interpreter(interpreter)
-            } else {
-                // Discover or create the virtual environment.
-                let environment = ProjectEnvironment::get_or_init(
-                    ProjectEnvironmentTarget::from(&workspace),
-                    None,
-                    &groups,
-                    &settings.resolver.sources,
-                    python.as_deref().map(PythonRequest::parse),
-                    &install_mirrors,
-                    &client_builder,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    no_sync,
-                    config_discovery,
-                    active,
-                    cache,
-                    DryRun::Disabled,
-                    LinkErrorReporting::User,
-                    printer,
-                )
-                .await?
-                .into_environment()?;
-
-                PythonTarget::Environment(environment)
+                    PythonTarget::Environment(environment)
+                }
             }
         }
         EditTarget::Script(script) => {
@@ -409,8 +403,9 @@ pub async fn remove(
         return Ok(ExitStatus::Success);
     };
 
-    if let Some(mut selection) = pending_selection {
-        let workspace = selection.refine_from_lock(project.workspace(), &lock)?;
+    if let Some(selection) = pending_selection {
+        let finalized = selection.finalize(&lock)?;
+        let workspace = finalized.environment_workspace(project.workspace());
         drop(environment_lock);
         python_target = PythonTarget::Environment(
             ProjectEnvironment::get_or_init(

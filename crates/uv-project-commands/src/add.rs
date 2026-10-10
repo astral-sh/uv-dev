@@ -65,7 +65,9 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 use crate::ProjectError;
 use crate::ScriptPath;
 use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
-use crate::lock::{CommandWorkspaceSelection, workspace_for_project_groups};
+use crate::lock::{
+    CommandWorkspaceDiscovery, PendingCommandWorkspaceSelection, workspace_for_project_groups,
+};
 use uv_resolve_operations::reporters::ResolverReporter;
 
 /// A failed dependency addition, with `uv add`-specific recovery context.
@@ -854,53 +856,45 @@ pub async fn add(
             preview,
         )
         .await?;
-        let (workspace, selection) = if no_sync {
-            (
-                project.workspace().with_workspace_groups(&discovered)?,
-                None,
-            )
-        } else {
-            workspace_for_project_groups(project, &[], false, &discovered)?
-        };
-        let needs_lock_resolution = selection
-            .as_ref()
-            .is_some_and(CommandWorkspaceSelection::needs_lock_resolution);
-        if needs_lock_resolution {
-            pending_selection = selection;
-        }
-        Some(if no_sync || needs_lock_resolution {
-            let project_python = ProjectPythonRequest::from_request(
-                python.as_deref().map(PythonRequest::parse),
-                Some(&workspace),
-                &defaulted_groups,
-                &settings.resolver.sources,
-                project_dir,
-                config_discovery,
-            )
-            .await?;
-            PythonTarget::Interpreter(
-                ProjectInterpreter::discover(
-                    ProjectEnvironmentTarget::from(&workspace),
-                    project_python,
-                    &client_builder,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    &install_mirrors,
-                    ProjectEnvironmentPolicy::Optional,
-                    active.without_warning(),
-                    cache,
-                    if no_sync || printer == Printer::Verbose {
-                        printer
-                    } else {
-                        Printer::Silent
-                    },
+        let discovery = workspace_for_project_groups(project, &[], false, &discovered, no_sync)?;
+        Some(match discovery {
+            CommandWorkspaceDiscovery::Provisional {
+                workspace,
+                selection,
+            } => {
+                pending_selection = selection;
+                let project_python = ProjectPythonRequest::from_request(
+                    python.as_deref().map(PythonRequest::parse),
+                    Some(&workspace),
+                    &defaulted_groups,
+                    &settings.resolver.sources,
+                    project_dir,
+                    config_discovery,
                 )
-                .await?
-                .into_interpreter(),
-            )
-        } else {
-            PythonTarget::Environment(
+                .await?;
+                PythonTarget::Interpreter(
+                    ProjectInterpreter::discover(
+                        ProjectEnvironmentTarget::from(&workspace),
+                        project_python,
+                        &client_builder,
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        ProjectEnvironmentPolicy::Optional,
+                        active.without_warning(),
+                        cache,
+                        if no_sync || printer == Printer::Verbose {
+                            printer
+                        } else {
+                            Printer::Silent
+                        },
+                    )
+                    .await?
+                    .into_interpreter(),
+                )
+            }
+            CommandWorkspaceDiscovery::Finalized(workspace) => PythonTarget::Environment(
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(&workspace),
                     None,
@@ -922,7 +916,7 @@ pub async fn add(
                 )
                 .await?
                 .into_environment()?,
-            )
+            ),
         })
     } else {
         None
@@ -1246,7 +1240,7 @@ fn edits(
 
 /// Environment settings retained until the edited target's member domain is resolved.
 struct PendingEnvironment<'a> {
-    selection: CommandWorkspaceSelection,
+    selection: PendingCommandWorkspaceSelection,
     python: Option<&'a str>,
     install_mirrors: &'a PythonInstallMirrors,
     python_preference: PythonPreference,
@@ -1475,7 +1469,7 @@ async fn lock_and_sync(
     // Lower-bound edits can trigger a second resolution. Use that final graph to select the
     // environment, while retaining the complete first graph for bound calculation above.
     let refined_environment = if let Some(PendingEnvironment {
-        mut selection,
+        selection,
         python,
         install_mirrors,
         python_preference,
@@ -1485,7 +1479,8 @@ async fn lock_and_sync(
         active,
     }) = pending_environment
     {
-        let workspace = selection.refine_from_lock(project.workspace(), &lock)?;
+        let finalized = selection.finalize(&lock)?;
+        let workspace = finalized.environment_workspace(project.workspace());
         Some(
             ProjectEnvironment::get_or_init(
                 ProjectEnvironmentTarget::from(&workspace),

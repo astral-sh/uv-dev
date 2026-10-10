@@ -44,8 +44,8 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
 use crate::lock::{
-    CommandWorkspaceSelection, command_workspace_group_from_lock, workspace_for_group_selection,
-    workspace_for_project_groups, workspace_selection_members,
+    CommandWorkspaceSelection, FinalizedCommandWorkspaceSelection,
+    command_workspace_group_from_lock, project_workspace_selection, workspace_selection_members,
 };
 use crate::toolchain;
 
@@ -325,10 +325,10 @@ pub async fn check(
         Vec::new(),
         Vec::new(),
     );
-    let mut pending_selection = None;
-    let mut discovery_workspace = if let Some(project) = &project {
+    let mut resolved_before_environment = None;
+    let discovery_workspace = if let Some(project) = &project {
         let workspace = project.workspace();
-        Some(if let Some(lock) = frozen_workspace_lock.as_ref() {
+        let selection = if let Some(lock) = frozen_workspace_lock.as_ref() {
             let members = workspace_selection_members(project, &package, all_packages);
             let mut selection = command_workspace_group_from_lock(
                 lock,
@@ -336,19 +336,13 @@ pub async fn check(
                 Some(&members),
                 all_packages || (package.is_empty() && project.is_non_project()),
             )?;
-            let scoped = workspace_for_group_selection(
-                workspace,
-                &members,
-                all_packages || (package.is_empty() && project.is_non_project()),
-                selection.as_ref(),
-            );
             if let Some(selected) = selection
                 .as_mut()
-                .and_then(CommandWorkspaceSelection::take_selected_lock)
+                .and_then(FinalizedCommandWorkspaceSelection::take_selected_lock)
             {
                 frozen_workspace_lock = Some(selected);
             }
-            scoped
+            selection.map(CommandWorkspaceSelection::Finalized)
         } else {
             let selection =
                 PackageSelection::from_args(all_packages, &package, project.project_name());
@@ -357,7 +351,7 @@ pub async fn check(
                 project.project_name(),
                 &project_install_options,
             );
-            let (workspace, selection) = workspace_for_project_groups(
+            project_workspace_selection(
                 project,
                 &package,
                 all_packages,
@@ -382,84 +376,85 @@ pub async fn check(
                     preview,
                 )
                 .await?,
-            )?;
-            pending_selection = selection.filter(CommandWorkspaceSelection::needs_lock_resolution);
-            workspace
-        })
+            )?
+        };
+        let finalized = match selection {
+            Some(CommandWorkspaceSelection::Pending(selection)) => {
+                let workspace = selection.provisional_workspace(project.workspace());
+                let project_python = ProjectPythonRequest::from_request(
+                    python.as_deref().map(PythonRequest::parse),
+                    Some(&workspace),
+                    &groups,
+                    &settings.resolver.sources,
+                    project_dir,
+                    config_discovery,
+                )
+                .await?;
+                let interpreter = ProjectInterpreter::discover(
+                    ProjectEnvironmentTarget::from(&workspace),
+                    project_python,
+                    &client_builder,
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    &install_mirrors,
+                    ProjectEnvironmentPolicy::Optional,
+                    ActiveEnvironment::Ignore,
+                    cache,
+                    if printer == Printer::Verbose {
+                        printer
+                    } else {
+                        Printer::Silent
+                    },
+                )
+                .await?
+                .into_interpreter();
+                let mode = if let LockCheck::Enabled(source) = lock_check {
+                    LockMode::Locked(&interpreter, source)
+                } else if isolated {
+                    LockMode::DryRun(&interpreter)
+                } else {
+                    LockMode::Write(&interpreter)
+                };
+                let exclusions =
+                    PackageSelection::from_args(all_packages, &package, project.project_name())
+                        .first_party_exclusions(
+                            project.workspace(),
+                            project.project_name(),
+                            &project_install_options,
+                        );
+                let result = Box::pin(
+                    LockOperation::new(
+                        mode,
+                        &settings.resolver,
+                        &client_builder,
+                        &state,
+                        Box::new(SummaryResolveLogger),
+                        &concurrency,
+                        cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .with_first_party_exclusions(exclusions)
+                    .execute(project.workspace().into()),
+                )
+                .await
+                .map_err(UvError::from)?;
+                let finalized = selection.finalize(result.lock())?;
+                resolved_before_environment = Some(result);
+                Some(finalized)
+            }
+            Some(CommandWorkspaceSelection::Finalized(selection)) => Some(selection),
+            None => None,
+        };
+        Some(finalized.map_or_else(
+            || workspace.clone(),
+            |selection| selection.environment_workspace(workspace),
+        ))
     } else {
         None
     };
-
-    let mut resolved_before_environment = None;
-    if let Some(project) = project.as_ref()
-        && let Some(mut selection) = pending_selection
-    {
-        let workspace = discovery_workspace
-            .as_ref()
-            .unwrap_or_else(|| project.workspace());
-        let project_python = ProjectPythonRequest::from_request(
-            python.as_deref().map(PythonRequest::parse),
-            Some(workspace),
-            &groups,
-            &settings.resolver.sources,
-            project_dir,
-            config_discovery,
-        )
-        .await?;
-        let interpreter = ProjectInterpreter::discover(
-            ProjectEnvironmentTarget::from(workspace),
-            project_python,
-            &client_builder,
-            python_preference,
-            python_arch,
-            python_downloads,
-            &install_mirrors,
-            ProjectEnvironmentPolicy::Optional,
-            ActiveEnvironment::Ignore,
-            cache,
-            if printer == Printer::Verbose {
-                printer
-            } else {
-                Printer::Silent
-            },
-        )
-        .await?
-        .into_interpreter();
-        let mode = if let LockCheck::Enabled(source) = lock_check {
-            LockMode::Locked(&interpreter, source)
-        } else if isolated {
-            LockMode::DryRun(&interpreter)
-        } else {
-            LockMode::Write(&interpreter)
-        };
-        let exclusions =
-            PackageSelection::from_args(all_packages, &package, project.project_name())
-                .first_party_exclusions(
-                    project.workspace(),
-                    project.project_name(),
-                    &project_install_options,
-                );
-        let result = Box::pin(
-            LockOperation::new(
-                mode,
-                &settings.resolver,
-                &client_builder,
-                &state,
-                Box::new(SummaryResolveLogger),
-                &concurrency,
-                cache,
-                workspace_cache,
-                printer,
-                preview,
-            )
-            .with_first_party_exclusions(exclusions)
-            .execute(project.workspace().into()),
-        )
-        .await
-        .map_err(UvError::from)?;
-        discovery_workspace = Some(selection.refine_from_lock(project.workspace(), result.lock())?);
-        resolved_before_environment = Some(result);
-    }
 
     // Create an isolated environment, if requested.
     let temp_dir;

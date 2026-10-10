@@ -206,6 +206,7 @@ pub async fn sync(
                     Some(&selection_members),
                     package.is_empty(),
                 )
+                .map(|selection| selection.map(CommandWorkspaceSelection::Finalized))
             } else {
                 let initial = provisional_command_workspace_group(
                     project.workspace(),
@@ -219,11 +220,12 @@ pub async fn sync(
                             &settings.resolver.dependency_metadata,
                         )?,
                 )
+                .map(|selection| selection.map(CommandWorkspaceSelection::Pending))
                 .map_err(UvError::from)?;
                 let probe_packages = initial
                     .as_ref()
-                    .filter(|group| group.name.is_some() && package.is_empty() && !all_packages)
-                    .map(|group| group.members.iter().cloned().collect::<Vec<_>>());
+                    .filter(|group| group.name().is_some() && package.is_empty() && !all_packages)
+                    .map(|group| group.members().iter().cloned().collect::<Vec<_>>());
                 let first_party_exclusions = PackageSelection::from_args(
                     all_packages,
                     probe_packages.as_deref().unwrap_or(&package),
@@ -270,33 +272,27 @@ pub async fn sync(
             Some(&selection_members),
             package.is_empty(),
         )
+        .map(|selection| selection.map(CommandWorkspaceSelection::Finalized))
         .map_err(UvError::from)?,
         SyncTarget::Manifest(SyncManifest::Script(_)) => None,
     };
 
     if let Some(group) = &workspace_group
-        && (group.name.is_some())
+        && (group.name().is_some())
         && package.is_empty()
     {
-        selection_members.clone_from(&group.members);
+        selection_members.clone_from(group.members());
         if !all_packages {
-            package.extend(group.members.iter().cloned());
+            package.extend(group.members().iter().cloned());
         }
     }
-    let mut group_workspace = match (&target, &workspace_group) {
-        (SyncTarget::Manifest(SyncManifest::Project(project)), Some(group)) => {
-            Some(group.scoped_workspace(project.workspace(), &selection_members))
-        }
-        _ => None,
-    };
-
     let projected_frozen_lock = workspace_group
         .as_mut()
         .and_then(CommandWorkspaceSelection::take_selected_lock);
     let selected_workspace_group = workspace_group
         .as_ref()
-        .filter(|group| group.name.is_some())
-        .and_then(|group| group.name.clone());
+        .filter(|group| group.name().is_some())
+        .and_then(|group| group.name().cloned());
     let selected_frozen_lock = if let Some(lock) = projected_frozen_lock {
         Some(lock)
     } else {
@@ -358,92 +354,101 @@ pub async fn sync(
         detect_conflicts(&install_target, &extras, &groups)?;
     }
 
-    // Some selected members are reachable only through extras or dependency groups. Resolve
-    // their activation domain before creating or replacing the project environment.
+    // Pending member domains can only expose a provisional interpreter probe. Complete the
+    // selection before constructing the workspace used to create or replace an environment.
     let mut resolved_before_environment = None;
-    if let SyncTarget::Manifest(SyncManifest::Project(project)) = &target
-        && let Some(selection) = workspace_group.as_mut()
-        && selection.needs_lock_resolution()
-    {
-        let workspace = group_workspace
-            .as_ref()
-            .unwrap_or_else(|| project.workspace());
-        let project_python = ProjectPythonRequest::from_request(
-            python.as_deref().map(PythonRequest::parse),
-            Some(workspace),
-            &groups,
-            &settings.resolver.sources,
-            project_dir,
-            config_discovery,
-        )
-        .await?;
-        let interpreter = ProjectInterpreter::discover(
-            ProjectEnvironmentTarget::from(workspace),
-            project_python,
-            &client_builder,
-            python_preference,
-            python_arch,
-            python_downloads,
-            &install_mirrors,
-            ProjectEnvironmentPolicy::Optional,
-            active.without_warning(),
-            cache,
-            if printer == Printer::Verbose {
-                printer
-            } else {
-                Printer::Silent
-            },
-        )
-        .await?
-        .into_interpreter();
-        let mode = if let LockCheck::Enabled(source) = lock_check {
-            LockMode::Locked(&interpreter, source)
-        } else if dry_run.enabled() {
-            LockMode::DryRun(&interpreter)
-        } else {
-            LockMode::Write(&interpreter)
+    let group_workspace = if let SyncTarget::Manifest(SyncManifest::Project(project)) = &target {
+        let finalized = match workspace_group.take() {
+            Some(CommandWorkspaceSelection::Pending(selection)) => {
+                let workspace = selection.provisional_workspace(project.workspace());
+                let project_python = ProjectPythonRequest::from_request(
+                    python.as_deref().map(PythonRequest::parse),
+                    Some(&workspace),
+                    &groups,
+                    &settings.resolver.sources,
+                    project_dir,
+                    config_discovery,
+                )
+                .await?;
+                let interpreter = ProjectInterpreter::discover(
+                    ProjectEnvironmentTarget::from(&workspace),
+                    project_python,
+                    &client_builder,
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    &install_mirrors,
+                    ProjectEnvironmentPolicy::Optional,
+                    active.without_warning(),
+                    cache,
+                    if printer == Printer::Verbose {
+                        printer
+                    } else {
+                        Printer::Silent
+                    },
+                )
+                .await?
+                .into_interpreter();
+                let mode = if let LockCheck::Enabled(source) = lock_check {
+                    LockMode::Locked(&interpreter, source)
+                } else if dry_run.enabled() {
+                    LockMode::DryRun(&interpreter)
+                } else {
+                    LockMode::Write(&interpreter)
+                };
+                let exclusions =
+                    PackageSelection::from_args(all_packages, &package, project.project_name())
+                        .first_party_exclusions(
+                            project.workspace(),
+                            project.project_name(),
+                            &install_options,
+                        );
+                let result = Box::pin(
+                    LockOperation::new(
+                        mode,
+                        &settings.resolver,
+                        &client_builder,
+                        &state,
+                        Box::new(DefaultResolveLogger),
+                        &concurrency,
+                        cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .with_first_party_exclusions(exclusions)
+                    .execute(project.workspace().into()),
+                )
+                .await;
+                let finalized = match result {
+                    Ok(result) => {
+                        let finalized = selection.finalize(result.lock())?;
+                        resolved_before_environment = Some(Ok(result));
+                        finalized
+                    }
+                    Err(LockError::LockMismatch(previous, current, source))
+                        if dry_run.enabled() =>
+                    {
+                        let finalized = selection.finalize(&current)?;
+                        resolved_before_environment =
+                            Some(Err(LockError::LockMismatch(previous, current, source)));
+                        finalized
+                    }
+                    Err(LockError::Resolve(error)) => return Err(UvError::from(*error).into()),
+                    Err(error @ (LockError::LockFormat(..) | LockError::LockMismatch(..))) => {
+                        return Err(UvError::user(error).into());
+                    }
+                    Err(error) => return Err(UvError::from(error).into()),
+                };
+                Some(finalized)
+            }
+            Some(CommandWorkspaceSelection::Finalized(selection)) => Some(selection),
+            None => None,
         };
-        let exclusions =
-            PackageSelection::from_args(all_packages, &package, project.project_name())
-                .first_party_exclusions(
-                    project.workspace(),
-                    project.project_name(),
-                    &install_options,
-                );
-        let result = Box::pin(
-            LockOperation::new(
-                mode,
-                &settings.resolver,
-                &client_builder,
-                &state,
-                Box::new(DefaultResolveLogger),
-                &concurrency,
-                cache,
-                workspace_cache,
-                printer,
-                preview,
-            )
-            .with_first_party_exclusions(exclusions)
-            .execute(project.workspace().into()),
-        )
-        .await;
-        resolved_before_environment = Some(match result {
-            Ok(result) => {
-                group_workspace =
-                    Some(selection.refine_from_lock(project.workspace(), result.lock())?);
-                Ok(result)
-            }
-            Err(LockError::LockMismatch(previous, current, source)) if dry_run.enabled() => {
-                group_workspace = Some(selection.refine_from_lock(project.workspace(), &current)?);
-                Err(LockError::LockMismatch(previous, current, source))
-            }
-            Err(LockError::Resolve(error)) => return Err(UvError::from(*error).into()),
-            Err(error @ (LockError::LockFormat(..) | LockError::LockMismatch(..))) => {
-                return Err(UvError::user(error).into());
-            }
-            Err(error) => return Err(UvError::from(error).into()),
-        });
-    }
+        finalized.map(|selection| selection.environment_workspace(project.workspace()))
+    } else {
+        None
+    };
 
     // Discover or create the virtual environment.
     let environment = match &target {

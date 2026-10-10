@@ -669,7 +669,8 @@ pub async fn run(
                     workspace_group.as_ref(),
                     Some(&selection_members),
                     package.is_none(),
-                )?
+                )
+                .map(|selection| selection.map(CommandWorkspaceSelection::Finalized))?
             } else if no_sync {
                 provisional_command_workspace_group(
                     project.workspace(),
@@ -683,6 +684,7 @@ pub async fn run(
                             &settings.resolver.dependency_metadata,
                         )?,
                 )
+                .map(|selection| selection.map(CommandWorkspaceSelection::Pending))
                 .map_err(UvError::from)?
             } else if frozen.is_some() {
                 None
@@ -718,27 +720,24 @@ pub async fn run(
             };
             let select_group_roots = workspace_group
                 .as_ref()
-                .is_some_and(|group| group.name.is_some());
+                .is_some_and(|group| group.name().is_some());
             if select_group_roots
                 && package.is_none()
                 && let Some(group) = &workspace_group
             {
-                selection_members.clone_from(&group.members);
+                selection_members.clone_from(group.members());
             }
-            let mut group_workspace = workspace_group
-                .as_ref()
-                .map(|group| group.scoped_workspace(project.workspace(), &selection_members));
             let group_members = workspace_group
                 .as_ref()
                 .filter(|_| select_group_roots)
-                .map(|group| group.members.iter().cloned().collect::<Vec<_>>());
+                .map(|group| group.members().iter().cloned().collect::<Vec<_>>());
             let projected_frozen_lock = workspace_group
                 .as_mut()
                 .and_then(CommandWorkspaceSelection::take_selected_lock);
             let selected_workspace_group = workspace_group
                 .as_ref()
                 .filter(|_| select_group_roots)
-                .and_then(|group| group.name.clone());
+                .and_then(|group| group.name().cloned());
             let selected_frozen_lock = if let Some(lock) = projected_frozen_lock {
                 Some(lock)
             } else {
@@ -775,73 +774,77 @@ pub async fn run(
             let extras = extras.with_defaults(default_extras);
 
             let mut resolved_before_environment = None;
-            if !no_sync
-                && let Some(selection) = workspace_group.as_mut()
-                && selection.needs_lock_resolution()
-            {
-                let workspace = group_workspace
-                    .as_ref()
-                    .unwrap_or_else(|| project.workspace());
-                let project_python = ProjectPythonRequest::from_request(
-                    python.as_deref().map(PythonRequest::parse),
-                    Some(workspace),
-                    &groups,
-                    &settings.resolver.sources,
-                    project_dir,
-                    config_discovery,
-                )
-                .await?;
-                let interpreter = ProjectInterpreter::discover(
-                    ProjectEnvironmentTarget::from(workspace),
-                    project_python,
-                    &client_builder,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    &install_mirrors,
-                    ProjectEnvironmentPolicy::Optional,
-                    active.without_warning(),
-                    &cache,
-                    if printer == Printer::Verbose {
-                        printer
-                    } else {
-                        Printer::Silent
-                    },
-                )
-                .await?
-                .into_interpreter();
-                let mode = if let LockCheck::Enabled(source) = lock_check {
-                    LockMode::Locked(&interpreter, source)
-                } else if isolated {
-                    LockMode::DryRun(&interpreter)
-                } else {
-                    LockMode::Write(&interpreter)
-                };
-                let result = Box::pin(
-                    LockOperation::new(
-                        mode,
-                        &settings.resolver,
-                        &client_builder,
-                        &lock_state,
-                        if show_resolution {
-                            Box::new(DefaultResolveLogger)
-                        } else {
-                            Box::new(SummaryResolveLogger)
-                        },
-                        &concurrency,
-                        &cache,
-                        workspace_cache,
-                        printer,
-                        preview,
+            let group_workspace = match workspace_group {
+                Some(selection) if no_sync => {
+                    Some(selection.provisional_workspace(project.workspace(), &selection_members))
+                }
+                Some(CommandWorkspaceSelection::Pending(selection)) => {
+                    let workspace = selection.provisional_workspace(project.workspace());
+                    let project_python = ProjectPythonRequest::from_request(
+                        python.as_deref().map(PythonRequest::parse),
+                        Some(&workspace),
+                        &groups,
+                        &settings.resolver.sources,
+                        project_dir,
+                        config_discovery,
                     )
-                    .execute(project.workspace().into()),
-                )
-                .await
-                .map_err(UvError::from)?;
-                group_workspace =
-                    Some(selection.refine_from_lock(project.workspace(), result.lock())?);
-                resolved_before_environment = Some(result);
-            }
+                    .await?;
+                    let interpreter = ProjectInterpreter::discover(
+                        ProjectEnvironmentTarget::from(&workspace),
+                        project_python,
+                        &client_builder,
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        ProjectEnvironmentPolicy::Optional,
+                        active.without_warning(),
+                        &cache,
+                        if printer == Printer::Verbose {
+                            printer
+                        } else {
+                            Printer::Silent
+                        },
+                    )
+                    .await?
+                    .into_interpreter();
+                    let mode = if let LockCheck::Enabled(source) = lock_check {
+                        LockMode::Locked(&interpreter, source)
+                    } else if isolated {
+                        LockMode::DryRun(&interpreter)
+                    } else {
+                        LockMode::Write(&interpreter)
+                    };
+                    let result = Box::pin(
+                        LockOperation::new(
+                            mode,
+                            &settings.resolver,
+                            &client_builder,
+                            &lock_state,
+                            if show_resolution {
+                                Box::new(DefaultResolveLogger)
+                            } else {
+                                Box::new(SummaryResolveLogger)
+                            },
+                            &concurrency,
+                            &cache,
+                            workspace_cache,
+                            printer,
+                            preview,
+                        )
+                        .execute(project.workspace().into()),
+                    )
+                    .await
+                    .map_err(UvError::from)?;
+                    let finalized = selection.finalize(result.lock())?;
+                    resolved_before_environment = Some(result);
+                    Some(finalized.environment_workspace(project.workspace()))
+                }
+                Some(CommandWorkspaceSelection::Finalized(selection)) => {
+                    Some(selection.environment_workspace(project.workspace()))
+                }
+                None => None,
+            };
             let environment_workspace = group_workspace
                 .as_ref()
                 .unwrap_or_else(|| project.workspace());

@@ -43,7 +43,7 @@ use uv_workspace::{
 
 use crate::ProjectError;
 use crate::edit::{ProjectEdit, PythonTarget};
-use crate::lock::{CommandWorkspaceSelection, workspace_for_project_groups};
+use crate::lock::{CommandWorkspaceDiscovery, workspace_for_project_groups};
 
 /// Version information for a project (`uv version`).
 #[derive(serde::Serialize)]
@@ -555,80 +555,78 @@ async fn lock_and_sync(
         preview,
     )
     .await?;
-    let (workspace, mut selection) = if no_sync {
-        (
-            project.workspace().with_workspace_groups(&discovered)?,
-            None,
-        )
-    } else {
-        workspace_for_project_groups(&project, &[], false, &discovered)?
-    };
-    let needs_lock_resolution = selection
-        .as_ref()
-        .is_some_and(CommandWorkspaceSelection::needs_lock_resolution);
+    let discovery = workspace_for_project_groups(&project, &[], false, &discovered, no_sync)?;
+    let mut pending_selection = None;
 
-    // Discover the interpreter or environment used to lock and sync the project.
-    let mut python_target = if no_sync || needs_lock_resolution {
-        // Discover the interpreter.
-        let project_python = ProjectPythonRequest::from_request(
-            python.as_deref().map(PythonRequest::parse),
-            Some(&workspace),
-            &groups,
-            &settings.resolver.sources,
-            project_dir,
-            config_discovery,
-        )
-        .await?;
-        let interpreter = ProjectInterpreter::discover(
-            ProjectEnvironmentTarget::from(&workspace),
-            project_python,
-            &client_builder,
-            python_preference,
-            python_arch,
-            python_downloads,
-            &install_mirrors,
-            ProjectEnvironmentPolicy::Optional,
-            if no_sync {
-                active
-            } else {
-                active.without_warning()
-            },
-            cache,
-            if no_sync || printer == Printer::Verbose {
-                printer
-            } else {
-                Printer::Silent
-            },
-        )
-        .await?
-        .into_interpreter();
+    // Discover an interpreter for a provisional scope, or create a finalized environment.
+    let mut python_target = match discovery {
+        CommandWorkspaceDiscovery::Provisional {
+            workspace,
+            selection,
+        } => {
+            pending_selection = selection;
+            // Discover the interpreter.
+            let project_python = ProjectPythonRequest::from_request(
+                python.as_deref().map(PythonRequest::parse),
+                Some(&workspace),
+                &groups,
+                &settings.resolver.sources,
+                project_dir,
+                config_discovery,
+            )
+            .await?;
+            let interpreter = ProjectInterpreter::discover(
+                ProjectEnvironmentTarget::from(&workspace),
+                project_python,
+                &client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                &install_mirrors,
+                ProjectEnvironmentPolicy::Optional,
+                if no_sync {
+                    active
+                } else {
+                    active.without_warning()
+                },
+                cache,
+                if no_sync || printer == Printer::Verbose {
+                    printer
+                } else {
+                    Printer::Silent
+                },
+            )
+            .await?
+            .into_interpreter();
 
-        PythonTarget::Interpreter(interpreter)
-    } else {
-        // Discover or create the virtual environment.
-        let environment = ProjectEnvironment::get_or_init(
-            ProjectEnvironmentTarget::from(&workspace),
-            None,
-            &groups,
-            &settings.resolver.sources,
-            python.as_deref().map(PythonRequest::parse),
-            &install_mirrors,
-            &client_builder,
-            python_preference,
-            python_arch,
-            python_downloads,
-            no_sync,
-            config_discovery,
-            active,
-            cache,
-            DryRun::Disabled,
-            LinkErrorReporting::User,
-            printer,
-        )
-        .await?
-        .into_environment()?;
+            PythonTarget::Interpreter(interpreter)
+        }
+        CommandWorkspaceDiscovery::Finalized(workspace) => {
+            // Discover or create the virtual environment.
+            let environment = ProjectEnvironment::get_or_init(
+                ProjectEnvironmentTarget::from(&workspace),
+                None,
+                &groups,
+                &settings.resolver.sources,
+                python.as_deref().map(PythonRequest::parse),
+                &install_mirrors,
+                &client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                no_sync,
+                config_discovery,
+                active,
+                cache,
+                DryRun::Disabled,
+                LinkErrorReporting::User,
+                printer,
+            )
+            .await?
+            .into_environment()?;
 
-        PythonTarget::Environment(environment)
+            PythonTarget::Environment(environment)
+        }
     };
 
     // Determine the lock mode.
@@ -660,10 +658,9 @@ async fn lock_and_sync(
         Err(err) => return Err(UvError::from(err).into()),
     };
 
-    if let Some(selection) = selection.as_mut()
-        && selection.needs_lock_resolution()
-    {
-        let workspace = selection.refine_from_lock(project.workspace(), &lock)?;
+    if let Some(selection) = pending_selection {
+        let finalized = selection.finalize(&lock)?;
+        let workspace = finalized.environment_workspace(project.workspace());
         python_target = PythonTarget::Environment(
             ProjectEnvironment::get_or_init(
                 ProjectEnvironmentTarget::from(&workspace),
