@@ -8,13 +8,21 @@ use uv_cache::Cache;
 use uv_configuration::BuildOptions;
 use uv_distribution::{DistributionDatabase, LocalWheel};
 use uv_distribution_types::{
-    BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed, Identifier, Name,
-    RemoteSource, Resolution,
+    BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, FileLocation, Hashed,
+    Identifier, Name, RemoteSource, Resolution,
 };
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::{BuildContext, HashStrategy, InFlight};
+
+/// File locations retain raw URLs for requests and cache identity; spans need a safe display view.
+fn tracing_url(location: &FileLocation) -> String {
+    match location.to_url() {
+        Ok(url) => url.to_string(),
+        Err(_) => "[invalid URL]".to_string(),
+    }
+}
 
 /// Prepare distributions for installation.
 ///
@@ -107,7 +115,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
         Ok(wheels)
     }
     /// Download, build, and unzip a single wheel.
-    #[instrument(skip_all, fields(name = % dist, size = ? dist.size(), url = dist.file().map(| file | file.url.to_string()).unwrap_or_default()))]
+    #[instrument(skip_all, fields(name = % dist, size = ? dist.size(), url = dist.file().map(|file| tracing_url(&file.url)).unwrap_or_default()))]
     async fn get_wheel(
         &self,
         dist: Dist,
@@ -320,5 +328,40 @@ impl uv_distribution::Reporter for Facade {
 
     fn on_download_complete(&self, name: &PackageName, index: usize) {
         self.reporter.on_download_complete(name, index);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use uv_distribution_types::FileLocation;
+    use uv_redacted::DisplaySafeUrl;
+
+    use super::tracing_url;
+
+    #[test]
+    fn redact_preparation_urls() -> Result<(), Box<dyn Error>> {
+        let url =
+            DisplaySafeUrl::parse("https://user:password@example.com/package.whl?sig=signature")?;
+        let absolute = FileLocation::AbsoluteUrl((&url).into());
+        insta::assert_snapshot!(tracing_url(&absolute), @"https://user:****@example.com/package.whl?sig=****");
+        assert_eq!(absolute.to_url()?.as_str(), url.as_str());
+        assert_eq!(absolute.to_string(), url.as_str());
+
+        let relative = FileLocation::RelativeUrl(
+            "https://user:password@example.com/".into(),
+            "package.whl?sig=signature".into(),
+        );
+        insta::assert_snapshot!(tracing_url(&relative), @"https://user:****@example.com/package.whl?sig=****");
+        assert_eq!(relative.to_string(), "package.whl?sig=signature");
+
+        let invalid = FileLocation::RelativeUrl(
+            "https://user:password@[invalid-host".into(),
+            "package.whl?sig=signature".into(),
+        );
+        insta::assert_snapshot!(tracing_url(&invalid), @"[invalid URL]");
+        assert!(invalid.to_url().is_err());
+        Ok(())
     }
 }
