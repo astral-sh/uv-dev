@@ -1,5 +1,7 @@
 #[cfg(feature = "test-universal")]
 use std::collections::BTreeMap;
+#[cfg(all(unix, feature = "test-universal"))]
+use std::path::Path;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use std::process::Command;
 
@@ -38,6 +40,98 @@ use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
+
+/// Updating a workspace lock follows relative symlink chains without replacing either link.
+#[cfg(all(unix, feature = "test-universal"))]
+#[test]
+fn lock_preserves_relative_symlink_chain() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let original = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#};
+    pyproject.write_str(original)?;
+    context.lock().arg("--offline").assert().success();
+    context.temp_dir.child("shared").create_dir_all()?;
+    context.temp_dir.child("links").create_dir_all()?;
+    let target = context.temp_dir.child("shared/uv.lock");
+    let intermediate = context.temp_dir.child("links/current.lock");
+    let lockfile = context.temp_dir.child("uv.lock");
+    fs_err::rename(&lockfile, &target)?;
+    create_symlink(Path::new("../shared/uv.lock"), &intermediate)?;
+    create_symlink(Path::new("links/current.lock"), &lockfile)?;
+    pyproject.write_str(&original.replace(">=3.12", ">=3.11"))?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(
+        fs_err::read_link(&lockfile)?,
+        Path::new("links/current.lock")
+    );
+    assert_eq!(
+        fs_err::read_link(&intermediate)?,
+        Path::new("../shared/uv.lock")
+    );
+    assert_snapshot!(context.read("shared/uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.11"
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "project"
+    version = "1.0.0"
+    source = { virtual = "." }
+    "#);
+    Ok(())
+}
+
+/// A script lock can create the missing destination of an absolute symlink.
+#[cfg(all(unix, feature = "test-universal"))]
+#[test]
+fn lock_script_preserves_dangling_absolute_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("nested/script.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    context.temp_dir.child("shared").create_dir_all()?;
+    let target = context.temp_dir.child("shared/script.lock");
+    let lockfile = context.temp_dir.child("nested/script.py.lock");
+    create_symlink(&target, &lockfile)?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--script")
+        .arg("nested/script.py")
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    assert_eq!(fs_err::read_link(&lockfile)?, target.path());
+    assert_snapshot!(context.read("shared/script.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+    "#);
+    Ok(())
+}
 
 /// Lock validation warnings should explain why a local dependency's metadata could not be read.
 #[cfg(feature = "test-universal")]
