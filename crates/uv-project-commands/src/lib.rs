@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use uv_scripts::Pep723Script;
 
 pub use error::ProjectError;
+pub use run_target::{ParsedRunCommand, RunCommand};
 
 pub mod add;
 pub mod audit;
@@ -17,6 +18,7 @@ pub mod init;
 pub mod lock;
 pub mod remove;
 pub mod run;
+mod run_target;
 pub mod sync;
 mod toolchain;
 pub mod tree;
