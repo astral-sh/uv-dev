@@ -58,20 +58,64 @@ pub(crate) struct PubGrubReportFormatter<'a> {
 
 /// Render a PubGrub report without recursive tree traversal.
 ///
-/// This preserves the output and shared-node reference behavior of
-/// [`pubgrub::DefaultStringReporter`], whose recursive entry point is private.
+/// A terminal conflict between pinned root requirements has a concise explanation. Other proofs
+/// preserve the output and shared-node reference behavior of [`pubgrub::DefaultStringReporter`],
+/// whose recursive entry point is private.
+///
+/// The original tree must precede the included-version range simplification, which can turn a
+/// non-singleton requirement into a singleton for display.
 pub(crate) fn report(
     derivation_tree: &ErrorTree,
+    original_tree: &ErrorTree,
     formatter: &PubGrubReportFormatter<'_>,
 ) -> String {
     match derivation_tree {
         DerivationTree::External(external) => formatter.format_external(external),
         DerivationTree::Derived(derived) => {
+            if let Some(report) = formatter.explain_pinned_root_conflict(derived, original_tree) {
+                return report;
+            }
             let mut reporter = IterativeReporter::default();
             reporter.build(derived, formatter);
             reporter.lines.join("\n")
         }
     }
+}
+
+/// Confirm the effective root pins before display simplification projects ranges onto the
+/// included versions. Local-version sentinels have already been removed from this tree.
+fn has_pinned_root_requirements(
+    original_tree: &ErrorTree,
+    root_versions: &Range<Version>,
+    requirements: [(&PubGrubPackage, &Version); 2],
+) -> bool {
+    let mut found = [false; 2];
+    let mut trees = vec![original_tree];
+    while let Some(tree) = trees.pop() {
+        match tree {
+            DerivationTree::External(external) => {
+                if let External::FromDependencyOf(root, versions, package, requested) = external
+                    && matches!(&**root, PubGrubPackageInner::Root(None))
+                    && versions == root_versions
+                    && let Some(version) = requested.as_singleton()
+                {
+                    for (found, (expected_package, expected_version)) in
+                        found.iter_mut().zip(requirements)
+                    {
+                        *found |= package == expected_package && version == expected_version;
+                    }
+                    if found.into_iter().all(std::convert::identity) {
+                        return true;
+                    }
+                }
+            }
+            DerivationTree::Derived(derived) => {
+                trees.push(&derived.cause1);
+                trees.push(&derived.cause2);
+            }
+        }
+    }
+    false
 }
 
 /// Accumulates the report state used by [`report`].
@@ -551,6 +595,131 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
 }
 
 impl PubGrubReportFormatter<'_> {
+    /// Explain a terminal conflict between two pinned requirements without treating the root as
+    /// another incompatible package. Keep shared nodes and more complicated proofs unchanged.
+    fn explain_pinned_root_conflict(
+        &self,
+        current: &ReportDerived,
+        original_tree: &ErrorTree,
+    ) -> Option<String> {
+        if !self.workspace_members.is_empty() || current.shared_id.is_some() {
+            return None;
+        }
+        let mut terms = current.terms.iter();
+        let (root, Term::Positive(root_versions)) = terms.next()? else {
+            return None;
+        };
+        let PubGrubPackageInner::Root(None) = &**root else {
+            return None;
+        };
+        if terms.next().is_some() {
+            return None;
+        }
+
+        let (prior, outer) = match (current.cause1.as_ref(), current.cause2.as_ref()) {
+            (DerivationTree::Derived(prior), DerivationTree::External(outer))
+            | (DerivationTree::External(outer), DerivationTree::Derived(prior)) => (prior, outer),
+            (DerivationTree::External(_), DerivationTree::External(_))
+            | (DerivationTree::Derived(_), DerivationTree::Derived(_)) => return None,
+        };
+        if prior.shared_id.is_some() || prior.terms.len() != 2 {
+            return None;
+        }
+        let External::FromDependencyOf(outer_root, outer_root_versions, package, requested) = outer
+        else {
+            return None;
+        };
+        let pinned_version = requested.as_singleton()?;
+        if outer_root != root || outer_root_versions != root_versions {
+            return None;
+        }
+        let Some(Term::Positive(prior_root_versions)) = prior.terms.get(root) else {
+            return None;
+        };
+        let Some(Term::Positive(prior_package_versions)) = prior.terms.get(package) else {
+            return None;
+        };
+        if prior_root_versions != root_versions || !prior_package_versions.contains(pinned_version)
+        {
+            return None;
+        }
+
+        let (DerivationTree::External(first), DerivationTree::External(second)) =
+            (prior.cause1.as_ref(), prior.cause2.as_ref())
+        else {
+            return None;
+        };
+        let (inner, dependency) = if let External::FromDependencyOf(inner_root, ..) = first
+            && inner_root == root
+        {
+            (first, second)
+        } else if let External::FromDependencyOf(inner_root, ..) = second
+            && inner_root == root
+        {
+            (second, first)
+        } else {
+            return None;
+        };
+        let External::FromDependencyOf(_, inner_root_versions, required, required_versions) = inner
+        else {
+            return None;
+        };
+        let required_version = required_versions.as_singleton()?;
+        let External::FromDependencyOf(dependent, versions, dependency, dependency_versions) =
+            dependency
+        else {
+            return None;
+        };
+        if inner_root_versions != root_versions
+            || dependent != package
+            || dependency != required
+            || package == required
+            || !versions.contains(pinned_version)
+            || dependency_versions.contains(required_version)
+        {
+            return None;
+        }
+        for package in [package, required] {
+            match &**package {
+                PubGrubPackageInner::Package {
+                    extra: None,
+                    group: None,
+                    marker,
+                    ..
+                } if marker.is_true() => {}
+                PubGrubPackageInner::Root(_)
+                | PubGrubPackageInner::Python(_)
+                | PubGrubPackageInner::System(_)
+                | PubGrubPackageInner::Package { .. }
+                | PubGrubPackageInner::Extra { .. }
+                | PubGrubPackageInner::Group { .. }
+                | PubGrubPackageInner::Marker { .. } => return None,
+            }
+        }
+        if !has_pinned_root_requirements(
+            original_tree,
+            root_versions,
+            [(package, pinned_version), (required, required_version)],
+        ) {
+            return None;
+        }
+
+        let dependency = self.format_external(&External::FromDependencyOf(
+            package.clone(),
+            requested.clone(),
+            required.clone(),
+            dependency_versions.clone(),
+        ));
+        let requirements = self.format_both_external(inner, outer);
+        let conclusion = self.format_terms(&current.terms);
+        Some(format!(
+            "Because {}and {}we can conclude that {}",
+            padded("", &dependency, " "),
+            padded("", &requirements, ", "),
+            padded("", &conclusion, "."),
+        ))
+    }
+
     /// Return the formatting for "the root package requires", if the given
     /// package is the root package.
     ///
@@ -2780,6 +2949,8 @@ fn padded<'a, T: std::fmt::Display + ?Sized>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use pubgrub::{DefaultStringReporter, Reporter};
     use uv_distribution_types::RequiresPython;
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
@@ -2844,6 +3015,321 @@ mod tests {
         }
     }
 
+    fn pinned_root_conflict(requested: Range<Version>, required: Range<Version>) -> ReportDerived {
+        let package = PubGrubPackage::base("a".parse().expect("valid package name"));
+        let dependency = PubGrubPackage::base("b".parse().expect("valid package name"));
+        pinned_root_conflict_for(package, dependency, requested, required)
+    }
+
+    fn pinned_root_conflict_for(
+        package: PubGrubPackage,
+        dependency: PubGrubPackage,
+        requested: Range<Version>,
+        required: Range<Version>,
+    ) -> ReportDerived {
+        let root = PubGrubPackage::from(PubGrubPackageInner::Root(None));
+        let root_versions = Range::singleton(Version::new([0_u64]));
+        let package_versions =
+            Range::from_range_bounds((Bound::Included(Version::new([2_u64])), Bound::Unbounded));
+        let dependency_versions = package_versions.clone();
+        let prior = ReportDerived {
+            terms: Map::from_iter([
+                (root.clone(), Term::Positive(root_versions.clone())),
+                (package.clone(), Term::Positive(package_versions.clone())),
+            ]),
+            shared_id: None,
+            cause1: ErrorTree::External(External::FromDependencyOf(
+                root.clone(),
+                root_versions.clone(),
+                dependency.clone(),
+                required,
+            ))
+            .into(),
+            cause2: ErrorTree::External(External::FromDependencyOf(
+                package.clone(),
+                package_versions,
+                dependency,
+                dependency_versions,
+            ))
+            .into(),
+        };
+        ReportDerived {
+            terms: Map::from_iter([(root.clone(), Term::Positive(root_versions.clone()))]),
+            shared_id: None,
+            cause1: ErrorTree::External(External::FromDependencyOf(
+                root,
+                root_versions,
+                package,
+                requested,
+            ))
+            .into(),
+            cause2: ErrorTree::Derived(prior).into(),
+        }
+    }
+
+    fn prior_root_conflict(tree: &mut ReportDerived) -> &mut ReportDerived {
+        match Arc::make_mut(&mut tree.cause2) {
+            DerivationTree::Derived(prior) => Some(prior),
+            DerivationTree::External(_) => None,
+        }
+        .expect("root-conflict fixture has a derived second cause")
+    }
+
+    #[test]
+    fn explains_terminal_conflicting_pins_without_a_root_incompatibility() {
+        let fixture = FormatterFixture::new();
+        let formatter = fixture.formatter();
+        let tree = pinned_root_conflict(
+            Range::singleton(Version::new([2_u64])),
+            Range::singleton(Version::new([1_u64])),
+        );
+        let original = ErrorTree::Derived(tree.clone());
+        let expected = report(&original, &original, &formatter);
+        insta::assert_snapshot!(expected, @"Because a==2 depends on b>=2 and you require b==1 and a==2, we can conclude that your requirements are unsatisfiable.");
+        for reverse_outer in [false, true] {
+            for reverse_inner in [false, true] {
+                let mut tree = tree.clone();
+                if reverse_inner {
+                    let prior = prior_root_conflict(&mut tree);
+                    std::mem::swap(&mut prior.cause1, &mut prior.cause2);
+                }
+                if reverse_outer {
+                    std::mem::swap(&mut tree.cause1, &mut tree.cause2);
+                }
+                assert_eq!(
+                    report(&ErrorTree::Derived(tree), &original, &formatter),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn requires_original_root_pins_before_display_simplification() {
+        let fixture = FormatterFixture::new();
+        let formatter = fixture.formatter();
+        let requested = Range::singleton(Version::new([2_u64]));
+        let required = Range::singleton(Version::new([1_u64]));
+        let reduced = ErrorTree::Derived(pinned_root_conflict(requested.clone(), required.clone()));
+        let bounded = |version| {
+            Range::from_range_bounds((
+                Bound::Included(Version::new([version])),
+                Bound::Excluded(Version::new([version + 1])),
+            ))
+        };
+        let mut originals = vec![
+            pinned_root_conflict(bounded(2_u64), required.clone()),
+            pinned_root_conflict(requested.clone(), bounded(1_u64)),
+            pinned_root_conflict(bounded(2_u64), bounded(1_u64)),
+        ];
+        let mut other_root_versions = pinned_root_conflict(requested.clone(), required.clone());
+        let versions = match Arc::make_mut(&mut other_root_versions.cause1) {
+            ErrorTree::External(External::FromDependencyOf(_, versions, _, _)) => Some(versions),
+            _ => None,
+        }
+        .expect("root-conflict fixture has an external first cause");
+        *versions = Range::singleton(Version::new([1_u64]));
+        originals.push(other_root_versions);
+
+        for original in originals {
+            assert_eq!(
+                report(&reduced, &ErrorTree::Derived(original), &formatter),
+                DefaultStringReporter::report_with_formatter(&reduced, &formatter)
+            );
+        }
+
+        // Public equality is encoded with a local-version sentinel until the error tree is
+        // prepared. That normalization preserves a true pin, unlike listing-based projection.
+        let encoded = |specifier: &str| {
+            Range::from(
+                specifier
+                    .parse::<VersionSpecifiers>()
+                    .expect("valid version specifier"),
+            )
+        };
+        assert!(encoded("==2").as_singleton().is_none());
+        let original = crate::error::NoSolutionError::collapse_local_version_segments(
+            ErrorTree::Derived(pinned_root_conflict(encoded("==2"), encoded("==1"))),
+        );
+        let original = crate::error::NoSolutionError::narrow_widened_sets(
+            original,
+            &FxHashMap::from_iter([
+                (
+                    "a".parse().expect("valid package name"),
+                    Arc::from([Version::new([2_u64])]),
+                ),
+                (
+                    "b".parse().expect("valid package name"),
+                    Arc::from([Version::new([1_u64]), Version::new([2_u64])]),
+                ),
+            ]),
+        );
+        assert_eq!(
+            report(&reduced, &original, &formatter),
+            report(&reduced, &reduced, &formatter)
+        );
+
+        let local = ErrorTree::Derived(pinned_root_conflict(
+            encoded("==2+local"),
+            encoded("==1+local"),
+        ));
+        assert_ne!(
+            report(&local, &local, &formatter),
+            DefaultStringReporter::report_with_formatter(&local, &formatter)
+        );
+    }
+
+    #[test]
+    fn preserves_other_terminal_proofs_and_shared_references() {
+        let fixture = FormatterFixture::new();
+        let formatter = fixture.formatter();
+        let make_tree = || {
+            pinned_root_conflict(
+                Range::singleton(Version::new([2_u64])),
+                Range::singleton(Version::new([1_u64])),
+            )
+        };
+        let mut cases = vec![
+            pinned_root_conflict(Range::full(), Range::singleton(Version::new([1_u64]))),
+            pinned_root_conflict(Range::singleton(Version::new([2_u64])), Range::full()),
+            pinned_root_conflict(
+                Range::singleton(Version::new([1_u64])),
+                Range::singleton(Version::new([1_u64])),
+            ),
+            pinned_root_conflict(
+                Range::singleton(Version::new([2_u64])),
+                Range::singleton(Version::new([2_u64])),
+            ),
+        ];
+        let mut shared = make_tree();
+        shared.shared_id = Some(1);
+        cases.push(shared);
+        let mut shared = make_tree();
+        prior_root_conflict(&mut shared).shared_id = Some(1);
+        cases.push(shared);
+        let mut no_terminal_root = make_tree();
+        no_terminal_root.terms.clear();
+        cases.push(no_terminal_root);
+        let mut named_root = make_tree();
+        named_root.terms = Map::from_iter([(
+            PubGrubPackageInner::Root(Some("project".parse().expect("valid package name"))).into(),
+            Term::Positive(Range::singleton(Version::new([0_u64]))),
+        )]);
+        cases.push(named_root);
+        let mut incomplete_prior = make_tree();
+        prior_root_conflict(&mut incomplete_prior).terms.clear();
+        cases.push(incomplete_prior);
+        let mut nested = make_tree();
+        let prior = prior_root_conflict(&mut nested);
+        prior.cause2 = derived(
+            Arc::unwrap_or_clone(prior.cause2.clone()),
+            Arc::unwrap_or_clone(prior.cause1.clone()),
+            None,
+        )
+        .into();
+        cases.push(nested);
+
+        let name: PackageName = "a".parse().expect("valid package name");
+        for package in [
+            PubGrubPackageInner::Package {
+                name: name.clone(),
+                extra: Some("extra".parse().expect("valid extra name")),
+                group: None,
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Package {
+                name: name.clone(),
+                extra: None,
+                group: Some("dev".parse().expect("valid group name")),
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Package {
+                name: name.clone(),
+                extra: None,
+                group: None,
+                marker: MarkerTree::FALSE,
+            },
+            PubGrubPackageInner::Extra {
+                name: name.clone(),
+                extra: "extra".parse().expect("valid extra name"),
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Group {
+                name: name.clone(),
+                group: "dev".parse().expect("valid group name"),
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Marker {
+                name,
+                marker: MarkerTree::TRUE,
+            },
+        ] {
+            let package = PubGrubPackage::from(package);
+            cases.push(pinned_root_conflict_for(
+                package.clone(),
+                PubGrubPackage::base("b".parse().expect("valid package name")),
+                Range::singleton(Version::new([2_u64])),
+                Range::singleton(Version::new([1_u64])),
+            ));
+            cases.push(pinned_root_conflict_for(
+                PubGrubPackage::base("b".parse().expect("valid package name")),
+                package,
+                Range::singleton(Version::new([2_u64])),
+                Range::singleton(Version::new([1_u64])),
+            ));
+        }
+
+        for tree in cases {
+            assert!(
+                formatter
+                    .explain_pinned_root_conflict(&tree, &ErrorTree::Derived(tree.clone()))
+                    .is_none()
+            );
+            let tree = ErrorTree::Derived(tree);
+            assert_eq!(
+                report(&tree, &tree, &formatter),
+                DefaultStringReporter::report_with_formatter(&tree, &formatter)
+            );
+        }
+
+        let mut workspace = FormatterFixture::new();
+        workspace
+            .workspace_members
+            .insert("project".parse().expect("valid package name"));
+        assert!(
+            workspace
+                .formatter()
+                .explain_pinned_root_conflict(&make_tree(), &ErrorTree::Derived(make_tree()))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn preserves_padding_in_multiline_pinned_root_conflicts() {
+        let fixture = FormatterFixture::new();
+        let formatter = fixture.formatter();
+        let mut tree = pinned_root_conflict(
+            Range::singleton(Version::new([2_u64])),
+            Range::singleton(Version::new([1_u64])),
+        );
+        prior_root_conflict(&mut tree).cause2 = ErrorTree::External(External::FromDependencyOf(
+            PubGrubPackage::base("a".parse().expect("valid package name")),
+            Range::from_range_bounds((Bound::Included(Version::new([2_u64])), Bound::Unbounded)),
+            PubGrubPackage::base("b".parse().expect("valid package name")),
+            Range::strictly_lower_than(Version::new([1_u64]))
+                .union(&Range::strictly_higher_than(Version::new([1_u64]))),
+        ))
+        .into();
+
+        let tree = ErrorTree::Derived(tree);
+        insta::assert_snapshot!(report(&tree, &tree, &formatter), @"
+        Because a==2 depends on one of:
+            b<1
+            b>1
+        and you require b==1 and a==2, we can conclude that your requirements are unsatisfiable.
+        ");
+    }
+
     #[test]
     fn iterative_reporter_matches_pubgrub_for_shared_nodes() {
         let fixture = FormatterFixture::new();
@@ -2866,7 +3352,7 @@ mod tests {
 
         for tree in trees {
             assert_eq!(
-                report(&tree, &formatter),
+                report(&tree, &tree, &formatter),
                 DefaultStringReporter::report_with_formatter(&tree, &formatter)
             );
         }
@@ -2886,7 +3372,7 @@ mod tests {
                 for _ in 0..100_000 {
                     tree = derived(tree, leaf.clone(), None);
                 }
-                let _report = report(&tree, &formatter);
+                let _report = report(&tree, &tree, &formatter);
                 crate::error::drop_derivation_tree(tree);
             })?;
 
