@@ -18819,3 +18819,26 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn install_pep723_target_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = "<3.12"
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_install().args(["--python-version", "3.11", "-r", "requirements.py"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    Ok(())
+}

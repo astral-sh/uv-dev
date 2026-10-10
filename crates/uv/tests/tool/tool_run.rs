@@ -3640,3 +3640,143 @@ async fn tool_run_latest_keyring_auth() {
     Installed 1 executable: app
     ");
 }
+
+#[test]
+fn tool_run_pep723_requirements_reject_incompatible_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel_bytes) = uv_test::packse::generate_wheel_with_files(
+        &"bound-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &std::collections::BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "bound_tool/cli.py",
+                "import sys\ndef main():\n    print(f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "bound_tool-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nbound-tool = bound_tool.cli:main\n",
+            ),
+        ],
+    );
+    let wheel = wheels.child(filename);
+    wheel.write_binary(&wheel_bytes)?;
+    context
+        .tool_install()
+        .args([
+            "--python",
+            "3.12",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "bound-tool",
+        ])
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = "<3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run().args(["--with-requirements", "requirements.py", "--no-index", "--find-links", "wheels", "bound-tool"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.11
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + bound-tool==1.0.0
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn tool_run_pep723_requirements_bound_interpreter_refinement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_tool_dirs();
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel_bytes) = uv_test::packse::generate_wheel_with_files(
+        &"bound-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &std::collections::BTreeMap::new(),
+        Some(&">=3.12".parse()?),
+        "py3-none-any",
+        &[
+            (
+                "bound_tool/cli.py",
+                "import sys\ndef main():\n    print(f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "bound_tool-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nbound-tool = bound_tool.cli:main\n",
+            ),
+        ],
+    );
+    let wheel = wheels.child(filename);
+    wheel.write_binary(&wheel_bytes)?;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = "<3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run().args(["--with-requirements", "requirements.py", "--python", ">=3.11", "--no-index", "--from"]).arg(wheel.path()).arg("bound-tool"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving tool dependencies
+      cause: Because the current Python version (3.11.[X]) does not satisfy Python>=3.12 and bound-tool==1.0.0 depends on Python>=3.12, we can conclude that bound-tool==1.0.0 cannot be used.
+             And because only bound-tool==1.0.0 is available and you require bound-tool, we can conclude that your requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
+
+#[test]
+fn tool_run_pep723_requirements_reject_explicit_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_tool_dirs();
+    let marker = context.temp_dir.child("backend-ran");
+    let archive = uv_test::archive::generate_source_archive(
+        &"bound-tool".parse()?,
+        &"1.0.0".parse()?,
+        "",
+        Some(marker.path()),
+    )?;
+    context
+        .temp_dir
+        .child("source.tar.gz")
+        .write_binary(&archive)?;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = "<3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run().args(["--python", "3.12", "--with-requirements", "requirements.py", "--no-index", "--from", "source.tar.gz", "bound-tool"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Python 3.12.[X] is incompatible with the PEP 723 `requires-python` value from `--with-requirements`: `<3.12`
+    "#);
+    marker.assert(predicates::path::missing());
+    Ok(())
+}

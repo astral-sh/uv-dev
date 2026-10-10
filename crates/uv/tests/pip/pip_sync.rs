@@ -7013,3 +7013,26 @@ fn sync_with_target_installs_missing_python() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn sync_pep723_target_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = "<3.12"
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_sync().args(["--python-version", "3.11", "requirements.py"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    Ok(())
+}

@@ -5,8 +5,9 @@ use serde::Deserialize;
 use toml_edit::{Array, Item, Table, Value, value};
 
 use uv_configuration::ExcludeDependency;
-use uv_distribution_types::{NameRequirementSpecification, Requirement};
+use uv_distribution_types::{NameRequirementSpecification, Requirement, RequiresPython};
 use uv_fs::{PortablePath, Simplified};
+use uv_pep440::VersionSpecifiers;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_types::PythonRequest;
 use uv_settings::{ToolOptions, ToolOptionsWire};
@@ -30,6 +31,8 @@ pub struct Tool {
     build_constraints: Vec<NameRequirementSpecification>,
     /// The Python requested by the user during installation.
     python: Option<PythonRequest>,
+    /// The Python bound from inline requirements metadata.
+    requires_python: Option<RequiresPython>,
     /// A mapping of entry point names to their metadata.
     entrypoints: Vec<ToolEntrypoint>,
     /// The [`ToolOptions`] used to install this tool.
@@ -50,6 +53,7 @@ struct ToolWire {
     #[serde(default)]
     build_constraint_dependencies: Vec<NameRequirementSpecification>,
     python: Option<PythonRequest>,
+    requires_python: Option<VersionSpecifiers>,
     entrypoints: Vec<ToolEntrypoint>,
     #[serde(default)]
     options: ToolOptionsWire,
@@ -78,6 +82,7 @@ impl From<Tool> for ToolWire {
             excludes: tool.excludes,
             build_constraint_dependencies: tool.build_constraints,
             python: tool.python,
+            requires_python: tool.requires_python.map(|bound| bound.specifiers().clone()),
             entrypoints: tool.entrypoints,
             options: tool.options.into(),
         }
@@ -102,6 +107,7 @@ impl TryFrom<ToolWire> for Tool {
             excludes: tool.excludes,
             build_constraints: tool.build_constraint_dependencies,
             python: tool.python,
+            requires_python: tool.requires_python.map(RequiresPython::from_specifiers),
             entrypoints: tool.entrypoints,
             options: tool.options.into(),
         })
@@ -178,6 +184,7 @@ impl Tool {
         excludes: Vec<ExcludeDependency>,
         build_constraints: Vec<NameRequirementSpecification>,
         python: Option<PythonRequest>,
+        requires_python: Option<RequiresPython>,
         entrypoints: impl IntoIterator<Item = ToolEntrypoint>,
         options: ToolOptions,
     ) -> Self {
@@ -190,8 +197,18 @@ impl Tool {
             excludes,
             build_constraints,
             python,
+            requires_python,
             entrypoints,
             options,
+        }
+    }
+
+    /// Retain the Python bound used when resolving inline requirements.
+    #[must_use]
+    pub fn with_requires_python(self, requires_python: Option<RequiresPython>) -> Self {
+        Self {
+            requires_python,
+            ..self
         }
     }
 
@@ -325,6 +342,10 @@ impl Tool {
             );
         }
 
+        if let Some(requires_python) = &self.requires_python {
+            table.insert("requires-python", value(requires_python.to_string()));
+        }
+
         table.insert("entrypoints", {
             let entrypoints = each_element_on_its_line_array(
                 self.entrypoints
@@ -377,6 +398,10 @@ impl Tool {
 
     pub fn python(&self) -> &Option<PythonRequest> {
         &self.python
+    }
+
+    pub fn requires_python(&self) -> Option<&RequiresPython> {
+        self.requires_python.as_ref()
     }
 
     pub fn options(&self) -> &ToolOptions {

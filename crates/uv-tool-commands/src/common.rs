@@ -175,6 +175,8 @@ pub(super) struct ToolPython {
     /// The selected Python request, computed by considering an explicit request, a global
     /// version file, and static `requires-python` metadata from the source requirement.
     pub(super) python_request: Option<PythonRequest>,
+    /// Compatibility required by inline requirements metadata, including explicit requests.
+    pub(super) requires_python: Option<RequiresPython>,
 }
 
 impl ToolPython {
@@ -182,6 +184,7 @@ impl ToolPython {
     pub(super) async fn from_request(
         python_request: Option<PythonRequest>,
         requirement: Option<&UnresolvedRequirement>,
+        requires_python_bound: Option<&RequiresPython>,
         config_discovery: ConfigDiscovery,
         lfs: GitLfsSetting,
         git_resolver: &GitResolver,
@@ -204,6 +207,19 @@ impl ToolPython {
             }
         } else {
             None
+        };
+
+        let requires_python = match (requires_python, requires_python_bound) {
+            (Some(requires_python), Some(bound)) => Some(RequiresPython::from_specifiers(
+                requires_python
+                    .specifiers()
+                    .iter()
+                    .chain(bound.specifiers().iter())
+                    .cloned()
+                    .collect(),
+            )),
+            (None, Some(bound)) => Some(bound.clone()),
+            (requires_python, None) => requires_python,
         };
 
         let (source, python_request) = if let Some(request) = python_request {
@@ -244,7 +260,24 @@ impl ToolPython {
         Ok(Self {
             source,
             python_request,
+            requires_python: requires_python_bound.cloned(),
         })
+    }
+
+    /// Validate the selected interpreter against requirements before it can run build hooks.
+    pub(super) fn check_interpreter_compatibility(
+        &self,
+        interpreter: &Interpreter,
+    ) -> anyhow::Result<()> {
+        if let Some(requires_python) = self.requires_python.as_ref()
+            && !requires_python.contains(interpreter.python_version())
+        {
+            bail!(
+                "Python {} is incompatible with the PEP 723 `requires-python` value from `--with-requirements`: `{requires_python}`",
+                interpreter.python_version()
+            );
+        }
+        Ok(())
     }
 
     /// Returns `true` if the selected request was explicitly provided by the user.
@@ -411,6 +444,7 @@ impl ToolLock {
         build_constraints: &Constraints,
         refresh: &Refresh,
         interpreter: &Interpreter,
+        requires_python: Option<&RequiresPython>,
         settings: &ResolverSettings,
         client_builder: &BaseClientBuilder<'_>,
         state: &PlatformState,
@@ -519,7 +553,7 @@ impl ToolLock {
         );
 
         let requires_python =
-            RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
+            uv_environment_operations::universal_requires_python(interpreter, requires_python);
         let overrides = overrides
             .iter()
             .cloned()
@@ -648,6 +682,7 @@ pub(super) fn tool_environment_spec<'lock>(
 pub(super) async fn refine_interpreter(
     interpreter: &Interpreter,
     python_request: Option<&PythonRequest>,
+    requires_python_bound: Option<&RequiresPython>,
     err: &ResolveError,
     client_builder: &BaseClientBuilder<'_>,
     reporter: &PythonDownloadReporter,
@@ -699,10 +734,23 @@ pub(super) async fn refine_interpreter(
         Bound::Unbounded => unreachable!("`requires-python` should never be unbounded"),
     };
 
+    let specifiers = VersionSpecifiers::from_iter(
+        [lower_bound, upper_bound].into_iter().chain(
+            requires_python_bound
+                .into_iter()
+                .flat_map(|requires_python| requires_python.specifiers().iter().cloned()),
+        ),
+    );
     let requires_python_request = PythonRequest::Version(VersionRequest::from_specifiers(
-        VersionSpecifiers::from_iter([lower_bound, upper_bound]),
+        specifiers,
         PythonVariant::default(),
     ));
+
+    if requires_python_bound.is_some_and(|requires_python| {
+        !requires_python_request.intersects_specifiers(requires_python.specifiers())
+    }) {
+        return Ok(None);
+    }
 
     debug!("Refining interpreter with: {requires_python_request}");
 
@@ -748,6 +796,7 @@ pub(super) fn finalize_tool_install(
     options: &ToolOptions,
     force: bool,
     python: Option<PythonRequest>,
+    requires_python: Option<&RequiresPython>,
     requirements: Vec<Requirement>,
     constraints: Vec<Requirement>,
     overrides: Vec<Requirement>,
@@ -948,6 +997,7 @@ pub(super) fn finalize_tool_install(
         excludes,
         build_constraints,
         python,
+        requires_python.cloned(),
         installed_entrypoints,
         options.clone(),
     );

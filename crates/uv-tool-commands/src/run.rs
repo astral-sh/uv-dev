@@ -34,7 +34,6 @@ use uv_pep440::{VersionSpecifier, VersionSpecifiers};
 use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
-use uv_python_discovery::PythonInstallation;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
@@ -57,7 +56,7 @@ use crate::requirements::resolve_names;
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
-use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::{PythonDownloadReporter, PythonInstallation};
 use uv_resolve_operations as operations;
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
@@ -806,23 +805,34 @@ async fn get_or_create_environment(
         // e.g., `uvx python3.12`
         (None, Some(tool_request)) => Some(tool_request),
     };
-    let python_request = ToolPython::from_request(
+    // Read the `--with` requirements.
+    let spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        &[],
+        None,
+        client_builder,
+    )
+    .await?;
+
+    let tool_python = ToolPython::from_request(
         python_request,
         unresolved_target_requirement
             .as_ref()
             .map(|requirement| &requirement.requirement),
+        spec.requires_python.as_ref(),
         ConfigDiscovery::Enabled,
         lfs,
         state.git(),
         client_builder,
         cache,
     )
-    .await?
-    .python_request;
+    .await?;
 
     // Discover an interpreter.
     let interpreter = PythonInstallation::find_or_download(
-        python_request.as_ref(),
+        tool_python.python_request.as_ref(),
         EnvironmentPreference::OnlySystem,
         python_preference,
         python_arch,
@@ -835,6 +845,9 @@ async fn get_or_create_environment(
     )
     .await?
     .into_interpreter();
+    tool_python.check_interpreter_compatibility(&interpreter)?;
+    let requires_python = &tool_python.requires_python;
+    let python_request = &tool_python.python_request;
 
     let build_constraints = Constraints::from_specifications(
         operations::read_constraints(build_constraints, client_builder).await?,
@@ -1020,16 +1033,6 @@ async fn get_or_create_environment(
         None
     };
 
-    // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        &[],
-        None,
-        client_builder,
-    )
-    .await?;
     let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
 
     // Resolve the `--from` and `--with` requirements.
@@ -1099,7 +1102,10 @@ async fn get_or_create_environment(
                             .unwrap_or(&PythonRequest::Any)
                             .with_default_arch(python_arch.map(PythonArchitecture::into_inner)),
                         cache,
-                    )
+                    ) && requires_python.as_ref().is_none_or(|requires_python| {
+                        requires_python
+                            .contains(environment.environment().interpreter().python_version())
+                    })
                 });
 
             // Check if the installed packages meet the requirements.
@@ -1227,6 +1233,7 @@ async fn get_or_create_environment(
                 let Some(interpreter) = refine_interpreter(
                     &interpreter,
                     python_request.as_ref(),
+                    requires_python.as_ref(),
                     &err,
                     client_builder,
                     &reporter,

@@ -1347,6 +1347,26 @@ pub enum EnvironmentResolution {
     Universal,
 }
 
+/// Bound universal environment resolution to the selected interpreter and input requirements.
+pub fn universal_requires_python(
+    interpreter: &Interpreter,
+    requires_python: Option<&RequiresPython>,
+) -> RequiresPython {
+    let minimum = RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
+    RequiresPython::from_specifiers(
+        minimum
+            .specifiers()
+            .iter()
+            .chain(
+                requires_python
+                    .into_iter()
+                    .flat_map(|bound| bound.specifiers().iter()),
+            )
+            .cloned()
+            .collect(),
+    )
+}
+
 /// Run dependency resolution for an interpreter, returning the [`ResolverOutput`].
 pub async fn resolve_environment(
     spec: EnvironmentSpecification<'_>,
@@ -1400,6 +1420,7 @@ pub async fn resolve_environment(
         override_dependencies,
         excludes,
         source_trees,
+        requires_python,
         ..
     } = spec.requirements;
 
@@ -1422,7 +1443,7 @@ pub async fn resolve_environment(
         EnvironmentResolution::Specific => PythonRequirement::from_interpreter(interpreter),
         EnvironmentResolution::Universal => PythonRequirement::from_requires_python(
             interpreter,
-            RequiresPython::greater_than_equal_version(&interpreter.python_minor_version()),
+            universal_requires_python(interpreter, requires_python.as_ref()),
         ),
     };
 

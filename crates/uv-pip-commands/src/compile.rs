@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
@@ -38,7 +38,7 @@ use uv_python_discovery::PythonInstallation;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
-    PythonVersion, VersionRequest,
+    PythonVariant, PythonVersion, VersionRequest,
 };
 use uv_requirements::{
     GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
@@ -210,6 +210,7 @@ pub async fn pip_compile(
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
         project,
+        requires_python,
         requirements,
         constraints,
         overrides,
@@ -312,6 +313,11 @@ pub async fn pip_compile(
         let request = if let Some(version) = python_version.as_ref() {
             // TODO(zanieb): We should consolidate `VersionRequest` and `PythonVersion`
             PythonRequest::Version(VersionRequest::from(version))
+        } else if let Some(requires_python) = requires_python.as_ref() {
+            PythonRequest::Version(VersionRequest::from_specifiers(
+                requires_python.specifiers().clone(),
+                PythonVariant::default(),
+            ))
         } else {
             PythonRequest::default()
         };
@@ -336,6 +342,17 @@ pub async fn pip_compile(
         interpreter.python_version(),
         interpreter.sys_executable().user_display().cyan()
     );
+
+    let target_version = python_version
+        .as_ref()
+        .map_or(interpreter.python_version(), PythonVersion::version);
+    if let Some(requires_python) = requires_python.as_ref()
+        && !requires_python.contains(target_version)
+    {
+        return Err(anyhow!(
+            "Python {target_version} is incompatible with the PEP 723 `requires-python` value: `{requires_python}`"
+        ));
+    }
 
     if let Some(python_version) = python_version.as_ref() {
         // If the requested version does not match the version we're using warn the user
@@ -372,7 +389,15 @@ pub async fn pip_compile(
     // Determine the Python requirement, if the user requested a specific version.
     let python_requirement = if universal {
         let requires_python = if let Some(python_version) = python_version.as_ref() {
-            RequiresPython::greater_than_equal_version(&python_version.version)
+            let minimum = RequiresPython::greater_than_equal_version(&python_version.version);
+            if let Some(requires_python) = requires_python.as_ref() {
+                RequiresPython::intersection([minimum.specifiers(), requires_python.specifiers()].into_iter())
+                    .context("The requested Python version does not overlap the PEP 723 `requires-python` value")?
+            } else {
+                minimum
+            }
+        } else if let Some(requires_python) = requires_python.as_ref() {
+            requires_python.clone()
         } else {
             let version = interpreter.python_minor_version();
             RequiresPython::greater_than_equal_version(&version)
