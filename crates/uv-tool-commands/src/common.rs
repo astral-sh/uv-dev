@@ -23,8 +23,7 @@ use uv_distribution::{
 };
 use uv_distribution_types::{
     DependencyMetadata, ExtraBuildRequires, HashCollection, IndexLocations, InstalledDist, Name,
-    NameRequirementSpecification, Requirement, RequirementSource, RequiresPython, Resolution,
-    UnresolvedRequirement,
+    NameRequirementSpecification, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
@@ -50,14 +49,13 @@ use uv_python_types::{
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
 use uv_settings::{
-    LockedSource, PythonInstallMirrors, ResolverInstallerOptions, ResolverInstallerSettings,
-    ResolverSettings, ToolInstallOptions, ToolOptions,
+    LockedSource, PythonInstallMirrors, ResolverInstallerSettings, ResolverSettings, ToolOptions,
 };
 use uv_shell::Shell;
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user_once;
-use uv_workspace::{VirtualProject, WorkspaceCache};
+use uv_workspace::{ProjectWorkspace, WorkspaceCache};
 
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolve_operations::{Error as ResolveError, resolution_markers, resolution_tags};
@@ -198,22 +196,31 @@ impl ToolPython {
         git_resolver: &GitResolver,
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
-        workspace_cache: Option<&WorkspaceCache>,
+        source_project: Option<&ProjectWorkspace>,
     ) -> Result<Self, io::Error> {
         let requires_python = if python_request.is_none() {
-            match requirement {
-                Some(requirement) => {
-                    infer_requires_python_from_requirement(
-                        requirement,
-                        lfs,
-                        git_resolver,
-                        client_builder,
-                        cache,
-                        workspace_cache,
-                    )
-                    .await
+            if let Some(project) = source_project {
+                match LockTarget::Workspace(project.workspace()).requires_python() {
+                    Ok(requires_python) => requires_python,
+                    Err(err) => {
+                        debug!("Failed to infer workspace `requires-python`: {err}");
+                        None
+                    }
                 }
-                None => None,
+            } else {
+                match requirement {
+                    Some(requirement) => {
+                        infer_requires_python_from_requirement(
+                            requirement,
+                            lfs,
+                            git_resolver,
+                            client_builder,
+                            cache,
+                        )
+                        .await
+                    }
+                    None => None,
+                }
             }
         } else {
             None
@@ -267,7 +274,7 @@ impl ToolPython {
     }
 }
 
-/// Infer [`RequiresPython`] from a direct source requirement or its imported workspace.
+/// Infer [`RequiresPython`] from a direct source requirement.
 ///
 /// Returns `None` when the requirement is not a directory or Git source, its metadata is not
 /// statically available, or the Git source cannot be fetched.
@@ -277,7 +284,6 @@ async fn infer_requires_python_from_requirement(
     git_resolver: &GitResolver,
     client_builder: &BaseClientBuilder<'_>,
     cache: &Cache,
-    workspace_cache: Option<&WorkspaceCache>,
 ) -> Option<RequiresPython> {
     let requirement = requirement
         .clone()
@@ -285,22 +291,6 @@ async fn infer_requires_python_from_requirement(
     let source = requirement.source();
 
     let database = StaticMetadataDatabase::new(client_builder, git_resolver, cache);
-    if let Some(workspace_cache) = workspace_cache {
-        match database
-            .source_tree_project(source.as_ref(), workspace_cache)
-            .await
-        {
-            Ok(Some((project, _))) => {
-                match LockTarget::Workspace(project.workspace()).requires_python() {
-                    Ok(requires_python) => return requires_python,
-                    Err(err) => debug!("Failed to infer workspace `requires-python`: {err}"),
-                }
-            }
-            Ok(None) => {}
-            Err(err) => debug!("Failed to discover the tool workspace: {err}"),
-        }
-    }
-
     match database.requires_python(source.as_ref()).await {
         Ok(requires_python) => requires_python,
         Err(err) => {
@@ -312,12 +302,13 @@ async fn infer_requires_python_from_requirement(
     }
 }
 
-/// Discover and validate the existing project lock for a source-tree tool.
+/// Validate the existing lock for a discovered source-tree tool.
 pub(crate) async fn locked_tool_project(
+    project: ProjectWorkspace,
+    git: Option<Fetch>,
     requirement: &Requirement,
     interpreter: &Interpreter,
     settings: &ResolverInstallerSettings,
-    options: &ToolInstallOptions,
     lock_source: LockedSource,
     state: &PlatformState,
     client_builder: &BaseClientBuilder<'_>,
@@ -326,55 +317,20 @@ pub(crate) async fn locked_tool_project(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
-) -> Result<
-    (
-        VirtualProject,
-        ValidatedProjectLock,
-        ResolverInstallerOptions,
-        ResolverInstallerSettings,
-    ),
-    ToolLockError,
-> {
-    let (project, git) = StaticMetadataDatabase::new(client_builder, state.git(), cache)
-        .source_tree_project(&requirement.source, workspace_cache)
-        .await
-        ?
-        .ok_or_else(|| {
-            if matches!(requirement.source, RequirementSource::Directory { .. } | RequirementSource::GitDirectory { .. }) {
-                return ToolLockError::Anyhow(anyhow::anyhow!("`--locked` requires a source tree with a `[project]` table for `{}`", requirement.name));
-            }
-            ToolLockError::Anyhow(anyhow::anyhow!(
-                "`--locked` requires a tool from a source tree (e.g., a Git repository or local directory), but `{}` is not a source tree",
-                requirement.name.cyan()
-            ))
-        })?;
-
-    match project.project_name() {
-        Some(name) if name == &requirement.name => {}
-        Some(name) => {
-            return Err(anyhow::anyhow!(
-                "Expected project `{}`, but the source tree defines `{name}`",
-                requirement.name,
-            )
-            .into());
-        }
-        None => {
-            return Err(anyhow::anyhow!(
-                "`--locked` requires a source tree with a `[project]` table for `{}`",
-                requirement.name,
-            )
-            .into());
-        }
+) -> Result<(ProjectWorkspace, ValidatedProjectLock), ToolLockError> {
+    if project.project_name() != &requirement.name {
+        return Err(anyhow::anyhow!(
+            "Expected project `{}`, but the source tree defines `{}`",
+            requirement.name,
+            project.project_name(),
+        )
+        .into());
     }
-
-    let options = options.for_project(project.workspace().install_path())?;
-    let mut project_settings = ResolverInstallerSettings::from(options.clone());
-    project_settings.resolver.torch_backend = settings.resolver.torch_backend;
 
     let universal_state = state.fork();
     let lock = LockOperation::new(
         LockMode::Locked(interpreter, lock_source),
-        &project_settings.resolver,
+        &settings.resolver,
         client_builder,
         &universal_state,
         Box::new(DefaultResolveLogger),
@@ -398,12 +354,7 @@ pub(crate) async fn locked_tool_project(
     ))?;
     store_credentials_from_target(target, client_builder)?;
 
-    Ok((
-        project,
-        ValidatedProjectLock { lock, git },
-        options,
-        project_settings,
-    ))
+    Ok((project, ValidatedProjectLock { lock, git }))
 }
 
 /// A source-project lock checked in locked mode, with any materialized Git origin.
@@ -499,7 +450,7 @@ impl ToolLock {
     /// Copy a validated project lock into a tool environment.
     pub(crate) fn from_project_lock(
         root: &Path,
-        project: &VirtualProject,
+        project: &ProjectWorkspace,
         project_name: &PackageName,
         lock: ValidatedProjectLock,
         manifest: &ResolverManifest,

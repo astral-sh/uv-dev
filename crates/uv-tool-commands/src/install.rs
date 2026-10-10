@@ -18,15 +18,16 @@ use uv_configuration::{
 };
 use uv_distribution::{
     GitWorkspaceMember, LoweredExtraBuildDependencies, LoweredRequirement, LoweringError,
+    StaticMetadataDatabase,
 };
 use uv_distribution_types::{
     ExtraBuildRequires, GitDirectorySourceUrl, IndexCapabilities, NameRequirementSpecification,
-    Requirement, RequirementSource, UnresolvedRequirementSpecification,
+    Requirement, RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
-use uv_pep508::MarkerTree;
+use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
@@ -132,7 +133,15 @@ pub async fn install(
     // Parse the input requirement.
     let request = ToolRequest::parse(&package, from.as_deref())?;
 
-    let unresolved_target_requirements = match &request {
+    // If the user passed, e.g., `ruff@latest`, refresh the cache.
+    let refresh = if request.is_latest() {
+        refresh.combine(Refresh::All(Timestamp::now()))
+    } else {
+        refresh
+    };
+    let cache = cache.with_refresh(refresh.clone());
+
+    let mut unresolved_target_requirements = match &request {
         ToolRequest::Package {
             target: Target::Unspecified(requirement),
             ..
@@ -151,6 +160,64 @@ pub async fn install(
         _ => None,
     };
 
+    // Locked tools import source-project settings and identity before any metadata build.
+    let source_project = if let LockCheck::Enabled(lock_source) = lock_check
+        && matches!(&request, ToolRequest::Package { .. })
+    {
+        let specification = unresolved_target_requirements
+            .as_mut()
+            .and_then(|requirements| requirements.first_mut())
+            .ok_or_else(|| anyhow::anyhow!(
+                "`--locked` requires a tool from a source tree (e.g., a Git repository or local directory), but `{package}` is not a source tree"
+            ))?;
+        let requirement = specification.requirement.clone().augment_requirement(
+            None,
+            None,
+            None,
+            lfs.into(),
+            None,
+        );
+        let source = requirement.source();
+        let (project, git) = StaticMetadataDatabase::new(&client_builder, state.git(), &cache)
+            .source_tree_project(source.as_ref(), workspace_cache)
+            .await?
+            .ok_or_else(|| {
+                let name = match &requirement {
+                    UnresolvedRequirement::Named(requirement) => requirement.name.to_string(),
+                    UnresolvedRequirement::Unnamed(requirement) => requirement.to_string(),
+                };
+                if matches!(source.as_ref(), RequirementSource::Directory { .. } | RequirementSource::GitDirectory { .. }) {
+                    anyhow::anyhow!("`--locked` requires a source tree with a `[project]` table for `{name}`")
+                } else {
+                    anyhow::anyhow!("`--locked` requires a tool from a source tree (e.g., a Git repository or local directory), but `{name}` is not a source tree")
+                }
+            })?;
+        specification.requirement = match requirement {
+            UnresolvedRequirement::Named(requirement) => UnresolvedRequirement::Named(requirement),
+            UnresolvedRequirement::Unnamed(requirement) => UnresolvedRequirement::Named(
+                uv_pep508::Requirement {
+                    name: project.project_name().clone(),
+                    extras: requirement.extras,
+                    version_or_url: Some(VersionOrUrl::Url(requirement.url)),
+                    marker: requirement.marker,
+                    origin: requirement.origin,
+                }
+                .into(),
+            ),
+        };
+        Some((project, git, lock_source))
+    } else {
+        None
+    };
+    let (options, settings) = if let Some((project, _, _)) = source_project.as_ref() {
+        let options = tool_options.for_project(project.workspace().install_path())?;
+        let mut project_settings = ResolverInstallerSettings::from(options.clone());
+        project_settings.resolver.torch_backend = settings.resolver.torch_backend;
+        (options, project_settings)
+    } else {
+        (tool_options.into_options(), settings)
+    };
+
     let tool_python = ToolPython::from_request(
         python.as_deref().map(PythonRequest::parse),
         unresolved_target_requirements
@@ -162,7 +229,7 @@ pub async fn install(
         state.git(),
         &client_builder,
         &cache,
-        locked.then_some(workspace_cache),
+        source_project.as_ref().map(|(project, _, _)| project),
     )
     .await?;
     let explicit_python_request = tool_python.is_explicit();
@@ -211,14 +278,6 @@ pub async fn install(
         operations::read_constraints(build_constraints, &client_builder).await?;
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
-
-    // If the user passed, e.g., `ruff@latest`, refresh the cache.
-    let refresh = if request.is_latest() {
-        refresh.combine(Refresh::All(Timestamp::now()))
-    } else {
-        refresh
-    };
-    let cache = cache.with_refresh(refresh.clone());
 
     // Resolve the `--from` requirement.
     let requirement = match &request {
@@ -399,12 +458,13 @@ pub async fn install(
 
     let package_name = &requirement.name;
 
-    let (source_project_lock, options, settings) = match lock_check {
-        LockCheck::Enabled(lock_source) => match locked_tool_project(
+    let source_project_lock = if let Some((project, git, lock_source)) = source_project {
+        match locked_tool_project(
+            project,
+            git,
             &requirement,
             &interpreter,
             &settings,
-            &tool_options,
             lock_source,
             &state,
             &client_builder,
@@ -416,11 +476,12 @@ pub async fn install(
         )
         .await
         {
-            Ok((project, lock, options, settings)) => (Some((project, lock)), options, settings),
+            Ok(project) => Some(project),
             Err(ToolLockError::Lock(err)) => return Err(UvError::from(err).into()),
             Err(err) => return Err(err.into()),
-        },
-        LockCheck::Disabled => (None, tool_options.into_options(), settings),
+        }
+    } else {
+        None
     };
 
     // If the user passed, e.g., `ruff@latest`, we need to mark it as upgradable.
