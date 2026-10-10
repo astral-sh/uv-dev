@@ -64,6 +64,10 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+fs-err = { workspace = true }
+url = { workspace = true }
+
 [features]
 clap = ["uv-configuration/clap"]
 schemars = ["uv-configuration/schemars"]
