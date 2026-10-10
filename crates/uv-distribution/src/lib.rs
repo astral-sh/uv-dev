@@ -9,6 +9,7 @@ pub use metadata::{
     LoweredRequirement, LoweringError, Metadata, MetadataError, RequiresDist,
     SourcedDependencyGroups,
 };
+pub use packed::{has_cached_local_archive, local_archive_cache_info};
 pub use reporter::Reporter;
 pub use source::{StaticMetadataDatabase, prune};
 
@@ -22,5 +23,6 @@ mod first_party;
 mod hash;
 mod index;
 mod metadata;
+mod packed;
 mod reporter;
 mod source;

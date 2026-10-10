@@ -464,10 +464,8 @@ impl Dist {
         // Normalize the path.
         let install_path = normalize_absolute_path(&install_path)?;
 
-        // Validate that the path exists.
-        if !install_path.exists() {
-            return Err(Error::NotFound(url.to_url()));
-        }
+        // Availability is checked by metadata and installation consumers, which may use a
+        // prefetched archive after the original file has been removed.
 
         // Determine whether the path represents a built or source distribution.
         match ext {

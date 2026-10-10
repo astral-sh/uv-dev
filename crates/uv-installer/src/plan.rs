@@ -361,6 +361,7 @@ impl<'a> Planner<'a> {
                     [installed] => {
                         let source = RequirementSource::from(dist);
                         match RequirementSatisfaction::check(
+                            cache,
                             dist.name(),
                             installed,
                             &source,
@@ -507,7 +508,9 @@ impl<'a> Planner<'a> {
                 }
                 Dist::Built(BuiltDist::Path(wheel)) => {
                     // Validate that the path exists.
-                    if !wheel.install_path.exists() {
+                    if !wheel.install_path.exists()
+                        && !uv_distribution::has_cached_local_archive(cache, dist.as_ref())
+                    {
                         return Err(Error::NotFound(wheel.url.to_url()).into());
                     }
 
@@ -701,7 +704,9 @@ impl<'a> Planner<'a> {
                 }
                 Dist::Source(SourceDist::Path(sdist)) => {
                     // Validate that the path exists.
-                    if !sdist.install_path.exists() {
+                    if !sdist.install_path.exists()
+                        && !uv_distribution::has_cached_local_archive(cache, dist.as_ref())
+                    {
                         return Err(Error::NotFound(sdist.url.to_url()).into());
                     }
 

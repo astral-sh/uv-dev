@@ -20,8 +20,8 @@ use url::Url;
 use uv_cache::{ArchiveFileId, ArchiveId, Cache, CacheBucket, CacheEntry, WheelCache};
 use uv_cache_info::{CacheInfo, Timestamp};
 use uv_client::{
-    CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, RegistryClient,
-    RequestBuilder, RetryState,
+    CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, PackedArchiveEntry,
+    RegistryClient, RequestBuilder, RetryState,
 };
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
@@ -93,6 +93,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             content_addressed_cache,
             first_party_packages: None,
         }
+    }
+
+    /// Return the cache used for distribution metadata and archives.
+    pub fn cache(&self) -> &Cache {
+        self.build_context.cache()
     }
 
     /// Allow metadata builds for the given first-party workspace source trees.
@@ -897,15 +902,27 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
+        let packed_entry =
+            PackedArchiveEntry::wheel(self.build_context.cache(), index, &url, filename);
         let archive = self
             .client
             .managed(|client| {
-                client.cached_client().get_serde_with_retry(
-                    req,
-                    &http_entry,
-                    cache_control.clone(),
-                    download,
-                )
+                client
+                    .cached_client()
+                    .get_serde_with_retry_and_packed_fallback(
+                        req,
+                        &http_entry,
+                        cache_control.clone(),
+                        Some(&packed_entry),
+                        |archive: &Archive| {
+                            archive.satisfies(hashes)
+                                && expected_size
+                                    .zip(archive.size)
+                                    .is_none_or(|(expected, actual)| expected == actual)
+                        },
+                        download,
+                    )
+                    .boxed_local()
             })
             .await
             .map_err(|err| match err {
@@ -936,6 +953,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .managed(async |client| {
                     client
                         .cached_client()
+                        .with_packed_entry(Some(&packed_entry))
                         .skip_cache_with_retry(
                             self.request(url)?,
                             &http_entry,
@@ -1025,15 +1043,27 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
+        let packed_entry =
+            PackedArchiveEntry::wheel(self.build_context.cache(), index, &url, filename);
         let archive = self
             .client
             .managed(|client| {
-                client.cached_client().get_serde_with_retry(
-                    req,
-                    &http_entry,
-                    cache_control.clone(),
-                    download,
-                )
+                client
+                    .cached_client()
+                    .get_serde_with_retry_and_packed_fallback(
+                        req,
+                        &http_entry,
+                        cache_control.clone(),
+                        Some(&packed_entry),
+                        |archive: &Archive| {
+                            archive.satisfies(hashes)
+                                && expected_size
+                                    .zip(archive.size)
+                                    .is_none_or(|(expected, actual)| expected == actual)
+                        },
+                        download,
+                    )
+                    .boxed_local()
             })
             .await
             .map_err(|err| match err {
@@ -1064,6 +1094,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .managed(async |client| {
                     client
                         .cached_client()
+                        .with_packed_entry(Some(&packed_entry))
                         .skip_cache_with_retry(
                             self.request(url)?,
                             &http_entry,
@@ -1393,8 +1424,39 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // Acquire an advisory lock, to guard against concurrent writes.
         let _lock = Self::lock_wheel(&wheel_entry, filename).await?;
 
-        // Determine the last-modified time of the wheel.
-        let modified = Timestamp::from_path(path).map_err(Error::CacheRead)?;
+        // A prefetched archive can outlive the original local file.
+        let packed = if !path.try_exists().map_err(Error::CacheRead)? {
+            let entry = match dist {
+                BuiltDist::Registry(wheels) => {
+                    let wheel = wheels.best_wheel();
+                    Some(PackedArchiveEntry::wheel(
+                        self.build_context.cache(),
+                        Some(&wheel.index),
+                        &wheel.file.url.to_url()?,
+                        filename,
+                    ))
+                }
+                BuiltDist::Path(wheel) => Some(PackedArchiveEntry::wheel(
+                    self.build_context.cache(),
+                    None,
+                    &wheel.url,
+                    filename,
+                )),
+                BuiltDist::DirectUrl(_) | BuiltDist::GitPath(_) => None,
+            };
+            if let Some(entry) = entry {
+                entry.read_local().await.map_err(Error::Client)?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let (path, modified) = if let Some((file, timestamp)) = &packed {
+            (file.path(), *timestamp)
+        } else {
+            (path, Timestamp::from_path(path).map_err(Error::CacheRead)?)
+        };
 
         // Attempt to read the archive pointer from the cache.
         let pointer_entry = wheel_entry.with_file(format!("{}.rev", filename.cache_key()));

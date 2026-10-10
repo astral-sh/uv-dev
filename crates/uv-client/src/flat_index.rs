@@ -253,7 +253,7 @@ impl<'a> FlatIndexClient<'a> {
             )
             .await;
         match response {
-            Ok(files) => {
+            Ok((files, _)) => {
                 let files = files.iter().map(|file| {
                     rkyv::deserialize::<File, rkyv::rancor::Error>(file)
                         .expect("archived version always deserializes")

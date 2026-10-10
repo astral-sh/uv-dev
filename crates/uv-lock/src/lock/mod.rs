@@ -6637,7 +6637,103 @@ pub struct Package {
     metadata: PackageMetadata,
 }
 
+/// A distribution archive recorded in a lockfile, independent of platform compatibility.
+#[derive(Debug, Clone)]
+pub struct LockedArtifact {
+    pub kind: LockedArtifactKind,
+    pub url: DisplaySafeUrl,
+    pub hash: Option<HashDigest>,
+    pub size: Option<u64>,
+}
+
+/// The source-aware identity of an archive recorded in a lockfile.
+#[derive(Debug, Clone)]
+pub enum LockedArtifactKind {
+    Wheel {
+        filename: WheelFilename,
+        index: Option<IndexUrl>,
+    },
+    Source {
+        extension: SourceDistExtension,
+        registry: Option<(IndexUrl, Version)>,
+    },
+}
+
 impl Package {
+    /// Return every wheel and source archive recorded for this package.
+    pub fn artifacts(&self, root: &Path) -> Result<Vec<LockedArtifact>, LockError> {
+        let mut artifacts = Vec::new();
+        for wheel in &self.wheels {
+            let mut index = None;
+            let url = match (&self.id.source, &wheel.url) {
+                (Source::Registry(source), _) => {
+                    let wheel = wheel.to_registry_wheel(source, root)?;
+                    index = Some(wheel.index);
+                    wheel.file.url.to_url().map_err(LockErrorKind::InvalidUrl)?
+                }
+                (_, WheelWireSource::Url { url }) => {
+                    url.to_url().map_err(LockErrorKind::InvalidUrl)?
+                }
+                (Source::Direct(url, _), _) => url.to_url().map_err(LockErrorKind::InvalidUrl)?,
+                (Source::Path(path), _) => {
+                    let path = absolute_path(root, path)?;
+                    DisplaySafeUrl::from_file_path(&path).map_err(|()| {
+                        LockErrorKind::PathToUrl {
+                            path: path.into_boxed_path(),
+                        }
+                    })?
+                }
+                _ => continue,
+            };
+            artifacts.push(LockedArtifact {
+                kind: LockedArtifactKind::Wheel {
+                    filename: wheel.filename.clone(),
+                    index,
+                },
+                url,
+                hash: wheel.hash.clone(),
+                size: wheel.size,
+            });
+        }
+        if let Some(sdist) = &self.sdist
+            && let Some(dist) = self.to_source_dist(root, FirstParty::No)?
+        {
+            let artifact = match dist {
+                uv_distribution_types::SourceDist::Registry(dist) => Some((
+                    dist.file.url.to_url().map_err(LockErrorKind::InvalidUrl)?,
+                    LockedArtifactKind::Source {
+                        extension: dist.ext,
+                        registry: Some((dist.index, dist.version)),
+                    },
+                )),
+                uv_distribution_types::SourceDist::DirectUrl(dist) => Some((
+                    dist.url.to_url(),
+                    LockedArtifactKind::Source {
+                        extension: dist.ext,
+                        registry: None,
+                    },
+                )),
+                uv_distribution_types::SourceDist::Path(dist) => Some((
+                    dist.url.to_url(),
+                    LockedArtifactKind::Source {
+                        extension: dist.ext,
+                        registry: None,
+                    },
+                )),
+                _ => None,
+            };
+            if let Some((url, kind)) = artifact {
+                artifacts.push(LockedArtifact {
+                    url,
+                    kind,
+                    hash: sdist.hash().cloned(),
+                    size: sdist.size(),
+                });
+            }
+        }
+        Ok(artifacts)
+    }
+
     pub fn is_from_pypi_registry(&self) -> bool {
         self.id.source.is_pypi_registry()
     }
