@@ -9,6 +9,7 @@ use uv_pep440::{Operator, Version};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_pypi_types::{HashDigest, HashDigests, HashError};
 use uv_requirements_txt::{RequirementEntry, RequirementsTxtRequirement};
+use uv_resolver_types::PreferenceId;
 
 use crate::ResolverEnvironment;
 use crate::universal_marker::UniversalMarker;
@@ -22,6 +23,7 @@ pub enum PreferenceError {
 /// A pinned requirement, as extracted from a `requirements.txt` file.
 #[derive(Clone, Debug)]
 pub struct Preference {
+    id: PreferenceId,
     name: PackageName,
     version: Version,
     /// The markers on the requirement itself (those after the semicolon).
@@ -60,6 +62,7 @@ impl Preference {
         }
 
         Ok(Some(Self {
+            id: PreferenceId::new(),
             name: requirement.name,
             version: specifier.version().clone(),
             marker: requirement.marker,
@@ -85,6 +88,7 @@ impl Preference {
         fork_markers: Vec<UniversalMarker>,
     ) -> Self {
         Self {
+            id: PreferenceId::new(),
             name,
             version,
             marker: MarkerTree::TRUE,
@@ -101,6 +105,7 @@ impl Preference {
             return None;
         };
         Some(Self {
+            id: PreferenceId::new(),
             name: dist.name.clone(),
             version: dist.version.clone(),
             marker: MarkerTree::TRUE,
@@ -109,6 +114,11 @@ impl Preference {
             hashes: HashDigests::empty(),
             source: PreferenceSource::Environment,
         })
+    }
+
+    /// Return the stable identity of this input preference.
+    pub fn id(&self) -> PreferenceId {
+        self.id
     }
 
     /// Return the [`PackageName`] of the package for this [`Preference`].
@@ -165,8 +175,8 @@ pub(crate) enum PreferenceSource {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Entry {
-    /// The position in the input preference list, before flattening fork markers.
-    preference_id: Option<usize>,
+    /// The identity of the input preference, shared by its flattened fork entries.
+    preference_id: Option<PreferenceId>,
     marker: UniversalMarker,
     index: PreferenceIndex,
     pin: Pin,
@@ -174,7 +184,7 @@ pub(crate) struct Entry {
 }
 
 impl Entry {
-    pub(crate) fn preference_id(&self) -> Option<usize> {
+    pub(crate) fn preference_id(&self) -> Option<PreferenceId> {
         self.preference_id
     }
 
@@ -218,7 +228,7 @@ impl Preferences {
         env: &ResolverEnvironment,
     ) -> Self {
         let mut map = FxHashMap::<PackageName, Vec<_>>::default();
-        for (preference_id, preference) in preferences.into_iter().enumerate() {
+        for preference in preferences {
             // Filter non-matching preferences when resolving for an environment.
             if let Some(markers) = env.marker_environment() {
                 if !preference.marker.evaluate(markers, &[]) {
@@ -243,7 +253,7 @@ impl Preferences {
             // Flatten the list of markers into individual entries.
             if preference.fork_markers.is_empty() {
                 map.entry(preference.name).or_default().push(Entry {
-                    preference_id: Some(preference_id),
+                    preference_id: Some(preference.id),
                     marker: UniversalMarker::TRUE,
                     index: preference.index,
                     pin: Pin {
@@ -255,7 +265,7 @@ impl Preferences {
             } else {
                 for fork_marker in preference.fork_markers {
                     map.entry(preference.name.clone()).or_default().push(Entry {
-                        preference_id: Some(preference_id),
+                        preference_id: Some(preference.id),
                         marker: fork_marker,
                         index: preference.index.clone(),
                         pin: Pin {

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
@@ -104,8 +105,8 @@ pub fn read_lock_requirements(
 
 /// Remove preferences whose selected registry artifacts do not cover a required environment.
 ///
-/// The resolution must come from the same ordered preference list. Candidate selection records
-/// each preference's input position, including reuse on other indexes and through local variants.
+/// Candidate selection records stable preference identities, including reuse on other indexes and
+/// through local variants. Reordering or removing input preferences does not change their identity.
 /// Preferences absent from this resolution remain available if a retry makes them reachable again.
 /// Returns whether any preference was removed.
 pub fn retain_wheel_ready_preferences(
@@ -117,7 +118,7 @@ pub fn retain_wheel_ready_preferences(
     if preferences.is_empty() || required_environments.is_empty() {
         return false;
     }
-    let mut retained = vec![true; preferences.len()];
+    let mut discarded = HashSet::new();
     for (_, distribution) in resolution.base_dists() {
         if distribution.preferences.is_empty() {
             continue;
@@ -152,18 +153,13 @@ pub fn retain_wheel_ready_preferences(
                 let applicable = activation.and(*required);
                 !applicable.is_false() && coverage.is_disjoint(applicable)
             }) {
-                retained[*preference] = false;
+                discarded.insert(*preference);
             }
         }
     }
 
     let previous_count = preferences.len();
-    let mut index = 0;
-    preferences.retain(|_| {
-        let keep = retained[index];
-        index += 1;
-        keep
-    });
+    preferences.retain(|preference| !discarded.contains(&preference.id()));
     preferences.len() != previous_count
 }
 

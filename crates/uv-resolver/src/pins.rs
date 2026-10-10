@@ -5,6 +5,7 @@ use rustc_hash::FxHashMap;
 use uv_distribution_types::{DistributionId, Identifier, ResolvedDist};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_resolver_types::PreferenceId;
 
 use crate::ResolveError;
 use crate::candidate_selector::Candidate;
@@ -21,7 +22,7 @@ enum FilePin<'index> {
         /// The index-level variant metadata for the selected package version.
         variants_json: Option<Box<RegisteredVariantsJson<'index>>>,
         /// Input preferences used to select this package, including selections through proxies.
-        preferences: Vec<usize>,
+        preferences: Vec<PreferenceId>,
     },
     Url(RegisteredMetadata<'index>),
 }
@@ -150,7 +151,7 @@ impl<'index> FilePins<'index> {
         &self,
         name: &PackageName,
         version: &Version,
-    ) -> Option<(&ResolvedDist, &DistributionId, &[usize])> {
+    ) -> Option<(&ResolvedDist, &DistributionId, &[PreferenceId])> {
         match self.0.get(&(name.clone(), version.clone()))? {
             FilePin::Registry {
                 dist,
