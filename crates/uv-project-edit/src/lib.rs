@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::{fmt, mem};
 
 use itertools::Itertools;
+use rustc_hash::{FxHashMap, FxHashSet};
 use thiserror::Error;
 use toml_edit::{
     Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TomlError, Value,
@@ -14,7 +15,7 @@ use uv_cache_key::CanonicalUrl;
 use uv_configuration::AddBoundsKind;
 use uv_distribution_types::{Index, IndexFormat, IndexUrl};
 use uv_fs::{PortablePath, is_same_file_allow_missing, try_relative_to_if};
-use uv_normalize::{ExtraName, GroupName, PackageName};
+use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionParseError};
 use uv_pep508::{MarkerTree, Requirement, VersionOrUrl};
 use uv_workspace::pyproject::{DependencyType, Source};
@@ -177,7 +178,8 @@ impl PyProjectTomlMut {
     /// Adds a dependency to `project.dependencies`.
     ///
     /// Returns `true` if the dependency was added, `false` if it was updated.
-    pub fn add_dependency(
+    #[cfg(test)]
+    fn add_dependency(
         &mut self,
         req: &Requirement,
         source: Option<&Source>,
@@ -193,9 +195,7 @@ impl PyProjectTomlMut {
 
         let edit = add_dependency(req, dependencies, source.is_some(), raw)?;
 
-        if let Some(source) = source {
-            self.add_source(&req.name, source)?;
-        }
+        self.add_dependency_sources(&[(req, source)])?;
 
         Ok(edit)
     }
@@ -262,7 +262,8 @@ impl PyProjectTomlMut {
     /// Adds a development dependency to `tool.uv.dev-dependencies`.
     ///
     /// Returns `true` if the dependency was added, `false` if it was updated.
-    pub fn add_dev_dependency(
+    #[cfg(test)]
+    fn add_dev_dependency(
         &mut self,
         req: &Requirement,
         source: Option<&Source>,
@@ -286,9 +287,7 @@ impl PyProjectTomlMut {
 
         let edit = add_dependency(req, dev_dependencies, source.is_some(), raw)?;
 
-        if let Some(source) = source {
-            self.add_source(&req.name, source)?;
-        }
+        self.add_dependency_sources(&[(req, source)])?;
 
         Ok(edit)
     }
@@ -501,7 +500,8 @@ impl PyProjectTomlMut {
     /// Adds a dependency to `project.optional-dependencies`.
     ///
     /// Returns `true` if the dependency was added, `false` if it was updated.
-    pub fn add_optional_dependency(
+    #[cfg(test)]
+    fn add_optional_dependency(
         &mut self,
         group: &ExtraName,
         req: &Requirement,
@@ -549,9 +549,7 @@ impl PyProjectTomlMut {
             optional_dependencies.fmt();
         }
 
-        if let Some(source) = source {
-            self.add_source(&req.name, source)?;
-        }
+        self.add_dependency_sources(&[(req, source)])?;
 
         Ok(added)
     }
@@ -594,7 +592,8 @@ impl PyProjectTomlMut {
     /// Adds a dependency to `dependency-groups`.
     ///
     /// Returns `true` if the dependency was added, `false` if it was updated.
-    pub fn add_dependency_group_requirement(
+    #[cfg(test)]
+    fn add_dependency_group_requirement(
         &mut self,
         group: &GroupName,
         req: &Requirement,
@@ -655,11 +654,115 @@ impl PyProjectTomlMut {
             dependency_groups.fmt();
         }
 
-        if let Some(source) = source {
-            self.add_source(&req.name, source)?;
-        }
+        self.add_dependency_sources(&[(req, source)])?;
 
         Ok(added)
+    }
+
+    /// Add dependencies across arrays, applying source changes in input order.
+    ///
+    /// Returns one edit per input dependency in input order, using each array's final indices.
+    pub fn add_dependencies(
+        &mut self,
+        requirements: &[(&DependencyType, &Requirement, Option<&Source>)],
+        raw: bool,
+    ) -> Result<Vec<ArrayEdit>, Error> {
+        let mut dependency_types = Vec::new();
+        for (dependency_type, _, _) in requirements {
+            if !dependency_types.contains(dependency_type) {
+                dependency_types.push(*dependency_type);
+            }
+        }
+        let mut edits = Vec::with_capacity(requirements.len());
+        for dependency_type in dependency_types {
+            let positions = requirements
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (kind, requirement, source))| {
+                    (*kind == dependency_type).then_some((index, (*requirement, *source)))
+                })
+                .collect::<Vec<_>>();
+            let array_requirements = positions
+                .iter()
+                .map(|(_, requirement)| *requirement)
+                .collect::<Vec<_>>();
+            let array_edits =
+                self.add_dependency_array(dependency_type, &array_requirements, raw)?;
+            edits.extend(
+                positions
+                    .into_iter()
+                    .map(|(index, _)| index)
+                    .zip(array_edits),
+            );
+        }
+        let sources = requirements
+            .iter()
+            .map(|(_, requirement, source)| (*requirement, *source))
+            .collect::<Vec<_>>();
+        self.add_dependency_sources(&sources)?;
+        edits.sort_unstable_by_key(|(index, _)| *index);
+        Ok(edits.into_iter().map(|(_, edit)| edit).collect())
+    }
+
+    /// Adds a batch of dependencies without updating their sources.
+    fn add_dependency_array(
+        &mut self,
+        dependency_type: &DependencyType,
+        requirements: &[(&Requirement, Option<&Source>)],
+        raw: bool,
+    ) -> Result<Vec<ArrayEdit>, Error> {
+        let was_sorted = if matches!(dependency_type, DependencyType::Group(_)) {
+            self.doc
+                .get("dependency-groups")
+                .and_then(Item::as_table_like)
+                .is_none_or(|groups| {
+                    groups
+                        .get_values()
+                        .iter()
+                        .filter_map(|(keys, _)| keys.first())
+                        .map(|key| key.get())
+                        .is_sorted()
+                })
+        } else {
+            false
+        };
+
+        let dependencies = match dependency_type {
+            DependencyType::Production => self.dependencies_array()?,
+            DependencyType::Dev => self.dev_dependencies_array()?,
+            DependencyType::Optional(extra) => self.optional_dependencies_array(extra)?,
+            DependencyType::Group(group) => self.dependency_groups_array(group)?,
+        };
+
+        let edits = add_dependencies(requirements, dependencies, raw)?;
+
+        if matches!(dependency_type, DependencyType::Optional(_))
+            && let Some(optional_dependencies) = self
+                .project()?
+                .get_mut("optional-dependencies")
+                .and_then(Item::as_inline_table_mut)
+        {
+            optional_dependencies.fmt();
+        }
+
+        if matches!(dependency_type, DependencyType::Group(_)) {
+            if was_sorted {
+                self.doc
+                    .get_mut("dependency-groups")
+                    .and_then(Item::as_table_like_mut)
+                    .ok_or(Error::MalformedDependencies)?
+                    .sort_values();
+            }
+            if let Some(dependency_groups) = self
+                .doc
+                .get_mut("dependency-groups")
+                .and_then(Item::as_inline_table_mut)
+            {
+                dependency_groups.fmt();
+            }
+        }
+
+        Ok(edits)
     }
 
     /// Ensure that a dependency group exists, creating an empty group if it doesn't.
@@ -916,9 +1019,14 @@ impl PyProjectTomlMut {
         Ok(dependencies)
     }
 
-    /// Adds a source to `tool.uv.sources`.
-    fn add_source(&mut self, name: &PackageName, source: &Source) -> Result<(), Error> {
-        // Get or create `tool.uv.sources`.
+    /// Adds a batch of sources, resolving normalized source keys once.
+    fn add_dependency_sources(
+        &mut self,
+        requirements: &[(&Requirement, Option<&Source>)],
+    ) -> Result<(), Error> {
+        if requirements.iter().all(|(_, source)| source.is_none()) {
+            return Ok(());
+        }
         let sources = self
             .doc
             .entry("tool")
@@ -933,12 +1041,23 @@ impl PyProjectTomlMut {
             .or_insert(Item::Table(Table::new()))
             .as_table_mut()
             .ok_or(Error::MalformedSources)?;
-
-        if let Some(key) = find_source(name, sources) {
-            sources.remove(&key);
+        let mut keys = FxHashMap::default();
+        for (key, _) in sources.iter() {
+            if let Ok(name) = PackageName::from_str(key) {
+                keys.entry(name).or_insert_with(|| key.to_string());
+            }
         }
-        add_source(name, source, sources)?;
 
+        for (requirement, source) in requirements {
+            let Some(source) = source else {
+                continue;
+            };
+            if let Some(key) = keys.remove(&requirement.name) {
+                sources.remove(&key);
+            }
+            add_source(&requirement.name, source, sources)?;
+            keys.insert(requirement.name.clone(), requirement.name.to_string());
+        }
         Ok(())
     }
 
@@ -1135,6 +1254,45 @@ impl PyProjectTomlMut {
             .is_some()
     }
 
+    /// Returns the normalized names in the standardized and legacy development-dependency arrays.
+    pub fn find_dev_dependency_names(&self) -> (FxHashSet<PackageName>, FxHashSet<PackageName>) {
+        let mut standardized = FxHashSet::default();
+        if let Some(groups) = self.doc.get("dependency-groups").and_then(Item::as_table) {
+            for (group, dependencies) in groups {
+                if !GroupName::from_str(group).is_ok_and(|group| group == *DEV_DEPENDENCIES) {
+                    continue;
+                }
+                let Some(dependencies) = dependencies.as_array() else {
+                    continue;
+                };
+                standardized.extend(
+                    dependencies
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter_map(try_parse_requirement)
+                        .map(|requirement| requirement.name),
+                );
+            }
+        }
+
+        let legacy = self
+            .doc
+            .get("tool")
+            .and_then(Item::as_table)
+            .and_then(|tool| tool.get("uv"))
+            .and_then(Item::as_table)
+            .and_then(|uv| uv.get("dev-dependencies"))
+            .and_then(Item::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(try_parse_requirement)
+            .map(|requirement| requirement.name)
+            .collect();
+
+        (standardized, legacy)
+    }
+
     /// Returns all the places in this `pyproject.toml` that contain a dependency with the given
     /// name.
     ///
@@ -1277,84 +1435,18 @@ fn add_dependency(
 
     match to_replace.as_slice() {
         [] => {
-            #[derive(Debug, Copy, Clone)]
-            enum Sort {
-                /// The list is sorted in a case-insensitive manner.
-                CaseInsensitive,
-                /// The list is sorted naively in a case-insensitive manner.
-                CaseInsensitiveNaive,
-                /// The list is sorted in a case-sensitive manner.
-                CaseSensitive,
-                /// The list is sorted naively in a case-sensitive manner.
-                CaseSensitiveNaive,
-                /// The list is unsorted.
-                Unsorted,
-            }
-
-            fn is_sorted<T, I>(items: I) -> bool
-            where
-                I: IntoIterator<Item = T>,
-                T: PartialOrd + Copy,
-            {
-                items.into_iter().tuple_windows().all(|(a, b)| a <= b)
-            }
-
-            // `deps` are either requirements (strings) or include groups (inline tables).
-            // Here we pull out just the requirements for determining the sort.
-            let reqs: Vec<_> = deps.iter().filter_map(Value::as_str).collect();
-            let reqs_lowercase: Vec<_> = reqs.iter().copied().map(str::to_lowercase).collect();
-
-            // Determine if the dependency list is sorted prior to
-            // adding the new dependency; the new dependency list
-            // will be sorted only when the original list is sorted
-            // so that user's custom dependency ordering is preserved.
-            //
-            // Any items which aren't strings are ignored, e.g.
-            // `{ include-group = "..." }` in dependency-groups.
-            //
-            // We account for both case-sensitive and case-insensitive sorting.
-            let sort = if is_sorted(
-                reqs_lowercase
-                    .iter()
-                    .map(String::as_str)
-                    .map(split_specifiers),
-            ) {
-                Sort::CaseInsensitive
-            } else if is_sorted(reqs.iter().copied().map(split_specifiers)) {
-                Sort::CaseSensitive
-            } else if is_sorted(reqs_lowercase.iter().map(String::as_str)) {
-                Sort::CaseInsensitiveNaive
-            } else if is_sorted(reqs) {
-                Sort::CaseSensitiveNaive
-            } else {
-                Sort::Unsorted
-            };
+            // Detect the ordering before each insertion to retain custom ordering in mixed batches.
+            let sort = dependency_sort(deps);
 
             let req_string = if raw {
                 req.displayable_with_credentials().to_string()
             } else {
                 req.to_string()
             };
-            let index = match sort {
-                Sort::CaseInsensitive => deps.iter().position(|dep| {
-                    dep.as_str().is_some_and(|dep| {
-                        split_specifiers(&dep.to_lowercase())
-                            > split_specifiers(&req_string.to_lowercase())
-                    })
-                }),
-                Sort::CaseInsensitiveNaive => deps.iter().position(|dep| {
-                    dep.as_str()
-                        .is_some_and(|dep| dep.to_lowercase() > req_string.to_lowercase())
-                }),
-                Sort::CaseSensitive => deps.iter().position(|dep| {
-                    dep.as_str()
-                        .is_some_and(|dep| split_specifiers(dep) > split_specifiers(&req_string))
-                }),
-                Sort::CaseSensitiveNaive => deps
-                    .iter()
-                    .position(|dep| dep.as_str().is_some_and(|dep| *dep > *req_string)),
-                Sort::Unsorted => None,
-            };
+            let index = deps.iter().position(|dep| {
+                dep.as_str()
+                    .is_some_and(|dep| compare_dependencies(sort, dep, &req_string).is_gt())
+            });
             let index = index.unwrap_or_else(|| {
                 // The dependency should be added to the end, ignoring any
                 // `include-group` items. This preserves the order for users who
@@ -1430,7 +1522,6 @@ fn add_dependency(
             // the new dependency.
             if deps.len() > 1 && index == 0 {
                 let prefix = deps
-                    .clone()
                     .get(index + 1)
                     .unwrap()
                     .decor()
@@ -1530,6 +1621,223 @@ fn add_dependency(
                 .collect(),
         }),
     }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum DependencySort {
+    CaseInsensitive,
+    CaseInsensitiveNaive,
+    CaseSensitive,
+    CaseSensitiveNaive,
+    Unsorted,
+}
+
+/// Determine the ordering of the string entries in a dependency array.
+fn dependency_sort(deps: &Array) -> DependencySort {
+    fn is_sorted<T, I>(items: I) -> bool
+    where
+        I: IntoIterator<Item = T>,
+        T: PartialOrd + Copy,
+    {
+        items
+            .into_iter()
+            .tuple_windows()
+            .all(|(left, right)| left <= right)
+    }
+
+    let requirements = deps.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+    let lowercase = requirements
+        .iter()
+        .copied()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+
+    if is_sorted(lowercase.iter().map(String::as_str).map(split_specifiers)) {
+        DependencySort::CaseInsensitive
+    } else if is_sorted(requirements.iter().copied().map(split_specifiers)) {
+        DependencySort::CaseSensitive
+    } else if is_sorted(lowercase.iter().map(String::as_str)) {
+        DependencySort::CaseInsensitiveNaive
+    } else if is_sorted(requirements) {
+        DependencySort::CaseSensitiveNaive
+    } else {
+        DependencySort::Unsorted
+    }
+}
+
+fn compare_dependencies(sort: DependencySort, left: &str, right: &str) -> std::cmp::Ordering {
+    match sort {
+        DependencySort::CaseInsensitive => {
+            split_specifiers(&left.to_lowercase()).cmp(&split_specifiers(&right.to_lowercase()))
+        }
+        DependencySort::CaseInsensitiveNaive => left.to_lowercase().cmp(&right.to_lowercase()),
+        DependencySort::CaseSensitive => split_specifiers(left).cmp(&split_specifiers(right)),
+        DependencySort::CaseSensitiveNaive => left.cmp(right),
+        DependencySort::Unsorted => std::cmp::Ordering::Equal,
+    }
+}
+
+/// Adds a batch of dependencies to an array, avoiding repeated parsing, sorting, and formatting.
+fn add_dependencies(
+    requirements: &[(&Requirement, Option<&Source>)],
+    deps: &mut Array,
+    raw: bool,
+) -> Result<Vec<ArrayEdit>, Error> {
+    let mut existing = FxHashMap::<(PackageName, MarkerTree), Vec<(usize, Requirement)>>::default();
+    for (index, requirement) in deps.iter().enumerate().filter_map(|(index, dependency)| {
+        dependency
+            .as_str()
+            .and_then(try_parse_requirement)
+            .map(|requirement| (index, requirement))
+    }) {
+        existing
+            .entry((requirement.name.clone(), requirement.marker))
+            .or_default()
+            .push((index, requirement));
+    }
+
+    let mut added = FxHashSet::default();
+    let mut has_additions = false;
+    let mut has_updates = false;
+    for (requirement, _) in requirements {
+        let key = (requirement.name.clone(), requirement.marker);
+        let matches = existing.get(&key).map_or(&[][..], Vec::as_slice);
+        if matches.len() > 1 {
+            return Err(Error::Ambiguous {
+                package_name: requirement.name.clone(),
+                requirements: matches
+                    .iter()
+                    .map(|(_, requirement)| requirement.clone())
+                    .collect(),
+            });
+        }
+
+        if matches.is_empty() && added.insert(key) {
+            has_additions = true;
+        } else {
+            has_updates = true;
+        }
+    }
+
+    // Updating a requirement can change the ordering of the array. Preserve the existing
+    // item-at-a-time behavior for mixed batches and for commented insertions, where moving a
+    // prefix is significant. These are uncommon, and the all-add and all-update paths cover the
+    // large requirements-file cases.
+    let has_comments = deps
+        .iter()
+        .flat_map(|dependency| [dependency.decor().prefix(), dependency.decor().suffix()])
+        .flatten()
+        .any(|raw| raw.as_str().is_some_and(|raw| raw.contains('#')))
+        || deps
+            .trailing()
+            .as_str()
+            .is_some_and(|raw| raw.contains('#'));
+    if has_additions && (has_updates || has_comments) {
+        let mut edits = Vec::with_capacity(requirements.len());
+        for (requirement, source) in requirements {
+            let edit = add_dependency(requirement, deps, source.is_some(), raw)?;
+            if let ArrayEdit::Add(index) = edit {
+                for existing in &mut edits {
+                    match existing {
+                        ArrayEdit::Add(existing) | ArrayEdit::Update(existing)
+                            if *existing >= index =>
+                        {
+                            *existing += 1;
+                        }
+                        ArrayEdit::Add(_) | ArrayEdit::Update(_) => {}
+                    }
+                }
+            }
+            edits.push(edit);
+        }
+        return Ok(edits);
+    }
+
+    if has_updates {
+        let mut edits = Vec::with_capacity(requirements.len());
+        for (requirement, source) in requirements {
+            let key = (requirement.name.clone(), requirement.marker);
+            let Some(matches) = existing.get_mut(&key) else {
+                return Err(Error::MissingDependency(0));
+            };
+            let Some((index, existing)) = matches.first_mut() else {
+                return Err(Error::MissingDependency(0));
+            };
+            update_requirement(existing, requirement, source.is_some());
+            deps.replace(*index, existing.to_string());
+            edits.push(ArrayEdit::Update(*index));
+        }
+        if !edits.is_empty() {
+            reformat_array_multiline(deps);
+        }
+        return Ok(edits);
+    }
+
+    if requirements.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let sort = dependency_sort(deps);
+    let mut pending = requirements
+        .iter()
+        .enumerate()
+        .map(|(index, (requirement, _))| {
+            let requirement = if raw {
+                requirement.displayable_with_credentials().to_string()
+            } else {
+                requirement.to_string()
+            };
+            (index, requirement)
+        })
+        .collect::<Vec<_>>();
+    pending.sort_by(|(_, left), (_, right)| compare_dependencies(sort, left, right));
+
+    let original = deps.iter().cloned().collect::<Vec<_>>();
+    let trailing = original.is_empty().then(|| deps.trailing().clone());
+    let last_requirement = original.iter().rposition(Value::is_str);
+    deps.clear();
+
+    let mut pending = pending.into_iter().peekable();
+    let mut edits = vec![ArrayEdit::Add(0); requirements.len()];
+    for (index, dependency) in original.into_iter().enumerate() {
+        if let Some(existing) = dependency.as_str() {
+            while pending.peek().is_some_and(|(_, requirement)| {
+                compare_dependencies(sort, requirement, existing).is_lt()
+            }) {
+                if let Some((input, requirement)) = pending.next() {
+                    edits[input] = ArrayEdit::Add(deps.len());
+                    let mut value = Value::from(requirement.as_str());
+                    if deps.is_empty()
+                        && let Some(prefix) = dependency.decor().prefix()
+                    {
+                        value.decor_mut().set_prefix(prefix.clone());
+                    }
+                    deps.push_formatted(value);
+                }
+            }
+        }
+
+        if last_requirement.is_some_and(|last| index > last) {
+            for (input, requirement) in pending.by_ref() {
+                edits[input] = ArrayEdit::Add(deps.len());
+                deps.push_formatted(Value::from(requirement.as_str()));
+            }
+        }
+        deps.push_formatted(dependency);
+    }
+    for (input, requirement) in pending {
+        edits[input] = ArrayEdit::Add(deps.len());
+        let mut value = Value::from(requirement.as_str());
+        if deps.is_empty()
+            && let Some(trailing) = &trailing
+        {
+            value.decor_mut().set_prefix(trailing.clone());
+        }
+        deps.push_formatted(value);
+    }
+
+    reformat_array_multiline(deps);
+    Ok(edits)
 }
 
 /// Update an existing requirement.
@@ -1839,9 +2147,124 @@ mod test {
     use std::str::FromStr;
     use toml_edit::DocumentMut;
     use uv_distribution_types::Index;
-    use uv_normalize::{ExtraName, GroupName, PackageName};
+    use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
     use uv_pep508::{Requirement, RequirementOrigin};
-    use uv_workspace::pyproject::DependencyType;
+    use uv_workspace::pyproject::{DependencyType, Source};
+
+    #[test]
+    fn find_dev_dependency_names() -> Result<()> {
+        let toml = PyProjectTomlMut::from_toml(
+            r#"
+            [project]
+            dependencies = ["production-only"]
+
+            [project.optional-dependencies]
+            extra = ["optional-only"]
+
+            [dependency-groups]
+            DEV = [
+                "shared_name>=1; python_version >= '3.12'",
+                "standardized-only",
+                { include-group = "other" },
+            ]
+            other = ["group-only"]
+
+            [tool.uv]
+            dev-dependencies = [
+                "shared-name<2; sys_platform == 'linux'",
+                "legacy_only",
+                { include-group = "other" },
+            ]
+            "#,
+            DependencyTarget::PyProjectToml,
+        )?;
+
+        let (standardized, legacy) = toml.find_dev_dependency_names();
+        assert_eq!(standardized.len(), 2);
+        assert_eq!(legacy.len(), 2);
+        assert!(standardized.contains(&PackageName::from_str("shared-name")?));
+        assert!(standardized.contains(&PackageName::from_str("standardized-only")?));
+        assert!(legacy.contains(&PackageName::from_str("shared_name")?));
+        assert!(legacy.contains(&PackageName::from_str("legacy-only")?));
+        assert!(!toml.has_dependency_group(&DEV_DEPENDENCIES));
+        assert!(toml.has_dev_dependencies());
+
+        Ok(())
+    }
+
+    #[test]
+    fn find_dev_dependency_names_ignores_malformed_arrays() -> Result<()> {
+        let toml = PyProjectTomlMut::from_toml(
+            r#"
+            [dependency-groups]
+            DEV = "malformed"
+
+            [tool.uv]
+            dev-dependencies = "malformed"
+            "#,
+            DependencyTarget::PyProjectToml,
+        )?;
+
+        let (standardized, legacy) = toml.find_dev_dependency_names();
+        assert!(standardized.is_empty());
+        assert!(legacy.is_empty());
+        assert!(!toml.has_dependency_group(&DEV_DEPENDENCIES));
+        assert!(toml.has_dev_dependencies());
+
+        Ok(())
+    }
+
+    fn assert_batch_matches_individual(
+        toml: &str,
+        inputs: &[&str],
+        dependency_type: &DependencyType,
+    ) -> Result<()> {
+        let requirements = inputs
+            .iter()
+            .map(|requirement| Requirement::from_str(requirement))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut individual = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        let mut individual_edits = Vec::new();
+        for requirement in &requirements {
+            let edit = match dependency_type {
+                DependencyType::Production => {
+                    individual.add_dependency(requirement, None, false)?
+                }
+                DependencyType::Dev => individual.add_dev_dependency(requirement, None, false)?,
+                DependencyType::Optional(extra) => {
+                    individual.add_optional_dependency(extra, requirement, None, false)?
+                }
+                DependencyType::Group(group) => {
+                    individual.add_dependency_group_requirement(group, requirement, None, false)?
+                }
+            };
+            if let ArrayEdit::Add(index) = edit {
+                for existing in &mut individual_edits {
+                    match existing {
+                        ArrayEdit::Add(existing) | ArrayEdit::Update(existing)
+                            if *existing >= index =>
+                        {
+                            *existing += 1;
+                        }
+                        ArrayEdit::Add(_) | ArrayEdit::Update(_) => {}
+                    }
+                }
+            }
+            individual_edits.push(edit);
+        }
+
+        let mut batch = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        let requests = requirements
+            .iter()
+            .map(|requirement| (dependency_type, requirement, None))
+            .collect::<Vec<_>>();
+        let batch_edits = batch.add_dependencies(&requests, false)?;
+
+        assert_eq!(batch.to_string(), individual.to_string());
+        assert_eq!(batch_edits, individual_edits);
+        Ok(())
+    }
 
     #[test]
     fn split() {
@@ -1911,6 +2334,243 @@ dependencies = [
             serialized.contains("\"attrs>=25.4.0\",#comment"),
             "inline comment spacing without padding should be preserved:\n{serialized}"
         );
+    }
+
+    #[test]
+    fn batch_add_preserves_dependency_ordering() -> Result<()> {
+        let cases = [
+            // Case-insensitive, specifier-aware sorting.
+            (
+                r#"[project]
+dependencies = ["Alpha>=1", "charlie", "echo"]
+"#,
+                vec!["delta", "bravo", "foxtrot"],
+            ),
+            // Case-sensitive, specifier-aware sorting.
+            (
+                r#"[project]
+dependencies = ["Alpha", "Bravo", "alpha"]
+"#,
+                vec!["Zulu", "Charlie"],
+            ),
+            // Case-insensitive naive sorting.
+            (
+                r#"[project]
+dependencies = ["a-b", "a>=1", "b"]
+"#,
+                vec!["a-c", "c"],
+            ),
+            // Case-sensitive naive sorting.
+            (
+                r#"[project]
+dependencies = ["A-b", "A>=1", "B", "a"]
+"#,
+                vec!["A-c", "C"],
+            ),
+            // Unsorted arrays preserve input order.
+            (
+                r#"[project]
+dependencies = ["zulu", "alpha", "echo"]
+"#,
+                vec!["delta", "bravo"],
+            ),
+            // Prepending preserves custom indentation.
+            (
+                r#"[project]
+dependencies = [
+        "delta",
+        "echo",
+]
+"#,
+                vec!["charlie", "alpha", "bravo"],
+            ),
+            // An empty array preserves the existing whitespace used by script metadata.
+            (
+                r"[project]
+dependencies = [ ]
+",
+                vec!["alpha"],
+            ),
+        ];
+
+        for (toml, inputs) in cases {
+            assert_batch_matches_individual(toml, &inputs, &DependencyType::Production)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn batch_add_preserves_dependency_groups_and_comments() -> Result<()> {
+        let group = uv_normalize::GroupName::from_str("dev")?;
+        assert_batch_matches_individual(
+            r#"[dependency-groups]
+dev = [
+    "alpha",
+    { include-group = "typing" },
+    "echo",
+    { include-group = "docs" },
+]
+typing = []
+docs = []
+"#,
+            &["delta", "bravo", "foxtrot"],
+            &DependencyType::Group(group.clone()),
+        )?;
+        assert_batch_matches_individual(
+            r#"[dependency-groups]
+dev = [ # bracket comment
+    "alpha", # alpha comment
+    # echo comment
+    "echo",
+    # trailing comment
+]
+"#,
+            &["delta", "bravo", "foxtrot"],
+            &DependencyType::Group(group),
+        )?;
+        assert_batch_matches_individual(
+            r#"[project.optional-dependencies]
+cloud_export_to_parquet = ["alpha", "echo"]
+"#,
+            &["delta", "bravo"],
+            &DependencyType::Optional(uv_normalize::ExtraName::from_str(
+                "cloud-export-to-parquet",
+            )?),
+        )?;
+        assert_batch_matches_individual(
+            r#"[tool.uv]
+dev-dependencies = ["alpha", "echo"]
+"#,
+            &["delta", "bravo"],
+            &DependencyType::Dev,
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn batch_update_preserves_markers_and_repeated_inputs() -> Result<()> {
+        assert_batch_matches_individual(
+            r#"[project]
+dependencies = [
+    "alpha[one]>=1",
+    "bravo>=1; python_version < '3.12'",
+    "bravo>=2; python_version >= '3.12'",
+    "charlie>=1",
+]
+"#,
+            &[
+                "charlie>=3",
+                "alpha[two]>=2",
+                "bravo>=4; python_version >= '3.12'",
+                "alpha[three]",
+            ],
+            &DependencyType::Production,
+        )
+    }
+
+    #[test]
+    fn batch_add_preserves_mixed_update_order() -> Result<()> {
+        assert_batch_matches_individual(
+            r#"[project]
+dependencies = ["a", "a-c"]
+"#,
+            &["a-b", "a[z]"],
+            &DependencyType::Production,
+        )
+    }
+
+    #[test]
+    fn batch_update_preserves_sources_and_ambiguity() -> Result<()> {
+        let toml = r#"[project]
+dependencies = ["alpha @ https://example.invalid/alpha.whl", "bravo>=1"]
+
+[tool.uv.sources]
+Alpha = { index = "old" }
+"#;
+        let requirements = ["alpha[two]>=2", "bravo>=2", "alpha[three]"]
+            .into_iter()
+            .map(Requirement::from_str)
+            .collect::<Result<Vec<_>, _>>()?;
+        let first = toml::from_str::<Source>("index = 'first'")?;
+        let last = toml::from_str::<Source>("index = 'last'")?;
+        let requests = [
+            (&DependencyType::Production, &requirements[0], Some(&first)),
+            (&DependencyType::Production, &requirements[1], None),
+            (&DependencyType::Production, &requirements[2], Some(&last)),
+        ];
+
+        let mut individual = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        let individual_edits = requests
+            .iter()
+            .map(|(_, requirement, source)| individual.add_dependency(requirement, *source, false))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut batch = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        let batch_edits = batch.add_dependencies(&requests, false)?;
+
+        assert_eq!(batch.to_string(), individual.to_string());
+        assert_eq!(batch_edits, individual_edits);
+
+        let mut ambiguous = PyProjectTomlMut::from_toml(
+            "[project]\ndependencies = ['alpha>=1', 'alpha>=2']\n",
+            DependencyTarget::PyProjectToml,
+        )?;
+        assert!(matches!(
+            ambiguous.add_dependencies(
+                &[(&DependencyType::Production, &requirements[0], None)],
+                false
+            ),
+            Err(super::Error::Ambiguous { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn batch_add_preserves_interleaved_source_order() -> Result<()> {
+        let toml = r#"[dependency-groups]
+dev = []
+
+[tool.uv]
+dev-dependencies = ["idna>=1"]
+"#;
+        let requirements = ["iniconfig", "idna", "anyio"]
+            .into_iter()
+            .map(Requirement::from_str)
+            .collect::<Result<Vec<_>, _>>()?;
+        let source = toml::from_str::<Source>("index = 'internal'")?;
+        let dev = uv_normalize::GroupName::from_str("dev")?;
+
+        let mut individual = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        individual.add_dependency_group_requirement(
+            &dev,
+            &requirements[0],
+            Some(&source),
+            false,
+        )?;
+        individual.add_dev_dependency(&requirements[1], Some(&source), false)?;
+        individual.add_dependency_group_requirement(
+            &dev,
+            &requirements[2],
+            Some(&source),
+            false,
+        )?;
+
+        let mut batch = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        let group = DependencyType::Group(dev);
+        let edits = batch.add_dependencies(
+            &[
+                (&group, &requirements[0], Some(&source)),
+                (&DependencyType::Dev, &requirements[1], Some(&source)),
+                (&group, &requirements[2], Some(&source)),
+            ],
+            false,
+        )?;
+        assert_eq!(
+            edits,
+            [ArrayEdit::Add(1), ArrayEdit::Update(0), ArrayEdit::Add(0)]
+        );
+
+        assert_eq!(batch.to_string(), individual.to_string());
+        Ok(())
     }
 
     #[test]
