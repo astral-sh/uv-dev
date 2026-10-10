@@ -649,6 +649,8 @@ fn eat_option(s: &mut Scanner, option: &str) -> bool {
         .chars()
         .next()
         .is_none_or(|char| char.is_whitespace() || matches!(char, '=' | '#'))
+        || remainder.starts_with("\\\n")
+        || remainder.starts_with("\\\r")
     {
         s.eat_if(option)
     } else {
@@ -675,7 +677,7 @@ fn parse_entry(
     }
 
     let start = s.cursor();
-    Ok(Some(if s.eat_if("-r") || s.eat_if("--requirement") {
+    Ok(Some(if s.eat_if("-r") || eat_option(s, "--requirement") {
         let filename = parse_value("--requirement", content, s, |c: char| !is_terminal(c))?;
         let filename = unquote(filename)
             .ok()
@@ -687,7 +689,7 @@ fn parse_entry(
             start,
             end,
         }
-    } else if s.eat_if("-c") || s.eat_if("--constraint") {
+    } else if s.eat_if("-c") || eat_option(s, "--constraint") {
         let filename = parse_value("--constraint", content, s, |c: char| !is_terminal(c))?;
         let filename = unquote(filename)
             .ok()
@@ -699,7 +701,7 @@ fn parse_entry(
             start,
             end,
         }
-    } else if s.eat_if("-e") || s.eat_if("--editable") {
+    } else if s.eat_if("-e") || eat_option(s, "--editable") {
         if s.eat_if('=') {
             // Explicit equals sign.
         } else if s.eat_if(char::is_whitespace) {
@@ -734,7 +736,7 @@ fn parse_entry(
             requirement,
             hashes,
         })
-    } else if s.eat_if("-i") || s.eat_if("--index-url") {
+    } else if s.eat_if("-i") || eat_option(s, "--index-url") {
         let given = parse_value("--index-url", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
             .ok()
@@ -765,7 +767,7 @@ fn parse_entry(
             })?
         };
         RequirementsTxtStatement::IndexUrl(url.with_given(given))
-    } else if s.eat_if("--extra-index-url") {
+    } else if eat_option(s, "--extra-index-url") {
         let given = parse_value("--extra-index-url", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
             .ok()
@@ -798,9 +800,9 @@ fn parse_entry(
         RequirementsTxtStatement::ExtraIndexUrl(url.with_given(given))
     } else if eat_option(s, "--no-index") {
         RequirementsTxtStatement::NoIndex
-    } else if s.eat_if("--require-hashes") {
+    } else if eat_option(s, "--require-hashes") {
         RequirementsTxtStatement::RequireHashes
-    } else if s.eat_if("--find-links") || s.eat_if("-f") {
+    } else if eat_option(s, "--find-links") || s.eat_if("-f") {
         let given = parse_value("--find-links", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
             .ok()
@@ -859,7 +861,7 @@ fn parse_entry(
             }
         };
         RequirementsTxtStatement::FindLinks(url.with_given(given))
-    } else if s.eat_if("--no-binary") {
+    } else if eat_option(s, "--no-binary") {
         let given = parse_value("--no-binary", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
             .ok()
@@ -875,7 +877,7 @@ fn parse_entry(
             }
         })?;
         RequirementsTxtStatement::NoBinary(NoBinary::from_pip_arg(specifier))
-    } else if s.eat_if("--only-binary") {
+    } else if eat_option(s, "--only-binary") {
         let given = parse_value("--only-binary", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
             .ok()
@@ -2908,6 +2910,9 @@ mod test {
         Ok(())
     }
 
+    #[test_case("--prefixed-option=value"; "pre prefix with value")]
+    #[test_case("--no-indexed"; "no index prefix")]
+    #[test_case("--require-hashes-extra"; "require hashes prefix")]
     #[test_case("--no-indexx"; "no index")]
     #[test_case("--prefoo"; "pre")]
     #[test_case("--trusted-hostile"; "trusted host")]
@@ -2929,6 +2934,23 @@ mod test {
         }, {
             insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1");
         });
+
+        Ok(())
+    }
+
+    #[test_case("--require-hashes\\\n"; "LF")]
+    #[test_case("--require-hashes\\\r\n"; "CRLF")]
+    #[test_case("--require-hashes\\\r"; "CR")]
+    #[test_case("--require-hashes\\\n    # comment\n"; "continued comment")]
+    #[tokio::test]
+    async fn require_hashes_line_continuation(content: &str) -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+        requirements_txt.write_str(content)?;
+
+        let parsed = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path()).await?;
+        assert!(parsed.require_hashes);
+        assert!(parsed.requirements.is_empty());
 
         Ok(())
     }
