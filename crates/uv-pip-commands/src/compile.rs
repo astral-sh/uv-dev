@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
-use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
@@ -97,6 +96,7 @@ pub async fn pip_compile(
     include_annotations: bool,
     include_header: bool,
     custom_compile_command: Option<String>,
+    invocation_args: Vec<OsString>,
     include_index_url: bool,
     include_find_links: bool,
     include_build_options: bool,
@@ -630,6 +630,7 @@ pub async fn pip_compile(
             format!(
                 "#    {}",
                 cmd(
+                    invocation_args,
                     include_index_url,
                     include_find_links,
                     custom_compile_command
@@ -814,6 +815,7 @@ pub async fn pip_compile(
 
 /// Format the uv command used to generate the output file.
 fn cmd(
+    invocation_args: Vec<OsString>,
     include_index_url: bool,
     include_find_links: bool,
     custom_compile_command: Option<String>,
@@ -821,7 +823,8 @@ fn cmd(
     if let Some(cmd_str) = custom_compile_command {
         return cmd_str;
     }
-    let args = env::args_os()
+    let args = invocation_args
+        .into_iter()
         .skip(1)
         .map(|arg| arg.to_string_lossy().to_string())
         .scan(None, move |skip_next, arg| {
