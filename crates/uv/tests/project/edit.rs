@@ -8625,57 +8625,229 @@ fn add_remove_frozen_unreadable_lockfile() -> Result<()> {
     Ok(())
 }
 
-/// Restore both files when syncing fails after resolution has written a lockfile.
+/// Restore the project files when syncing fails after resolution.
 #[test]
-fn remove_version_build_failure_reverts_project() -> Result<()> {
-    for args in [
-        &["remove", "iniconfig"][..],
-        &["version", "--bump", "minor"][..],
-    ] {
-        for locked in [false, true] {
-            let context = uv_test::test_context!("3.12");
-            context
-                .temp_dir
-                .child("pyproject.toml")
-                .write_str(indoc! {r#"
-                [project]
-                name = "project"
-                version = "0.1.0"
-                requires-python = ">=3.12"
-                dependencies = ["iniconfig"]
+fn remove_build_failure_reverts_project_without_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
 
-                [build-system]
-                requires = []
-                build-backend = "backend"
-                backend-path = ["."]
-            "#})?;
-            context.temp_dir.child("backend.py").write_str(indoc! {r#"
-                from pathlib import Path
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
 
-                def build_editable(*args, **kwargs):
-                    Path(__file__).with_name("built").touch()
-                    raise RuntimeError("build failed")
-            "#})?;
-            if locked {
-                context.lock().assert().success();
-            }
-            let pyproject = context.read("pyproject.toml");
-            let lock = locked.then(|| context.read("uv.lock"));
+        def build_editable(*args, **kwargs):
+            Path(__file__).with_name("built").touch()
+            raise RuntimeError("build failed")
+    "#})?;
+    let pyproject = context.read("pyproject.toml");
 
-            context.command().args(args).assert().code(1);
-            assert!(context.temp_dir.join("built").exists(), "{args:?}");
-            assert_eq!(context.read("pyproject.toml"), pyproject, "{args:?}");
-            match lock {
-                Some(lock) => assert_eq!(context.read("uv.lock"), lock, "{args:?}"),
-                None => {
-                    context
-                        .temp_dir
-                        .child("uv.lock")
-                        .assert(predicate::path::missing());
-                }
-            }
-        }
-    }
+    uv_snapshot!(context.filters(), context.remove().arg("iniconfig"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_editable` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/backend.py", line 5, in build_editable
+                 raise RuntimeError("build failed")
+             RuntimeError: build failed
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
+    context
+        .temp_dir
+        .child("built")
+        .assert(predicate::path::is_file());
+    assert_eq!(context.read("pyproject.toml"), pyproject);
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Restore the project files when syncing fails after resolution.
+#[test]
+fn remove_build_failure_reverts_project_with_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def build_editable(*args, **kwargs):
+            Path(__file__).with_name("built").touch()
+            raise RuntimeError("build failed")
+    "#})?;
+    context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
+    let lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.remove().arg("iniconfig"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_editable` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/backend.py", line 5, in build_editable
+                 raise RuntimeError("build failed")
+             RuntimeError: build failed
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
+    context
+        .temp_dir
+        .child("built")
+        .assert(predicate::path::is_file());
+    assert_eq!(context.read("pyproject.toml"), pyproject);
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// Restore the project files when syncing fails after resolution.
+#[test]
+fn version_build_failure_reverts_project_without_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def build_editable(*args, **kwargs):
+            Path(__file__).with_name("built").touch()
+            raise RuntimeError("build failed")
+    "#})?;
+    let pyproject = context.read("pyproject.toml");
+
+    uv_snapshot!(context.filters(), context.version().args(["--bump", "minor"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_editable` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/backend.py", line 5, in build_editable
+                 raise RuntimeError("build failed")
+             RuntimeError: build failed
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
+    context
+        .temp_dir
+        .child("built")
+        .assert(predicate::path::is_file());
+    assert_eq!(context.read("pyproject.toml"), pyproject);
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Restore the project files when syncing fails after resolution.
+#[test]
+fn version_build_failure_reverts_project_with_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def build_editable(*args, **kwargs):
+            Path(__file__).with_name("built").touch()
+            raise RuntimeError("build failed")
+    "#})?;
+    context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
+    let lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.version().args(["--bump", "minor"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_editable` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/backend.py", line 5, in build_editable
+                 raise RuntimeError("build failed")
+             RuntimeError: build failed
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
+    context
+        .temp_dir
+        .child("built")
+        .assert(predicate::path::is_file());
+    assert_eq!(context.read("pyproject.toml"), pyproject);
+    assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }
 
