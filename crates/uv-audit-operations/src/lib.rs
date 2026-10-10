@@ -30,6 +30,17 @@ use reporter::AuditReporter;
 pub mod json;
 pub mod sarif;
 
+/// A failure to prepare or query a lockfile audit.
+#[derive(Debug, thiserror::Error)]
+pub enum AuditError {
+    #[error(transparent)]
+    Lock(#[from] uv_lock::LockError),
+    #[error(transparent)]
+    ClientBuild(#[from] uv_client::ClientBuildError),
+    #[error(transparent)]
+    Osv(#[from] osv::Error),
+}
+
 /// Audit findings and ignore-rule matches for one lockfile.
 pub struct AuditOutcome {
     pub n_packages: usize,
@@ -53,7 +64,7 @@ pub async fn audit_lock(
     service_url: Option<DisplaySafeUrl>,
     ignore: &[VulnerabilityID],
     ignore_until_fixed: &[VulnerabilityID],
-) -> Result<AuditOutcome> {
+) -> Result<AuditOutcome, AuditError> {
     let auditable = lock.auditable(extras, groups, |_| true);
     let mut projects = auditable.projects(root)?;
 
