@@ -668,12 +668,14 @@ pub async fn run(
                     lock,
                     workspace_group.as_ref(),
                     Some(&selection_members),
+                    package.is_none(),
                 )?
             } else if no_sync {
                 provisional_command_workspace_group(
                     project.workspace(),
                     workspace_group.as_ref(),
                     Some(&selection_members),
+                    package.is_none(),
                     &project
                         .workspace()
                         .workspace_groups_with_dependency_metadata(
@@ -689,6 +691,7 @@ pub async fn run(
                     project.workspace(),
                     workspace_group.as_ref(),
                     Some(&selection_members),
+                    package.is_none(),
                     &discover_workspace_groups(
                         project.workspace(),
                         project_dir,

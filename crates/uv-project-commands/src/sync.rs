@@ -204,12 +204,14 @@ pub async fn sync(
                     lock,
                     workspace_group.as_ref(),
                     Some(&selection_members),
+                    package.is_empty(),
                 )
             } else {
                 let initial = provisional_command_workspace_group(
                     project.workspace(),
                     workspace_group.as_ref(),
                     Some(&selection_members),
+                    package.is_empty(),
                     &project
                         .workspace()
                         .workspace_groups_with_dependency_metadata(
@@ -236,6 +238,7 @@ pub async fn sync(
                     project.workspace(),
                     workspace_group.as_ref(),
                     Some(&selection_members),
+                    package.is_empty(),
                     &discover_workspace_groups(
                         project.workspace(),
                         project_dir,
@@ -265,6 +268,7 @@ pub async fn sync(
             workspace.lock(),
             workspace_group.as_ref(),
             Some(&selection_members),
+            package.is_empty(),
         )
         .map_err(UvError::from)?,
         SyncTarget::Manifest(SyncManifest::Script(_)) => None,

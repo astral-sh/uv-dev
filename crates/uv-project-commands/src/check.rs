@@ -319,7 +319,12 @@ pub async fn check(
         let workspace = project.workspace();
         Some(if let Some(lock) = frozen_workspace_lock.as_ref() {
             let members = workspace_selection_members(project, &package, all_packages);
-            let mut selection = command_workspace_group_from_lock(lock, None, Some(&members))?;
+            let mut selection = command_workspace_group_from_lock(
+                lock,
+                None,
+                Some(&members),
+                all_packages || (package.is_empty() && project.is_non_project()),
+            )?;
             let scoped = workspace_for_group_selection(
                 workspace,
                 &members,

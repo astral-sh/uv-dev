@@ -2433,6 +2433,221 @@ fn workspace_groups_ordinary_python_intersection() -> Result<()> {
     Ok(())
 }
 
+/// A named member uses its own activation domain for frozen and manifest-free discovery.
+#[test]
+fn workspace_groups_named_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-index", "--find-links", "wheels", "--python", "3.12",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 3 packages in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--workspace-group", "main", "--package", "leaf", "--python", "3.12",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from `requires-python` in `uv.lock`).
+    "#);
+    context
+        .temp_dir
+        .child(".venv")
+        .assert(predicate::path::missing());
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("app/pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("leaf/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--preview-features", "frozen-lockfile",
+        "--workspace-group", "main", "--package", "leaf", "--python", "3.12",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from `requires-python` in `uv.lock`).
+    "#);
+    context
+        .temp_dir
+        .child(".venv")
+        .assert(predicate::path::missing());
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--preview-features", "frozen-lockfile",
+        "--workspace-group", "main", "--package", "leaf",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf-dep==1.0.0
+    "#);
+    Ok(())
+}
+
+/// A default group's explicit member narrows discovery while the whole group retains its domain.
+#[test]
+fn workspace_groups_default_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-index", "--find-links", "wheels", "--python", "3.12",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 3 packages in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--no-index", "--find-links", "wheels", "--package", "leaf", "--python", "3.12",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `leaf`'s `project.requires-python`).
+    "#);
+    context
+        .temp_dir
+        .child(".venv")
+        .assert(predicate::path::missing());
+    uv_snapshot!(context.filters(), context.run().args([
+        "--offline", "--no-index", "--find-links", "wheels", "--package", "leaf",
+        "python", "-c", "import sys; print(sys.version_info[:2])",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 13)
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf-dep==1.0.0
+    "#);
+    let environment = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--package", "leaf", "--python", "3.12",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from `requires-python` in `uv.lock`).
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--python", "3.12",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    "#);
+    Ok(())
+}
+
 /// A workspace member keeps its identity when an external project depends on a local namesake.
 #[test]
 fn workspace_groups_member_projection_distinguishes_local_sources() -> Result<()> {
@@ -2683,7 +2898,7 @@ fn workspace_groups_member_projection_distinguishes_local_sources() -> Result<()
     ]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    local-leaf-dep==1.0.0 ; python_full_version >= '3.13'
+    local-leaf-dep==1.0.0
     "#);
     uv_snapshot!(context.filters(), context.export().current_dir(&workspace).args([
         "--offline", "--frozen", "--workspace-group", "local", "--no-header", "--no-hashes", "--no-annotate",
@@ -2739,7 +2954,7 @@ fn workspace_groups_member_projection_distinguishes_local_sources() -> Result<()
     ]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    local-leaf-dep==1.0.0 ; python_full_version >= '3.13'
+    local-leaf-dep==1.0.0
     "#);
     workspace
         .child("uv.lock")
@@ -2912,7 +3127,7 @@ fn workspace_groups_frozen_local_member_shares_registry_name() -> Result<()> {
     ]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    leaf-dep==1.0.0 ; python_full_version >= '3.13'
+    leaf-dep==1.0.0
     ");
     fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
     fs_err::remove_file(context.temp_dir.child("app/pyproject.toml"))?;
@@ -2923,7 +3138,7 @@ fn workspace_groups_frozen_local_member_shares_registry_name() -> Result<()> {
     ]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    leaf-dep==1.0.0 ; python_full_version >= '3.13'
+    leaf-dep==1.0.0
     ");
     uv_snapshot!(context.filters(), context.sync().args([
         "--offline", "--frozen", "--workspace-group", "main", "--package", "leaf",

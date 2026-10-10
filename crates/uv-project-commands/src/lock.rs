@@ -97,11 +97,18 @@ pub(crate) fn workspace_for_project_groups(
     groups: &[ResolvedWorkspaceGroup],
 ) -> Result<Workspace, ProjectError> {
     let members = workspace_selection_members(project, packages, all_packages);
-    let selection = command_workspace_group(project.workspace(), None, Some(&members), groups)?;
+    let workspace_target = all_packages || (packages.is_empty() && project.is_non_project());
+    let selection = command_workspace_group(
+        project.workspace(),
+        None,
+        Some(&members),
+        workspace_target,
+        groups,
+    )?;
     Ok(workspace_for_group_selection(
         project.workspace(),
         &members,
-        all_packages || (packages.is_empty() && project.is_non_project()),
+        workspace_target,
         selection.as_ref(),
     ))
 }
@@ -156,7 +163,7 @@ pub(crate) struct CommandWorkspaceSelection {
 }
 
 impl CommandWorkspaceSelection {
-    /// Reuse the graph projected while deriving an ordinary frozen selection's Python domain.
+    /// Reuse the graph projected while deriving a frozen selection's Python domain.
     pub(crate) fn take_selected_lock(&mut self) -> Option<Lock> {
         self.selected_lock.take()
     }
@@ -179,10 +186,14 @@ impl CommandWorkspaceSelection {
 }
 
 /// Select group metadata for Python discovery from an existing lockfile.
+///
+/// Whole-group commands replace their ordinary roots with the named or default group's roots;
+/// explicit member selections retain their narrower activation domain.
 pub(crate) fn command_workspace_group_from_lock(
     lock: &Lock,
     name: Option<&GroupName>,
     members: Option<&BTreeSet<PackageName>>,
+    use_group_roots: bool,
 ) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
     if lock.workspace_groups().is_empty() {
         return if let Some(name) = name {
@@ -191,7 +202,7 @@ pub(crate) fn command_workspace_group_from_lock(
             Ok(None)
         };
     }
-    if let Some(group) = name
+    let group = name
         .and_then(|name| {
             lock.workspace_groups()
                 .iter()
@@ -205,19 +216,17 @@ pub(crate) fn command_workspace_group_from_lock(
                         .find(|group| group.definition.default)
                 })
                 .flatten()
-        })
+        });
+    if let Some(name) = name
+        && group.is_none()
     {
-        return Ok(Some(CommandWorkspaceSelection {
-            name: Some(group.definition.name.clone()),
-            members: group.definition.members.clone(),
-            requires_python: group.effective_requires_python.clone(),
-            environments: group.effective_environment(),
-            selected_lock: None,
-        }));
-    }
-    if let Some(name) = name {
         return Err(WorkspaceGroupSelectionError::Missing(name.clone()).into());
     }
+    let members = if use_group_roots {
+        group.map(|group| &group.definition.members).or(members)
+    } else {
+        members.or_else(|| group.map(|group| &group.definition.members))
+    };
     let Some(members) = members else {
         return Ok(None);
     };
@@ -226,10 +235,11 @@ pub(crate) fn command_workspace_group_from_lock(
     } else {
         members
     };
-    let selected = lock.select_workspace_context(None, members)?;
+    let name = group.map(|group| &group.definition.name);
+    let selected = lock.select_workspace_context(name, members)?;
     Ok(Some(CommandWorkspaceSelection {
-        name: None,
-        members: members.clone(),
+        name: name.cloned(),
+        members: group.map_or_else(|| members.clone(), |group| group.definition.members.clone()),
         requires_python: selected.requires_python().clone(),
         environments: implicit_constraints_marker(
             selected.requires_python().to_exact_marker_tree(),
@@ -239,17 +249,19 @@ pub(crate) fn command_workspace_group_from_lock(
     }))
 }
 
-/// Select completed group metadata for Python discovery.
+/// Select completed group metadata for Python discovery with the command's root selection.
 pub(crate) fn command_workspace_group(
     workspace: &Workspace,
     name: Option<&GroupName>,
     members: Option<&BTreeSet<PackageName>>,
+    use_group_roots: bool,
     groups: &[ResolvedWorkspaceGroup],
 ) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
     select_command_workspace_group(
         workspace,
         name,
         members,
+        use_group_roots,
         &groups
             .iter()
             .map(|group| CommandGroupDomain {
@@ -267,12 +279,14 @@ pub(crate) fn provisional_command_workspace_group(
     workspace: &Workspace,
     name: Option<&GroupName>,
     members: Option<&BTreeSet<PackageName>>,
+    use_group_roots: bool,
     groups: &[ProvisionalWorkspaceGroup],
 ) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
     select_command_workspace_group(
         workspace,
         name,
         members,
+        use_group_roots,
         &groups
             .iter()
             .map(|group| CommandGroupDomain {
@@ -293,14 +307,38 @@ struct CommandGroupDomain<'a> {
 }
 
 impl CommandGroupDomain<'_> {
-    fn selection(&self) -> CommandWorkspaceSelection {
-        CommandWorkspaceSelection {
+    fn selection(
+        &self,
+        members: Option<&BTreeSet<PackageName>>,
+    ) -> Result<CommandWorkspaceSelection, ProjectError> {
+        let (requires_python, environments) = if let Some(members) = members {
+            let environments = members
+                .iter()
+                .fold(self.environments, |environment, member| {
+                    // Production reachability can omit members selected through extras or groups.
+                    // Their membership and complete activation domain are checked by lock projection.
+                    environment.and(
+                        self.member_environments
+                            .get(member)
+                            .copied()
+                            .unwrap_or(self.environments),
+                    )
+                });
+            let requires_python =
+                RequiresPython::from_marker_tree(environments).ok_or_else(|| {
+                    WorkspaceGroupSelectionError::Target(self.definition.name.clone())
+                })?;
+            (requires_python, environments)
+        } else {
+            (self.requires_python.clone(), self.environments)
+        };
+        Ok(CommandWorkspaceSelection {
             name: Some(self.definition.name.clone()),
             members: self.definition.members.clone(),
-            requires_python: self.requires_python.clone(),
-            environments: self.environments,
+            requires_python,
+            environments,
             selected_lock: None,
-        }
+        })
     }
 }
 
@@ -308,22 +346,26 @@ fn select_command_workspace_group(
     workspace: &Workspace,
     name: Option<&GroupName>,
     members: Option<&BTreeSet<PackageName>>,
+    use_group_roots: bool,
     groups: &[CommandGroupDomain<'_>],
 ) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
     if let Some(name) = name {
-        return groups
+        let group = groups
             .iter()
             .find(|group| group.definition.name == *name)
-            .map(|group| Some(group.selection()))
             .ok_or_else(|| {
                 uv_workspace::WorkspaceError::from(
                     uv_workspace::WorkspaceErrorKind::UnknownWorkspaceGroup(name.clone()),
                 )
-                .into()
-            });
+            })?;
+        return group
+            .selection(if use_group_roots { None } else { members })
+            .map(Some);
     }
     if let Some(group) = groups.iter().find(|group| group.definition.default) {
-        return Ok(Some(group.selection()));
+        return group
+            .selection(if use_group_roots { None } else { members })
+            .map(Some);
     }
     if groups.is_empty() {
         return Ok(None);

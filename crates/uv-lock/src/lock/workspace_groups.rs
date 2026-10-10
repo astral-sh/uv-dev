@@ -25,7 +25,7 @@ pub struct LockedWorkspaceGroup {
 }
 
 impl LockedWorkspaceGroup {
-    pub fn effective_environment(&self) -> MarkerTree {
+    fn effective_environment(&self) -> MarkerTree {
         self.environment
             .unwrap_or_else(|| self.effective_requires_python.to_exact_marker_tree())
     }
@@ -91,10 +91,11 @@ impl Lock {
             let selected = self
                 .select_workspace_group(name)?
                 .ok_or_else(|| WorkspaceGroupSelectionError::Missing(name.clone()))?;
-            if !selected.contains_workspace_members(members) {
-                return Err(WorkspaceGroupSelectionError::Target(name.clone()));
-            }
-            return Ok(selected);
+            let selected = selected
+                .select_workspace_members(members)?
+                .ok_or_else(|| WorkspaceGroupSelectionError::Target(name.clone()))?;
+            return Self::merge_workspace_resolutions(vec![selected])?
+                .ok_or_else(|| WorkspaceGroupSelectionError::Target(name.clone()));
         }
         let mut candidates = Vec::new();
         let mut covered = BTreeSet::new();

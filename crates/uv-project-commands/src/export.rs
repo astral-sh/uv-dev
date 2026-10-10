@@ -308,12 +308,14 @@ pub async fn export(
                     lock,
                     workspace_group.as_ref(),
                     batch.is_none().then_some(&selection_members),
+                    package.is_empty(),
                 )
             } else {
                 command_workspace_group(
                     project.workspace(),
                     workspace_group.as_ref(),
                     batch.is_none().then_some(&selection_members),
+                    package.is_empty(),
                     &discover_workspace_groups(
                         project.workspace(),
                         project_dir,
@@ -343,6 +345,7 @@ pub async fn export(
             workspace.lock(),
             workspace_group.as_ref(),
             batch.is_none().then_some(&selection_members),
+            package.is_empty(),
         )
         .map_err(UvError::from)?,
         ExportSource::Manifest(ExportTarget::Script(_)) => {
