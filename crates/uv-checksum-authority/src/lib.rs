@@ -162,9 +162,21 @@ impl ChecksumAuthority {
 pub struct VerifiedArchive {
     parts: http::response::Parts,
     file: fs_err::tokio::File,
+    sha256: Sha256Digest,
+    size: u64,
 }
 
 impl VerifiedArchive {
+    /// The digest computed from the complete authenticated archive.
+    pub fn sha256(&self) -> Sha256Digest {
+        self.sha256
+    }
+
+    /// The number of authenticated archive bytes.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
     /// Reuse the authenticated file for seekable extraction.
     pub fn into_parts(self) -> (http::response::Parts, fs_err::tokio::File) {
         (self.parts, self.file)
@@ -229,7 +241,12 @@ impl VerifiedRecord {
             });
         }
         file.rewind().await?;
-        Ok(VerifiedArchive { parts, file })
+        Ok(VerifiedArchive {
+            parts,
+            file,
+            sha256: actual,
+            size: record.size(),
+        })
     }
 }
 

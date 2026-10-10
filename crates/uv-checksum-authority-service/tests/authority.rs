@@ -689,11 +689,11 @@ async fn verified_archive_reports_transfer_and_remains_seekable() -> Result<()> 
     let response = reqwest::get(endpoint).await?;
     let temporary = assert_fs::TempDir::new()?;
     let mut first_chunk = Some(received_first_chunk);
-    let mut progress = Vec::new();
+    let mut progress = 0;
     let archive = tokio::time::timeout(
         Duration::from_secs(5),
         verified.verify_response(response, temporary.path(), |bytes| {
-            progress.push(bytes);
+            progress += bytes;
             if let Some(received) = first_chunk.take() {
                 let _ = received.send(());
             }
@@ -701,12 +701,9 @@ async fn verified_archive_reports_transfer_and_remains_seekable() -> Result<()> 
     )
     .await??;
     server.await??;
-    insta::assert_debug_snapshot!(progress, @"
-    [
-        8,
-        7,
-    ]
-    ");
+    assert_eq!(progress, record.size());
+    assert_eq!(archive.size(), record.size());
+    assert_eq!(archive.sha256(), record.sha256());
     let (parts, mut file) = archive.into_parts();
     assert_eq!(parts.headers["x-archive"], "trusted");
     assert_eq!(file.stream_position().await?, 0);

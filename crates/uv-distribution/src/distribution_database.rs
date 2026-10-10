@@ -38,7 +38,9 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_preview::PreviewFeature;
-use uv_pypi_types::{HashDigest, HashDigests, PyProjectToml, ResolutionMetadata};
+use uv_pypi_types::{
+    Digest, HashAlgorithm, HashDigest, HashDigests, PyProjectToml, ResolutionMetadata,
+};
 use uv_python_types::PythonVariant;
 use uv_redacted::DisplaySafeUrl;
 use uv_threads::initialize_rayon_once;
@@ -196,9 +198,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
     fn validate_hashes(
         dist: &BuiltDist,
         hashes: ArchiveHashPolicy<'_>,
-        hashers: Vec<Hasher>,
+        computed_hashes: impl IntoIterator<Item = HashDigest>,
     ) -> Result<HashDigests, Error> {
-        let computed_hashes: HashDigests = hashers.into_iter().map(HashDigest::from).collect();
+        let mut computed_hashes: HashDigests = computed_hashes.into_iter().collect();
+        computed_hashes.sort_unstable();
         if hashes.requires_validation() && !hashes.matches(computed_hashes.as_slice()) {
             return Err(Error::hash_mismatch(
                 dist.to_string(),
@@ -870,7 +873,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     });
                 }
 
-                let computed_hashes = Self::validate_hashes(dist, hashes, hashers)?;
+                let computed_hashes =
+                    Self::validate_hashes(dist, hashes, hashers.into_iter().map(HashDigest::from))?;
 
                 // Before we make the wheel accessible by persisting it, ensure that the RECORD is
                 // valid.
@@ -1148,7 +1152,12 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         let algorithms = http_hash_algorithms(hashes);
 
-        let mut hashers = algorithms.into_iter().map(Hasher::from).collect::<Vec<_>>();
+        let mut hashers = algorithms
+            .into_iter()
+            .filter(|algorithm| authority.is_none() || *algorithm != HashAlgorithm::Sha256)
+            .map(Hasher::from)
+            .collect::<Vec<_>>();
+        let mut verified_digest = None;
         let (file, mut response, mut bytes_retrieved) = if let Some(authority) = authority {
             if let (Some(expected), Some(actual)) = (expected_size, content_length(&response))
                 && expected != actual
@@ -1166,12 +1175,17 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     }
                 })
                 .await?;
+            let bytes_retrieved = verified.size();
+            verified_digest = Some(HashDigest::Sha256(Digest::from_bytes(
+                verified.sha256().into_bytes(),
+            )));
             let (_, mut file) = verified.into_parts();
-            // Index and user-supplied hashes remain independent checks. Hash the verified file
-            // without copying it or reporting its bytes as another network transfer.
-            let mut reader = uv_extract::hash::HashReader::new(&mut file, &mut hashers);
-            reader.finish().await.map_err(Error::HashExhaustion)?;
-            let bytes_retrieved = reader.bytes_read();
+            // Index and user-supplied policies independently compare the verified digest. Read
+            // the authenticated file again only when they require another hash algorithm.
+            if !hashers.is_empty() {
+                let mut reader = uv_extract::hash::HashReader::new(&mut file, &mut hashers);
+                reader.finish().await.map_err(Error::HashExhaustion)?;
+            }
             (file, None, bytes_retrieved)
         } else {
             let temp_file = tempfile::tempfile_in(self.build_context.cache().root())
@@ -1414,7 +1428,14 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let mut extracted = tokio::task::spawn_blocking(move || extractor.extract_seekable(file))
             .await?
             .map_err(|err| Error::Extract(filename.to_string(), err))?;
-        let computed_hashes = Self::validate_hashes(dist, hashes, hashers)?;
+        let computed_hashes = Self::validate_hashes(
+            dist,
+            hashes,
+            hashers
+                .into_iter()
+                .map(HashDigest::from)
+                .chain(verified_digest),
+        )?;
 
         // Before we make the wheel accessible by persisting it, ensure that the RECORD is
         // valid.
@@ -1541,7 +1562,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             // Exhaust the reader to compute the hash.
             hasher.finish().await.map_err(Error::HashExhaustion)?;
 
-            let computed_hashes = Self::validate_hashes(dist, hashes, hashers)?;
+            let computed_hashes =
+                Self::validate_hashes(dist, hashes, hashers.into_iter().map(HashDigest::from))?;
 
             // Before we make the wheel accessible by persisting it, ensure that the RECORD is
             // valid.
