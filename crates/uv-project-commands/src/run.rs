@@ -35,8 +35,8 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     EnvironmentError, EnvironmentSpecification, LinkErrorReporting, PreferenceLocation,
-    ProjectEnvironment, ProjectEnvironmentTarget, ScriptEnvironment, discover_workspace_groups,
-    sync_from_lock, update_environment,
+    ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
+    ScriptEnvironment, discover_workspace_groups, sync_from_lock, update_environment,
 };
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
@@ -725,12 +725,9 @@ pub async fn run(
             {
                 selection_members.clone_from(&group.members);
             }
-            let group_workspace = workspace_group
+            let mut group_workspace = workspace_group
                 .as_ref()
                 .map(|group| group.scoped_workspace(project.workspace(), &selection_members));
-            let environment_workspace = group_workspace
-                .as_ref()
-                .unwrap_or_else(|| project.workspace());
             let group_members = workspace_group
                 .as_ref()
                 .filter(|_| select_group_roots)
@@ -741,7 +738,7 @@ pub async fn run(
             let selected_workspace_group = workspace_group
                 .as_ref()
                 .filter(|_| select_group_roots)
-                .and_then(|group| group.name.as_ref());
+                .and_then(|group| group.name.clone());
             let selected_frozen_lock = if let Some(lock) = projected_frozen_lock {
                 Some(lock)
             } else {
@@ -749,7 +746,7 @@ pub async fn run(
                     .map(|lock| {
                         select_workspace_group_lock(
                             lock,
-                            selected_workspace_group,
+                            selected_workspace_group.as_ref(),
                             &selection_members,
                         )
                     })
@@ -776,6 +773,78 @@ pub async fn run(
             let default_extras = DefaultExtras::default();
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);
+
+            let mut resolved_before_environment = None;
+            if !no_sync
+                && let Some(selection) = workspace_group.as_mut()
+                && selection.needs_lock_resolution()
+            {
+                let workspace = group_workspace
+                    .as_ref()
+                    .unwrap_or_else(|| project.workspace());
+                let project_python = ProjectPythonRequest::from_request(
+                    python.as_deref().map(PythonRequest::parse),
+                    Some(workspace),
+                    &groups,
+                    &settings.resolver.sources,
+                    project_dir,
+                    config_discovery,
+                )
+                .await?;
+                let interpreter = ProjectInterpreter::discover(
+                    ProjectEnvironmentTarget::from(workspace),
+                    project_python,
+                    &client_builder,
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    &install_mirrors,
+                    ProjectEnvironmentPolicy::Optional,
+                    active.without_warning(),
+                    &cache,
+                    if printer == Printer::Verbose {
+                        printer
+                    } else {
+                        Printer::Silent
+                    },
+                )
+                .await?
+                .into_interpreter();
+                let mode = if let LockCheck::Enabled(source) = lock_check {
+                    LockMode::Locked(&interpreter, source)
+                } else if isolated {
+                    LockMode::DryRun(&interpreter)
+                } else {
+                    LockMode::Write(&interpreter)
+                };
+                let result = Box::pin(
+                    LockOperation::new(
+                        mode,
+                        &settings.resolver,
+                        &client_builder,
+                        &lock_state,
+                        if show_resolution {
+                            Box::new(DefaultResolveLogger)
+                        } else {
+                            Box::new(SummaryResolveLogger)
+                        },
+                        &concurrency,
+                        &cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .execute(project.workspace().into()),
+                )
+                .await
+                .map_err(UvError::from)?;
+                group_workspace =
+                    Some(selection.refine_from_lock(project.workspace(), result.lock())?);
+                resolved_before_environment = Some(result);
+            }
+            let environment_workspace = group_workspace
+                .as_ref()
+                .unwrap_or_else(|| project.workspace());
 
             let venv = if isolated {
                 debug!("Creating isolated virtual environment");
@@ -864,7 +933,7 @@ pub async fn run(
                             .map(|lock| {
                                 select_workspace_group_lock(
                                     lock,
-                                    selected_workspace_group,
+                                    selected_workspace_group.as_ref(),
                                     &selection_members,
                                 )
                             })
@@ -911,6 +980,12 @@ pub async fn run(
 
                 let result = if let Some(lock) = selected_frozen_lock {
                     LockResult::Unchanged(lock)
+                } else if let Some(result) = resolved_before_environment.take() {
+                    select_workspace_group_result(
+                        result,
+                        selected_workspace_group.as_ref(),
+                        &selection_members,
+                    )?
                 } else {
                     match Box::pin(
                         LockOperation::new(
@@ -935,7 +1010,7 @@ pub async fn run(
                     {
                         Ok(result) => select_workspace_group_result(
                             result,
-                            selected_workspace_group,
+                            selected_workspace_group.as_ref(),
                             &selection_members,
                         )?,
                         Err(err) => return Err(UvError::from(err).into()),

@@ -22,8 +22,8 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     EnvironmentError, EnvironmentUpdate, LinkErrorReporting, ProjectEnvironment,
-    ProjectEnvironmentTarget, ScriptEnvironment, detect_conflicts, discover_workspace_groups,
-    sync_from_lock, update_environment,
+    ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, ScriptEnvironment,
+    detect_conflicts, discover_workspace_groups, sync_from_lock, update_environment,
 };
 use uv_fs::{PortablePathBuf, Simplified};
 use uv_install_operations::Changelog;
@@ -36,7 +36,7 @@ use uv_lock_operations::{
 };
 use uv_normalize::{DefaultExtras, DefaultGroups, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};
-use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::{ConfigDiscovery, ProjectPythonRequest};
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::{script_extra_build_requires, script_specification};
@@ -283,7 +283,7 @@ pub async fn sync(
             package.extend(group.members.iter().cloned());
         }
     }
-    let group_workspace = match (&target, &workspace_group) {
+    let mut group_workspace = match (&target, &workspace_group) {
         (SyncTarget::Manifest(SyncManifest::Project(project)), Some(group)) => {
             Some(group.scoped_workspace(project.workspace(), &selection_members))
         }
@@ -296,19 +296,19 @@ pub async fn sync(
     let selected_workspace_group = workspace_group
         .as_ref()
         .filter(|group| group.name.is_some())
-        .and_then(|group| group.name.as_ref());
+        .and_then(|group| group.name.clone());
     let selected_frozen_lock = if let Some(lock) = projected_frozen_lock {
         Some(lock)
     } else {
         match (&target, frozen_lock) {
             (SyncTarget::Lockfile { workspace, .. }, _) => Some(select_workspace_group_lock(
                 workspace.lock().clone(),
-                selected_workspace_group,
+                selected_workspace_group.as_ref(),
                 &selection_members,
             )?),
             (SyncTarget::Manifest(_), Some(lock)) => Some(select_workspace_group_lock(
                 lock,
-                selected_workspace_group,
+                selected_workspace_group.as_ref(),
                 &selection_members,
             )?),
             (SyncTarget::Manifest(_), None) => None,
@@ -356,6 +356,93 @@ pub async fn sync(
         install_target.validate_extras(&extras)?;
         install_target.validate_groups(&groups)?;
         detect_conflicts(&install_target, &extras, &groups)?;
+    }
+
+    // Some selected members are reachable only through extras or dependency groups. Resolve
+    // their activation domain before creating or replacing the project environment.
+    let mut resolved_before_environment = None;
+    if let SyncTarget::Manifest(SyncManifest::Project(project)) = &target
+        && let Some(selection) = workspace_group.as_mut()
+        && selection.needs_lock_resolution()
+    {
+        let workspace = group_workspace
+            .as_ref()
+            .unwrap_or_else(|| project.workspace());
+        let project_python = ProjectPythonRequest::from_request(
+            python.as_deref().map(PythonRequest::parse),
+            Some(workspace),
+            &groups,
+            &settings.resolver.sources,
+            project_dir,
+            config_discovery,
+        )
+        .await?;
+        let interpreter = ProjectInterpreter::discover(
+            ProjectEnvironmentTarget::from(workspace),
+            project_python,
+            &client_builder,
+            python_preference,
+            python_arch,
+            python_downloads,
+            &install_mirrors,
+            ProjectEnvironmentPolicy::Optional,
+            active.without_warning(),
+            cache,
+            if printer == Printer::Verbose {
+                printer
+            } else {
+                Printer::Silent
+            },
+        )
+        .await?
+        .into_interpreter();
+        let mode = if let LockCheck::Enabled(source) = lock_check {
+            LockMode::Locked(&interpreter, source)
+        } else if dry_run.enabled() {
+            LockMode::DryRun(&interpreter)
+        } else {
+            LockMode::Write(&interpreter)
+        };
+        let exclusions =
+            PackageSelection::from_args(all_packages, &package, project.project_name())
+                .first_party_exclusions(
+                    project.workspace(),
+                    project.project_name(),
+                    &install_options,
+                );
+        let result = Box::pin(
+            LockOperation::new(
+                mode,
+                &settings.resolver,
+                &client_builder,
+                &state,
+                Box::new(DefaultResolveLogger),
+                &concurrency,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            )
+            .with_first_party_exclusions(exclusions)
+            .execute(project.workspace().into()),
+        )
+        .await;
+        resolved_before_environment = Some(match result {
+            Ok(result) => {
+                group_workspace =
+                    Some(selection.refine_from_lock(project.workspace(), result.lock())?);
+                Ok(result)
+            }
+            Err(LockError::LockMismatch(previous, current, source)) if dry_run.enabled() => {
+                group_workspace = Some(selection.refine_from_lock(project.workspace(), &current)?);
+                Err(LockError::LockMismatch(previous, current, source))
+            }
+            Err(LockError::Resolve(error)) => return Err(UvError::from(*error).into()),
+            Err(error @ (LockError::LockFormat(..) | LockError::LockMismatch(..))) => {
+                return Err(UvError::user(error).into());
+            }
+            Err(error) => return Err(UvError::from(error).into()),
+        });
     }
 
     // Discover or create the virtual environment.
@@ -612,27 +699,31 @@ pub async fn sync(
             let outcome = if let Some(lock) = selected_frozen_lock.as_ref() {
                 Outcome::Frozen(lock)
             } else {
-                let result = Box::pin(
-                    LockOperation::new(
-                        mode,
-                        &settings.resolver,
-                        &client_builder,
-                        &state,
-                        Box::new(DefaultResolveLogger),
-                        &concurrency,
-                        cache,
-                        workspace_cache,
-                        printer,
-                        preview,
+                let result = if let Some(result) = resolved_before_environment.take() {
+                    result
+                } else {
+                    Box::pin(
+                        LockOperation::new(
+                            mode,
+                            &settings.resolver,
+                            &client_builder,
+                            &state,
+                            Box::new(DefaultResolveLogger),
+                            &concurrency,
+                            cache,
+                            workspace_cache,
+                            printer,
+                            preview,
+                        )
+                        .with_first_party_exclusions(first_party_exclusions)
+                        .execute(lock_target),
                     )
-                    .with_first_party_exclusions(first_party_exclusions)
-                    .execute(lock_target),
-                )
-                .await;
+                    .await
+                };
                 match result {
                     Ok(result) => Outcome::Success(select_workspace_group_result(
                         result,
-                        selected_workspace_group,
+                        selected_workspace_group.as_ref(),
                         &selection_members,
                     )?),
                     Err(LockError::Resolve(err)) => return Err(UvError::from(*err).into()),
@@ -644,7 +735,7 @@ pub async fn sync(
                                 prev,
                                 Box::new(select_workspace_group_lock(
                                     *cur,
-                                    selected_workspace_group,
+                                    selected_workspace_group.as_ref(),
                                     &selection_members,
                                 )?),
                                 lock_source,

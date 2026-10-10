@@ -65,7 +65,7 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 use crate::ProjectError;
 use crate::ScriptPath;
 use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
-use crate::lock::workspace_for_project_groups;
+use crate::lock::{CommandWorkspaceSelection, workspace_for_project_groups};
 use uv_resolve_operations::reporters::ResolverReporter;
 
 /// A failed dependency addition, with `uv add`-specific recovery context.
@@ -805,6 +805,7 @@ pub async fn add(
     // Use separate state for locking and syncing.
     let lock_state = state.fork();
     let sync_state = state;
+    let mut pending_selection = None;
     let refined_python_target = if let EditTarget::Project(project) = &target
         && !project
             .workspace()
@@ -853,12 +854,21 @@ pub async fn add(
             preview,
         )
         .await?;
-        let workspace = if no_sync {
-            project.workspace().with_workspace_groups(&discovered)?
+        let (workspace, selection) = if no_sync {
+            (
+                project.workspace().with_workspace_groups(&discovered)?,
+                None,
+            )
         } else {
             workspace_for_project_groups(project, &[], false, &discovered)?
         };
-        Some(if no_sync {
+        let needs_lock_resolution = selection
+            .as_ref()
+            .is_some_and(CommandWorkspaceSelection::needs_lock_resolution);
+        if needs_lock_resolution {
+            pending_selection = selection;
+        }
+        Some(if no_sync || needs_lock_resolution {
             let project_python = ProjectPythonRequest::from_request(
                 python.as_deref().map(PythonRequest::parse),
                 Some(&workspace),
@@ -880,7 +890,11 @@ pub async fn add(
                     ProjectEnvironmentPolicy::Optional,
                     active.without_warning(),
                     cache,
-                    printer,
+                    if no_sync || printer == Printer::Verbose {
+                        printer
+                    } else {
+                        Printer::Silent
+                    },
                 )
                 .await?
                 .into_interpreter(),
@@ -921,7 +935,7 @@ pub async fn add(
         sync_state
     };
     let python_target = refined_python_target.as_ref().unwrap_or(&python_target);
-    let _refined_lock = if refined_python_target.is_some() {
+    let _refined_lock = if refined_python_target.is_some() && pending_selection.is_none() {
         python_target
             .interpreter()
             .lock()
@@ -938,6 +952,16 @@ pub async fn add(
     match Box::pin(lock_and_sync(
         target,
         python_target,
+        pending_selection.map(|selection| PendingEnvironment {
+            selection,
+            python: python.as_deref(),
+            install_mirrors: &install_mirrors,
+            python_preference,
+            python_arch,
+            python_downloads,
+            config_discovery,
+            active,
+        }),
         &mut toml,
         &edits,
         lock_state,
@@ -1220,11 +1244,24 @@ fn edits(
     Ok(edits)
 }
 
+/// Environment settings retained until the edited target's member domain is resolved.
+struct PendingEnvironment<'a> {
+    selection: CommandWorkspaceSelection,
+    python: Option<&'a str>,
+    install_mirrors: &'a PythonInstallMirrors,
+    python_preference: PythonPreference,
+    python_arch: Option<PythonArchitecture>,
+    python_downloads: PythonDownloads,
+    config_discovery: ConfigDiscovery,
+    active: ActiveEnvironment,
+}
+
 /// Re-lock and re-sync the project after a series of edits.
 #[expect(clippy::fn_params_excessive_bools)]
 async fn lock_and_sync(
     mut target: EditTarget,
     python_target: &PythonTarget,
+    pending_environment: Option<PendingEnvironment<'_>>,
     toml: &mut PyProjectTomlMut,
     edits: &[DependencyEdit],
     mut lock_state: UniversalState,
@@ -1435,7 +1472,62 @@ async fn lock_and_sync(
         return Ok(());
     };
 
-    let PythonTarget::Environment(venv) = python_target else {
+    // Lower-bound edits can trigger a second resolution. Use that final graph to select the
+    // environment, while retaining the complete first graph for bound calculation above.
+    let refined_environment = if let Some(PendingEnvironment {
+        mut selection,
+        python,
+        install_mirrors,
+        python_preference,
+        python_arch,
+        python_downloads,
+        config_discovery,
+        active,
+    }) = pending_environment
+    {
+        let workspace = selection.refine_from_lock(project.workspace(), &lock)?;
+        Some(
+            ProjectEnvironment::get_or_init(
+                ProjectEnvironmentTarget::from(&workspace),
+                None,
+                groups,
+                &settings.resolver.sources,
+                python.map(PythonRequest::parse),
+                install_mirrors,
+                client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                false,
+                config_discovery,
+                active,
+                cache,
+                DryRun::Disabled,
+                LinkErrorReporting::User,
+                printer,
+            )
+            .await?
+            .into_environment()?,
+        )
+    } else {
+        None
+    };
+    let _environment_lock = if let Some(environment) = refined_environment.as_ref() {
+        environment
+            .lock()
+            .await
+            .inspect_err(|err| {
+                warn!("Failed to acquire environment lock: {err}");
+            })
+            .ok()
+    } else {
+        None
+    };
+    let venv = if let Some(environment) = refined_environment.as_ref() {
+        environment
+    } else if let PythonTarget::Environment(environment) = python_target {
+        environment
+    } else {
         // If we're not syncing, exit early.
         return Ok(());
     };

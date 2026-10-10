@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 
@@ -95,7 +95,7 @@ pub(crate) fn workspace_for_project_groups(
     packages: &[PackageName],
     all_packages: bool,
     groups: &[ResolvedWorkspaceGroup],
-) -> Result<Workspace, ProjectError> {
+) -> Result<(Workspace, Option<CommandWorkspaceSelection>), ProjectError> {
     let members = workspace_selection_members(project, packages, all_packages);
     let workspace_target = all_packages || (packages.is_empty() && project.is_non_project());
     let selection = command_workspace_group(
@@ -105,12 +105,13 @@ pub(crate) fn workspace_for_project_groups(
         workspace_target,
         groups,
     )?;
-    Ok(workspace_for_group_selection(
+    let workspace = workspace_for_group_selection(
         project.workspace(),
         &members,
         workspace_target,
         selection.as_ref(),
-    ))
+    );
+    Ok((workspace, selection))
 }
 
 /// Scope a workspace to selected roots, applying a named default to whole-workspace targets.
@@ -160,9 +161,32 @@ pub(crate) struct CommandWorkspaceSelection {
     requires_python: RequiresPython,
     environments: MarkerTree,
     selected_lock: Option<Lock>,
+    target_members: BTreeSet<PackageName>,
+    needs_lock_resolution: bool,
 }
 
 impl CommandWorkspaceSelection {
+    /// Whether a transitive member needs its complete resolved activation domain.
+    pub(crate) fn needs_lock_resolution(&self) -> bool {
+        self.needs_lock_resolution
+    }
+
+    /// Complete a provisional member domain using the command's current resolved graph.
+    pub(crate) fn refine_from_lock(
+        &mut self,
+        workspace: &Workspace,
+        lock: &Lock,
+    ) -> Result<Workspace, ProjectError> {
+        let selected = lock.select_workspace_context(self.name.as_ref(), &self.target_members)?;
+        self.requires_python = selected.requires_python().clone();
+        self.environments = implicit_constraints_marker(
+            selected.requires_python().to_exact_marker_tree(),
+            selected.supported_environments(),
+        );
+        self.needs_lock_resolution = false;
+        Ok(self.scoped_workspace(workspace, &self.target_members))
+    }
+
     /// Reuse the graph projected while deriving a frozen selection's Python domain.
     pub(crate) fn take_selected_lock(&mut self) -> Option<Lock> {
         self.selected_lock.take()
@@ -246,6 +270,8 @@ pub(crate) fn command_workspace_group_from_lock(
             selected.supported_environments(),
         ),
         selected_lock: Some(selected),
+        target_members: members.clone(),
+        needs_lock_resolution: false,
     }))
 }
 
@@ -268,7 +294,6 @@ pub(crate) fn command_workspace_group(
                 definition: group.definition(),
                 requires_python: group.requires_python(),
                 environments: group.environments(),
-                member_environments: group.member_environments(),
             })
             .collect::<Vec<_>>(),
     )
@@ -293,7 +318,6 @@ pub(crate) fn provisional_command_workspace_group(
                 definition: group.definition(),
                 requires_python: group.requires_python(),
                 environments: group.environments(),
-                member_environments: group.member_environments(),
             })
             .collect::<Vec<_>>(),
     )
@@ -303,42 +327,28 @@ struct CommandGroupDomain<'a> {
     definition: &'a WorkspaceGroup,
     requires_python: &'a RequiresPython,
     environments: MarkerTree,
-    member_environments: &'a BTreeMap<PackageName, MarkerTree>,
 }
 
 impl CommandGroupDomain<'_> {
-    fn selection(
-        &self,
-        members: Option<&BTreeSet<PackageName>>,
-    ) -> Result<CommandWorkspaceSelection, ProjectError> {
-        let (requires_python, environments) = if let Some(members) = members {
-            let environments = members
-                .iter()
-                .fold(self.environments, |environment, member| {
-                    // Production reachability can omit members selected through extras or groups.
-                    // Their membership and complete activation domain are checked by lock projection.
-                    environment.and(
-                        self.member_environments
-                            .get(member)
-                            .copied()
-                            .unwrap_or(self.environments),
-                    )
-                });
-            let requires_python =
-                RequiresPython::from_marker_tree(environments).ok_or_else(|| {
-                    WorkspaceGroupSelectionError::Target(self.definition.name.clone())
-                })?;
-            (requires_python, environments)
-        } else {
-            (self.requires_python.clone(), self.environments)
-        };
-        Ok(CommandWorkspaceSelection {
+    fn selection(&self, members: Option<&BTreeSet<PackageName>>) -> CommandWorkspaceSelection {
+        // Configured roots are active throughout the group. Transitive members can gain paths
+        // through extras or dependency groups beyond their production reachability, so their
+        // preliminary domain must remain the complete group until lock projection refines it.
+        CommandWorkspaceSelection {
             name: Some(self.definition.name.clone()),
             members: self.definition.members.clone(),
-            requires_python,
-            environments,
+            requires_python: self.requires_python.clone(),
+            environments: self.environments,
             selected_lock: None,
-        })
+            target_members: members
+                .cloned()
+                .unwrap_or_else(|| self.definition.members.clone()),
+            needs_lock_resolution: members.is_some_and(|members| {
+                members
+                    .iter()
+                    .any(|member| !self.definition.members.contains(member))
+            }),
+        }
     }
 }
 
@@ -358,14 +368,18 @@ fn select_command_workspace_group(
                     uv_workspace::WorkspaceErrorKind::UnknownWorkspaceGroup(name.clone()),
                 )
             })?;
-        return group
-            .selection(if use_group_roots { None } else { members })
-            .map(Some);
+        return Ok(Some(group.selection(if use_group_roots {
+            None
+        } else {
+            members
+        })));
     }
     if let Some(group) = groups.iter().find(|group| group.definition.default) {
-        return group
-            .selection(if use_group_roots { None } else { members })
-            .map(Some);
+        return Ok(Some(group.selection(if use_group_roots {
+            None
+        } else {
+            members
+        })));
     }
     if groups.is_empty() {
         return Ok(None);
@@ -373,25 +387,17 @@ fn select_command_workspace_group(
     let all_environments = groups.iter().fold(MarkerTree::FALSE, |environment, group| {
         environment.or(group.environments)
     });
-    let environments = if let Some(members) = members {
-        let mut environments = MarkerTree::TRUE;
-        for member in members {
-            let supported = groups
+    // A member can also be reached transitively in another context. Only configured roots
+    // guarantee complete activation information before resolution; otherwise keep the union as
+    // an upper bound and derive the selected domain from the resolved graph.
+    let needs_lock_resolution = members.is_some_and(|members| {
+        groups.iter().any(|group| {
+            members
                 .iter()
-                .filter_map(|group| group.member_environments.get(member).copied())
-                .fold(MarkerTree::FALSE, MarkerTree::or);
-            // Python inference follows production dependencies. The complete lock also includes
-            // extras and dependency groups, so only lock projection can reject target membership.
-            environments = environments.and(if supported.is_false() {
-                all_environments
-            } else {
-                supported
-            });
-        }
-        environments
-    } else {
-        all_environments
-    };
+                .any(|member| !group.definition.members.contains(member))
+        })
+    });
+    let environments = all_environments;
     let requires_python = RequiresPython::from_marker_tree(environments)
         .ok_or(WorkspaceGroupSelectionError::Ambiguous)?;
     Ok(Some(CommandWorkspaceSelection {
@@ -402,6 +408,10 @@ fn select_command_workspace_group(
         requires_python,
         environments,
         selected_lock: None,
+        target_members: members
+            .cloned()
+            .unwrap_or_else(|| workspace.packages().keys().cloned().collect()),
+        needs_lock_resolution,
     }))
 }
 

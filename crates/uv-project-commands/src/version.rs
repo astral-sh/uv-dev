@@ -43,7 +43,7 @@ use uv_workspace::{
 
 use crate::ProjectError;
 use crate::edit::{ProjectEdit, PythonTarget};
-use crate::lock::workspace_for_project_groups;
+use crate::lock::{CommandWorkspaceSelection, workspace_for_project_groups};
 
 /// Version information for a project (`uv version`).
 #[derive(serde::Serialize)]
@@ -555,14 +555,20 @@ async fn lock_and_sync(
         preview,
     )
     .await?;
-    let workspace = if no_sync {
-        project.workspace().with_workspace_groups(&discovered)?
+    let (workspace, mut selection) = if no_sync {
+        (
+            project.workspace().with_workspace_groups(&discovered)?,
+            None,
+        )
     } else {
         workspace_for_project_groups(&project, &[], false, &discovered)?
     };
+    let needs_lock_resolution = selection
+        .as_ref()
+        .is_some_and(CommandWorkspaceSelection::needs_lock_resolution);
 
     // Discover the interpreter or environment used to lock and sync the project.
-    let python_target = if no_sync {
+    let mut python_target = if no_sync || needs_lock_resolution {
         // Discover the interpreter.
         let project_python = ProjectPythonRequest::from_request(
             python.as_deref().map(PythonRequest::parse),
@@ -582,9 +588,17 @@ async fn lock_and_sync(
             python_downloads,
             &install_mirrors,
             ProjectEnvironmentPolicy::Optional,
-            active,
+            if no_sync {
+                active
+            } else {
+                active.without_warning()
+            },
             cache,
-            printer,
+            if no_sync || printer == Printer::Verbose {
+                printer
+            } else {
+                Printer::Silent
+            },
         )
         .await?
         .into_interpreter();
@@ -645,6 +659,35 @@ async fn lock_and_sync(
         Ok(result) => result.into_lock(),
         Err(err) => return Err(UvError::from(err).into()),
     };
+
+    if let Some(selection) = selection.as_mut()
+        && selection.needs_lock_resolution()
+    {
+        let workspace = selection.refine_from_lock(project.workspace(), &lock)?;
+        python_target = PythonTarget::Environment(
+            ProjectEnvironment::get_or_init(
+                ProjectEnvironmentTarget::from(&workspace),
+                None,
+                &groups,
+                &settings.resolver.sources,
+                python.as_deref().map(PythonRequest::parse),
+                &install_mirrors,
+                &client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                false,
+                config_discovery,
+                active,
+                cache,
+                DryRun::Disabled,
+                LinkErrorReporting::User,
+                printer,
+            )
+            .await?
+            .into_environment()?,
+        );
+    }
 
     let PythonTarget::Environment(venv) = &python_target else {
         // If we're not syncing, exit early.

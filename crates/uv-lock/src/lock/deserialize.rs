@@ -337,6 +337,7 @@ impl<'de> de::Deserializer<'de> for DocumentDeserializer<'_, 'de> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MapKind {
     Root,
+    WorkspaceGroup,
     Options,
     OptionsExcludeNewerPackage,
     Manifest,
@@ -353,6 +354,7 @@ enum MapKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SequenceKind {
+    WorkspaceGroups,
     Packages,
     ManifestDependencyMetadata,
 }
@@ -481,6 +483,11 @@ impl<'de> DocumentMapAccess<'_, 'de> {
                     .deserialize(de::value::BorrowedStrDeserializer::new("manifest"))
                     .map(Some);
             }
+            (MapKind::Root, "[[workspace-group]]") => Some((
+                "workspace-group",
+                Pending::Sequence(SequenceKind::WorkspaceGroups),
+                "[[workspace-group]]",
+            )),
             (MapKind::Root, "[[package]]") => Some((
                 "package",
                 Pending::Sequence(SequenceKind::Packages),
@@ -617,6 +624,7 @@ impl<'de> SeqAccess<'de> for SectionSequenceAccess<'_, 'de> {
             }
 
             let expected = match self.kind {
+                SequenceKind::WorkspaceGroups => "[[workspace-group]]",
                 SequenceKind::Packages => "[[package]]",
                 SequenceKind::ManifestDependencyMetadata => "[[manifest.dependency-metadata]]",
             };
@@ -628,6 +636,7 @@ impl<'de> SeqAccess<'de> for SectionSequenceAccess<'_, 'de> {
 
         self.started = true;
         let kind = match self.kind {
+            SequenceKind::WorkspaceGroups => MapKind::WorkspaceGroup,
             SequenceKind::Packages => MapKind::Package,
             SequenceKind::ManifestDependencyMetadata => MapKind::ManifestDependencyMetadata,
         };
@@ -1690,6 +1699,89 @@ version = "1.0.0"
         assert_eq!(
             Lock::from_canonical_toml(&canonical).expect("writer output uses fast path"),
             lock
+        );
+    }
+
+    #[test]
+    fn canonical_workspace_group_round_trip_uses_fast_path() {
+        let input = r#"version = 2
+revision = 3
+requires-python = ">=3.12"
+resolution-markers = ["extra == 'workspace-main'"]
+
+[[workspace-group]]
+name = "main"
+members = ["project"]
+effective-requires-python = ">=3.12"
+
+[manifest]
+members = ["project"]
+
+[[package]]
+name = "project"
+version = "0.1.0"
+source = { virtual = "." }
+resolution-markers = ["extra == 'workspace-main'"]
+"#;
+        let lock: Lock = toml::from_str(input).expect("valid grouped TOML lock");
+        let canonical = lock.to_toml().expect("grouped lock serializes canonically");
+
+        assert_eq!(
+            Lock::from_canonical_toml(&canonical).expect("grouped writer output uses fast path"),
+            lock
+        );
+    }
+
+    #[test]
+    fn canonical_workspace_groups_with_metadata_round_trip_uses_fast_path() {
+        let input = r#"version = 2
+revision = 3
+requires-python = ">=3.12,<3.15"
+resolution-markers = ["python_full_version < '3.13' and extra == 'workspace-main'", "extra == 'workspace-next'"]
+
+[[workspace-group]]
+name = "main"
+members = ["project"]
+requires-python = "==3.12.*"
+effective-requires-python = "==3.12.*"
+environment = "python_full_version >= '3.12' and python_full_version < '3.13'"
+default = true
+
+[[workspace-group]]
+name = "next"
+members = ["project"]
+effective-requires-python = ">=3.12,<3.15"
+
+[options]
+resolution-mode = "lowest"
+
+[manifest]
+members = ["project"]
+
+[[package]]
+name = "dependency"
+version = "1.0.0"
+source = { registry = "https://example.com/simple" }
+resolution-markers = ["python_full_version < '3.13' and extra == 'workspace-main'", "extra == 'workspace-next'"]
+
+[[package]]
+name = "project"
+version = "0.1.0"
+source = { virtual = "." }
+resolution-markers = ["python_full_version < '3.13' and extra == 'workspace-main'", "extra == 'workspace-next'"]
+dependencies = [{ name = "dependency" }]
+
+[package.metadata]
+requires-dist = [{ name = "dependency", specifier = ">=1" }]
+"#;
+        let lock: Lock = toml::from_str(input).expect("valid grouped TOML lock with metadata");
+        let canonical = lock.to_toml().expect("grouped lock serializes canonically");
+        // The writer canonicalizes marker order before either reader consumes the lock.
+        let expected: Lock = toml::from_str(&canonical).expect("valid canonical TOML lock");
+
+        assert_eq!(
+            Lock::from_canonical_toml(&canonical).expect("grouped writer output uses fast path"),
+            expected
         );
     }
 }

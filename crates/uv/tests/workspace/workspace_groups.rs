@@ -1269,14 +1269,14 @@ fn workspace_groups_select_python_outside_patch_gap() -> Result<()> {
         [tool.uv]
         package = false
     "#})?;
-    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--package", "common"]), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--package", "common"]), @r#"
     exit_code: 0 (success)
     ----- stderr -----
+    Resolved 3 packages in [TIME]
     Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
     Creating virtual environment at: .venv
-    Resolved 3 packages in [TIME]
     Checked in [TIME]
-    ");
+    "#);
     uv_snapshot!(context.filters(), context.run().args([
         "--no-sync", "--package", "common", "python", "-c", "import sys; print(sys.version_info[:2])",
     ]), @"
@@ -2416,20 +2416,1322 @@ fn workspace_groups_ordinary_python_intersection() -> Result<()> {
         .args(["--clear", "--python", "3.12"])
         .assert()
         .success();
-    uv_snapshot!(context.filters(), context.sync().args(["--all-packages", "--offline", "--no-index"]), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--all-packages", "--offline", "--no-index"]), @r#"
     exit_code: 0 (success)
     ----- stderr -----
+    Resolved 2 packages in [TIME]
     Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    Resolved 2 packages in [TIME]
     Checked in [TIME]
-    ");
+    "#);
     uv_snapshot!(context.python_command().arg("-c").arg("import sys; print(sys.version_info[:2])"), @"
     exit_code: 0 (success)
     ----- stdout -----
     (3, 13)
     ");
+    Ok(())
+}
+
+/// Extra reachability can extend a member beyond its production-only Python domain.
+#[test]
+fn workspace_groups_fallback_partial_production_member() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf; python_version < '3.13'"]
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'installed'\n")],
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--workspace-group", "main", "--package", "leaf", "--python", "3.13",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf-dep==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--workspace-group", "main", "--package", "leaf", "--python", "3.13",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Checked 1 package in [TIME]
+    "#);
+    context.assert_command("import sys, leaf_dep; assert sys.version_info[:2] == (3, 13); assert leaf_dep.VALUE == 'installed'").success();
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// A root in one group can gain additional reachability through an extra in another group.
+#[test]
+fn workspace_groups_fallback_root_in_another_group() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["leaf"]
+        requires-python = "==3.12.*"
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["app"]
+        requires-python = "==3.13.*"
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'installed'\n")],
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--package", "leaf", "--python", "3.13",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf-dep==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--package", "leaf", "--python", "3.13",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Checked 1 package in [TIME]
+    "#);
+    context.assert_command("import sys, leaf_dep; assert sys.version_info[:2] == (3, 13); assert leaf_dep.VALUE == 'installed'").success();
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// Resolve an extra-only member before replacing an existing project environment.
+#[test]
+fn workspace_groups_fallback_sync_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'installed'\n")],
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--workspace-group", "main", "--package", "leaf", "--python", "3.12",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `leaf`'s `project.requires-python`).
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(context.read("uv.lock"), locked);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--workspace-group", "main", "--package", "leaf",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf-dep==1.0.0
+    "#);
+    context.assert_command("import sys, leaf_dep; assert sys.version_info[:2] == (3, 13); assert leaf_dep.VALUE == 'installed'").success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--locked", "--workspace-group", "main", "--package", "leaf",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Checked 1 package in [TIME]
+    "#);
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// Run selects the resolved extra-only member domain before reusing an environment.
+#[test]
+fn workspace_groups_fallback_run_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'installed'\n")],
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.run().args(["--offline", "--package", "leaf", "python", "-c", "import sys; print(sys.version_info[:2])"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 13)
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf-dep==1.0.0
+    "#);
+    assert_ne!(context.read(".venv/pyvenv.cfg"), environment);
+    context.assert_command("import sys, leaf_dep; assert sys.version_info[:2] == (3, 13); assert leaf_dep.VALUE == 'installed'").success();
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// No-sync execution retains the existing environment without resolving a fallback member.
+#[test]
+fn workspace_groups_fallback_run_no_sync_preserves_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'installed'\n")],
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.run().args(["--offline", "--no-sync", "--package", "leaf", "python", "-c", "import sys; print(sys.version_info[:2])"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// An isolated run resolves a fallback member before selecting its temporary interpreter.
+#[test]
+fn workspace_groups_fallback_run_isolated_preserves_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'installed'\n")],
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.run().args(["--offline", "--isolated", "--package", "leaf", "python", "-c", "import sys; print(sys.version_info[:2])"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 13)
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf-dep==1.0.0
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// Check resolves an extra-only member before selecting its environment and locked tool.
+#[test]
+fn workspace_groups_fallback_check_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["ty==1.2.3"]
+        [tool.uv]
+        package = false
+    "#})?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"ty".parse()?,
+        &"1.2.3".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.13".parse()?),
+        "py3-none-any",
+        &[
+            (
+                "ty/cli.py",
+                indoc! {r#"
+                import sys
+
+                def main():
+                    assert sys.version_info[:2] == (3, 13)
+                    if "--version" in sys.argv:
+                        print("ty 1.2.3")
+                    else:
+                        print("All checks passed!")
+            "#},
+            ),
+            (
+                "ty-1.2.3.dist-info/entry_points.txt",
+                "[console_scripts]\nty=ty.cli:main\n",
+            ),
+        ],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.check().args(["--offline", "--package", "leaf", "--show-version", "--preview-features", "check-command"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Installed 1 package in [TIME]
+    Using ty 1.2.3
+    "#);
+    assert_ne!(context.read(".venv/pyvenv.cfg"), environment);
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
+        .success();
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// No-sync check refines tool discovery without changing the project environment.
+#[test]
+fn workspace_groups_fallback_check_no_sync_preserves_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["ty==1.2.3"]
+        [tool.uv]
+        package = false
+    "#})?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"ty".parse()?,
+        &"1.2.3".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.13".parse()?),
+        "py3-none-any",
+        &[
+            (
+                "ty/cli.py",
+                indoc! {r#"
+                import sys
+
+                def main():
+                    assert sys.version_info[:2] == (3, 13)
+                    if "--version" in sys.argv:
+                        print("ty 1.2.3")
+                    else:
+                        print("All checks passed!")
+            "#},
+            ),
+            (
+                "ty-1.2.3.dist-info/entry_points.txt",
+                "[console_scripts]\nty=ty.cli:main\n",
+            ),
+        ],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.check().args(["--offline", "--no-sync", "--package", "leaf", "--show-version", "--preview-features", "check-command"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python ==3.13.*`)
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Installed 1 package in [TIME]
+    Using ty 1.2.3
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 12)")
+        .success();
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// An isolated check selects the resolved member domain before creating its temporary environment.
+#[test]
+fn workspace_groups_fallback_check_isolated_preserves_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["ty==1.2.3"]
+        [tool.uv]
+        package = false
+    "#})?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"ty".parse()?,
+        &"1.2.3".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.13".parse()?),
+        "py3-none-any",
+        &[
+            (
+                "ty/cli.py",
+                indoc! {r#"
+                import sys
+
+                def main():
+                    assert sys.version_info[:2] == (3, 13)
+                    if "--version" in sys.argv:
+                        print("ty 1.2.3")
+                    else:
+                        print("All checks passed!")
+            "#},
+            ),
+            (
+                "ty-1.2.3.dist-info/entry_points.txt",
+                "[console_scripts]\nty=ty.cli:main\n",
+            ),
+        ],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.check().args(["--offline", "--isolated", "--package", "leaf", "--show-version", "--preview-features", "check-command"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    Installed 1 package in [TIME]
+    Using ty 1.2.3
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 12)")
+        .success();
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// Add retains its complete bound-resolution graph and defers fallback environment changes.
+#[test]
+fn workspace_groups_fallback_add_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = []
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/fresh-1.0.0-py3-none-any.whl"),
+        "fresh",
+        "1.0.0",
+        "fresh-1.0.0",
+        "",
+        &[("fresh.py", "VALUE = 'installed'\n")],
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    let manifest = context.read("leaf/pyproject.toml");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.add().args([
+        "--offline", "--package", "leaf", "fresh", "--python", "3.12",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `leaf`'s `project.requires-python`).
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(context.read("leaf/pyproject.toml"), manifest);
+    assert_eq!(context.read("uv.lock"), locked);
+    uv_snapshot!(context.filters(), context.add().args([
+        "--offline", "--package", "leaf", "fresh",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + fresh==1.0.0
+    "#);
+    context.assert_command("import sys, fresh; assert sys.version_info[:2] == (3, 13); assert fresh.VALUE == 'installed'").success();
+    insta::assert_snapshot!(context.read("leaf/pyproject.toml"), @r#"
+    [project]
+    name = "leaf"
+    version = "1.0.0"
+    requires-python = ">=3.13"
+    dependencies = [
+        "fresh>=1.0.0",
+    ]
+    [tool.uv]
+    package = false
+    "#);
+    Ok(())
+}
+
+/// Remove resolves a group-only member before changing the environment.
+#[test]
+fn workspace_groups_fallback_remove_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["old"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context.temp_dir.child("wheels/old-1.0.0-py3-none-any.whl"),
+        "old",
+        "1.0.0",
+        "old-1.0.0",
+        "",
+        &[("old.py", "VALUE = 'installed'\n")],
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    let manifest = context.read("leaf/pyproject.toml");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.remove().args([
+        "--offline", "--package", "leaf", "old", "--python", "3.12",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `leaf`'s `project.requires-python`).
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(context.read("leaf/pyproject.toml"), manifest);
+    assert_eq!(context.read("uv.lock"), locked);
+    uv_snapshot!(context.filters(), context.remove().args([
+        "--offline", "--package", "leaf", "old",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    "#);
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
+        .success();
+    insta::assert_snapshot!(context.read("leaf/pyproject.toml"), @r#"
+    [project]
+    name = "leaf"
+    version = "1.0.0"
+    requires-python = ">=3.13"
+    dependencies = []
+    [tool.uv]
+    package = false
+    "#);
+    Ok(())
+}
+
+/// Version edits use the resolved fallback member domain before environment mutation.
+#[test]
+fn workspace_groups_fallback_version_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'installed'\n")],
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    let manifest = context.read("leaf/pyproject.toml");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.version().current_dir(context.temp_dir.child("leaf")).args([
+        "1.0.1", "--offline", "--python", "3.12",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `leaf`'s `project.requires-python`).
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(context.read("leaf/pyproject.toml"), manifest);
+    assert_eq!(context.read("uv.lock"), locked);
+    uv_snapshot!(context.filters(), context.version().current_dir(context.temp_dir.child("leaf")).args([
+        "1.0.1", "--offline",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf 1.0.0 => 1.0.1
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: [VENV]/
+    Creating virtual environment at: [VENV]/
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf-dep==1.0.0
+    "#);
+    context.assert_command("import sys, leaf_dep; assert sys.version_info[:2] == (3, 13); assert leaf_dep.VALUE == 'installed'").success();
+    insta::assert_snapshot!(context.read("leaf/pyproject.toml"), @r#"
+    [project]
+    name = "leaf"
+    version = "1.0.1"
+    requires-python = ">=3.13"
+    dependencies = ["leaf-dep"]
+    [tool.uv]
+    package = false
+    "#);
+    Ok(())
+}
+
+/// A missing locked fallback graph fails before replacing the project environment.
+#[test]
+fn workspace_groups_fallback_locked_missing_lock_preserves_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'installed'\n")],
+    )?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--locked", "--workspace-group", "main", "--package", "leaf", "--python", "3.13"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Unable to find lockfile at `uv.lock`, but `--locked` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// A fallback dry run resolves the selected domain without writing a lock or replacing the environment.
+#[test]
+fn workspace_groups_fallback_sync_dry_run_preserves_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'installed'\n")],
+    )?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--dry-run", "--workspace-group", "main", "--package", "leaf", "--python", "3.13"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Would replace project environment at: .venv
+    Would create lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + leaf-dep==1.0.0
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
     Ok(())
 }
 
@@ -2602,6 +3904,7 @@ fn workspace_groups_default_member_python() -> Result<()> {
     ]), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
+    Resolved 3 packages in [TIME]
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `leaf`'s `project.requires-python`).
     "#);
@@ -2618,9 +3921,9 @@ fn workspace_groups_default_member_python() -> Result<()> {
     (3, 13)
 
     ----- stderr -----
+    Resolved 3 packages in [TIME]
     Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
     Creating virtual environment at: .venv
-    Resolved 3 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + leaf-dep==1.0.0
@@ -3998,16 +5301,16 @@ fn workspace_groups_selected_transitive_member_group_python() -> Result<()> {
     )?;
     uv_snapshot!(context.filters(), context.sync().args([
         "--offline", "--workspace-group", "main", "--package", "common",
-    ]), @"
+    ]), @r#"
     exit_code: 0 (success)
     ----- stderr -----
+    Resolved 3 packages in [TIME]
     Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
     Creating virtual environment at: .venv
-    Resolved 3 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + leaf==1.0.0
-    ");
+    "#);
     uv_snapshot!(context.filters(), context.sync().args([
         "--offline", "--frozen", "--workspace-group", "main", "--package", "common",
     ]), @"
@@ -4739,15 +6042,15 @@ fn workspace_groups_remove_selects_target_python() -> Result<()> {
     context.venv().args(["--python", "3.12"]).assert().success();
     uv_snapshot!(context.filters(), context.remove().args([
         "--package", "modern", "old", "--offline",
-    ]), @"
+    ]), @r#"
     exit_code: 0 (success)
     ----- stderr -----
+    Resolved 2 packages in [TIME]
     Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    Resolved 2 packages in [TIME]
     Checked in [TIME]
-    ");
+    "#);
     context
         .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
         .success();
@@ -4813,17 +6116,17 @@ fn workspace_groups_add_selects_target_python() -> Result<()> {
     )?;
     uv_snapshot!(context.filters(), context.add().args([
         "--package", "modern", "fresh", "--offline",
-    ]), @"
+    ]), @r#"
     exit_code: 0 (success)
     ----- stderr -----
+    Resolved 3 packages in [TIME]
     Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    Resolved 3 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + fresh==1.0.0
-    ");
+    "#);
     context
         .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
         .success();
@@ -4878,18 +6181,18 @@ fn workspace_groups_version_selects_target_python() -> Result<()> {
     context.venv().args(["--python", "3.12"]).assert().success();
     uv_snapshot!(context.filters(), context.version()
         .current_dir(context.temp_dir.child("modern"))
-        .args(["0.2.0", "--offline"]), @"
+        .args(["0.2.0", "--offline"]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     modern 0.1.0 => 0.2.0
 
     ----- stderr -----
+    Resolved 2 packages in [TIME]
     Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
     Removed virtual environment at: [VENV]/
     Creating virtual environment at: [VENV]/
-    Resolved 2 packages in [TIME]
     Checked in [TIME]
-    ");
+    "#);
     context
         .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
         .success();

@@ -40,7 +40,7 @@ use uv_workspace::pyproject::DependencyType;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
-use crate::lock::workspace_for_project_groups;
+use crate::lock::{CommandWorkspaceSelection, workspace_for_project_groups};
 
 /// Remove one or more packages from the project requirements.
 pub async fn remove(
@@ -244,7 +244,8 @@ pub async fn remove(
     let workspace_cache = WorkspaceCache::default();
 
     // Discover the interpreter or environment used to lock and sync the target.
-    let python_target = match &target {
+    let mut pending_selection = None;
+    let mut python_target = match &target {
         EditTarget::Project(project) => {
             let discovered = discover_workspace_groups(
                 project.workspace(),
@@ -267,13 +268,22 @@ pub async fn remove(
                 preview,
             )
             .await?;
-            let workspace = if no_sync {
-                project.workspace().with_workspace_groups(&discovered)?
+            let (workspace, selection) = if no_sync {
+                (
+                    project.workspace().with_workspace_groups(&discovered)?,
+                    None,
+                )
             } else {
                 workspace_for_project_groups(project, &[], false, &discovered)?
             };
+            let needs_lock_resolution = selection
+                .as_ref()
+                .is_some_and(CommandWorkspaceSelection::needs_lock_resolution);
+            if needs_lock_resolution {
+                pending_selection = selection;
+            }
 
-            if no_sync {
+            if no_sync || needs_lock_resolution {
                 // Discover the interpreter.
                 let project_python = ProjectPythonRequest::from_request(
                     python.as_deref().map(PythonRequest::parse),
@@ -296,7 +306,11 @@ pub async fn remove(
                     // Suppress warnings about the active environment when we won't modify it.
                     active.without_warning(),
                     cache,
-                    printer,
+                    if no_sync || printer == Printer::Verbose {
+                        printer
+                    } else {
+                        Printer::Silent
+                    },
                 )
                 .await?
                 .into_interpreter();
@@ -351,7 +365,7 @@ pub async fn remove(
         }
     };
 
-    let _lock = python_target
+    let mut environment_lock = python_target
         .interpreter()
         .lock()
         .await
@@ -394,6 +408,43 @@ pub async fn remove(
         edit.commit();
         return Ok(ExitStatus::Success);
     };
+
+    if let Some(mut selection) = pending_selection {
+        let workspace = selection.refine_from_lock(project.workspace(), &lock)?;
+        drop(environment_lock);
+        python_target = PythonTarget::Environment(
+            ProjectEnvironment::get_or_init(
+                ProjectEnvironmentTarget::from(&workspace),
+                None,
+                &groups,
+                &settings.resolver.sources,
+                python.as_deref().map(PythonRequest::parse),
+                &install_mirrors,
+                &client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                false,
+                config_discovery,
+                active,
+                cache,
+                DryRun::Disabled,
+                LinkErrorReporting::User,
+                printer,
+            )
+            .await?
+            .into_environment()?,
+        );
+        environment_lock = python_target
+            .interpreter()
+            .lock()
+            .await
+            .inspect_err(|err| {
+                warn!("Failed to acquire environment lock: {err}");
+            })
+            .ok();
+    }
+    let _lock = environment_lock;
 
     let PythonTarget::Environment(venv) = &python_target else {
         // If we're not syncing, exit early.

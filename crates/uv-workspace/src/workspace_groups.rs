@@ -117,10 +117,6 @@ impl ResolvedWorkspaceGroup {
         self.domain.environments
     }
 
-    pub fn member_environments(&self) -> &BTreeMap<PackageName, MarkerTree> {
-        &self.domain.member_environments
-    }
-
     /// Consume the completed group for storage or command selection.
     pub fn into_parts(self) -> (WorkspaceGroup, RequiresPython, MarkerTree) {
         (
@@ -782,12 +778,18 @@ mod tests {
         group.narrow_environment(narrowed)?;
         assert_eq!(group.environments(), narrowed);
         assert_eq!(group.requires_python().to_exact_marker_tree(), narrowed);
-        assert_eq!(group.member_environments()[&member], active.and(narrowed));
+        assert_eq!(
+            group.domain.member_environments[&member],
+            active.and(narrowed)
+        );
 
         assert!(group.narrow_environment(MarkerTree::FALSE).is_err());
         assert_eq!(group.environments(), narrowed);
         assert_eq!(group.requires_python().to_exact_marker_tree(), narrowed);
-        assert_eq!(group.member_environments()[&member], active.and(narrowed));
+        assert_eq!(
+            group.domain.member_environments[&member],
+            active.and(narrowed)
+        );
         Ok(())
     }
 }
