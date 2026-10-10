@@ -11,7 +11,7 @@ use uv_normalize::PackageName;
 use uv_pep440::{MIN_VERSION, Version};
 use uv_pep508::MarkerTree;
 use uv_pypi_types::VerbatimParsedUrl;
-use uv_resolver_types::PackageNodeKind;
+use uv_resolver_types::{PackageNodeKind, PreferenceId};
 
 use crate::pins::FilePins;
 use crate::redirect::url_to_precise;
@@ -44,7 +44,7 @@ pub(crate) struct ResolvedFork {
 pub(crate) struct SelectedDistribution {
     version: Version,
     source: SelectedSource,
-    preferences: Vec<usize>,
+    preferences: Vec<PreferenceId>,
 }
 
 #[derive(Debug)]
@@ -124,12 +124,12 @@ impl SelectedDistribution {
         &self.version
     }
 
-    pub(crate) fn preferences(&self) -> &[usize] {
+    pub(crate) fn preferences(&self) -> &[PreferenceId] {
         &self.preferences
     }
 
     /// Move the selected artifact and metadata into the output graph.
-    pub(crate) fn into_parts(self) -> (Version, ResolvedDist, Option<Metadata>, Vec<usize>) {
+    pub(crate) fn into_parts(self) -> (Version, ResolvedDist, Option<Metadata>, Vec<PreferenceId>) {
         match self.source {
             SelectedSource::Url { dist, metadata, .. } => {
                 (self.version, dist, Some(metadata), self.preferences)

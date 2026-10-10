@@ -655,6 +655,7 @@ async fn do_lock(
         .index_strategy(*index_strategy)
         .build_options(build_options.clone())
         .artifact_environments(artifact_environments.clone())
+        .wheel_preference_environments(lock_required_environments.clone())
         .minimum_libc_version(minimum_libc_version)
         .build();
     // Checking an existing lockfile may build metadata and install build dependencies. Verify any

@@ -3918,70 +3918,6 @@ impl Lock {
         SatisfiesResult::Satisfied
     }
 
-    fn normalized_constraint_inputs(
-        &self,
-        normalizer: &RequirementNormalizer<'_>,
-        filter: &ManifestFilter,
-        constraints: &[Requirement],
-    ) -> Result<(NormalizedConstraints, NormalizedConstraints), LockError> {
-        let omit_constraints = uv_preview::is_enabled(PreviewFeature::ResolutionInputs);
-        let expected = normalizer.constraints(
-            constraints
-                .iter()
-                .filter(|entry| {
-                    filter.includes_constraint(entry)
-                        && (!omit_constraints || !self.can_omit_constraint(entry))
-                })
-                .cloned(),
-        )?;
-        let actual = normalizer.constraints(
-            self.manifest
-                .constraints
-                .iter()
-                .filter(|entry| !omit_constraints || !self.can_omit_constraint(entry))
-                .cloned(),
-        )?;
-        Ok((expected, actual))
-    }
-
-    /// Normalize package groups using this lock revision's empty-group convention.
-    fn normalized_dependency_groups<I, R>(
-        &self,
-        normalizer: &RequirementNormalizer<'_>,
-        groups: I,
-    ) -> Result<BTreeMap<GroupName, NormalizedRequirements>, LockError>
-    where
-        I: IntoIterator<Item = (GroupName, R)>,
-        R: IntoIterator<Item = Requirement>,
-    {
-        groups
-            .into_iter()
-            .filter_map(|(group, requirements)| {
-                let mut requirements = requirements.into_iter().peekable();
-                if !self.includes_empty_groups() && requirements.peek().is_none() {
-                    None
-                } else {
-                    Some(
-                        normalizer
-                            .requirements(requirements)
-                            .map(|requirements| (group, requirements)),
-                    )
-                }
-            })
-            .collect()
-    }
-
-    fn filtered_dependency_metadata(
-        filter: &ManifestFilter,
-        dependency_metadata: &DependencyMetadata,
-    ) -> BTreeSet<StaticMetadata> {
-        dependency_metadata
-            .values()
-            .filter(|entry| filter.includes_metadata(entry))
-            .cloned()
-            .collect()
-    }
-
     /// Return a [`SatisfiesResult`] if the given requirements do not match the [`Package`] metadata.
     fn satisfies_requires_dist<'lock>(
         &self,
@@ -3994,7 +3930,8 @@ impl Lock {
         package_version: Option<&Version>,
         package: &'lock Package,
         activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
-        available_indexes: &mut AvailableIndexes,
+        remotes: &mut Option<BTreeSet<UrlString>>,
+        locals: &mut Option<BTreeSet<Box<Path>>>,
         root: &Path,
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
@@ -4048,15 +3985,23 @@ impl Lock {
             ));
         }
 
-        let expected_groups = self.normalized_dependency_groups(&normalizer, dependency_groups)?;
-        let actual = self.normalized_dependency_groups(
-            &normalizer,
-            package
-                .metadata
-                .dependency_groups
-                .iter()
-                .map(|(group, requirements)| (group.clone(), requirements.iter().cloned())),
-        )?;
+        let expected_groups = dependency_groups
+            .into_iter()
+            .filter(|(_, requirements)| self.includes_empty_groups() || !requirements.is_empty())
+            .map(|(group, requirements)| Ok((group, normalizer.requirements(requirements)?)))
+            .collect::<Result<BTreeMap<_, _>, LockError>>()?;
+        let actual = package
+            .metadata
+            .dependency_groups
+            .iter()
+            .filter(|(_, requirements)| self.includes_empty_groups() || !requirements.is_empty())
+            .map(|(group, requirements)| {
+                Ok((
+                    group.clone(),
+                    normalizer.requirements(requirements.iter().cloned())?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, LockError>>()?;
         if !missing_metadata && expected_groups != actual {
             return Ok(SatisfiesResult::MismatchedPackageDependencyGroups(
                 &package.id.name,
@@ -4114,7 +4059,7 @@ impl Lock {
         // we can consider them "available". Recording indexes only after validating refreshed
         // requirements prevents stale static metadata from authorizing an unrelated locked source.
         for index in &indexes {
-            available_indexes.record(index.url(), root);
+            Self::record_index(index, remotes, locals, root);
         }
 
         Ok(SatisfiesResult::Satisfied)
@@ -4225,6 +4170,30 @@ impl Lock {
         }
 
         Ok(SatisfiesResult::Satisfied)
+    }
+
+    fn record_index(
+        index: &IndexMetadata,
+        remotes: &mut Option<BTreeSet<UrlString>>,
+        locals: &mut Option<BTreeSet<Box<Path>>>,
+        root: &Path,
+    ) {
+        match &index.url {
+            IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
+                if let Some(remotes) = remotes.as_mut() {
+                    remotes.insert(UrlString::from(index.url().without_credentials().as_ref()));
+                }
+            }
+            IndexUrl::Path(url) => {
+                if let Some(locals) = locals.as_mut()
+                    && let Some(path) = url.to_file_path().ok().and_then(|path| {
+                        try_relative_to_if(&path, root, url.prefers_relative()).ok()
+                    })
+                {
+                    locals.insert(path.into_boxed_path());
+                }
+            }
+        }
     }
 
     /// Check whether the lock matches the project structure, requirements and configuration.
@@ -4380,10 +4349,25 @@ impl Lock {
         }
 
         let filter = ManifestFilter::from_lock(self);
+        let omit_constraints = uv_preview::is_enabled(PreviewFeature::ResolutionInputs);
 
         let normalized_constraints = {
-            let (expected, actual) =
-                self.normalized_constraint_inputs(&normalizer, &filter, constraints)?;
+            let expected = normalizer.constraints(
+                constraints
+                    .iter()
+                    .filter(|entry| {
+                        filter.includes_constraint(entry)
+                            && (!omit_constraints || !self.can_omit_constraint(entry))
+                    })
+                    .cloned(),
+            )?;
+            let actual = normalizer.constraints(
+                self.manifest
+                    .constraints
+                    .iter()
+                    .filter(|entry| !omit_constraints || !self.can_omit_constraint(entry))
+                    .cloned(),
+            )?;
             if expected != actual {
                 return Ok(SatisfiesResult::MismatchedConstraints(
                     expected.into_iter().collect(),
@@ -4501,7 +4485,11 @@ impl Lock {
 
         // Validate that the lockfile was generated with the same static metadata.
         {
-            let expected = Self::filtered_dependency_metadata(&filter, dependency_metadata);
+            let expected = dependency_metadata
+                .values()
+                .filter(|entry| filter.includes_metadata(entry))
+                .cloned()
+                .collect::<BTreeSet<_>>();
             let actual = &self.manifest.dependency_metadata;
             if expected != *actual {
                 return Ok(SatisfiesResult::MismatchedStaticMetadata(expected, actual));
@@ -4548,7 +4536,35 @@ impl Lock {
         };
 
         // Collect the set of available indexes (both `--index-url` and `--find-links` entries).
-        let mut available_indexes = AvailableIndexes::new(indexes, root);
+        let mut remotes = indexes.map(|locations| {
+            locations
+                .allowed_indexes()
+                .into_iter()
+                .filter_map(|index| match index.url() {
+                    IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
+                        Some(UrlString::from(index.url().without_credentials().as_ref()))
+                    }
+                    IndexUrl::Path(_) => None,
+                })
+                .collect::<BTreeSet<_>>()
+        });
+
+        let mut locals = indexes.map(|locations| {
+            locations
+                .allowed_indexes()
+                .into_iter()
+                .filter_map(|index| match index.url() {
+                    IndexUrl::Pypi(_) | IndexUrl::Url(_) => None,
+                    IndexUrl::Path(url) => {
+                        let path = url.to_file_path().ok()?;
+                        let path = try_relative_to_if(&path, root, url.prefers_relative())
+                            .ok()?
+                            .into_boxed_path();
+                        Some(path)
+                    }
+                })
+                .collect::<BTreeSet<_>>()
+        });
 
         // Add the workspace packages to the queue.
         for root_name in packages.keys() {
@@ -4574,7 +4590,7 @@ impl Lock {
                 index: Some(index), ..
             } = &requirement.source
             {
-                available_indexes.record(index.url(), root);
+                Self::record_index(index, &mut remotes, &mut locals, root);
             }
         }
 
@@ -4638,8 +4654,34 @@ impl Lock {
         while let Some(package_index) = queue.pop_front() {
             let package = self.package(package_index);
             // If the lockfile references an index that was not provided, we can't validate it.
-            if let Some(missing) = available_indexes.missing_registry(package) {
-                return Ok(missing);
+            if let Source::Registry(index) = &package.id.source {
+                match index {
+                    RegistrySource::Url(url) => {
+                        if remotes
+                            .as_ref()
+                            .is_some_and(|remotes| !remotes.contains(url))
+                        {
+                            let name = &package.id.name;
+                            let version = &package
+                                .id
+                                .version
+                                .as_ref()
+                                .expect("version for registry source");
+                            return Ok(SatisfiesResult::MissingRemoteIndex(name, version, url));
+                        }
+                    }
+                    RegistrySource::Path(path) => {
+                        if locals.as_ref().is_some_and(|locals| !locals.contains(path)) {
+                            let name = &package.id.name;
+                            let version = &package
+                                .id
+                                .version
+                                .as_ref()
+                                .expect("version for registry source");
+                            return Ok(SatisfiesResult::MissingLocalIndex(name, version, path));
+                        }
+                    }
+                }
             }
 
             // If the package is immutable, we don't need to validate it (or its dependencies).
@@ -4731,7 +4773,8 @@ impl Lock {
                             Some(version),
                             package,
                             &mut activated_extras,
-                            &mut available_indexes,
+                            &mut remotes,
+                            &mut locals,
                             root,
                             allow_missing_package_metadata,
                         )? {
@@ -4796,7 +4839,8 @@ impl Lock {
                         Some(&metadata.version),
                         package,
                         &mut activated_extras,
-                        &mut available_indexes,
+                        &mut remotes,
+                        &mut locals,
                         root,
                         allow_missing_package_metadata,
                     )? {
@@ -4863,7 +4907,8 @@ impl Lock {
                         None,
                         package,
                         &mut activated_extras,
-                        &mut available_indexes,
+                        &mut remotes,
+                        &mut locals,
                         root,
                         allow_missing_package_metadata,
                     ) {
@@ -4927,7 +4972,8 @@ impl Lock {
                         Some(&metadata.version),
                         package,
                         &mut activated_extras,
-                        &mut available_indexes,
+                        &mut remotes,
+                        &mut locals,
                         root,
                         allow_missing_package_metadata,
                     )? {
@@ -6054,89 +6100,6 @@ impl<'tags> TagPolicy<'tags> {
         match self {
             Self::Required(tags) | Self::Preferred(tags) => tags,
         }
-    }
-}
-
-/// Registries allowed by configuration and validated source declarations.
-struct AvailableIndexes {
-    remotes: Option<BTreeSet<UrlString>>,
-    locals: Option<BTreeSet<Box<Path>>>,
-}
-
-impl AvailableIndexes {
-    fn new(indexes: Option<&IndexLocations>, root: &Path) -> Self {
-        let mut available = Self {
-            remotes: indexes.map(|_| BTreeSet::new()),
-            locals: indexes.map(|_| BTreeSet::new()),
-        };
-        if let Some(indexes) = indexes {
-            for index in indexes.allowed_indexes() {
-                available.record(index.url(), root);
-            }
-        }
-        available
-    }
-
-    fn record(&mut self, index: &IndexUrl, root: &Path) {
-        match index {
-            IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
-                if let Some(remotes) = self.remotes.as_mut() {
-                    remotes.insert(UrlString::from(index.without_credentials().as_ref()));
-                }
-            }
-            IndexUrl::Path(url) => {
-                if let Some(locals) = self.locals.as_mut()
-                    && let Some(path) = url.to_file_path().ok().and_then(|path| {
-                        try_relative_to_if(&path, root, url.prefers_relative()).ok()
-                    })
-                {
-                    locals.insert(path.into_boxed_path());
-                }
-            }
-        }
-    }
-
-    fn missing_registry<'lock>(&self, package: &'lock Package) -> Option<SatisfiesResult<'lock>> {
-        let Source::Registry(index) = &package.id.source else {
-            return None;
-        };
-        match index {
-            RegistrySource::Url(url) => {
-                if self
-                    .remotes
-                    .as_ref()
-                    .is_some_and(|remotes| !remotes.contains(url))
-                {
-                    return Some(SatisfiesResult::MissingRemoteIndex(
-                        &package.id.name,
-                        package
-                            .id
-                            .version
-                            .as_ref()
-                            .expect("version for registry source"),
-                        url,
-                    ));
-                }
-            }
-            RegistrySource::Path(path) => {
-                if self
-                    .locals
-                    .as_ref()
-                    .is_some_and(|locals| !locals.contains(path))
-                {
-                    return Some(SatisfiesResult::MissingLocalIndex(
-                        &package.id.name,
-                        package
-                            .id
-                            .version
-                            .as_ref()
-                            .expect("version for registry source"),
-                        path,
-                    ));
-                }
-            }
-        }
-        None
     }
 }
 

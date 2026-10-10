@@ -7,10 +7,15 @@ use smallvec::SmallVec;
 use tracing::{debug, trace};
 
 use uv_configuration::IndexStrategy;
-use uv_distribution_types::{DistributionMetadata, IndexUrl, Name, ResolutionRecorder};
+use uv_distribution_types::{
+    DistributionMetadata, IndexUrl, MinimumLibcVersion, Name, ResolutionRecorder,
+};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
+use uv_pypi_types::SupportedEnvironments;
+use uv_resolver_types::PreferenceId;
 use uv_types::InstalledPackagesProvider;
 
 use crate::preferences::{Entry, PreferenceSource, Preferences};
@@ -29,6 +34,8 @@ pub(crate) struct CandidateSelector {
     resolution_strategy: ResolutionStrategy,
     prerelease_strategy: PrereleaseStrategy,
     index_strategy: IndexStrategy,
+    wheel_preference_environments: SupportedEnvironments,
+    minimum_libc_version: Option<MinimumLibcVersion>,
 }
 
 impl CandidateSelector {
@@ -53,6 +60,8 @@ impl CandidateSelector {
                 options.dependency_mode,
             ),
             index_strategy: options.index_strategy,
+            wheel_preference_environments: options.wheel_preference_environments.clone(),
+            minimum_libc_version: options.minimum_libc_version,
         }
     }
 
@@ -90,6 +99,7 @@ impl CandidateSelector {
         index: Option<&'a IndexUrl>,
         env: &ResolverEnvironment,
         tags: Option<&'a Tags>,
+        activation: MarkerTree,
     ) -> Option<Candidate<'a>> {
         if let Some(recorder) = &self.recorder {
             recorder.candidate_policy(package_name);
@@ -118,6 +128,7 @@ impl CandidateSelector {
             prerelease_selection,
             env,
             tags,
+            activation,
         ) {
             trace!("Using preference {} {}", preferred.name, preferred.version);
             return Some(preferred);
@@ -194,6 +205,7 @@ impl CandidateSelector {
         prerelease_selection: PrereleaseSelection,
         env: &ResolverEnvironment,
         tags: Option<&'a Tags>,
+        activation: MarkerTree,
     ) -> Option<Candidate<'a>> {
         let preferences = preferences.get(package_name);
 
@@ -245,7 +257,7 @@ impl CandidateSelector {
             }
         };
 
-        Self::get_preferred_from_iter(
+        self.get_preferred_from_iter(
             preferences,
             package_name,
             range,
@@ -254,12 +266,15 @@ impl CandidateSelector {
             reinstall,
             prerelease_selection,
             tags,
+            env,
+            activation,
         )
     }
 
     /// Return the first preference that satisfies the current range and is allowed.
     fn get_preferred_from_iter<'a, InstalledPackages: InstalledPackagesProvider>(
-        preferences: impl Iterator<Item = (&'a Version, PreferenceSource, Option<usize>)>,
+        &self,
+        preferences: impl Iterator<Item = (&'a Version, PreferenceSource, Option<PreferenceId>)>,
         package_name: &'a PackageName,
         range: &Range<Version>,
         version_maps: &'a [VersionMap],
@@ -267,6 +282,8 @@ impl CandidateSelector {
         reinstall: bool,
         prerelease_selection: PrereleaseSelection,
         tags: Option<&Tags>,
+        env: &ResolverEnvironment,
+        activation: MarkerTree,
     ) -> Option<Candidate<'a>> {
         for (version, source, preference_id) in preferences {
             // Respect the version range for this requirement.
@@ -360,26 +377,56 @@ impl CandidateSelector {
                         }
                         if let Some(dist) = version_map.get(local) {
                             debug!("Preferring local version `{package_name}` (v{local})");
-                            return Some(
-                                Candidate::new(
-                                    package_name,
-                                    local,
-                                    dist,
-                                    VersionChoiceKind::Preference,
-                                )
-                                .with_preference_id(preference_id),
-                            );
+                            let candidate = Candidate::new(
+                                package_name,
+                                local,
+                                dist,
+                                VersionChoiceKind::Preference,
+                            )
+                            .with_preference_id(preference_id);
+                            if self.allows_source_preference(&candidate, activation, env) {
+                                return Some(candidate);
+                            }
                         }
                     }
                 }
 
-                return Some(
+                let candidate =
                     Candidate::new(package_name, version, file, VersionChoiceKind::Preference)
-                        .with_preference_id(preference_id),
-                );
+                        .with_preference_id(preference_id);
+                if self.allows_source_preference(&candidate, activation, env) {
+                    return Some(candidate);
+                }
             }
         }
         None
+    }
+
+    /// Avoid building metadata for an input preference already known to need different wheels.
+    /// This skips the preference only; ordinary candidate selection may still choose its version.
+    fn allows_source_preference(
+        &self,
+        candidate: &Candidate<'_>,
+        activation: MarkerTree,
+        env: &ResolverEnvironment,
+    ) -> bool {
+        if candidate.preference_id().is_none()
+            || self.wheel_preference_environments.is_empty()
+            || activation.is_false()
+        {
+            return true;
+        }
+        let Some(CompatibleDist::SourceDist { sdist, prioritized }) = candidate.compatible() else {
+            return true;
+        };
+        let Some(fork) = env.fork_markers() else {
+            return true;
+        };
+        let coverage = prioritized.wheel_markers(&sdist.index, self.minimum_libc_version);
+        !self.wheel_preference_environments.iter().any(|required| {
+            let applicable = activation.and(fork).and(*required);
+            !applicable.is_false() && coverage.is_disjoint(applicable)
+        })
     }
 
     /// Check for an installed distribution that satisfies the current range and is allowed.
@@ -957,7 +1004,7 @@ pub(crate) struct Candidate<'a> {
     dist: CandidateDist<'a>,
     /// Whether this candidate was selected from a preference.
     choice_kind: VersionChoiceKind,
-    preference_id: Option<usize>,
+    preference_id: Option<PreferenceId>,
 }
 
 impl<'a> Candidate<'a> {
@@ -976,12 +1023,12 @@ impl<'a> Candidate<'a> {
         }
     }
 
-    fn with_preference_id(mut self, preference_id: Option<usize>) -> Self {
+    fn with_preference_id(mut self, preference_id: Option<PreferenceId>) -> Self {
         self.preference_id = preference_id;
         self
     }
 
-    pub(crate) fn preference_id(&self) -> Option<usize> {
+    pub(crate) fn preference_id(&self) -> Option<PreferenceId> {
         self.preference_id
     }
 

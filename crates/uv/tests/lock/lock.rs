@@ -51845,3 +51845,343 @@ fn lock_required_environment_backtracking_preserves_inactive_pin() -> Result<()>
     ");
     Ok(())
 }
+
+/// Required wheels can release a source preference before its metadata needs an unavailable backend.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_skips_unbuildable_source_preference() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let packages = context.temp_dir.child("packages");
+    packages.create_dir_all()?;
+    let mut source = Vec::new();
+    write_tar_gz(
+        &mut source,
+        &[
+            (
+                "example-1.0.0/pyproject.toml",
+                indoc! {r#"
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#},
+            ),
+            (
+                "example-1.0.0/backend.py",
+                indoc! {r#"
+            import os
+            from pathlib import Path
+
+            def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+                if os.environ.get("FAIL_SOURCE_METADATA"):
+                    raise RuntimeError("source metadata is unavailable in this environment")
+                path = Path(metadata_directory, "example-1.0.0.dist-info")
+                path.mkdir()
+                path.joinpath("METADATA").write_text("Metadata-Version: 2.3\nName: example\nVersion: 1.0.0\n\n")
+                return path.name
+        "#},
+            ),
+        ],
+    )?;
+    packages
+        .child("example-1.0.0.tar.gz")
+        .write_binary(&source)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    packages.child(filename).write_binary(&wheel)?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "packages", "--upgrade-package", "example==1"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "packages", "--no-cache"])
+        .env("FAIL_SOURCE_METADATA", "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated example v1.0.0 -> v2.0.0
+    ");
+    Ok(())
+}
+
+/// A source preference outside the required environment remains pinned when its metadata is needed.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_preserves_inactive_source_preference() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let packages = context.temp_dir.child("packages");
+    packages.create_dir_all()?;
+    let mut source = Vec::new();
+    write_tar_gz(
+        &mut source,
+        &[
+            (
+                "example-1.0.0/pyproject.toml",
+                indoc! {r#"
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#},
+            ),
+            (
+                "example-1.0.0/backend.py",
+                indoc! {r#"
+            import os
+            from pathlib import Path
+
+            def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+                if os.environ.get("FAIL_SOURCE_METADATA"):
+                    raise RuntimeError("source metadata is unavailable in this environment")
+                path = Path(metadata_directory, "example-1.0.0.dist-info")
+                path.mkdir()
+                path.joinpath("METADATA").write_text("Metadata-Version: 2.3\nName: example\nVersion: 1.0.0\n\n")
+                return path.name
+        "#},
+            ),
+        ],
+    )?;
+    packages
+        .child("example-1.0.0.tar.gz")
+        .write_binary(&source)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    packages.child(filename).write_binary(&wheel)?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example; sys_platform == 'win32'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "packages", "--upgrade-package", "example==1"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "packages", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Current parent edges can release a transitive source preference before its backend runs.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_skips_unbuildable_transitive_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let packages = context.temp_dir.child("packages");
+    packages.create_dir_all()?;
+    let mut source = Vec::new();
+    write_tar_gz(
+        &mut source,
+        &[
+            (
+                "example-1.0.0/pyproject.toml",
+                indoc! {r#"
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#},
+            ),
+            (
+                "example-1.0.0/backend.py",
+                indoc! {r#"
+            import os
+            from pathlib import Path
+
+            def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+                if os.environ.get("FAIL_SOURCE_METADATA"):
+                    raise RuntimeError("source metadata is unavailable in this environment")
+                path = Path(metadata_directory, "example-1.0.0.dist-info")
+                path.mkdir()
+                path.joinpath("METADATA").write_text("Metadata-Version: 2.3\nName: example\nVersion: 1.0.0\n\n")
+                return path.name
+        "#},
+            ),
+        ],
+    )?;
+    packages
+        .child("example-1.0.0.tar.gz")
+        .write_binary(&source)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    packages.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"parent".parse()?,
+        &"1.0.0".parse()?,
+        &["example".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    packages.child(filename).write_binary(&wheel)?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "packages", "--upgrade-package", "example==1"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "packages", "--no-cache"])
+        .env("FAIL_SOURCE_METADATA", "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated example v1.0.0 -> v2.0.0
+    ");
+    Ok(())
+}
+
+/// Backtracking restores a source preference after the path requiring newer wheels is rejected.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_backtracking_restores_source_preference() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let packages = context.temp_dir.child("packages");
+    packages.create_dir_all()?;
+    let mut source = Vec::new();
+    write_tar_gz(
+        &mut source,
+        &[
+            (
+                "b-child-1.0.0/pyproject.toml",
+                indoc! {r#"
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#},
+            ),
+            (
+                "b-child-1.0.0/backend.py",
+                indoc! {r#"
+            from pathlib import Path
+
+            def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+                path = Path(metadata_directory, "b_child-1.0.0.dist-info")
+                path.mkdir()
+                path.joinpath("METADATA").write_text("Metadata-Version: 2.3\nName: b-child\nVersion: 1.0.0\n\n")
+                return path.name
+        "#},
+            ),
+        ],
+    )?;
+    packages
+        .child("b-child-1.0.0.tar.gz")
+        .write_binary(&source)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"b-child".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    packages.child(filename).write_binary(&wheel)?;
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "backtracked-source-preference-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a-parent.versions."1.0.0"]
+        requires = ["b-child; sys_platform == 'win32'"]
+        [packages.a-parent.versions."2.0.0"]
+        requires = ["b-child", "z-conflict"]
+        [packages.z-conflict.versions."1.0.0"]
+        requires = ["leaf==1"]
+        [packages.leaf.versions."1.0.0"]
+        [packages.leaf.versions."2.0.0"]
+    "#})?);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a-parent", "leaf==1"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--find-links", "packages", "--upgrade-package", "a-parent==2", "--upgrade-package", "b-child==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml").replace("leaf==1", "leaf==2")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--find-links", "packages", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Updated a-parent v2.0.0 -> v1.0.0
+    Updated leaf v1.0.0 -> v2.0.0
+    Removed z-conflict v1.0.0
+    ");
+    Ok(())
+}

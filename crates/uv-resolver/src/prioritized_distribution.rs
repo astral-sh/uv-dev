@@ -6,7 +6,7 @@ use tracing::debug;
 
 use uv_distribution_filename::{BuildTag, WheelFilename};
 use uv_distribution_types::{
-    File, InstalledDist, MinimumLibcVersion, Name, RegistryBuiltDist, RegistryBuiltWheel,
+    File, IndexUrl, InstalledDist, MinimumLibcVersion, Name, RegistryBuiltDist, RegistryBuiltWheel,
     RegistrySourceDist, RequiresPython,
 };
 use uv_normalize::PackageName;
@@ -531,6 +531,24 @@ impl PrioritizedDist {
                 WheelCompatibility::Compatible(_, _, _) => None,
                 WheelCompatibility::Incompatible(incompatibility) => Some(incompatibility),
             })
+    }
+
+    /// Return current wheel coverage for one selected registry, excluding filtered artifacts.
+    pub(crate) fn wheel_markers(
+        &self,
+        index: &IndexUrl,
+        minimum_libc_version: Option<MinimumLibcVersion>,
+    ) -> MarkerTree {
+        implied_markers_for_wheels(
+            self.0
+                .wheels
+                .iter()
+                .filter(|(wheel, compatibility)| {
+                    wheel.index == *index && !compatibility.is_excluded()
+                })
+                .map(|(wheel, _)| &wheel.filename),
+            minimum_libc_version,
+        )
     }
 
     /// Return the hashes for each distribution.
