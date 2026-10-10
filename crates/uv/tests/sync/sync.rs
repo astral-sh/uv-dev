@@ -10933,6 +10933,66 @@ fn sync_scripts_required_workspace_member_not_packaged() -> Result<()> {
 }
 
 #[test]
+fn sync_scripts_workspace_member_not_packaged_root_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.11");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "root"
+        version = "0.1.0"
+        requires-python = "~=3.11.0"
+        dependencies = ["member"]
+
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [tool.uv.sources]
+        member = { workspace = true }
+        "#,
+    )?;
+
+    let member = context.temp_dir.child("member");
+    member.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = "~=3.11.0"
+
+        [project.scripts]
+        my_script = "my_script:main"
+
+        [tools.uv]
+        package = true
+        "#,
+    )?;
+    member.child("my_script.py").write_str(indoc! {r#"
+        def main():
+            print("entry point installed")
+        "#})?;
+
+    // The warning says the entry point is skipped even though it is installed; see astral-sh/uv#22111.
+    uv_snapshot!(context.filters(), context.sync().current_dir(member.path()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    warning: Skipping installation of entry points (`project.scripts`) for package `member` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + member==0.1.0 (from file://[TEMP_DIR]/member)
+    ");
+
+    uv_snapshot!(context.filters(), context.run().current_dir(member.path()).arg("--no-sync").arg("my_script"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    entry point installed
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn sync_dynamic_extra() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
