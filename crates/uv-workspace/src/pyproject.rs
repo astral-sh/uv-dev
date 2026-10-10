@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::ops::Deref;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 
 use glob::Pattern;
@@ -20,12 +20,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use tracing::instrument;
 use uv_build_backend::BuildBackendSettings;
-use uv_configuration::{ExcludeDependency, GitLfsSetting, Override};
-use uv_distribution_types::{
-    Index, IndexName, MinimumLibcVersion, NameRequirementSpecification, RequirementSource,
-};
-use uv_fs::{PortablePathBuf, try_relative_to_if};
-use uv_git_types::GitReference;
+use uv_configuration::{ExcludeDependency, Override};
+use uv_distribution_types::{Index, IndexName, MinimumLibcVersion, NameRequirementSpecification};
+use uv_fs::PortablePathBuf;
 use uv_macros::OptionsMetadata;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_options_metadata::{OptionSet, OptionsMetadata, Visit};
@@ -1709,38 +1706,6 @@ impl<'de> Deserialize<'de> for Source {
 
 #[derive(Error, Debug)]
 pub enum SourceError {
-    #[error("Failed to resolve Git reference: `{0}`")]
-    UnresolvedReference(String),
-    #[error("Workspace dependency `{0}` must refer to local directory, not a Git repository")]
-    WorkspacePackageGit(String),
-    #[error("Workspace dependency `{0}` must refer to local directory, not a URL")]
-    WorkspacePackageUrl(String),
-    #[error("Workspace dependency `{0}` must refer to local directory, not a file")]
-    WorkspacePackageFile(String),
-    #[error(
-        "`{0}` did not resolve to a Git repository, but a Git reference (`--rev {1}`) was provided."
-    )]
-    UnusedRev(String, String),
-    #[error(
-        "`{0}` did not resolve to a Git repository, but a Git reference (`--tag {1}`) was provided."
-    )]
-    UnusedTag(String, String),
-    #[error(
-        "`{0}` did not resolve to a Git repository, but a Git reference (`--branch {1}`) was provided."
-    )]
-    UnusedBranch(String, String),
-    #[error(
-        "`{0}` did not resolve to a Git repository, but a Git extension (`--lfs`) was provided."
-    )]
-    UnusedLfs(String),
-    #[error(
-        "`{0}` did not resolve to a local directory, but the `--editable` flag was provided. Editable installs are only supported for local directories."
-    )]
-    UnusedEditable(String),
-    #[error("Failed to resolve absolute path")]
-    Absolute(#[from] std::io::Error),
-    #[error("Path contains invalid characters: {}", _0.display())]
-    NonUtf8Path(PathBuf),
     #[error("Source markers must be disjoint, but the following markers overlap: `{0}` and `{1}`.")]
     OverlappingMarkers(String, String, String),
     #[error(
@@ -1757,251 +1722,12 @@ impl uv_errors::Hinted for SourceError {
             Self::OverlappingMarkers(_, rhs, replacement) => {
                 uv_errors::Hints::from(format!("replace `{rhs}` with `{replacement}`"))
             }
-            _ => uv_errors::Hints::none(),
+            Self::MissingMarkers | Self::EmptySources => uv_errors::Hints::none(),
         }
     }
 }
 
 impl Source {
-    pub fn from_requirement(
-        name: &PackageName,
-        source: RequirementSource,
-        workspace: bool,
-        editable: Option<bool>,
-        index: Option<IndexName>,
-        rev: Option<String>,
-        tag: Option<String>,
-        branch: Option<String>,
-        lfs: GitLfsSetting,
-        root: &Path,
-        existing_sources: Option<&BTreeMap<PackageName, Sources>>,
-    ) -> Result<Option<Self>, SourceError> {
-        // If the user specified a Git reference for a non-Git source, try existing Git sources before erroring.
-        if !matches!(
-            source,
-            RequirementSource::GitDirectory { .. } | RequirementSource::GitPath { .. }
-        ) && (branch.is_some()
-            || tag.is_some()
-            || rev.is_some()
-            || matches!(lfs, GitLfsSetting::Enabled { .. }))
-        {
-            if let Some(sources) = existing_sources
-                && let Some(package_sources) = sources.get(name)
-            {
-                for existing_source in package_sources.iter() {
-                    if let Self::Git {
-                        git,
-                        subdirectory,
-                        path,
-                        marker,
-                        extra,
-                        group,
-                        ..
-                    } = existing_source
-                    {
-                        return Ok(Some(Self::Git {
-                            git: git.clone(),
-                            subdirectory: subdirectory.clone(),
-                            rev,
-                            tag,
-                            branch,
-                            lfs: lfs.into(),
-                            marker: *marker,
-                            path: path.clone(),
-                            extra: extra.clone(),
-                            group: group.clone(),
-                        }));
-                    }
-                }
-            }
-            if let Some(rev) = rev {
-                return Err(SourceError::UnusedRev(name.to_string(), rev));
-            }
-            if let Some(tag) = tag {
-                return Err(SourceError::UnusedTag(name.to_string(), tag));
-            }
-            if let Some(branch) = branch {
-                return Err(SourceError::UnusedBranch(name.to_string(), branch));
-            }
-            if matches!(lfs, GitLfsSetting::Enabled { from_env: false }) {
-                return Err(SourceError::UnusedLfs(name.to_string()));
-            }
-        }
-
-        // If we resolved a non-path source, and user specified an `--editable` flag, error.
-        if !workspace {
-            if !matches!(source, RequirementSource::Directory { .. }) {
-                if editable == Some(true) {
-                    return Err(SourceError::UnusedEditable(name.to_string()));
-                }
-            }
-        }
-
-        // If the source is a workspace package, error if the user tried to specify a source.
-        if workspace {
-            return match source {
-                RequirementSource::Registry { .. } | RequirementSource::Directory { .. } => {
-                    Ok(Some(Self::Workspace {
-                        workspace: WorkspaceReference::Bool(true),
-                        editable,
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }))
-                }
-                RequirementSource::Url { .. } => {
-                    Err(SourceError::WorkspacePackageUrl(name.to_string()))
-                }
-                RequirementSource::GitDirectory { .. } => {
-                    Err(SourceError::WorkspacePackageGit(name.to_string()))
-                }
-                RequirementSource::GitPath { .. } => {
-                    Err(SourceError::WorkspacePackageGit(name.to_string()))
-                }
-                RequirementSource::Path { .. } => {
-                    Err(SourceError::WorkspacePackageFile(name.to_string()))
-                }
-            };
-        }
-
-        let source = match source {
-            RequirementSource::Registry { index: Some(_), .. } => {
-                return Ok(None);
-            }
-            RequirementSource::Registry { index: None, .. } if let Some(index) = index => {
-                Self::Registry {
-                    index,
-                    marker: MarkerTree::TRUE,
-                    extra: None,
-                    group: None,
-                }
-            }
-            RequirementSource::Registry { index: None, .. } => return Ok(None),
-            RequirementSource::Path {
-                install_path, url, ..
-            } => Self::Path {
-                editable: None,
-                package: None,
-                path: PortablePathBuf::from(
-                    try_relative_to_if(&install_path, root, url.prefers_relative())
-                        .map_err(SourceError::Absolute)?
-                        .into_boxed_path(),
-                ),
-                marker: MarkerTree::TRUE,
-                extra: None,
-                group: None,
-            },
-            RequirementSource::Directory {
-                install_path,
-                editable: is_editable,
-                url,
-                ..
-            } => Self::Path {
-                editable: editable.or(is_editable),
-                package: None,
-                path: PortablePathBuf::from(
-                    try_relative_to_if(&install_path, root, url.prefers_relative())
-                        .map_err(SourceError::Absolute)?
-                        .into_boxed_path(),
-                ),
-                marker: MarkerTree::TRUE,
-                extra: None,
-                group: None,
-            },
-            RequirementSource::Url {
-                location,
-                subdirectory,
-                ..
-            } => Self::Url {
-                url: location,
-                subdirectory: subdirectory.map(PortablePathBuf::from),
-                marker: MarkerTree::TRUE,
-                extra: None,
-                group: None,
-            },
-            RequirementSource::GitDirectory {
-                git, subdirectory, ..
-            } => {
-                if rev.is_none() && tag.is_none() && branch.is_none() {
-                    let rev = match git.reference() {
-                        GitReference::Branch(rev) => Some(rev),
-                        GitReference::Tag(rev) => Some(rev),
-                        GitReference::BranchOrTag(rev) => Some(rev),
-                        GitReference::BranchOrTagOrCommit(rev) => Some(rev),
-                        GitReference::NamedRef(rev) => Some(rev),
-                        GitReference::DefaultBranch => None,
-                    };
-                    Self::Git {
-                        rev: rev.cloned(),
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: subdirectory.map(PortablePathBuf::from),
-                        path: None,
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                } else {
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: subdirectory.map(PortablePathBuf::from),
-                        path: None,
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                }
-            }
-            RequirementSource::GitPath {
-                git, install_path, ..
-            } => {
-                if rev.is_none() && tag.is_none() && branch.is_none() {
-                    let rev = match git.reference() {
-                        GitReference::Branch(rev) => Some(rev),
-                        GitReference::Tag(rev) => Some(rev),
-                        GitReference::BranchOrTag(rev) => Some(rev),
-                        GitReference::BranchOrTagOrCommit(rev) => Some(rev),
-                        GitReference::NamedRef(rev) => Some(rev),
-                        GitReference::DefaultBranch => None,
-                    };
-                    Self::Git {
-                        rev: rev.cloned(),
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: None,
-                        path: Some(PortablePathBuf::from(install_path.as_path())),
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                } else {
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: None,
-                        path: Some(PortablePathBuf::from(install_path.as_path())),
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                }
-            }
-        };
-
-        Ok(Some(source))
-    }
-
     /// Return the [`MarkerTree`] for the source.
     pub fn marker(&self) -> MarkerTree {
         match self {
