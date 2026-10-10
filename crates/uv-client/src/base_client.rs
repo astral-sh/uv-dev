@@ -17,7 +17,7 @@ use reqwest_middleware::{ClientWithMiddleware, Middleware};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{Jitter, RetryTransientMiddleware};
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 use url::ParseError;
 use url::Url;
 
@@ -26,7 +26,7 @@ use uv_auth::{
 };
 use uv_configuration::ProxyUrlKind;
 use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, TrustedHost};
-use uv_distribution_types::IndexCredentialsError;
+use uv_distribution_types::{IndexCredentialsError, IndexLocations};
 use uv_git::GitHttpSettings;
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
@@ -356,10 +356,26 @@ impl<'a> BaseClientBuilder<'a> {
         self
     }
 
-    #[must_use]
-    pub(crate) fn indexes(mut self, indexes: Indexes) -> Self {
-        self.indexes = indexes;
-        self
+    /// Configure index authentication policies and cache explicitly configured credentials.
+    pub fn index_locations(mut self, locations: &IndexLocations) -> Result<Self, ClientBuildError> {
+        for index in locations.known_indexes() {
+            if let Some(credentials) = index.credentials()? {
+                trace!(
+                    "Read credentials for index `{}`",
+                    index
+                        .name
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| index.url.to_string())
+                );
+                if let Some(root_url) = index.root_url() {
+                    self.store_credentials(&root_url, credentials.clone());
+                }
+                self.store_credentials(index.raw_url(), credentials);
+            }
+        }
+        self.indexes = Indexes::from(locations);
+        Ok(self)
     }
 
     #[must_use]
@@ -432,6 +448,15 @@ impl<'a> BaseClientBuilder<'a> {
     pub fn client_name(mut self, name: &'static str) -> Self {
         self.client_name = Some(name);
         self
+    }
+
+    /// Construct authentication middleware with this builder's shared cache and credential policy.
+    pub fn auth_middleware(&self) -> AuthMiddleware {
+        AuthMiddleware::new()
+            .with_cache_arc(self.credentials_cache.clone())
+            .with_indexes(self.indexes.clone())
+            .with_keyring(self.keyring.to_provider())
+            .with_preview(self.preview)
     }
 
     pub fn credentials_cache(&self) -> &CredentialsCache {
@@ -705,20 +730,11 @@ impl<'a> BaseClientBuilder<'a> {
                 // Initialize the authentication middleware to set headers.
                 match self.auth_integration {
                     AuthIntegration::Default => {
-                        let auth_middleware = AuthMiddleware::new()
-                            .with_cache_arc(self.credentials_cache.clone())
-                            .with_indexes(self.indexes.clone())
-                            .with_keyring(self.keyring.to_provider())
-                            .with_preview(self.preview);
+                        let auth_middleware = self.auth_middleware();
                         client = client.with(auth_middleware);
                     }
                     AuthIntegration::OnlyAuthenticated => {
-                        let auth_middleware = AuthMiddleware::new()
-                            .with_cache_arc(self.credentials_cache.clone())
-                            .with_indexes(self.indexes.clone())
-                            .with_keyring(self.keyring.to_provider())
-                            .with_preview(self.preview)
-                            .with_only_authenticated(true);
+                        let auth_middleware = self.auth_middleware().with_only_authenticated(true);
                         client = client.with(auth_middleware);
                     }
                     AuthIntegration::NoAuthMiddleware => {

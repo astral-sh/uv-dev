@@ -223,6 +223,8 @@ def run_test(
             ],
             env=env,
         )
+    elif auth_method == "ambient":
+        pass
     elif token:
         raise ValueError(f"Unknown authentication method: {auth_method}")
 
@@ -333,7 +335,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--auth-method",
-        choices=["env", "text-store"],
+        choices=["ambient", "env", "text-store"],
         default="env",
     )
     parser.add_argument("--color", choices=["always", "auto", "never"], default="auto")
@@ -385,7 +387,7 @@ def main() -> None:
         public = (
             env.get(f"UV_TEST_{registry_name.upper()}_PUBLIC", "").lower() == "true"
         )
-        if not token and not public:
+        if not token and not public and args.auth_method != "ambient":
             if args.all:
                 print(
                     f"{Fore.RED}{registry_name}: UV_TEST_{registry_name.upper()}_TOKEN contained no token. Required by --all"
@@ -409,7 +411,7 @@ def main() -> None:
             registry_url,
             package,
             username,
-            token,
+            token or "",
             args.verbose,
             args.timeout,
             args.required_python,

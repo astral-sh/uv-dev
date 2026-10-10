@@ -3,6 +3,8 @@ use std::fmt;
 use std::io::Read;
 use std::io::Write;
 use std::str::{FromStr, Utf8Error};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::read::DecoderReader;
@@ -20,6 +22,10 @@ use url::Url;
 use uv_netrc::Netrc;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
+
+use crate::providers::{
+    ArtifactRegistryCredentials, ArtifactRegistryError, ArtifactRegistryProvider,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Credentials {
@@ -401,6 +407,12 @@ pub(crate) enum Authentication {
 
     /// Azure Storage signing.
     AzureSigner(AzureDefaultSigner),
+
+    /// Google Artifact Registry authentication.
+    ArtifactRegistry {
+        provider: ArtifactRegistryProvider,
+        initial_credentials: Arc<Mutex<Option<ArtifactRegistryCredentials>>>,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -424,6 +436,12 @@ pub(crate) enum AuthenticationError {
         #[source]
         source: reqsign::Error,
     },
+
+    #[error("Failed to retrieve Google Artifact Registry credentials")]
+    ArtifactRegistry,
+
+    #[error(transparent)]
+    ArtifactRegistryCredentials(#[from] ArtifactRegistryError),
 }
 
 impl PartialEq for Authentication {
@@ -433,6 +451,7 @@ impl PartialEq for Authentication {
             (Self::AwsSigner(..), Self::AwsSigner(..)) => true,
             (Self::GcsSigner(..), Self::GcsSigner(..)) => true,
             (Self::AzureSigner(..), Self::AzureSigner(..)) => true,
+            (Self::ArtifactRegistry { .. }, Self::ArtifactRegistry { .. }) => true,
             _ => false,
         }
     }
@@ -465,11 +484,24 @@ impl From<AzureDefaultSigner> for Authentication {
 }
 
 impl Authentication {
+    pub(crate) fn artifact_registry(
+        provider: ArtifactRegistryProvider,
+        credentials: ArtifactRegistryCredentials,
+    ) -> Self {
+        Self::ArtifactRegistry {
+            provider,
+            initial_credentials: Arc::new(Mutex::new(Some(credentials))),
+        }
+    }
+
     /// Return the password used for authentication, if any.
     pub(crate) fn password(&self) -> Option<&str> {
         match self {
             Self::Credentials(credentials) => credentials.password(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => None,
+            Self::AwsSigner(..)
+            | Self::GcsSigner(..)
+            | Self::AzureSigner(..)
+            | Self::ArtifactRegistry { .. } => None,
         }
     }
 
@@ -477,7 +509,10 @@ impl Authentication {
     pub(crate) fn username(&self) -> Option<&str> {
         match self {
             Self::Credentials(credentials) => credentials.username(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => None,
+            Self::AwsSigner(..)
+            | Self::GcsSigner(..)
+            | Self::AzureSigner(..)
+            | Self::ArtifactRegistry { .. } => None,
         }
     }
 
@@ -485,9 +520,10 @@ impl Authentication {
     pub(crate) fn as_username(&self) -> Cow<'_, Username> {
         match self {
             Self::Credentials(credentials) => credentials.as_username(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => {
-                Cow::Owned(Username::none())
-            }
+            Self::AwsSigner(..)
+            | Self::GcsSigner(..)
+            | Self::AzureSigner(..)
+            | Self::ArtifactRegistry { .. } => Cow::Owned(Username::none()),
         }
     }
 
@@ -495,7 +531,10 @@ impl Authentication {
     pub(crate) fn to_username(&self) -> Username {
         match self {
             Self::Credentials(credentials) => credentials.to_username(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => Username::none(),
+            Self::AwsSigner(..)
+            | Self::GcsSigner(..)
+            | Self::AzureSigner(..)
+            | Self::ArtifactRegistry { .. } => Username::none(),
         }
     }
 
@@ -503,7 +542,10 @@ impl Authentication {
     pub(crate) fn is_authenticated(&self) -> bool {
         match self {
             Self::Credentials(credentials) => credentials.is_authenticated(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => true,
+            Self::AwsSigner(..)
+            | Self::GcsSigner(..)
+            | Self::AzureSigner(..)
+            | Self::ArtifactRegistry { .. } => true,
         }
     }
 
@@ -511,7 +553,10 @@ impl Authentication {
     pub(crate) fn is_empty(&self) -> bool {
         match self {
             Self::Credentials(credentials) => credentials.is_empty(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => false,
+            Self::AwsSigner(..)
+            | Self::GcsSigner(..)
+            | Self::AzureSigner(..)
+            | Self::ArtifactRegistry { .. } => false,
         }
     }
 
@@ -619,6 +664,21 @@ impl Authentication {
                     request.url_mut().set_query(path_and_query.query());
                 }
                 Ok(request)
+            }
+            Self::ArtifactRegistry {
+                provider,
+                initial_credentials,
+            } => {
+                let initial_credentials = initial_credentials.lock().await.take();
+                let credentials =
+                    match initial_credentials.and_then(ArtifactRegistryCredentials::into_fresh) {
+                        Some(credentials) => Some(credentials),
+                        None => provider.credentials_for(request.url()).await?,
+                    };
+                let Some(credentials) = credentials else {
+                    return Err(AuthenticationError::ArtifactRegistry);
+                };
+                Ok(credentials.authenticate(request)?)
             }
         }
     }

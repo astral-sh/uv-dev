@@ -16,7 +16,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tracing::{Instrument, Span, debug, info_span, instrument, trace, warn};
 use url::Url;
 
-use uv_auth::{CredentialsCache, Indexes};
+use uv_auth::CredentialsCache;
 use uv_cache::{Cache, CacheBucket, CacheEntry, WheelCache};
 use uv_configuration::IndexStrategy;
 use uv_configuration::KeyringProviderType;
@@ -146,29 +146,6 @@ impl<'a> RegistryClientBuilder<'a> {
         self
     }
 
-    /// Add all authenticated sources to the cache.
-    fn cache_index_credentials(&mut self) -> Result<(), ClientBuildError> {
-        for index in self.index_locations.known_indexes() {
-            if let Some(credentials) = index.credentials()? {
-                trace!(
-                    "Read credentials for index `{}`",
-                    index
-                        .name
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| index.url.to_string())
-                );
-                if let Some(root_url) = index.root_url() {
-                    self.base_client_builder
-                        .store_credentials(&root_url, credentials.clone());
-                }
-                self.base_client_builder
-                    .store_credentials(index.raw_url(), credentials);
-            }
-        }
-        Ok(())
-    }
-
     pub fn build(self) -> Result<RegistryClient, ClientBuildError> {
         self.build_inner(None)
     }
@@ -179,15 +156,13 @@ impl<'a> RegistryClientBuilder<'a> {
     }
 
     fn build_inner(
-        mut self,
+        self,
         existing: Option<&BaseClient>,
     ) -> Result<RegistryClient, ClientBuildError> {
-        self.cache_index_credentials()?;
-
         // Wrap in any relevant middleware and handle connectivity.
         let builder = self
             .base_client_builder
-            .indexes(Indexes::from(&self.index_locations));
+            .index_locations(&self.index_locations)?;
         let client = if let Some(existing) = existing {
             builder.wrap_existing(existing)
         } else {
