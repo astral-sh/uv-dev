@@ -12,7 +12,7 @@ use uv_command_support::Printer;
 use uv_errors::{Hinted, Hints};
 /// Format an error chain with the default user-facing hints and output settings.
 pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::fmt::Result {
-    uv_errors::write_error_chain_with_options(
+    uv_errors::write_error_chain_buffered(
         err.as_ref(),
         &hints_for_error(err),
         uv_errors::ErrorOptions::default().with_stream(printer.stderr_important()),
