@@ -6170,6 +6170,7 @@ dependencies = [
  "uv-installer",
  "uv-normalize",
  "uv-pep440",
+ "uv-platform-tags",
  "uv-preview",
  "uv-python-discovery",
  "uv-python-interpreter",

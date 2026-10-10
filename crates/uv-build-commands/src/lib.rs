@@ -90,7 +90,9 @@ pub enum Error {
     #[error(transparent)]
     BuildFrontend(#[from] uv_build_frontend::Error),
     #[error("Failed to check build requirements")]
-    RequirementsCheck(#[source] anyhow::Error),
+    RequirementsCheck(#[source] uv_installer::SitePackagesError),
+    #[error("Failed to check build requirements")]
+    RequirementsTags(#[source] uv_platform_tags::TagsError),
     #[error("Build requirement is not satisfied: `{0}`")]
     UnsatisfiedBuildRequirement(Box<Requirement>),
     #[error(transparent)]
@@ -1039,7 +1041,7 @@ impl BuildDependencyCheck<'_> {
         let tags = environment
             .interpreter()
             .tags()
-            .map_err(|err| Error::RequirementsCheck(err.into()))?;
+            .map_err(Error::RequirementsTags)?;
         let markers = environment.interpreter().to_resolver_marker_environment();
         match site_packages
             .satisfies_requirements(

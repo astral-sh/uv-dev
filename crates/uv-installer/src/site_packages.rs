@@ -3,19 +3,18 @@ use std::iter::{Flatten, once};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{Context, Result};
 use fs_err as fs;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_configuration::{
     DependencyMode, DependencyModifierScope, DependencyModifiers, ExcludeDependency, Excludes,
-    Override, Overrides,
+    Override, Overrides, ScopedOverrideSourceError,
 };
 use uv_distribution_filename::EggInfoFilename;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, Diagnostic, ExtraBuildRequires, ExtraBuildVariables,
-    InstalledDist, InstalledDistKind, Name, NameRequirementSpecification, PackageConfigSettings,
-    Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    InstalledDist, InstalledDistError, InstalledDistKind, Name, NameRequirementSpecification,
+    PackageConfigSettings, Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
@@ -29,6 +28,60 @@ use uv_types::InstalledPackagesProvider;
 use uv_warnings::warn_user;
 
 use crate::satisfies::{BuildSettings, RequirementSatisfaction};
+
+/// A failure to discover installed packages or check their requirements.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct SitePackagesError(Box<SitePackagesErrorKind>);
+
+impl From<SitePackagesErrorKind> for SitePackagesError {
+    fn from(error: SitePackagesErrorKind) -> Self {
+        Self(Box::new(error))
+    }
+}
+
+impl From<ScopedOverrideSourceError> for SitePackagesError {
+    fn from(error: ScopedOverrideSourceError) -> Self {
+        SitePackagesErrorKind::ScopedOverride(error).into()
+    }
+}
+
+impl AsRef<SitePackagesErrorKind> for SitePackagesError {
+    fn as_ref(&self) -> &SitePackagesErrorKind {
+        &self.0
+    }
+}
+
+/// The cause and context of an installed-package failure.
+#[derive(Debug, thiserror::Error)]
+pub enum SitePackagesErrorKind {
+    #[error("Failed to read site-packages directory")]
+    ReadDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Failed to read site-packages directory contents: {}", path.user_display())]
+    ReadDirectoryContents {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Failed to read metadata from: {}", path.simplified_display())]
+    ReadMetadata {
+        path: PathBuf,
+        #[source]
+        source: InstalledDistError,
+    },
+    #[error("Failed to read metadata for: {distribution}")]
+    ReadDistributionMetadata {
+        distribution: Box<InstalledDist>,
+        #[source]
+        source: InstalledDistError,
+    },
+    #[error(transparent)]
+    ScopedOverride(#[from] ScopedOverrideSourceError),
+}
 
 /// An index over the packages installed in an environment.
 ///
@@ -50,7 +103,7 @@ pub struct SitePackages {
 
 impl SitePackages {
     /// Build an index of installed packages from the given Python environment.
-    pub fn from_environment(environment: &PythonEnvironment) -> Result<Self> {
+    pub fn from_environment(environment: &PythonEnvironment) -> Result<Self, SitePackagesError> {
         Self::from_interpreter(environment.interpreter())
     }
 
@@ -58,13 +111,13 @@ impl SitePackages {
     pub fn from_environment_for_packages<'a>(
         environment: &PythonEnvironment,
         package_names: impl IntoIterator<Item = &'a PackageName>,
-    ) -> Result<Self> {
+    ) -> Result<Self, SitePackagesError> {
         let package_names = package_names.into_iter().collect::<FxHashSet<_>>();
         Self::from_interpreter_with_filter(environment.interpreter(), Some(&package_names))
     }
 
     /// Build an index of installed packages from the given Python executable.
-    pub fn from_interpreter(interpreter: &Interpreter) -> Result<Self> {
+    pub fn from_interpreter(interpreter: &Interpreter) -> Result<Self, SitePackagesError> {
         Self::from_interpreter_with_filter(interpreter, None)
     }
 
@@ -72,7 +125,7 @@ impl SitePackages {
     fn from_interpreter_with_filter(
         interpreter: &Interpreter,
         package_names: Option<&FxHashSet<&PackageName>>,
-    ) -> Result<Self> {
+    ) -> Result<Self, SitePackagesError> {
         let mut distributions: Vec<Option<InstalledDist>> = Vec::new();
         let mut by_name: FxHashMap<PackageName, Vec<usize>> = FxHashMap::default();
         let mut by_url: FxHashMap<DisplaySafeUrl, Vec<usize>> = FxHashMap::default();
@@ -80,16 +133,22 @@ impl SitePackages {
         for site_packages in interpreter.site_packages() {
             // Read the site-packages directory.
             let site_packages = match fs::read_dir(site_packages.as_ref()) {
-                Ok(read_dir) => sorted_dist_like_paths(read_dir).with_context(|| {
-                    format!(
-                        "Failed to read site-packages directory contents: {}",
-                        site_packages.user_display()
-                    )
+                Ok(read_dir) => sorted_dist_like_paths(read_dir).map_err(|source| {
+                    SitePackagesErrorKind::ReadDirectoryContents {
+                        path: site_packages.to_path_buf(),
+                        source,
+                    }
                 })?,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     continue;
                 }
-                Err(err) => return Err(err).context("Failed to read site-packages directory"),
+                Err(source) => {
+                    return Err(SitePackagesErrorKind::ReadDirectory {
+                        path: site_packages.to_path_buf(),
+                        source,
+                    }
+                    .into());
+                }
             };
 
             // Index all installed packages by name.
@@ -116,10 +175,9 @@ impl SitePackages {
                         continue;
                     }
                     Err(err) => {
-                        return Err(err).context(format!(
-                            "Failed to read metadata from: {}",
-                            path.simplified_display()
-                        ));
+                        return Err(
+                            SitePackagesErrorKind::ReadMetadata { path, source: err }.into()
+                        );
                     }
                 };
 
@@ -209,7 +267,7 @@ impl SitePackages {
         markers: &ResolverMarkerEnvironment,
         tags: &Tags,
         dependency_metadata: &DependencyMetadata,
-    ) -> Result<Vec<SitePackagesDiagnostic>> {
+    ) -> anyhow::Result<Vec<SitePackagesDiagnostic>> {
         let mut diagnostics = Vec::new();
 
         for (package, indexes) in &self.by_name {
@@ -346,7 +404,7 @@ impl SitePackages {
         config_settings_package: &PackageConfigSettings,
         extra_build_requires: &ExtraBuildRequires,
         extra_build_variables: &ExtraBuildVariables,
-    ) -> Result<SatisfiesResult<UnresolvedRequirement>> {
+    ) -> Result<SatisfiesResult<UnresolvedRequirement>, SitePackagesError> {
         // First, map all unnamed requirements to named requirements.
         let requirements = {
             let mut named = Vec::with_capacity(requirements.len());
@@ -484,7 +542,7 @@ impl SitePackages {
         markers: &ResolverMarkerEnvironment,
         tags: &Tags,
         build_settings: Option<BuildSettings<'_>>,
-    ) -> Result<SatisfiesResult<Requirement>> {
+    ) -> Result<SatisfiesResult<Requirement>, SitePackagesError> {
         // Collect the constraints by package name.
         let constraints: FxHashMap<&PackageName, Vec<&Requirement>> =
             constraints.fold(FxHashMap::default(), |mut constraints, constraint| {
@@ -573,8 +631,11 @@ impl SitePackages {
                     {
                         Cow::Owned(metadata)
                     } else {
-                        Cow::Borrowed(distribution.read_metadata().with_context(|| {
-                            format!("Failed to read metadata for: {distribution}")
+                        Cow::Borrowed(distribution.read_metadata().map_err(|source| {
+                            SitePackagesErrorKind::ReadDistributionMetadata {
+                                distribution: Box::new((*distribution).clone()),
+                                source,
+                            }
                         })?)
                     };
 
@@ -827,13 +888,13 @@ mod tests {
     #[cfg(unix)]
     use uv_cache::Cache;
     #[cfg(unix)]
-    use uv_distribution_types::Name;
+    use uv_distribution_types::{InstalledDistError, Name};
     #[cfg(unix)]
     use uv_python_interpreter::Interpreter;
 
-    #[cfg(unix)]
-    use super::SitePackages;
     use super::sorted_dist_like_paths;
+    #[cfg(unix)]
+    use super::{SitePackages, SitePackagesErrorKind};
 
     #[test]
     fn sorted_dist_like_paths_filters_and_sorts() -> Result<()> {
@@ -867,7 +928,7 @@ mod tests {
     /// A missing `purelib` directory must not prevent indexing an existing, distinct `platlib`.
     #[cfg(unix)]
     #[tokio::test]
-    async fn site_packages_scans_platlib_when_purelib_is_missing() -> Result<()> {
+    async fn site_packages_scans_platlib_and_reports_invalid_metadata() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let purelib = temp_dir.path().join("purelib");
         let platlib = temp_dir.path().join("platlib");
@@ -939,6 +1000,23 @@ mod tests {
                 .map(|distribution| distribution.name().as_ref())
                 .collect::<Vec<_>>(),
             ["demo"]
+        );
+
+        let invalid = platlib.join("broken-invalid.dist-info");
+        fs_err::create_dir(&invalid)?;
+        let error = SitePackages::from_interpreter(&interpreter)
+            .expect_err("invalid installed version must fail discovery");
+        assert!(matches!(
+            error.as_ref(),
+            SitePackagesErrorKind::ReadMetadata {
+                path,
+                source: InstalledDistError::VersionParse(_),
+            } if path == &invalid
+        ));
+        assert!(
+            std::error::Error::source(&error)
+                .expect("installed metadata error should retain its source")
+                .is::<InstalledDistError>()
         );
 
         Ok(())
