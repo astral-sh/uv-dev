@@ -27,9 +27,17 @@ impl std::fmt::Display for SourceAnnotation {
                 }
                 RequirementOrigin::Group(path, project_name, group) => {
                     if let Some(project_name) = project_name {
-                        write!(f, "{project_name} ({}:{group})", path.portable_display())
+                        write!(
+                            f,
+                            "{project_name} ({}::dependency-groups.{group})",
+                            path.portable_display()
+                        )
                     } else {
-                        write!(f, "({}:{group})", path.portable_display())
+                        write!(
+                            f,
+                            "({}::dependency-groups.{group})",
+                            path.portable_display()
+                        )
                     }
                 }
                 RequirementOrigin::Workspace => {
@@ -83,5 +91,89 @@ impl SourceAnnotations {
     /// Return the source annotations for a given package.
     pub fn get(&self, package: &PackageName) -> Option<&BTreeSet<SourceAnnotation>> {
         self.0.get(package)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::SourceAnnotation;
+    use uv_normalize::{GroupName, PackageName};
+    use uv_pep508::RequirementOrigin;
+
+    #[test]
+    fn dependency_group_annotations() {
+        let project: PackageName = "My_Project".parse().expect("valid package name");
+        let group: GroupName = "Docs_Test".parse().expect("valid group name");
+        let path = PathBuf::from("sub dir").join("pyproject.toml");
+
+        assert_eq!(
+            SourceAnnotation::Requirement(RequirementOrigin::Group(
+                path.clone(),
+                Some(project),
+                group.clone(),
+            ))
+            .to_string(),
+            "my-project (sub dir/pyproject.toml::dependency-groups.docs-test)"
+        );
+        assert_eq!(
+            SourceAnnotation::Requirement(RequirementOrigin::Group(path, None, group)).to_string(),
+            "(sub dir/pyproject.toml::dependency-groups.docs-test)"
+        );
+    }
+
+    #[test]
+    fn other_source_annotations() {
+        let project: PackageName = "my-project".parse().expect("valid package name");
+        let group: GroupName = "docs".parse().expect("valid group name");
+        let path = PathBuf::from("..").join("pyproject.toml");
+        let cases = [
+            (
+                RequirementOrigin::File(path.clone()),
+                "-r ../pyproject.toml",
+                "-c ../pyproject.toml",
+                "--override ../pyproject.toml",
+            ),
+            (
+                RequirementOrigin::Project(path.clone(), project.clone()),
+                "my-project (../pyproject.toml)",
+                "-c ../pyproject.toml",
+                "--override my-project (../pyproject.toml)",
+            ),
+            (
+                RequirementOrigin::Group(path.clone(), Some(project), group.clone()),
+                "my-project (../pyproject.toml::dependency-groups.docs)",
+                "-c ../pyproject.toml",
+                "--override my-project (../pyproject.toml:docs)",
+            ),
+            (
+                RequirementOrigin::Group(path, None, group),
+                "(../pyproject.toml::dependency-groups.docs)",
+                "-c ../pyproject.toml",
+                "--override (../pyproject.toml:docs)",
+            ),
+            (
+                RequirementOrigin::Workspace,
+                "(workspace)",
+                "-c (workspace)",
+                "--override (workspace)",
+            ),
+        ];
+
+        for (origin, requirement, constraint, expected_override) in cases {
+            assert_eq!(
+                SourceAnnotation::Requirement(origin.clone()).to_string(),
+                requirement
+            );
+            assert_eq!(
+                SourceAnnotation::Constraint(origin.clone()).to_string(),
+                constraint
+            );
+            assert_eq!(
+                SourceAnnotation::Override(origin).to_string(),
+                expected_override
+            );
+        }
     }
 }
