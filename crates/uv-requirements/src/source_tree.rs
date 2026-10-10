@@ -15,6 +15,7 @@ use uv_distribution_types::{
 };
 use uv_fs::Simplified;
 use uv_normalize::{ExtraName, PackageName};
+use uv_once_map::Registration;
 use uv_pep508::RequirementOrigin;
 use uv_pypi_types::PyProjectToml;
 use uv_redacted::DisplaySafeUrl;
@@ -227,24 +228,25 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
         // Fetch the metadata for the distribution.
         let metadata = {
             let id = source.distribution_id();
-            if let Some(response) = self.index.distributions().register_or_wait(&id).await {
-                let MetadataResponse::Found(archive) = &*response else {
-                    panic!("Failed to find metadata for: {}", path.user_display());
-                };
-                archive.metadata.clone()
-            } else {
-                // Run the PEP 517 build process to extract metadata from the source distribution.
-                let source = BuildableSource::Url(source);
-                let archive = self.database.build_wheel_metadata(&source, hashes).await?;
+            match self.index.distributions().register_or_wait(&id).await {
+                Registration::Existing(response) => {
+                    let MetadataResponse::Found(archive) = &*response else {
+                        panic!("Failed to find metadata for: {}", path.user_display());
+                    };
+                    archive.metadata.clone()
+                }
+                Registration::New(producer) => {
+                    // Run the PEP 517 build process to extract metadata from the source distribution.
+                    let source = BuildableSource::Url(source);
+                    let archive = self.database.build_wheel_metadata(&source, hashes).await?;
 
-                let metadata = archive.metadata.clone();
+                    let metadata = archive.metadata.clone();
 
-                // Insert the metadata into the index.
-                self.index
-                    .distributions()
-                    .done(id, Arc::new(MetadataResponse::Found(archive)));
+                    // Insert the metadata into the index.
+                    producer.done(Arc::new(MetadataResponse::Found(archive)));
 
-                metadata
+                    metadata
+                }
             }
         };
 

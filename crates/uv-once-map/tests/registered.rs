@@ -23,10 +23,10 @@ async fn registered_waiters() -> Result<(), Box<dyn Error>> {
         assert!(poll!(&mut second_wait).is_pending());
 
         map.done("package", 42);
-        assert_eq!(first_wait.await, 42);
-        assert_eq!(second_wait.await, 42);
-        assert_eq!(cloned.wait_blocking(), 42);
-        assert_eq!(first.wait().await, 42);
+        assert_eq!(first_wait.await?, 42);
+        assert_eq!(second_wait.await?, 42);
+        assert_eq!(cloned.wait_blocking()?, 42);
+        assert_eq!(first.wait().await?, 42);
     }
     assert_eq!(map.remove(&"package"), Some(42));
     assert!(map.get_registered("package").is_none());
@@ -42,7 +42,7 @@ fn preloaded_entry() -> Result<(), Box<dyn Error>> {
             .get_registered("package")
             .ok_or("missing preloaded entry")?;
         assert_eq!(entry.key(), &"package");
-        assert_eq!(*entry.wait_blocking(), 42);
+        assert_eq!(*entry.wait_blocking()?, 42);
     }
     let result = map.remove(&"package").ok_or("missing result")?;
     assert_eq!(*result, 42);
@@ -51,12 +51,18 @@ fn preloaded_entry() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn register_or_wait() {
+async fn register_or_wait() -> Result<(), Box<dyn Error>> {
     let map = RegisteredOnceMap::<_, _>::default();
-    assert_eq!(map.register_or_wait(&"package").await, None);
+    let Registration::New(producer) = map.register_or_wait(&"package").await else {
+        return Err("expected a new producer".into());
+    };
     let mut wait = pin!(map.register_or_wait(&"package"));
     assert!(poll!(&mut wait).is_pending());
-    map.done("package", 42);
-    assert_eq!(wait.await, Some(42));
-    assert_eq!(map.register_or_wait(&"package").await, Some(42));
+    producer.done(42);
+    let Registration::Existing(value) = wait.await else {
+        return Err("expected a cached result".into());
+    };
+    assert_eq!(value, 42);
+    assert_eq!(map.get(&"package"), Some(42));
+    Ok(())
 }
