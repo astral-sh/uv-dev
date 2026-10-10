@@ -50588,6 +50588,564 @@ async fn lock_required_environment_refreshed_parent_release() -> Result<()> {
     Ok(())
 }
 
+/// An uncached registry lookup can replace a parent and activate a previously inactive child.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_required_environment_uncached_parent_release() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "uncached-parent-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["child; python_version < '3.13'"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.child.versions."2.0.0"]
+    "#})?;
+    let artifacts = PackseServer::from_scenario(&scenario);
+    let listing = |name: &str, retire_parent: bool| {
+        let prefix = format!("{name}-");
+        let files = artifacts
+            .files()
+            .filter(|(filename, _)| filename.starts_with(&prefix))
+            .filter(|(filename, _)| !retire_parent || !filename.starts_with("parent-2.0.0"))
+            .map(|(filename, hash)| {
+                json!({
+                    "filename": filename,
+                    "url": artifacts.file_url(filename),
+                    "hashes": { "sha256": hash },
+                    "upload-time": "2024-03-24T00:00:00Z",
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({"meta": {"api-version": "1.1"}, "name": name, "files": files}).to_string()
+    };
+    let parent_before = listing("parent", false);
+    let parent_after = listing("parent", true);
+    let child = listing("child", false);
+    let index = MockServer::start().await;
+    let parent_before_guard = Mock::given(method("GET"))
+        .and(path("/simple/parent/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(parent_before, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount_as_scoped(&index)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/child/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(child, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["parent"]
+    "#})?;
+    let index_url = format!("{}/simple/", index.uri());
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent==2", "--upgrade-package", "child==1"])
+        .arg("--index-url").arg(&index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    drop(parent_before_guard);
+    Mock::given(method("GET"))
+        .and(path("/simple/parent/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(parent_after, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    context.temp_dir.child("pyproject.toml").write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"python_version == '3.13' and sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--no-cache").arg("--index-url").arg(&index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated child v1.0.0 -> v2.0.0
+    Updated parent v2.0.0 -> v1.0.0
+    ");
+    Ok(())
+}
+
+/// Refreshed wheel availability can keep a child pinned when its parent broadens activation.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_required_environment_revalidated_child_gains_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "revalidated-child-gains-required-wheel"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["child; python_version < '3.13'"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64", "cp313-cp313-manylinux_2_17_x86_64"]
+        [packages.child.versions."2.0.0"]
+    "#})?;
+    let artifacts = PackseServer::from_scenario(&scenario);
+    let listing = |name: &str, refreshed: bool| {
+        let prefix = format!("{name}-");
+        let files = artifacts
+            .files()
+            .filter(|(filename, _)| filename.starts_with(&prefix))
+            .filter(|(filename, _)| !refreshed || !filename.starts_with("parent-2.0.0"))
+            .filter(|(filename, _)| refreshed || !filename.starts_with("child-1.0.0-cp313"))
+            .map(|(filename, hash)| {
+                json!({
+                    "filename": filename,
+                    "url": artifacts.file_url(filename),
+                    "hashes": { "sha256": hash },
+                    "upload-time": "2024-03-24T00:00:00Z",
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({"meta": {"api-version": "1.1"}, "name": name, "files": files}).to_string()
+    };
+    let parent_before = listing("parent", false);
+    let parent_after = listing("parent", true);
+    let child_before = listing("child", false);
+    let child_after = listing("child", true);
+    let index = MockServer::start().await;
+    let parent_before_guard = Mock::given(method("GET"))
+        .and(path("/simple/parent/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(parent_before, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount_as_scoped(&index)
+        .await;
+    let child_before_guard = Mock::given(method("GET"))
+        .and(path("/simple/child/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(child_before, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount_as_scoped(&index)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["parent"]
+    "#})?;
+    let index_url = format!("{}/simple/", index.uri());
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent==2", "--upgrade-package", "child==1"])
+        .arg("--index-url").arg(&index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    drop(parent_before_guard);
+    drop(child_before_guard);
+    Mock::given(method("GET"))
+        .and(path("/simple/child/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(child_after, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/parent/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(parent_after, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    context.temp_dir.child("pyproject.toml").write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"python_version == '3.13' and sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(&index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated parent v2.0.0 -> v1.0.0
+    ");
+    Ok(())
+}
+
+/// HTTP revalidation can replace a parent and successively activate old child preferences.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_required_environment_revalidated_parent_release() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "revalidated-parent-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["child; python_version < '3.13'"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.child.versions."2.0.0"]
+        requires = ["grandchild"]
+        [packages.grandchild.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.grandchild.versions."2.0.0"]
+    "#})?;
+    let artifacts = PackseServer::from_scenario(&scenario);
+    let listing = |name: &str, retire_parent: bool| {
+        let prefix = format!("{name}-");
+        let files = artifacts
+            .files()
+            .filter(|(filename, _)| filename.starts_with(&prefix))
+            .filter(|(filename, _)| !retire_parent || !filename.starts_with("parent-2.0.0"))
+            .map(|(filename, hash)| {
+                json!({
+                    "filename": filename,
+                    "url": artifacts.file_url(filename),
+                    "hashes": { "sha256": hash },
+                    "upload-time": "2024-03-24T00:00:00Z",
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({"meta": {"api-version": "1.1"}, "name": name, "files": files}).to_string()
+    };
+    let parent_before = listing("parent", false);
+    let parent_after = listing("parent", true);
+    let child = listing("child", false);
+    let grandchild = listing("grandchild", false);
+    let index = MockServer::start().await;
+    let parent_before_guard = Mock::given(method("GET"))
+        .and(path("/simple/parent/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(parent_before, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount_as_scoped(&index)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/child/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(child, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/grandchild/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(grandchild, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["parent", "grandchild; python_version < '3.13'"]
+    "#})?;
+    let index_url = format!("{}/simple/", index.uri());
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent==2", "--upgrade-package", "child==1", "--upgrade-package", "grandchild==1"])
+        .arg("--index-url").arg(&index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    drop(parent_before_guard);
+    Mock::given(method("GET"))
+        .and(path("/simple/parent/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(parent_after, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    context.temp_dir.child("pyproject.toml").write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"python_version == '3.13' and sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(&index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Updated child v1.0.0 -> v2.0.0
+    Updated grandchild v1.0.0 -> v2.0.0
+    Updated parent v2.0.0 -> v1.0.0
+    ");
+    Ok(())
+}
+
+/// A preference can disappear from one resolution attempt and become reachable after a retry.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_required_environment_revalidated_parent_preserves_reintroduced_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "revalidated-parent-reintroduced-pin"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["child; python_version < '3.13'", "grandchild"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.child.versions."2.0.0"]
+        requires = ["grandchild"]
+        [packages.grandchild.versions."1.0.0"]
+        [packages.grandchild.versions."2.0.0"]
+    "#})?;
+    let artifacts = PackseServer::from_scenario(&scenario);
+    let listing = |name: &str, retire_parent: bool| {
+        let prefix = format!("{name}-");
+        let files = artifacts
+            .files()
+            .filter(|(filename, _)| filename.starts_with(&prefix))
+            .filter(|(filename, _)| !retire_parent || !filename.starts_with("parent-2.0.0"))
+            .map(|(filename, hash)| {
+                json!({
+                    "filename": filename,
+                    "url": artifacts.file_url(filename),
+                    "hashes": { "sha256": hash },
+                    "upload-time": "2024-03-24T00:00:00Z",
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({"meta": {"api-version": "1.1"}, "name": name, "files": files}).to_string()
+    };
+    let parent_before = listing("parent", false);
+    let parent_after = listing("parent", true);
+    let child = listing("child", false);
+    let grandchild = listing("grandchild", false);
+    let index = MockServer::start().await;
+    let parent_before_guard = Mock::given(method("GET"))
+        .and(path("/simple/parent/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(parent_before, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount_as_scoped(&index)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/child/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(child, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/grandchild/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(grandchild, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["parent"]
+    "#})?;
+    let index_url = format!("{}/simple/", index.uri());
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent==2", "--upgrade-package", "child==1", "--upgrade-package", "grandchild==1"])
+        .arg("--index-url").arg(&index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    drop(parent_before_guard);
+    Mock::given(method("GET"))
+        .and(path("/simple/parent/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(parent_after, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    context.temp_dir.child("pyproject.toml").write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"python_version == '3.13' and sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(&index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Updated child v1.0.0 -> v2.0.0
+    Updated parent v2.0.0 -> v1.0.0
+    ");
+    Ok(())
+}
+
+/// A registry replacement cannot activate a child outside the parent's platform domain.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_required_environment_revalidated_parent_preserves_disjoint_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "revalidated-parent-disjoint-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["child; python_version < '3.13'"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        [packages.child.versions."2.0.0"]
+    "#})?;
+    let artifacts = PackseServer::from_scenario(&scenario);
+    let listing = |name: &str, retire_parent: bool| {
+        let prefix = format!("{name}-");
+        let files = artifacts
+            .files()
+            .filter(|(filename, _)| filename.starts_with(&prefix))
+            .filter(|(filename, _)| !retire_parent || !filename.starts_with("parent-2.0.0"))
+            .map(|(filename, hash)| {
+                json!({
+                    "filename": filename,
+                    "url": artifacts.file_url(filename),
+                    "hashes": { "sha256": hash },
+                    "upload-time": "2024-03-24T00:00:00Z",
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({"meta": {"api-version": "1.1"}, "name": name, "files": files}).to_string()
+    };
+    let parent_before = listing("parent", false);
+    let parent_after = listing("parent", true);
+    let child = listing("child", false);
+    let index = MockServer::start().await;
+    let parent_before_guard = Mock::given(method("GET"))
+        .and(path("/simple/parent/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(parent_before, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount_as_scoped(&index)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/child/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(child, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["parent; sys_platform == 'win32'"]
+    "#})?;
+    let index_url = format!("{}/simple/", index.uri());
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent==2", "--upgrade-package", "child==1"])
+        .arg("--index-url").arg(&index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    drop(parent_before_guard);
+    Mock::given(method("GET"))
+        .and(path("/simple/parent/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-cache")
+                .set_body_raw(parent_after, "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&index)
+        .await;
+    context.temp_dir.child("pyproject.toml").write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"python_version == '3.13' and sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(&index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated parent v2.0.0 -> v1.0.0
+    ");
+    Ok(())
+}
+
 /// A stricter prerelease policy can replace a parent and activate dependencies on a new platform.
 #[cfg(feature = "test-universal")]
 #[test]

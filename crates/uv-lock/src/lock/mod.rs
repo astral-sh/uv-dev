@@ -4323,6 +4323,42 @@ impl Lock {
             .collect())
     }
 
+    /// Return locked packages with artifacts and activation refreshed from a completed resolution.
+    ///
+    /// Match exact versions and sources, retaining original fork hints for preference identity.
+    /// Base markers include all paths through regular dependencies, extras, and dependency groups.
+    /// Unselected packages remain inactive so their preferences can be reused if a later resolution
+    /// makes them reachable again.
+    pub fn resolved_packages(
+        &self,
+        resolution: &ResolverOutput,
+        root: &Path,
+        index_locations: &IndexLocations,
+    ) -> Result<Vec<(Cow<'_, Package>, MarkerTree)>, LockError> {
+        let mut packages = self
+            .packages
+            .iter()
+            .map(|package| (Cow::Borrowed(package), MarkerTree::FALSE))
+            .collect::<Vec<_>>();
+        for (_, distribution) in resolution.base_dists() {
+            let id = PackageId::from_annotated_dist(distribution, root)?;
+            let Some(index) = self.by_id.get(&id) else {
+                continue;
+            };
+            let package = Package::from_annotated_dist(
+                distribution,
+                self.package(*index).fork_markers.clone(),
+                root,
+                index_locations,
+            )?;
+            let marker = resolution
+                .requires_python
+                .complexify_markers(distribution.marker.pep508());
+            packages[index.0] = (Cow::Owned(package), packages[index.0].1.or(marker));
+        }
+        Ok(packages)
+    }
+
     /// Return a [`SatisfiesResult`] if the given requirements do not match the [`Package`] metadata.
     fn satisfies_requires_dist<'lock>(
         &self,

@@ -20,7 +20,7 @@ pub enum PreferenceError {
 }
 
 /// A pinned requirement, as extracted from a `requirements.txt` file.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Preference {
     name: PackageName,
     version: Version,
@@ -117,7 +117,7 @@ impl Preference {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub(crate) enum PreferenceIndex {
     /// The preference should match to any index.
     Any,
@@ -151,7 +151,7 @@ impl From<Option<IndexUrl>> for PreferenceIndex {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum PreferenceSource {
     /// The preference is from an installed package in the environment.
     Environment,

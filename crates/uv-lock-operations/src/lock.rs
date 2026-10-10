@@ -907,7 +907,10 @@ async fn do_lock(
             } else {
                 None
             };
-            let LockedRequirements { preferences, git } = versions_lock
+            let LockedRequirements {
+                mut preferences,
+                git,
+            } = versions_lock
                 .map(|lock| {
                     read_lock_requirements(
                         lock,
@@ -968,57 +971,96 @@ async fn do_lock(
             let workspace_members = member_requirements
                 .iter()
                 .map(|requirement| (requirement.name.clone(), requirement.source.clone()))
-                .collect();
+                .collect::<BTreeMap<_, _>>();
 
-            // Resolve the requirements.
-            let (resolution, _) = uv_resolve_operations::resolve(
-                member_requirements
-                    .into_iter()
-                    .chain(target.group_requirements())
-                    .chain(requirements.iter().cloned())
-                    .chain(
-                        dependency_groups
-                            .values()
-                            .flat_map(|requirements| requirements.iter().cloned()),
-                    )
-                    .map(UnresolvedRequirementSpecification::from)
-                    .collect(),
-                constraints
-                    .iter()
-                    .cloned()
-                    .map(NameRequirementSpecification::from)
-                    .chain(external)
-                    .collect(),
-                Vec::new(),
-                overrides.clone(),
-                excludes.clone(),
-                source_trees,
-                // The root is always null in workspaces, it "depends on" the projects
-                None,
-                workspace_members,
-                &extras,
-                &groups,
-                preferences,
-                None,
-                &hasher,
-                &Reinstall::default(),
-                upgrade,
-                None,
-                resolver_env,
-                python_requirement,
-                interpreter.markers(),
-                conflicts.clone(),
-                &client,
-                &flat_index,
-                state.index(),
-                &build_dispatch,
-                concurrency,
-                options,
-                recorder.clone(),
-                Box::new(SummaryResolveLogger),
-                printer,
-            )
-            .await?;
+            let resolver_requirements = member_requirements
+                .into_iter()
+                .chain(target.group_requirements())
+                .chain(requirements.iter().cloned())
+                .chain(
+                    dependency_groups
+                        .values()
+                        .flat_map(|requirements| requirements.iter().cloned()),
+                )
+                .map(UnresolvedRequirementSpecification::from)
+                .collect::<Vec<_>>();
+            let resolver_constraints = constraints
+                .iter()
+                .cloned()
+                .map(NameRequirementSpecification::from)
+                .chain(external)
+                .collect::<Vec<_>>();
+
+            let resolution = loop {
+                let (resolution, _) = uv_resolve_operations::resolve(
+                    resolver_requirements.clone(),
+                    resolver_constraints.clone(),
+                    Vec::new(),
+                    overrides.clone(),
+                    excludes.clone(),
+                    source_trees.clone(),
+                    // The root is always null in workspaces, it "depends on" the projects
+                    None,
+                    workspace_members.clone(),
+                    &extras,
+                    &groups,
+                    preferences.clone(),
+                    None,
+                    &hasher,
+                    &Reinstall::default(),
+                    upgrade,
+                    None,
+                    resolver_env.clone(),
+                    python_requirement.clone(),
+                    interpreter.markers(),
+                    conflicts.clone(),
+                    &client,
+                    &flat_index,
+                    state.index(),
+                    &build_dispatch,
+                    concurrency,
+                    options.clone(),
+                    recorder.clone(),
+                    Box::new(SummaryResolveLogger),
+                    printer,
+                )
+                .await?;
+
+                let Some(lock) = versions_lock.filter(|_| {
+                    !preferences.is_empty() && !lock_required_environments.as_markers().is_empty()
+                }) else {
+                    break resolution;
+                };
+                // Registry revalidation can replace a preferred release without an explicit
+                // refresh request. Recheck wheel preferences against the actual selected graph.
+                // Each retry removes at least one retained preference; removed preferences are
+                // never restored, so this process terminates without limiting the number of retries.
+                let resolved_packages =
+                    lock.resolved_packages(&resolution, target.install_path(), index_locations)?;
+                let retained = read_lock_requirements(
+                    lock,
+                    target.install_path(),
+                    upgrade,
+                    &requires_python,
+                    build_options,
+                    lock_required_environments.as_markers(),
+                    Some(
+                        resolved_packages
+                            .iter()
+                            .map(|(package, marker)| (package.as_ref(), *marker))
+                            .collect(),
+                    ),
+                    minimum_libc_version,
+                )?
+                .preferences
+                .into_iter()
+                .collect::<FxHashSet<_>>();
+                let previous_count = preferences.len();
+                preferences.retain(|preference| retained.contains(preference));
+                if preferences.len() == previous_count {
+                    break resolution;
+                }
+            };
 
             // Print the success message after completing resolution.
             logger.on_complete(resolution.len(), start, printer)?;
