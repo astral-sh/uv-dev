@@ -49596,7 +49596,7 @@ fn lock_required_environment_preserves_lowered_index_pin() -> Result<()> {
     Ok(())
 }
 
-/// Unlocking a parent invalidates its conditional descendants without activating unrelated roots.
+/// A replacement release can activate any locked package within the parent's marker domain.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_unlocked_parent_activation() -> Result<()> {
@@ -49655,6 +49655,7 @@ fn lock_required_environment_unlocked_parent_activation() -> Result<()> {
     Resolved 4 packages in [TIME]
     Updated child v1.0.0 -> v2.0.0
     Updated parent v1.0.0 -> v2.0.0
+    Updated platform-only v1.0.0 -> v2.0.0
     ");
     Ok(())
 }
@@ -50177,6 +50178,119 @@ fn lock_required_environment_dynamic_recursive_extra_preserves_inactive_pin() ->
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A replacement release can introduce a dependency that has no edge in the old lock graph.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_unlocked_parent_adds_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "replacement-parent-new-edge-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["child"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.child.versions."2.0.0"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent", "child; python_version < '3.13'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent==1", "--upgrade-package", "child==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent", "child; python_version < '3.13'"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13' and sys_platform == 'linux'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated child v1.0.0 -> v2.0.0
+    Updated parent v1.0.0 -> v2.0.0
+    ");
+    Ok(())
+}
+
+/// An unlocked parent cannot activate dependencies outside its own marker domain.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_unlocked_parent_preserves_disjoint_domain() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "unlocked-parent-disjoint-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        requires = ["child"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["child"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        [packages.child.versions."2.0.0"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent; sys_platform == 'win32'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent==1", "--upgrade-package", "child==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent; sys_platform == 'win32'"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13' and sys_platform == 'linux'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated parent v1.0.0 -> v2.0.0
     ");
     Ok(())
 }
