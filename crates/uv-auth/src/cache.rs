@@ -93,8 +93,8 @@ impl CredentialsCache {
         let key = (realm, username);
         let realm_username = fmt::from_fn(|f| {
             let (realm, username) = &key;
-            if let Some(username) = username.as_deref() {
-                write!(f, "{username}@{realm}")
+            if username.is_some() {
+                write!(f, "****@{realm}")
             } else {
                 write!(f, "{realm}")
             }

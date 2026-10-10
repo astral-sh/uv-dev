@@ -75,7 +75,7 @@ impl KeyringProvider {
     /// Store credentials for the given [`DisplaySafeUrl`] to the keyring.
     ///
     /// Only the native keyring provider is supported at this time.
-    #[instrument(skip_all, fields(url = % url.to_string(), username))]
+    #[instrument(skip_all, fields(url = %url))]
     pub async fn store(
         &self,
         url: &DisplaySafeUrl,
@@ -122,7 +122,7 @@ impl KeyringProvider {
     }
 
     /// Store credentials to the system keyring.
-    #[instrument(skip_all, fields(service = ?service, username = ?username))]
+    #[instrument(skip_all, fields(service = %DisplaySafeService(service)))]
     async fn store_native(
         &self,
         service: &str,
@@ -138,7 +138,7 @@ impl KeyringProvider {
     /// Remove credentials for the given [`DisplaySafeUrl`] and username from the keyring.
     ///
     /// Only the native keyring provider is supported at this time.
-    #[instrument(skip_all, fields(url = % url.to_string(), username))]
+    #[instrument(skip_all, fields(url = %url))]
     pub async fn remove(&self, url: &DisplaySafeUrl, username: &str) -> Result<(), Error> {
         // Ensure we strip credentials from the URL before storing
         let url = url.without_credentials();
@@ -175,7 +175,7 @@ impl KeyringProvider {
 
     /// Remove credentials from the system keyring for the given `service_name`/`username`
     /// pair.
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(service = %DisplaySafeService(service_name)))]
     async fn remove_native(
         &self,
         service_name: &str,
@@ -184,7 +184,10 @@ impl KeyringProvider {
         let prefixed_service = format!("{UV_SERVICE_PREFIX}{service_name}");
         let entry = uv_keyring::Entry::new(&prefixed_service, username)?;
         entry.delete_credential().await?;
-        trace!("Removed credentials for {username}@{service_name} from system keyring");
+        trace!(
+            "Removed credentials for {} from system keyring",
+            DisplaySafeService(service_name)
+        );
         Ok(())
     }
 
@@ -192,7 +195,7 @@ impl KeyringProvider {
     ///
     /// Returns [`None`] if no password was found for the username or if any errors
     /// are encountered in the keyring backend.
-    #[instrument(skip_all, fields(url = % url.to_string(), username))]
+    #[instrument(skip_all, fields(url = %url))]
     pub async fn fetch(&self, url: &DisplaySafeUrl, username: Option<&str>) -> Option<Credentials> {
         // Validate the request
         debug_assert!(
@@ -262,7 +265,7 @@ impl KeyringProvider {
         credentials.map(|(username, password)| Credentials::basic(Some(username), Some(password)))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(service = %DisplaySafeService(service_name)))]
     async fn fetch_subprocess(
         &self,
         service_name: &str,
@@ -325,7 +328,8 @@ impl KeyringProvider {
                 let username = lines.next()?;
                 let Some(password) = lines.next() else {
                     warn!(
-                        "Got username without password for `{service_name}` from `keyring` command"
+                        "Got username without password for `{}` from `keyring` command",
+                        DisplaySafeService(service_name)
                     );
                     return None;
                 };
@@ -336,7 +340,10 @@ impl KeyringProvider {
                 // We allow this for backwards compatibility, but it might be better to return
                 // `None` instead if there's confusion from users — we haven't seen this in practice
                 // yet.
-                warn!("Got empty password for `{username}@{service_name}` from `keyring` command");
+                warn!(
+                    "Got empty password for `{}` from `keyring` command",
+                    DisplaySafeService(service_name)
+                );
             }
 
             Some((username.to_string(), password.to_string()))
@@ -357,7 +364,7 @@ impl KeyringProvider {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(service = %DisplaySafeService(service)))]
     async fn fetch_native(
         &self,
         service: &str,
@@ -371,13 +378,17 @@ impl KeyringProvider {
         match entry.get_password().await {
             Ok(password) => return Some((username.to_string(), password)),
             Err(uv_keyring::Error::NoEntry) => {
-                debug!("No entry found in system keyring for {service}");
+                debug!(
+                    "No entry found in system keyring for {}",
+                    DisplaySafeService(service)
+                );
             }
             Err(err) => {
                 warn_user_once_with_chain!(
                     anyhow::Error::from(err)
                         .context(format!(
-                            "Unable to fetch credentials for {service} from system keyring"
+                            "Unable to fetch credentials for {} from system keyring",
+                            DisplaySafeService(service)
                         ))
                         .as_ref()
                 );
@@ -427,10 +438,51 @@ impl KeyringProvider {
     }
 }
 
+/// A display view for keyring service identifiers, which can be URLs or bare hosts.
+struct DisplaySafeService<'a>(&'a str);
+
+impl std::fmt::Display for DisplaySafeService<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.0.contains("://") {
+            return formatter.write_str(self.0);
+        }
+        if let Ok(url) = DisplaySafeUrl::parse(self.0) {
+            std::fmt::Display::fmt(&url, formatter)
+        } else {
+            formatter.write_str("[invalid service URL]")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use url::Url;
+
+    #[test]
+    fn redact_service_identifiers() {
+        insta::assert_snapshot!(DisplaySafeService("https://synthetic-token@example.com/service?sig=signature"), @"https://****@example.com/service?sig=****");
+        insta::assert_snapshot!(DisplaySafeService("https://user:secret@[invalid-host"), @"[invalid service URL]");
+        insta::assert_snapshot!(DisplaySafeService("example.com:8443"), @"example.com:8443");
+        insta::assert_snapshot!(DisplaySafeService("https:8443"), @"https:8443");
+    }
+
+    #[tokio::test]
+    async fn fetch_preserves_signed_service_url() -> Result<(), uv_redacted::DisplaySafeUrlError> {
+        let input = "https://example.com/service?sig=synthetic-signature";
+        let url = DisplaySafeUrl::parse(input)?;
+        let keyring = KeyringProvider::dummy([(input, "user", "password")]);
+        let credentials = keyring.fetch(&url, Some("user")).await;
+        assert_eq!(
+            credentials,
+            Some(Credentials::basic(
+                Some("user".to_string()),
+                Some("password".to_string())
+            ))
+        );
+        assert_eq!(url.as_str(), input);
+        Ok(())
+    }
 
     #[tokio::test]
     #[cfg_attr(

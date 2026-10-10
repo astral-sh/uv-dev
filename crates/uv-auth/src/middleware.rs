@@ -788,11 +788,7 @@ impl AuthMiddleware {
             if self.preview.is_enabled(PreviewFeature::NativeAuth) {
                 let native_store = KeyringProvider::native();
                 let username = credentials.and_then(|credentials| credentials.username());
-                let display_username = if let Some(username) = username {
-                    format!("{username}@")
-                } else {
-                    String::new()
-                };
+                let display_username = if username.is_some() { "****@" } else { "" };
                 if let Some(index) = index {
                     // N.B. The native store performs an exact look up right now, so we use the root
                     // URL of the index instead of relying on prefix-matching.
@@ -827,16 +823,16 @@ impl AuthMiddleware {
                 if let Some(username) = credentials.and_then(|credentials| credentials.username()) {
                     if let Some(index) = index {
                         debug!(
-                            "Checking keyring for credentials for index URL `{}@{}`",
-                            username, index.url
+                            "Checking keyring for credentials for index URL `****@{}`",
+                            index.url
                         );
                         keyring
                             .fetch(DisplaySafeUrl::ref_cast(&index.url), Some(username))
                             .await
                     } else {
                         debug!(
-                            "Checking keyring for credentials for full URL `{}@{}`",
-                            username, url
+                            "Checking keyring for credentials for full URL `****@{}`",
+                            url
                         );
                         keyring.fetch(url, Some(username)).await
                     }
