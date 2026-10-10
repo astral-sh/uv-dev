@@ -327,8 +327,9 @@ impl Middleware for AuthMiddleware {
     /// - Check the cache (URL key)
     /// - Perform the request
     /// - On 401, 403, or 404 check for authentication if there was a cache miss
-    ///     - Check the cache (index URL or realm key) for the username and password
-    ///     - Check the netrc for a username and password
+    ///     - Check the cache for index-specific credentials, or the realm for an unknown index
+    ///     - Check credential providers for a username and password
+    ///     - Fall back to cached realm credentials if the index has none of its own
     ///     - Perform the request again if found
     ///     - Add the username and password to the cache if successful
     async fn handle(
@@ -449,10 +450,7 @@ impl Middleware for AuthMiddleware {
             .map(|credentials| credentials.to_username())
             .unwrap_or(Username::none());
         let credentials = if let Some(index) = index {
-            self.cache().get_url(&index.url, &username).or_else(|| {
-                self.cache()
-                    .get_realm(Realm::from(&**retry_request_url), username)
-            })
+            self.cache().get_url(&index.url, &username)
         } else {
             // Since there is no known index for this URL, check if there are credentials in
             // the realm-level cache.
@@ -470,6 +468,24 @@ impl Middleware for AuthMiddleware {
                     .await;
             }
         }
+
+        let realm_credentials = index.and_then(|_| {
+            self.cache().get_realm(
+                Realm::from(&**retry_request_url),
+                credentials
+                    .as_ref()
+                    .map(|credentials| credentials.to_username())
+                    .unwrap_or(Username::none()),
+            )
+        });
+        // A cached username can enable provider lookups, but a cached password must not bypass
+        // an index's own credentials.
+        let credentials = credentials.or_else(|| {
+            realm_credentials
+                .as_ref()
+                .filter(|credentials| !credentials.is_authenticated())
+                .cloned()
+        });
 
         // Then, fetch from external services.
         // Here, we use the username from the cache if present.
@@ -492,6 +508,18 @@ impl Middleware for AuthMiddleware {
                     next,
                     auth_policy,
                 )
+                .await;
+        }
+
+        // For a known index, only reuse realm credentials after looking up its own credentials.
+        // Another index on the same server may require a different username or password.
+        if let Some(credentials) =
+            realm_credentials.filter(|credentials| credentials.is_authenticated())
+        {
+            trace!("Retrying request for `{url}` with realm credentials {credentials:?}");
+            retry_request = credentials.authenticate(retry_request).await?;
+            return self
+                .complete_request(None, retry_request, extensions, next, auth_policy)
                 .await;
         }
 
@@ -2142,6 +2170,46 @@ mod tests {
         Ok(())
     }
 
+    /// A username cached for another index can enable a keyring lookup with automatic authentication.
+    #[test(tokio::test)]
+    async fn test_credentials_from_keyring_with_cached_realm_username() -> Result<(), Error> {
+        let username = "user";
+        let password = "password";
+        let server = start_test_server(username, password).await;
+        let base_url = Url::parse(&server.uri())?;
+        let index_url_1 = base_url.join("prefix_1/simple")?;
+        let index_url_2 = base_url.join("prefix_2/simple")?;
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            DisplaySafeUrl::ref_cast(&index_url_1),
+            Credentials::basic(Some(username.to_string()), None),
+        );
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(cache)
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_keyring(Some(KeyringProvider::dummy([(
+                        index_url_2.clone(),
+                        username,
+                        password,
+                    )])))
+                    .with_indexes(indexes_for(&index_url_2, AuthPolicy::Auto)),
+            )
+            .build();
+
+        // The password exists only in the keyring, so successful authentication requires using
+        // the cached realm username to perform the lookup.
+        assert_eq!(
+            client.get(index_url_2).send().await?.status(),
+            200,
+            "The cached realm username should enable the second index's keyring lookup"
+        );
+
+        Ok(())
+    }
+
     /// Demonstrates that when an index' credentials are cached for its realm, we
     /// find those credentials if they're not present in the keyring.
     #[test(tokio::test)]
@@ -2172,6 +2240,7 @@ mod tests {
 
         let base_url = Url::parse(&server.uri())?;
         let index_url = base_url.join("prefix_1")?;
+        let sibling_url = base_url.join("prefix_2")?;
         let indexes = Indexes::from_indexes(vec![Index {
             url: DisplaySafeUrl::from_url(index_url.clone()),
             root_url: DisplaySafeUrl::from_url(index_url.clone()),
@@ -2183,7 +2252,7 @@ mod tests {
                 AuthMiddleware::new()
                     .with_cache(CredentialsCache::new())
                     .with_keyring(Some(KeyringProvider::dummy([(
-                        base_url.clone(),
+                        sibling_url.clone(),
                         username,
                         password,
                     )])))
@@ -2199,12 +2268,18 @@ mod tests {
         );
 
         // Send a request that will cache realm credentials.
-        let mut realm_url = base_url.clone();
+        let mut realm_url = sibling_url;
         realm_url.set_username(username).unwrap();
         assert_eq!(
             client.get(realm_url.clone()).send().await?.status(),
             200,
             "The first realm request with a username will succeed"
+        );
+
+        assert_eq!(
+            client.get(index_url.clone()).send().await?.status(),
+            200,
+            "The index should use cached realm credentials when it has none of its own"
         );
 
         let mut url = index_url.clone();
@@ -2238,6 +2313,77 @@ mod tests {
         }])
     }
 
+    /// Each always-authenticated index uses its own keyring username and password.
+    #[test(tokio::test)]
+    async fn test_auth_policy_always_different_index_usernames() -> Result<(), Error> {
+        let username = "user";
+        let other_username = "other-user";
+        let password_1 = "password1";
+        let password_2 = "password2";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/prefix_1.*"))
+            .and(basic_auth(username, password_1))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("/prefix_2.*"))
+            .and(basic_auth(other_username, password_2))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let base_url = Url::parse(&server.uri())?;
+        let base_url_1 = base_url.join("prefix_1")?;
+        let base_url_2 = base_url.join("prefix_2")?;
+        let indexes = Indexes::from_indexes(vec![
+            Index {
+                url: DisplaySafeUrl::from_url(base_url_1.clone()),
+                root_url: DisplaySafeUrl::from_url(base_url_1.clone()),
+                auth_policy: AuthPolicy::Always,
+            },
+            Index {
+                url: DisplaySafeUrl::from_url(base_url_2.clone()),
+                root_url: DisplaySafeUrl::from_url(base_url_2.clone()),
+                auth_policy: AuthPolicy::Always,
+            },
+        ]);
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_keyring(Some(KeyringProvider::dummy([
+                        (base_url_1.clone(), username, password_1),
+                        (base_url_2.clone(), other_username, password_2),
+                    ])))
+                    .with_indexes(indexes),
+            )
+            .build();
+
+        assert_eq!(client.get(base_url_1).send().await?.status(), 200);
+        assert_eq!(client.get(base_url_2).send().await?.status(), 200);
+        assert_eq!(
+            client
+                .get(base_url.join("prefix_2/foo")?)
+                .send()
+                .await?
+                .status(),
+            200,
+            "File requests use the second index's credentials"
+        );
+        Ok(())
+    }
+
     /// With the "always" auth policy, requests should succeed on
     /// authenticated requests with the correct credentials.
     #[test(tokio::test)]
@@ -2250,10 +2396,11 @@ mod tests {
         let base_url = Url::parse(&server.uri())?;
 
         let indexes = indexes_for(&base_url, AuthPolicy::Always);
+        let cache = Arc::new(CredentialsCache::new());
         let client = test_client_builder()
             .with(
                 AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
+                    .with_cache_arc(cache.clone())
                     .with_indexes(indexes),
             )
             .build();
@@ -2274,6 +2421,12 @@ mod tests {
         url.set_username(username).unwrap();
         url.set_password(Some(password)).unwrap();
         assert_eq!(client.get(url).send().await?.status(), 200);
+
+        // A username-only index entry must still find the password cached for the realm.
+        cache.store_credentials(
+            DisplaySafeUrl::ref_cast(&base_url),
+            Credentials::basic(Some(username.to_string()), None),
+        );
 
         assert_eq!(
             client
