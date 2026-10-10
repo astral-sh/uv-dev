@@ -34,6 +34,7 @@ use crate::bytecode::{compile_bytecode, compile_bytecode_files};
 use crate::error::Error;
 use crate::loggers::InstallLogger;
 
+/// Whether an installation may retain unrelated packages.
 #[derive(Debug, Clone, Copy)]
 pub enum Modifications {
     /// Use `pip install` semantics, whereby existing installations are left as-is, unless they are
