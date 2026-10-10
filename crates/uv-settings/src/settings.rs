@@ -245,6 +245,19 @@ impl Options {
                 }
             }
         }
+        self.normalize_indexes()
+    }
+
+    /// Normalize index spellings while this configuration source is still independent.
+    pub(crate) fn normalize_indexes(mut self) -> Self {
+        normalize_indexes(
+            &mut self.top_level.index,
+            &mut self.top_level.index_url,
+            &mut self.top_level.extra_index_url,
+        );
+        if let Some(pip) = &mut self.pip {
+            normalize_indexes(&mut pip.index, &mut pip.index_url, &mut pip.extra_index_url);
+        }
         self
     }
 
@@ -518,6 +531,25 @@ impl TryFrom<GlobalOptionsWire> for GlobalOptions {
     }
 }
 
+/// Normalize spellings within one source before index lists from distinct sources are combined.
+fn normalize_indexes(
+    indexes: &mut Option<Vec<Index>>,
+    index_url: &mut Option<PipIndex>,
+    extra_index_urls: &mut Option<Vec<PipExtraIndex>>,
+) {
+    if index_url.is_some() || extra_index_urls.is_some() {
+        let indexes = indexes.get_or_insert_with(Vec::new);
+        indexes.extend(
+            extra_index_urls
+                .take()
+                .into_iter()
+                .flatten()
+                .map(Index::from),
+        );
+        indexes.extend(index_url.take().map(Index::from));
+    }
+}
+
 /// Resolve registry indexes and find-links relative to the given root directory.
 fn rebase_indexes(
     root_dir: &Path,
@@ -586,7 +618,7 @@ pub struct InstallerOptions {
 }
 
 /// Settings shared by all operations that use package indexes.
-#[derive(Debug, Clone, Default, CombineOptions)]
+#[derive(Debug, Clone, Default)]
 pub struct IndexOptions {
     pub index: Option<Vec<Index>>,
     pub index_url: Option<PipIndex>,
@@ -596,6 +628,17 @@ pub struct IndexOptions {
 }
 
 impl IndexOptions {
+    /// Convert legacy URL declarations into indexes without changing their within-layer order.
+    #[must_use]
+    pub fn normalize(mut self) -> Self {
+        normalize_indexes(
+            &mut self.index,
+            &mut self.index_url,
+            &mut self.extra_index_url,
+        );
+        self
+    }
+
     /// Resolve the [`IndexOptions`] relative to the given root directory.
     pub fn relative_to(mut self, root_dir: &Path) -> Result<Self, IndexUrlError> {
         rebase_indexes(
@@ -2459,15 +2502,32 @@ pub struct ToolOptionsWire {
     torch_backend: Option<TorchMode>,
 }
 
+/// Keep receipt comparisons independent of repeated declarations in configuration layers.
+fn deduplicate_tool_indexes(indexes: Option<Vec<Index>>) -> Option<Vec<Index>> {
+    indexes.map(|mut indexes| {
+        // Keep the first occurrence and the order of distinct indexes. Equality includes policy.
+        let mut unique = 0;
+        for position in 0..indexes.len() {
+            if !indexes[..unique].contains(&indexes[position]) {
+                indexes.swap(unique, position);
+                unique += 1;
+            }
+        }
+        indexes.truncate(unique);
+        indexes
+    })
+}
+
 impl From<ResolverInstallerOptions> for ToolOptions {
-    fn from(value: ResolverInstallerOptions) -> Self {
+    fn from(mut value: ResolverInstallerOptions) -> Self {
+        value.indexes = value.indexes.normalize();
         Self {
-            index: value.indexes.index.map(|indexes| {
+            index: deduplicate_tool_indexes(value.indexes.index.map(|indexes| {
                 indexes
                     .into_iter()
                     .map(Index::with_promoted_auth_policy)
                     .collect()
-            }),
+            })),
             index_url: value.indexes.index_url,
             extra_index_url: value.indexes.extra_index_url,
             no_index: value.indexes.no_index,
@@ -2501,7 +2561,12 @@ impl From<ResolverInstallerOptions> for ToolOptions {
 }
 
 impl From<ToolOptionsWire> for ToolOptions {
-    fn from(value: ToolOptionsWire) -> Self {
+    fn from(mut value: ToolOptionsWire) -> Self {
+        normalize_indexes(
+            &mut value.index,
+            &mut value.index_url,
+            &mut value.extra_index_url,
+        );
         let exclude_newer = value
             .exclude_newer
             .map(|exclude_newer| match exclude_newer {
@@ -2519,7 +2584,7 @@ impl From<ToolOptionsWire> for ToolOptions {
             });
 
         Self {
-            index: value.index,
+            index: deduplicate_tool_indexes(value.index),
             index_url: value.index_url,
             extra_index_url: value.extra_index_url,
             no_index: value.no_index,

@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
@@ -1495,7 +1495,7 @@ async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
         ]
 
         [tool.options]
-        index-url = "http://[LOCALHOST]/basic-auth/simple"
+        index = [{ url = "http://[LOCALHOST]/basic-auth/simple", explicit = false, default = true, format = "simple", authenticate = "always" }, { url = "http://[LOCALHOST]/basic-auth/simple/", explicit = false, default = true, format = "simple", authenticate = "always" }]
         keyring-provider = "subprocess"
         exclude-newer = "2025-01-18T00:00:00Z"
         "#);
@@ -1927,4 +1927,84 @@ fn new_tool_index() -> PackseServer {
     "#})
     .expect("new tool scenario should parse");
     PackseServer::from_scenario(&scenario)
+}
+
+/// Legacy receipts still recover credentials from a modern configured index.
+#[tokio::test]
+async fn tool_upgrade_legacy_index_receipt_keyring_auth() -> Result<()> {
+    let keyring_context = uv_test::test_context!("3.12");
+    keyring_context
+        .pip_install()
+        .arg(
+            keyring_context
+                .workspace_root
+                .join("test/packages/keyring_test_plugin"),
+        )
+        .assert()
+        .success();
+    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12")
+        .with_exclude_newer("2025-01-18T00:00:00Z")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let path = std::env::join_paths([venv_bin_path(&keyring_context.venv), bin_dir.to_path_buf()])?;
+    let credentials = format!(
+        r#"{{"{host}": {{"public": "heron"}}}}"#,
+        host = proxy.host_port()
+    );
+    let uv_toml = context.temp_dir.child("uv.toml");
+    uv_toml.write_str(&format!(
+        indoc! {r#"
+        keyring-provider = "subprocess"
+        [[index]]
+        url = "{}"
+        default = true
+    "#},
+        proxy.username_url("public", "/basic-auth/simple/")
+    ))?;
+    context
+        .tool_install()
+        .arg("executable-application")
+        .arg("--index-url")
+        .arg(proxy.username_url("public", "/basic-auth/simple"))
+        .arg("--config-file")
+        .arg(uv_toml.as_os_str())
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env(EnvVars::KEYRING_TEST_CREDENTIALS, &credentials)
+        .env(EnvVars::PATH, &path)
+        .assert()
+        .success();
+
+    let receipt_path = tool_dir.join("executable-application/uv-receipt.toml");
+    let mut receipt: toml::Value = toml::from_str(&fs_err::read_to_string(&receipt_path)?)?;
+    let options = receipt["tool"]["options"]
+        .as_table_mut()
+        .ok_or_else(|| anyhow!("Expected tool options"))?;
+    let index = options
+        .remove("index")
+        .ok_or_else(|| anyhow!("Expected modern receipt indexes"))?;
+    let url = index
+        .as_array()
+        .and_then(|indexes| indexes.first())
+        .and_then(|index| index.get("url"))
+        .cloned()
+        .ok_or_else(|| anyhow!("Expected receipt index URL"))?;
+    options.insert("index-url".to_string(), url);
+    fs_err::write(&receipt_path, toml::to_string(&receipt)?)?;
+
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("executable-application")
+        .arg("--config-file").arg(uv_toml.as_os_str())
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env(EnvVars::KEYRING_TEST_CREDENTIALS, &credentials)
+        .env(EnvVars::PATH, &path), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Keyring request for public@http://[LOCALHOST]/basic-auth/simple/
+    Keyring request for public@[LOCALHOST]
+    Nothing to upgrade
+    ");
+    Ok(())
 }

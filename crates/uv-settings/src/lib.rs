@@ -194,7 +194,7 @@ impl FilesystemOptions {
                 let options = options.relative_to(&std::path::absolute(dir)?)?;
 
                 tracing::debug!("Found workspace configuration at `{}`", path.display());
-                return Ok(Some(Self(options)));
+                return Ok(Some(Self::from(options)));
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => return Err(err.into()),
@@ -210,13 +210,13 @@ impl FilesystemOptions {
 
         let options = read_file(path)?;
         validate_uv_toml(path, &options)?;
-        Ok(Self(options))
+        Ok(Self(options.normalize_indexes()))
     }
 }
 
 impl From<Options> for FilesystemOptions {
     fn from(options: Options) -> Self {
-        Self(options)
+        Self(options.normalize_indexes())
     }
 }
 
