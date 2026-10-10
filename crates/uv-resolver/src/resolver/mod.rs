@@ -1269,34 +1269,39 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     .map_or(MarkerTree::TRUE, requires_python_marker);
                 // If the caller marked an environment as requiring artifact coverage, ensure it
                 // has coverage.
+                let applicable = find_environments(id, pubgrub);
                 for environment_marker in self.options.artifact_environments.iter().copied() {
-                    let wheel_marker = if self.options.required_environments_mode
-                        == Some(RequiredEnvironmentsMode::RequireWheels)
-                        && self
-                            .options
-                            .required_environments
-                            .iter()
-                            .any(|required| *required == environment_marker)
+                    let required_markers = applicable.and(environment_marker);
+                    let (required_markers, wheel_marker) =
+                        if self.options.required_environments_mode
+                            == Some(RequiredEnvironmentsMode::RequireWheels)
+                            && self
+                                .options
+                                .required_environments
+                                .iter()
+                                .any(|required| *required == environment_marker)
+                        {
+                            // Wheel support and dependency applicability must overlap within the
+                            // project's Python range as well as the current resolver fork.
+                            let required_markers = required_markers.and(requires_python_marker(
+                                self.python_requirement.target().specifiers(),
+                            ));
+                            (
+                                required_markers,
+                                wheel_marker.and(python_marker).and(required_markers),
+                            )
+                        } else {
+                            (required_markers, wheel_marker.and(environment_marker))
+                        };
+                    if env.included_by_marker(required_markers)
+                        && !env.included_by_marker(wheel_marker)
                     {
-                        wheel_marker.and(python_marker)
-                    } else {
-                        wheel_marker
-                    };
-                    // If the platform is part of the current environment...
-                    if env.included_by_marker(environment_marker)
-                        && env.included_by_marker(
-                            find_environments(id, pubgrub).and(environment_marker),
-                        )
-                    {
-                        // ...but the wheel doesn't support it in this fork, it's incompatible.
-                        if !env.included_by_marker(wheel_marker.and(environment_marker)) {
-                            return Ok(Some(ResolverVersion::Unavailable(
-                                version.clone(),
-                                UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
-                                    IncompatibleWheel::MissingPlatform(environment_marker),
-                                )),
-                            )));
-                        }
+                        return Ok(Some(ResolverVersion::Unavailable(
+                            version.clone(),
+                            UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
+                                IncompatibleWheel::MissingPlatform(environment_marker),
+                            )),
+                        )));
                     }
                 }
             }
@@ -1562,18 +1567,25 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         // If the caller marked an environment as requiring artifact coverage, ensure it has
         // coverage.
         for marker in self.options.artifact_environments.iter().copied() {
+            let require_wheel_coverage = require_wheels
+                && self
+                    .options
+                    .required_environments
+                    .iter()
+                    .any(|required| *required == marker);
             // Check the dependency's applicability before requesting metadata for this coverage.
             let required_markers = marker.and(find_environments(id, pubgrub));
+            let required_markers = if require_wheel_coverage {
+                required_markers.and(requires_python_marker(
+                    self.python_requirement.target().specifiers(),
+                ))
+            } else {
+                required_markers
+            };
             if env.included_by_marker(required_markers) {
                 let mut unavailable_wheel = None;
                 // But isn't supported by the distribution in this fork...
-                let supported = if require_wheels
-                    && self
-                        .options
-                        .required_environments
-                        .iter()
-                        .any(|required| *required == marker)
-                {
+                let supported = if require_wheel_coverage {
                     if let Some(prioritized) = dist.prioritized() {
                         prioritized.has_wheel_coverage(
                             self.options.minimum_libc_version,

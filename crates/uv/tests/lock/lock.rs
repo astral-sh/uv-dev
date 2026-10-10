@@ -49164,3 +49164,137 @@ fn lock_required_environment_direct_wheel_python_metadata() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Required wheel coverage must overlap the project's patch-level Python range.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_wheel_target_python_range() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12,<3.13.2".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13.2,<3.14"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--no-index", "--find-links", "wheels"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*')
+      cause: Because example==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels and only example==1.0.0 is available, we can conclude that all versions of example cannot be used.
+             And because your project depends on example, we can conclude that your project's requirements are unsatisfiable.
+
+    "#);
+    Ok(())
+}
+
+/// Direct wheels must cover the project's patch-level Python range.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_direct_wheel_target_python_range() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12,<3.13.2".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13.2,<3.14"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        [tool.uv.sources]
+        example = {{ path = "wheels/{filename}" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because only example==1.0.0 is available and example==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels, we can conclude that all versions of example cannot be used.
+             And because your project depends on example, we can conclude that your project's requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
+
+/// Compound dependency markers can retain Linux applicability without a Python fork.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_direct_wheel_dependency_applicability() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12,<3.13".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example; python_version == '3.13' or sys_platform == 'win32'"]
+        [tool.uv]
+        required-environments = ["sys_platform == 'linux'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        [tool.uv.sources]
+        example = {{ path = "wheels/{filename}" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because only example{python_full_version == '3.13.*' or sys_platform == 'win32'}==1.0.0 is available and example{python_full_version == '3.13.*' or sys_platform == 'win32'}==1.0.0 has no Linux-compatible wheels, we can conclude that all versions of example{python_full_version == '3.13.*' or sys_platform == 'win32'} cannot be used.
+             And because your project depends on example{python_full_version == '3.13.*' or sys_platform == 'win32'}, we can conclude that your project's requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
