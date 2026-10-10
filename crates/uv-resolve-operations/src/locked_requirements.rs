@@ -87,7 +87,7 @@ pub fn read_lock_requirements(
 
     let mut candidates = Vec::new();
     let mut git = Vec::new();
-    let mut unlocked = Vec::new();
+    let mut changed_activation = MarkerTree::FALSE;
     let missing_wheels = |package: &Package, activation: MarkerTree| {
         let mut wheel_coverage = None;
         required_environments.iter().copied().any(|marker| {
@@ -114,7 +114,9 @@ pub fn read_lock_requirements(
         // Skip the distribution if it's included in the upgrade strategy (either by explicit
         // package name or via a dependency group).
         if upgrade_packages.contains(package.name()) {
-            unlocked.push((package.name(), activation));
+            if !required_environments.is_empty() {
+                changed_activation = changed_activation.or(activation);
+            }
             continue;
         }
 
@@ -129,7 +131,7 @@ pub fn read_lock_requirements(
             // Registry selection can move to another release. Fixed URLs, Git pins, and
             // workspace sources retain their dependency metadata when only wheel preference changes.
             if package.index(install_path)?.is_some() {
-                unlocked.push((package.name(), activation));
+                changed_activation = changed_activation.or(activation);
             }
             continue;
         }
@@ -149,22 +151,15 @@ pub fn read_lock_requirements(
         }
     }
 
-    // An unlocked ancestor can replace conditional edges throughout its dependency subtree.
-    // Propagate its activation without those old edge markers, while retaining the ancestor's
-    // root and Python bounds.
-    if required_environments.is_empty() {
-        unlocked.clear();
-    }
-    let changed_activation = lock.descendant_activation(unlocked);
+    // A replacement release can introduce edges to any locked package. Old adjacency cannot
+    // prove those packages inactive, so reconsider their preferences within the unlocked parents'
+    // activation domain. Required environments outside that domain retain their existing pins.
     let preferences = candidates
         .into_iter()
         .filter_map(|(package, activation, preference)| {
-            let changed = changed_activation
-                .get(package.name())
-                .copied()
-                .unwrap_or(MarkerTree::FALSE);
-            (changed.is_false() || !missing_wheels(package, activation.or(changed)))
-                .then_some(preference)
+            (changed_activation.is_false()
+                || !missing_wheels(package, activation.or(changed_activation)))
+            .then_some(preference)
         })
         .collect();
     Ok(LockedRequirements { preferences, git })
