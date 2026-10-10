@@ -46,10 +46,10 @@ tool is uninstalled. If the environment is manually deleted, the tool will fail 
 
 ## Tool versions
 
-Unless a specific version is requested, `uv tool install` will install the latest available of the
-requested tool. `uvx` will use the latest available version of the requested tool _on the first
-invocation_. After that, `uvx` will use the cached version of the tool unless a different version is
-requested, the cache is pruned, or the cache is refreshed.
+Unless a specific version is requested, `uv tool install` will install the latest available version
+of the requested tool. When there is no compatible installed tool, `uvx` resolves each request using
+the available package metadata, which may be cached. It can reuse a cached environment for the
+selected dependencies and interpreter.
 
 For example, to run a specific version of Ruff:
 
@@ -58,16 +58,19 @@ $ uvx ruff@0.6.0 --version
 ruff 0.6.0
 ```
 
-A subsequent invocation of `uvx` will use the latest, not the cached, version.
+A version requested for one invocation does not pin later invocations. For example, if the available
+package metadata lists Ruff 0.6.2 as the latest version, an unversioned request selects it:
 
 ```console
 $ uvx ruff --version
 ruff 0.6.2
 ```
 
-But, if a new version of Ruff was released, it would not be used unless the cache was refreshed.
+Repeated unversioned requests can keep using Ruff 0.6.2 while the cached package metadata is fresh.
+They are not version pins: when the metadata expires or is refreshed, a newer release can be
+selected.
 
-To request the latest version of Ruff and refresh the cache, use the `@latest` suffix:
+To check for the latest version of Ruff and refresh the cache, use the `@latest` suffix:
 
 ```console
 $ uvx ruff@latest --version
