@@ -36,10 +36,12 @@ use uv_fs::Simplified;
 use uv_git::store_credentials;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
-use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, PackageName};
+use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
-use uv_project_edit::{ArrayEdit, DependencyTarget, PyProjectTomlMut};
+use uv_project_edit::{
+    ArrayEdit, DependencyEdit, DependencyEditBatch, DependencyTarget, PyProjectTomlMut,
+};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -889,7 +891,8 @@ fn edits(
     index: Option<&IndexName>,
     toml: &mut PyProjectTomlMut,
 ) -> Result<Vec<DependencyEdit>> {
-    let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
+    let mut edits =
+        DependencyEditBatch::with_capacity(toml, dependency_type, raw, requirements.len());
     for mut requirement in requirements {
         let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
 
@@ -991,86 +994,9 @@ fn edits(
             _ => source,
         };
 
-        // Determine the dependency type.
-        let dependency_type = match &dependency_type {
-            DependencyType::Dev => {
-                let existing = toml.find_dependency(&requirement.name, None);
-                if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)) {
-                    // If the dependency already exists in `dependency-groups.dev`, use that.
-                    DependencyType::Group(DEV_DEPENDENCIES.clone())
-                } else if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Dev)) {
-                    // If the dependency already exists in `dev-dependencies`, use that.
-                    DependencyType::Dev
-                } else {
-                    // Otherwise, use `dependency-groups.dev`, unless it would introduce a separate table.
-                    match (toml.has_dev_dependencies(), toml.has_dependency_group(&DEV_DEPENDENCIES)) {
-                        (true, false) => DependencyType::Dev,
-                        (false, true) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                        (true, true) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                        (false, false) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                    }
-                }
-            }
-            DependencyType::Group(group) if group == &*DEV_DEPENDENCIES => {
-                let existing = toml.find_dependency(&requirement.name, None);
-                if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)) {
-                    // If the dependency already exists in `dependency-groups.dev`, use that.
-                    DependencyType::Group(DEV_DEPENDENCIES.clone())
-                } else if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Dev)) {
-                    // If the dependency already exists in `dev-dependencies`, use that.
-                    DependencyType::Dev
-                } else {
-                    // Otherwise, use `dependency-groups.dev`.
-                    DependencyType::Group(DEV_DEPENDENCIES.clone())
-                }
-            }
-            DependencyType::Production => DependencyType::Production,
-            DependencyType::Optional(extra) => DependencyType::Optional(extra.clone()),
-            DependencyType::Group(group) => DependencyType::Group(group.clone()),
-        };
-
-        // Update the `pyproject.toml`.
-        let edit = match &dependency_type {
-            DependencyType::Production => {
-                toml.add_dependency(&requirement, source.as_ref(), raw)?
-            }
-            DependencyType::Dev => toml.add_dev_dependency(&requirement, source.as_ref(), raw)?,
-            DependencyType::Optional(extra) => {
-                toml.add_optional_dependency(extra, &requirement, source.as_ref(), raw)?
-            }
-            DependencyType::Group(group) => {
-                toml.add_dependency_group_requirement(group, &requirement, source.as_ref(), raw)?
-            }
-        };
-
-        // If the edit was inserted before the end of the list, update the existing edits.
-        if let ArrayEdit::Add(index) = &edit {
-            for edit in &mut edits {
-                if edit.dependency_type == dependency_type {
-                    match &mut edit.edit {
-                        ArrayEdit::Add(existing) => {
-                            if *existing >= *index {
-                                *existing += 1;
-                            }
-                        }
-                        ArrayEdit::Update(existing) => {
-                            if *existing >= *index {
-                                *existing += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        edits.push(DependencyEdit {
-            dependency_type,
-            requirement,
-            source,
-            edit,
-        });
+        edits.add(requirement, source)?;
     }
-    Ok(edits)
+    Ok(edits.into_edits())
 }
 
 /// Re-lock and re-sync the project after a series of edits.
@@ -1370,12 +1296,4 @@ fn resolve_requirement(
     processed_requirement.clear_url();
 
     Ok((processed_requirement, source))
-}
-
-#[derive(Debug, Clone)]
-struct DependencyEdit {
-    dependency_type: DependencyType,
-    requirement: uv_pep508::Requirement,
-    source: Option<Source>,
-    edit: ArrayEdit,
 }
