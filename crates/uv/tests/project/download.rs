@@ -9,6 +9,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_cache::{Cache, CacheBucket, WheelCache};
 use uv_distribution_types::IndexUrl;
 use uv_redacted::DisplaySafeUrl;
+use uv_static::EnvVars;
 use uv_test::archive::write_tar_gz;
 use uv_test::{TestContext, uv_snapshot};
 
@@ -1928,5 +1929,159 @@ fn download_ignores_resolver_only_settings() -> Result<()> {
     ----- stderr -----
     Downloaded 1 distributions (1 total)
     ");
+    Ok(())
+}
+
+/// Fresh PEP 658 metadata does not supersede an expired archive retained for offline preparation.
+#[tokio::test]
+async fn download_retains_archive_on_cached_pep658_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original")?;
+    let hash = digest(&bytes);
+    let filename = "basic_package-0.1.0-py3-none-any.whl";
+    let url = format!("{}/{filename}", server.uri());
+    let index = format!("{}/simple/", server.uri());
+    let metadata = "Metadata-Version: 2.3\nName: basic-package\nVersion: 0.1.0\n";
+    write_locked_wheel(&context, &format!("registry = \"{index}\""), &url, &hash)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("basic-package==0.1.0\n")?;
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("cache-control", "public, max-age=3600")
+            .set_body_raw(format!(r#"<a href="{url}#sha256={hash}" data-core-metadata="sha256={}">{filename}</a>"#, digest(metadata.as_bytes())).into_bytes(), "text/html"))
+        .expect(1).mount(&server).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}.metadata")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_string(metadata),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=0")
+                .set_body_bytes(bytes),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate"])
+        .arg("--index-url").arg(&index).env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package==0.1.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate"])
+        .arg("--index-url").arg(&index).env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package==0.1.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+    server.verify().await;
+    Ok(())
+}
+
+/// Cached metadata obtained from a wheel does not discard a later prefetched archive.
+#[tokio::test]
+async fn download_retains_archive_on_cached_wheel_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original")?;
+    let hash = digest(&bytes);
+    let filename = "basic_package-0.1.0-py3-none-any.whl";
+    let url = format!("{}/{filename}", server.uri());
+    write_locked_wheel(&context, &format!("url = \"{url}\""), &url, &hash)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("basic-package @ {url}\n"))?;
+    Mock::given(method("HEAD"))
+        .and(path(format!("/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("content-length", bytes.len().to_string()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(bytes.clone()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut filters = context.filters();
+    filters.push((r"(?m)^WARN Range requests not supported[^\n]*\n", ""));
+    uv_snapshot!(filters, context.pip_compile().args(["requirements.in", "--no-index", "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package @ http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    server.verify().await;
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=0")
+                .set_body_bytes(bytes),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-index", "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package @ http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0 (from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl)
+    ");
+    server.verify().await;
     Ok(())
 }
