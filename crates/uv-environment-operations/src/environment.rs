@@ -17,7 +17,7 @@ use uv_cache_info::CacheInfo;
 use uv_cache_key::{cache_digest, hash_digest};
 use uv_client::BaseClientBuilder;
 use uv_distribution_types::{
-    BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
+    BuiltDist, Dist, Identifier, Name, Node, Resolution, ResolvedDist, SourceDist,
 };
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment, canonicalize_executable};
@@ -238,10 +238,19 @@ impl CachedEnvironment {
         // Search in the content-addressed cache.
         let cache_entry = cache.entry(CacheBucket::Environments, interpreter_hash, resolution_hash);
 
-        if let Ok(root) = cache.resolve_link(cache_entry.path()) {
-            if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
-                environment.set_pyvenv_cfg("immutable", "true")?;
-                return Ok(Self(environment));
+        // A reinstall needs a new archive, since another overlay may still use this base.
+        let reinstall = resolution.distributions().any(|dist| {
+            settings.reinstall.contains_package(dist.name())
+                || dist
+                    .source_tree()
+                    .is_some_and(|path| settings.reinstall.contains_path(path))
+        });
+        if !reinstall {
+            if let Ok(root) = cache.resolve_link(cache_entry.path()) {
+                if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
+                    environment.set_pyvenv_cfg("immutable", "true")?;
+                    return Ok(Self(environment));
+                }
             }
         }
 
