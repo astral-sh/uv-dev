@@ -1949,6 +1949,210 @@ fn run_with_overlay_interpreter() -> Result<()> {
     Ok(())
 }
 
+/// Long project paths force installed entrypoints to use an absolute `/bin/sh` wrapper.
+#[test]
+#[cfg(unix)]
+fn run_with_overlay_long_project_path() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_exclude_newer("2025-04-01T00:00:00Z")
+        .with_env("TERM", "dumb")
+        .with_filter((r"a{200}", "[LONG_DIR]"));
+    let project = context.temp_dir.child("a".repeat(200));
+    project.child("pyproject.toml").write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["pytest==8.3.5"]
+        "#
+    })?;
+    project.child("test_import.py").write_str(indoc! { r"
+        def test_import():
+            import six
+        "
+    })?;
+
+    uv_snapshot!(context.filters(), context.sync().current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Resolved 6 packages in [TIME]
+    Prepared 4 packages in [TIME]
+    Installed 4 packages in [TIME]
+     + iniconfig==2.1.0
+     + packaging==24.2
+     + pluggy==1.5.0
+     + pytest==8.3.5
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read(project.child(".venv/bin/pytest")), @r#"
+        #!/bin/sh
+        '''exec' '[TEMP_DIR]/[LONG_DIR]/.venv/bin/python' "$0" "$@"
+        ' '''
+        # -*- coding: utf-8 -*-
+        import sys
+        from pytest import console_main
+        if __name__ == "__main__":
+            if sys.argv[0].endswith("-script.pyw"):
+                sys.argv[0] = sys.argv[0][:-11]
+            elif sys.argv[0].endswith(".exe"):
+                sys.argv[0] = sys.argv[0][:-4]
+            sys.exit(console_main())
+        "#);
+    });
+
+    // The absolute shell wrapper is not rewritten, so the entrypoint cannot import `--with`
+    // packages even though they are installed: astral-sh/uv#22323.
+    uv_snapshot!(context.filters(), context.run()
+        .current_dir(&project)
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--with")
+        .arg("six==1.17.0")
+        .arg("pytest")
+        .arg("-q")
+        .arg("--tb=short")
+        .arg("test_import.py"), @"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    F                                                                                            [100%]
+    ============================================= FAILURES =============================================
+    ___________________________________________ test_import ____________________________________________
+    test_import.py:2: in test_import
+        import six
+    E   ModuleNotFoundError: No module named 'six'
+    ===================================== short test summary info ======================================
+    FAILED test_import.py::test_import - ModuleNotFoundError: No module named 'six'
+    1 failed in [TIME]
+
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    Checked 4 packages in [TIME]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + six==1.17.0
+    ");
+
+    // Invoking the module directly uses the overlay interpreter and can import `six`.
+    uv_snapshot!(context.filters(), context.run()
+        .current_dir(&project)
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--with")
+        .arg("six==1.17.0")
+        .arg("python")
+        .arg("-m")
+        .arg("pytest")
+        .arg("-q")
+        .arg("test_import.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    .                                                                                            [100%]
+    1 passed in [TIME]
+
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    Checked 4 packages in [TIME]
+    Resolved 1 package in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Spaces in a configured project environment also force an absolute `/bin/sh` wrapper.
+#[test]
+#[cfg(unix)]
+fn run_with_overlay_space_in_environment_path() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_exclude_newer("2025-04-01T00:00:00Z")
+        .with_env("TERM", "dumb")
+        .with_env(EnvVars::UV_PROJECT_ENVIRONMENT, "custom venv");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["pytest==8.3.5"]
+        "#
+        })?;
+    context
+        .temp_dir
+        .child("test_import.py")
+        .write_str(indoc! { r"
+        def test_import():
+            import six
+        "
+        })?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: custom venv
+    Resolved 6 packages in [TIME]
+    Prepared 4 packages in [TIME]
+    Installed 4 packages in [TIME]
+     + iniconfig==2.1.0
+     + packaging==24.2
+     + pluggy==1.5.0
+     + pytest==8.3.5
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("custom venv/bin/pytest"), @r#"
+        #!/bin/sh
+        '''exec' '[TEMP_DIR]/custom venv/bin/python' "$0" "$@"
+        ' '''
+        # -*- coding: utf-8 -*-
+        import sys
+        from pytest import console_main
+        if __name__ == "__main__":
+            if sys.argv[0].endswith("-script.pyw"):
+                sys.argv[0] = sys.argv[0][:-11]
+            elif sys.argv[0].endswith(".exe"):
+                sys.argv[0] = sys.argv[0][:-4]
+            sys.exit(console_main())
+        "#);
+    });
+
+    // The absolute shell wrapper is not rewritten, so the entrypoint cannot import `--with`
+    // packages even though they are installed: astral-sh/uv#22323.
+    uv_snapshot!(context.filters(), context.run()
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--with")
+        .arg("six==1.17.0")
+        .arg("pytest")
+        .arg("-q")
+        .arg("--tb=short")
+        .arg("test_import.py"), @"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    F                                                                                            [100%]
+    ============================================= FAILURES =============================================
+    ___________________________________________ test_import ____________________________________________
+    test_import.py:2: in test_import
+        import six
+    E   ModuleNotFoundError: No module named 'six'
+    ===================================== short test summary info ======================================
+    FAILED test_import.py::test_import - ModuleNotFoundError: No module named 'six'
+    1 failed in [TIME]
+
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    Checked 4 packages in [TIME]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + six==1.17.0
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn run_with_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9");
