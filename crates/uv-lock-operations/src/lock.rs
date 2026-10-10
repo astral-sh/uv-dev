@@ -24,8 +24,8 @@ use uv_pypi_types::{ConflictKind, SupportedEnvironments};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::{ExtrasResolver, script_extra_build_requires};
 use uv_resolve_operations::Error as ResolveError;
+use uv_resolve_operations::ResolveSummary;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
-use uv_resolve_operations::loggers::{ResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::{
     FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment, UniversalMarker,
@@ -89,7 +89,7 @@ pub struct LockOperation<'env> {
     settings: &'env ResolverSettings,
     client_builder: &'env BaseClientBuilder<'env>,
     state: &'env UniversalState,
-    logger: Box<dyn ResolveLogger>,
+    summary: ResolveSummary,
     concurrency: &'env Concurrency,
     cache: &'env Cache,
     workspace_cache: &'env WorkspaceCache,
@@ -104,7 +104,7 @@ impl<'env> LockOperation<'env> {
         settings: &'env ResolverSettings,
         client_builder: &'env BaseClientBuilder<'env>,
         state: &'env UniversalState,
-        logger: Box<dyn ResolveLogger>,
+        summary: ResolveSummary,
         concurrency: &'env Concurrency,
         cache: &'env Cache,
         workspace_cache: &'env WorkspaceCache,
@@ -120,7 +120,7 @@ impl<'env> LockOperation<'env> {
             settings,
             client_builder,
             state,
-            logger,
+            summary,
             concurrency,
             cache,
             workspace_cache,
@@ -203,7 +203,7 @@ impl<'env> LockOperation<'env> {
                     self.settings,
                     self.client_builder,
                     self.state,
-                    self.logger,
+                    self.summary,
                     self.concurrency,
                     self.cache,
                     self.workspace_cache,
@@ -258,7 +258,7 @@ impl<'env> LockOperation<'env> {
                     self.settings,
                     self.client_builder,
                     self.state,
-                    self.logger,
+                    self.summary,
                     self.concurrency,
                     self.cache,
                     self.workspace_cache,
@@ -293,7 +293,7 @@ async fn do_lock(
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     state: &UniversalState,
-    logger: Box<dyn ResolveLogger>,
+    summary: ResolveSummary,
     concurrency: &Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -839,7 +839,7 @@ async fn do_lock(
         // Resolution from the lockfile succeeded.
         Some(ValidatedLock::Satisfies(lock)) => {
             // Print the success message after completing resolution.
-            logger.on_complete(lock.len(), start, printer)?;
+            summary.on_complete(lock.len(), start, printer)?;
 
             Ok(LockResult::Unchanged(lock))
         }
@@ -969,13 +969,13 @@ async fn do_lock(
                 concurrency,
                 options,
                 recorder.clone(),
-                Box::new(SummaryResolveLogger),
+                ResolveSummary::Suppress,
                 printer,
             )
             .await?;
 
             // Print the success message after completing resolution.
-            logger.on_complete(resolution.len(), start, printer)?;
+            summary.on_complete(resolution.len(), start, printer)?;
 
             // Notify the user of any resolution diagnostics.
             uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;

@@ -32,7 +32,7 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_interpreter::Interpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference};
 use uv_redacted::DisplaySafeUrl;
-use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::ResolveSummary;
 use uv_resolver::MetadataResponse;
 use uv_settings::{PythonInstallMirrors, ResolverSettings};
 use uv_workspace::pyproject::{DependencyType, Source};
@@ -410,7 +410,7 @@ pub async fn upgrade(
             &settings,
             &client_builder,
             &state,
-            Box::new(DefaultResolveLogger),
+            ResolveSummary::Display,
             &concurrency,
             &cache,
             workspace_cache,

@@ -58,8 +58,8 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::check_environment_compatibility;
+use uv_resolve_operations::ResolveSummary;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
-use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::{InstallerSettingsRef, ResolverInstallerSettings, ResolverSettings};
 
 pub mod environment;
@@ -1358,7 +1358,7 @@ pub async fn resolve_environment(
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     state: &PlatformState,
-    logger: Box<dyn ResolveLogger>,
+    logger: ResolveSummary,
     concurrency: &Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -1750,7 +1750,7 @@ pub async fn update_environment(
     settings: &ResolverInstallerSettings,
     client_builder: &BaseClientBuilder<'_>,
     state: &SharedState,
-    resolve: Box<dyn ResolveLogger>,
+    resolve: ResolveSummary,
     install: Box<dyn InstallLogger>,
     installer_metadata: bool,
     concurrency: &Concurrency,

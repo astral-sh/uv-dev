@@ -57,7 +57,7 @@ use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::{DefaultInstallLogger, InstallLogger};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::report_interpreter;
-use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::ResolveSummary;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// The interpreter is externally managed and cannot be modified.
@@ -588,7 +588,7 @@ pub async fn pip_install(
             &concurrency,
             options,
             None,
-            Box::new(DefaultResolveLogger),
+            ResolveSummary::Display,
             printer,
         )
         .await
