@@ -182,6 +182,7 @@ impl From<LockParseError> for LockError {
                 source,
             } => Self::UnparsableLockVersion(supported, version, source),
             LockParseError::Toml(source) => Self::UvLockParse(source),
+            LockParseError::MissingWorkspaceMemberIdentity(source) => Self::Lock(source),
         }
     }
 }

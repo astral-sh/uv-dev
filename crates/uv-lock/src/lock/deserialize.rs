@@ -896,6 +896,7 @@ impl<'de> VariantAccess<'de> for InlineVariantAccess<'_, 'de> {
 mod tests {
     use std::assert_matches;
     use std::fmt::Write as _;
+    use std::path::Path;
 
     use serde::Deserialize;
 
@@ -919,6 +920,89 @@ dependencies = [
     { name = "dependency" },
 ]
 "#;
+
+    const LOCAL_MEMBER_LOCK: &str = r#"version = 1
+requires-python = ">=3.12"
+
+[manifest]
+members = ["leaf"]
+workspace-member-ids = [{ name = "leaf", version = "1.0.0", source = { virtual = "leaf" } }]
+
+[[package]]
+name = "leaf"
+version = "1.0.0"
+source = { virtual = "leaf" }
+
+[[package]]
+name = "leaf"
+version = "2.0.0"
+source = { virtual = "../external/leaf" }
+"#;
+
+    #[test]
+    fn local_member_identity_matches_toml() {
+        let expected: Lock = toml::from_str(LOCAL_MEMBER_LOCK).expect("valid TOML member identity");
+        let actual = from_str(LOCAL_MEMBER_LOCK).expect("valid canonical member identity");
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual.workspace_member_paths().collect::<Vec<_>>(),
+            vec![(
+                &"leaf".parse().expect("valid package name"),
+                Path::new("leaf")
+            )]
+        );
+        let serialized = actual.to_toml().expect("serializable member identity");
+        assert_eq!(
+            Lock::from_toml(&serialized).expect("member identity round trip"),
+            actual
+        );
+    }
+
+    #[test]
+    fn local_member_identity_rejects_missing_package() {
+        let input = LOCAL_MEMBER_LOCK.replacen(
+            "name = \"leaf\", version = \"1.0.0\"",
+            "name = \"leaf\", version = \"3.0.0\"",
+            1,
+        );
+        let error = Lock::from_toml(&input).expect_err("identity must reference a locked package");
+        insta::assert_snapshot!(error.to_string(), @r#"
+    Invalid workspace member identity `leaf==3.0.0 @ virtual+leaf` in lockfile
+    "#);
+    }
+
+    #[test]
+    fn local_member_identity_rejects_undeclared_member() {
+        let input = LOCAL_MEMBER_LOCK.replacen("members = [\"leaf\"]", "members = [\"other\"]", 1);
+        let error = Lock::from_toml(&input).expect_err("identity must reference a declared member");
+        insta::assert_snapshot!(error.to_string(), @r#"
+    Invalid workspace member identity `leaf==1.0.0 @ virtual+leaf` in lockfile
+    "#);
+    }
+
+    #[test]
+    fn local_member_identity_rejects_registry_package() {
+        let input = LOCAL_MEMBER_LOCK.replace(
+            "{ virtual = \"leaf\" }",
+            "{ registry = \"https://example.com/simple\" }",
+        );
+        let error = Lock::from_toml(&input).expect_err("workspace members must be source trees");
+        insta::assert_snapshot!(error.to_string(), @r#"
+    Invalid workspace member identity `leaf==1.0.0 @ registry+https://example.com/simple` in lockfile
+    "#);
+    }
+
+    #[test]
+    fn local_member_identity_rejects_conflicting_references() {
+        let input = LOCAL_MEMBER_LOCK.replace(
+            "workspace-member-ids = [{ name = \"leaf\", version = \"1.0.0\", source = { virtual = \"leaf\" } }]",
+            "workspace-member-ids = [{ name = \"leaf\", version = \"1.0.0\", source = { virtual = \"leaf\" } }, { name = \"leaf\", version = \"2.0.0\", source = { virtual = \"../external/leaf\" } }]",
+        );
+        let error = Lock::from_toml(&input).expect_err("a member must have one identity");
+        insta::assert_snapshot!(error.to_string(), @r#"
+    Invalid workspace member identity `leaf==2.0.0 @ virtual+../external/leaf` in lockfile
+    "#);
+    }
 
     #[test]
     fn canonical_lock_matches_toml() {

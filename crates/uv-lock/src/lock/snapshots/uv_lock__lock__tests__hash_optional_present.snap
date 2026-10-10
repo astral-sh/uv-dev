@@ -136,6 +136,7 @@ Ok(
         manifest: ResolverManifest {
             members: {},
             workspace_members: None,
+            workspace_member_ids: {},
             default_groups: None,
             group_requires_python: {},
             requirements: {},

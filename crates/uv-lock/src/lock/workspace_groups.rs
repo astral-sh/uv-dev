@@ -191,8 +191,25 @@ impl Lock {
         let revision = first.revision;
         let mut packages = BTreeMap::<PackageId, Package>::new();
         let mut fork_markers = BTreeSet::new();
+        let mut member_ids = BTreeSet::new();
+        let mut group_roots = BTreeMap::<GroupName, BTreeSet<PackageId>>::new();
 
         for (names, lock) in std::iter::once((first_names, first)).chain(resolutions) {
+            let context_members = lock.workspace_member_ids();
+            for group in &groups {
+                if names.contains(&group.definition().name) {
+                    group_roots
+                        .entry(group.definition().name.clone())
+                        .or_default()
+                        .extend(
+                            context_members
+                                .iter()
+                                .filter(|id| group.definition().members.contains(&id.name))
+                                .cloned(),
+                        );
+                }
+            }
+            member_ids.extend(context_members);
             merge_manifest(&mut manifest, lock.manifest);
             options
                 .exclude_newer
@@ -258,7 +275,14 @@ impl Lock {
         };
         let fork_markers =
             canonical_workspace_markers(&fork_markers.into_iter().collect::<Vec<_>>(), &groups);
-        normalize_workspace_graph(&mut packages, &groups, &manifest, &requires_python);
+        normalize_workspace_graph(
+            &mut packages,
+            &groups,
+            &group_roots,
+            &manifest,
+            &requires_python,
+        );
+        manifest.set_workspace_members(packages.values(), &member_ids);
         Self::new(
             WORKSPACE_GROUPS_VERSION,
             revision,
@@ -325,7 +349,8 @@ impl Lock {
         }
         let mut manifest = self.manifest.clone();
         manifest.members.clone_from(&group.definition.members);
-        retain_reachable(&mut packages, &group.definition.members, &manifest);
+        retain_reachable(self, &mut packages, &group.definition.members, &manifest);
+        manifest.set_workspace_members(packages.iter(), &self.workspace_member_ids());
         let fork_markers = select_markers(&self.fork_markers);
         Self::new(
             VERSION,
@@ -359,8 +384,11 @@ impl Lock {
             return Ok(None);
         }
         let mut selected = self.clone();
-        retain_reachable(&mut selected.packages, members, &selected.manifest);
+        retain_reachable(self, &mut selected.packages, members, &selected.manifest);
         selected.manifest.members.clone_from(members);
+        selected
+            .manifest
+            .set_workspace_members(selected.packages.iter(), &self.workspace_member_ids());
         Self::new(
             selected.version,
             selected.revision,
@@ -400,10 +428,10 @@ impl Lock {
             );
             for member in &lock.manifest.members {
                 let active = lock
-                    .packages_for_name(member)
-                    .iter()
-                    .fold(MarkerTree::FALSE, |active, package| {
-                        active.or(package_environment(package, &lock.requires_python))
+                    .workspace_members
+                    .get(member)
+                    .map_or(MarkerTree::FALSE, |&index| {
+                        package_environment(lock.package(index), &lock.requires_python)
                     })
                     .and(environment);
                 let supported = member_environments
@@ -442,7 +470,9 @@ impl Lock {
         let mut packages = BTreeMap::<PackageId, Package>::new();
         let mut supported_environments = MarkerTree::FALSE;
         let mut fork_markers = BTreeSet::new();
+        let mut member_ids = BTreeSet::new();
         for lock in std::iter::once(first).chain(resolutions) {
+            member_ids.extend(lock.workspace_member_ids());
             merge_manifest(&mut manifest, lock.manifest);
             options
                 .exclude_newer
@@ -506,6 +536,7 @@ impl Lock {
                 merge_package(&mut packages, package, &requires_python);
             }
         }
+        manifest.set_workspace_members(packages.values(), &member_ids);
         Self::new(
             VERSION,
             revision,
@@ -572,6 +603,7 @@ fn package_environment(package: &Package, requires_python: &RequiresPython) -> M
 fn normalize_workspace_graph(
     packages: &mut BTreeMap<PackageId, Package>,
     groups: &[ResolvedWorkspaceGroup],
+    group_roots: &BTreeMap<GroupName, BTreeSet<PackageId>>,
     manifest: &ResolverManifest,
     requires_python: &RequiresPython,
 ) {
@@ -581,8 +613,14 @@ fn normalize_workspace_graph(
             let mut pending = packages
                 .values()
                 .filter_map(|package| {
-                    root_marker(package, &group.definition().members, manifest)
-                        .map(|marker| (package.id.clone(), marker.and(group.environments())))
+                    root_marker(
+                        package,
+                        group_roots
+                            .get(&group.definition().name)
+                            .is_some_and(|roots| roots.contains(&package.id)),
+                        manifest,
+                    )
+                    .map(|marker| (package.id.clone(), marker.and(group.environments())))
                 })
                 .collect::<Vec<_>>();
             let mut reached = BTreeMap::<PackageId, MarkerTree>::new();
@@ -655,10 +693,10 @@ fn normalize_workspace_graph(
 
 fn root_marker(
     package: &Package,
-    members: &BTreeSet<PackageName>,
+    is_root: bool,
     manifest: &ResolverManifest,
 ) -> Option<MarkerTree> {
-    let mut marker = if members.contains(&package.id.name) {
+    let mut marker = if is_root {
         MarkerTree::TRUE
     } else {
         MarkerTree::FALSE
@@ -686,6 +724,7 @@ fn merge_manifest(target: &mut ResolverManifest, manifest: ResolverManifest) {
     let ResolverManifest {
         members,
         workspace_members,
+        workspace_member_ids,
         default_groups,
         group_requires_python,
         requirements,
@@ -700,6 +739,7 @@ fn merge_manifest(target: &mut ResolverManifest, manifest: ResolverManifest) {
         .workspace_members
         .get_or_insert_with(|| target.members.clone());
     full_members.extend(workspace_members.unwrap_or(members));
+    target.workspace_member_ids.extend(workspace_member_ids);
     if target.default_groups.is_none() {
         target.default_groups = default_groups;
     }
@@ -761,13 +801,21 @@ fn merge_package(
 }
 
 fn retain_reachable(
+    lock: &Lock,
     packages: &mut Vec<Package>,
     members: &BTreeSet<PackageName>,
     manifest: &ResolverManifest,
 ) {
     let mut pending = packages
         .iter()
-        .filter(|package| root_marker(package, members, manifest).is_some())
+        .filter(|package| {
+            root_marker(
+                package,
+                members.contains(&package.id.name) && lock.is_workspace_member(package),
+                manifest,
+            )
+            .is_some()
+        })
         .map(|package| package.id.clone())
         .collect::<Vec<_>>();
     let by_id = packages

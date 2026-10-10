@@ -2433,9 +2433,332 @@ fn workspace_groups_ordinary_python_intersection() -> Result<()> {
     Ok(())
 }
 
-/// A registry release does not replace the identity of a same-name local workspace member.
+/// A workspace member keeps its identity when an external project depends on a local namesake.
 #[test]
-fn workspace_groups_frozen_local_member_shares_registry_name() -> Result<()> {
+fn workspace_groups_member_projection_distinguishes_local_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("workspace");
+    workspace.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &workspace.child("wheels/local_leaf_dep-1.0.0-py3-none-any.whl"),
+        "local-leaf-dep",
+        "1.0.0",
+        "local_leaf_dep-1.0.0",
+        "",
+        &[],
+    )?;
+    write_wheel_with_metadata(
+        &workspace.child("wheels/external_leaf_dep-1.0.0-py3-none-any.whl"),
+        "external-leaf-dep",
+        "1.0.0",
+        "external_leaf_dep-1.0.0",
+        "",
+        &[],
+    )?;
+    workspace.child("pyproject.toml").write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        [[tool.uv.workspace.groups]]
+        name = "local"
+        members = ["leaf"]
+        requires-python = ">=3.13,<3.14"
+        [tool.uv.sources]
+        bridge = { path = "../external/bridge" }
+        leaf = { workspace = true }
+    "#})?;
+    workspace.child("app/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["bridge; python_version < '3.13'", "leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    workspace
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["local-leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("external/bridge/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "bridge"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+        [tool.uv.workspace]
+        members = []
+        [tool.uv.sources]
+        leaf = { path = "../leaf" }
+    "#})?;
+    context
+        .temp_dir
+        .child("external/leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["external-leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace).args([
+        "--offline", "--no-index", "--find-links", "wheels",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 6 packages in [TIME]
+    "#);
+    let locked = context.read("workspace/uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(locked, @r#"
+    version = 2
+    revision = 5
+    requires-python = ">=3.12, <3.14"
+    resolution-markers = [
+        "python_full_version < '3.13' and extra == 'workspace-main'",
+        "python_full_version >= '3.13' and extra == 'workspace-local'",
+        "python_full_version >= '3.13' and extra == 'workspace-main'",
+    ]
+
+    [[workspace-group]]
+    name = "main"
+    members = [
+        "app",
+    ]
+    requires-python = ">=3.12, <3.14"
+    effective-requires-python = ">=3.12, <3.14"
+    environment = "python_full_version >= '3.12' and python_full_version < '3.14'"
+
+    [[workspace-group]]
+    name = "local"
+    members = [
+        "leaf",
+    ]
+    requires-python = ">=3.13, <3.14"
+    effective-requires-python = "==3.13.*"
+    environment = "python_full_version == '3.13.*'"
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [manifest]
+    members = [
+        "app",
+        "leaf",
+    ]
+    workspace-member-ids = [
+        { name = "leaf", version = "1.0.0", source = { virtual = "leaf" } },
+    ]
+
+    [[package]]
+    name = "app"
+    version = "1.0.0"
+    source = { virtual = "app" }
+    resolution-markers = [
+        "extra == 'workspace-main'",
+    ]
+    dependencies = [
+        { name = "bridge", marker = "python_full_version < '3.13' and extra == 'workspace-main'" },
+        { name = "leaf", version = "1.0.0", source = { virtual = "leaf" }, marker = "python_full_version >= '3.13' and extra == 'workspace-main'" },
+    ]
+
+    [package.metadata]
+    requires-dist = [
+        { name = "bridge", marker = "python_full_version < '3.13'", virtual = "../external/bridge" },
+        { name = "leaf", marker = "python_full_version >= '3.13'", virtual = "leaf" },
+    ]
+
+    [[package]]
+    name = "bridge"
+    version = "1.0.0"
+    source = { virtual = "../external/bridge" }
+    resolution-markers = [
+        "python_full_version < '3.13' and extra == 'workspace-main'",
+    ]
+    dependencies = [
+        { name = "leaf", version = "2.0.0", source = { virtual = "../external/leaf" }, marker = "python_full_version < '3.13' and extra == 'workspace-main'" },
+    ]
+
+    [package.metadata]
+    requires-dist = [{ name = "leaf", virtual = "../external/leaf" }]
+
+    [[package]]
+    name = "external-leaf-dep"
+    version = "1.0.0"
+    source = { registry = "wheels" }
+    resolution-markers = [
+        "python_full_version < '3.13' and extra == 'workspace-main'",
+    ]
+    wheels = [
+        { path = "external_leaf_dep-1.0.0-py3-none-any.whl" },
+    ]
+
+    [[package]]
+    name = "leaf"
+    version = "1.0.0"
+    source = { virtual = "leaf" }
+    resolution-markers = [
+        "python_full_version >= '3.13' and extra == 'workspace-local'",
+        "python_full_version >= '3.13' and extra == 'workspace-main'",
+    ]
+    dependencies = [
+        { name = "local-leaf-dep", marker = "(python_full_version >= '3.13' and extra == 'workspace-local') or (python_full_version >= '3.13' and extra == 'workspace-main')" },
+    ]
+
+    [package.metadata]
+    requires-dist = [{ name = "local-leaf-dep" }]
+
+    [[package]]
+    name = "leaf"
+    version = "2.0.0"
+    source = { virtual = "../external/leaf" }
+    resolution-markers = [
+        "python_full_version < '3.13' and extra == 'workspace-main'",
+    ]
+    dependencies = [
+        { name = "external-leaf-dep", marker = "python_full_version < '3.13' and extra == 'workspace-main'" },
+    ]
+
+    [package.metadata]
+    requires-dist = [{ name = "external-leaf-dep" }]
+
+    [[package]]
+    name = "local-leaf-dep"
+    version = "1.0.0"
+    source = { registry = "wheels" }
+    resolution-markers = [
+        "python_full_version >= '3.13' and extra == 'workspace-local'",
+        "python_full_version >= '3.13' and extra == 'workspace-main'",
+    ]
+    wheels = [
+        { path = "local_leaf_dep-1.0.0-py3-none-any.whl" },
+    ]
+    "#);
+    });
+    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace).args([
+        "--offline", "--no-index", "--find-links", "wheels", "--locked",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 6 packages in [TIME]
+    "#);
+    assert_eq!(context.read("workspace/uv.lock"), locked);
+    uv_snapshot!(context.filters(), context.export().current_dir(&workspace).args([
+        "--offline", "--frozen", "--package", "app", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    external-leaf-dep==1.0.0 ; python_full_version < '3.13'
+    local-leaf-dep==1.0.0 ; python_full_version >= '3.13'
+    "#);
+    uv_snapshot!(context.filters(), context.export().current_dir(&workspace).args([
+        "--offline", "--frozen", "--package", "leaf", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    local-leaf-dep==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.export().current_dir(&workspace).args([
+        "--offline", "--frozen", "--workspace-group", "main", "--package", "leaf",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    local-leaf-dep==1.0.0 ; python_full_version >= '3.13'
+    "#);
+    uv_snapshot!(context.filters(), context.export().current_dir(&workspace).args([
+        "--offline", "--frozen", "--workspace-group", "local", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    local-leaf-dep==1.0.0
+    "#);
+
+    // Earlier lockfiles record member names without the local package identity.
+    let mut legacy: toml::Value = toml::from_str(&locked)?;
+    legacy["manifest"]
+        .as_table_mut()
+        .expect("lock manifest")
+        .remove("workspace-member-ids");
+    workspace
+        .child("uv.lock")
+        .write_str(&toml::to_string(&legacy)?)?;
+    uv_snapshot!(context.filters(), context.export().current_dir(&workspace).args([
+        "--offline", "--frozen", "--package", "leaf", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Lockfile does not identify workspace member `leaf` among multiple local packages
+
+    hint: Run `uv lock` to record workspace member identities
+    "#);
+    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace).args([
+        "--offline", "--no-index", "--find-links", "wheels",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    warning: Failed to read existing lockfile; ignoring locked requirements: Lockfile does not identify workspace member `leaf` among multiple local packages
+    Resolved 6 packages in [TIME]
+    "#);
+    assert_eq!(context.read("workspace/uv.lock"), locked);
+
+    fs_err::remove_file(workspace.child("pyproject.toml"))?;
+    fs_err::remove_file(workspace.child("app/pyproject.toml"))?;
+    fs_err::remove_file(workspace.child("leaf/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.export().current_dir(&workspace).args([
+        "--offline", "--frozen", "--preview-features", "frozen-lockfile", "--package", "leaf",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    local-leaf-dep==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.export().current_dir(&workspace).args([
+        "--offline", "--frozen", "--preview-features", "frozen-lockfile",
+        "--workspace-group", "main", "--package", "leaf", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    local-leaf-dep==1.0.0 ; python_full_version >= '3.13'
+    "#);
+    workspace
+        .child("uv.lock")
+        .write_str(&toml::to_string(&legacy)?)?;
+    uv_snapshot!(context.filters(), context.export().current_dir(&workspace).args([
+        "--offline", "--frozen", "--preview-features", "frozen-lockfile", "--package", "leaf",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse lockfile `[TEMP_DIR]/workspace/uv.lock`
+      cause: Lockfile does not identify workspace member `leaf` among multiple local packages
+    ");
+    Ok(())
+}
+
+/// Selecting one local member prunes its registry namesake without dropping dependency branches.
+#[test]
+fn workspace_groups_member_projection_uses_local_identity() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context.temp_dir.child("wheels").create_dir_all()?;
     write_wheel_with_metadata(
@@ -2463,13 +2786,94 @@ fn workspace_groups_frozen_local_member_shares_registry_name() -> Result<()> {
         [tool.uv.workspace]
         members = ["app", "leaf"]
         [[tool.uv.workspace.groups]]
-        name = "legacy"
+        name = "main"
         members = ["app"]
-        requires-python = ">=3.12,<3.13"
+        requires-python = ">=3.12,<3.14"
+        [tool.uv.sources]
+        leaf = { workspace = true, marker = "python_version >= '3.13'" }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-index", "--find-links", "wheels",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--package", "app", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==1.0.0 ; python_full_version < '3.13'
+    leaf-dep==1.0.0 ; python_full_version >= '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--package", "leaf", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf-dep==1.0.0
+    ");
+    Ok(())
+}
+
+/// A registry release does not replace the identity of a same-name local workspace member.
+#[test]
+fn workspace_groups_frozen_local_member_shares_registry_name() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context.temp_dir.child("wheels/leaf-1.0.0-py3-none-any.whl"),
+        "leaf",
+        "1.0.0",
+        "leaf-1.0.0",
+        "",
+        &[],
+    )?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
         [[tool.uv.workspace.groups]]
-        name = "modern"
+        name = "main"
         members = ["app"]
-        requires-python = ">=3.13,<3.14"
+        requires-python = ">=3.12,<3.14"
         [tool.uv.sources]
         leaf = { workspace = true, marker = "python_version >= '3.13'" }
     "#})?;
@@ -2503,24 +2907,36 @@ fn workspace_groups_frozen_local_member_shares_registry_name() -> Result<()> {
         .assert()
         .success();
     uv_snapshot!(context.filters(), context.export().args([
-        "--offline", "--frozen", "--workspace-group", "modern", "--package", "leaf",
+        "--offline", "--frozen", "--workspace-group", "main", "--package", "leaf",
         "--no-header", "--no-hashes", "--no-annotate",
     ]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    leaf-dep==1.0.0
+    leaf-dep==1.0.0 ; python_full_version >= '3.13'
     ");
     fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
     fs_err::remove_file(context.temp_dir.child("app/pyproject.toml"))?;
     fs_err::remove_file(context.temp_dir.child("leaf/pyproject.toml"))?;
     uv_snapshot!(context.filters(), context.export().args([
-        "--offline", "--frozen", "--workspace-group", "modern", "--package", "leaf",
+        "--offline", "--frozen", "--workspace-group", "main", "--package", "leaf",
         "--preview-features", "frozen-lockfile", "--no-header", "--no-hashes", "--no-annotate",
     ]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    leaf-dep==1.0.0
+    leaf-dep==1.0.0 ; python_full_version >= '3.13'
     ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--workspace-group", "main", "--package", "leaf",
+        "--preview-features", "frozen-lockfile", "--python", "3.13",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf-dep==1.0.0
+    "#);
     Ok(())
 }
 
@@ -5124,9 +5540,6 @@ fn workspace_groups_configured_metadata_removes_local_edge() -> Result<()> {
 
     [manifest]
     members = [
-        "app",
-    ]
-    workspace-members = [
         "app",
     ]
 
