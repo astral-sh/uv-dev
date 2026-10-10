@@ -4080,25 +4080,50 @@ impl Lock {
                 return Ok(false);
             }
             let current = current.metadata;
-            let current = current
-                .requires_dist
-                .iter()
-                .chain(current.dependency_groups.values().flatten())
-                .map(|requirement| Requirement {
+            let current_requirements =
+                current.requires_dist.iter().map(|requirement| Requirement {
                     marker: requirement.marker.simplify_extras(&current.provides_extra),
                     ..requirement.clone()
                 });
             let all_extras = &package.metadata.provides_extra;
-            let previous = package
+            let previous_requirements =
+                package
+                    .metadata
+                    .requires_dist
+                    .iter()
+                    .map(|requirement| Requirement {
+                        marker: requirement.marker.simplify_extras(all_extras),
+                        ..requirement.clone()
+                    });
+            if normalizer.requirements(current_requirements)?
+                != normalizer.requirements(previous_requirements)?
+            {
+                return Ok(false);
+            }
+            // Scoped overrides apply to regular dependencies but not dependency groups.
+            let current_groups = current
+                .dependency_groups
+                .into_iter()
+                .filter(|(_, requirements)| {
+                    self.includes_empty_groups() || !requirements.is_empty()
+                })
+                .map(|(group, requirements)| Ok((group, normalizer.requirements(requirements)?)))
+                .collect::<Result<BTreeMap<_, _>, LockError>>()?;
+            let previous_groups = package
                 .metadata
-                .requires_dist
+                .dependency_groups
                 .iter()
-                .chain(package.metadata.dependency_groups.values().flatten())
-                .map(|requirement| Requirement {
-                    marker: requirement.marker.simplify_extras(all_extras),
-                    ..requirement.clone()
-                });
-            if normalizer.requirements(current)? != normalizer.requirements(previous)? {
+                .filter(|(_, requirements)| {
+                    self.includes_empty_groups() || !requirements.is_empty()
+                })
+                .map(|(group, requirements)| {
+                    Ok((
+                        group.clone(),
+                        normalizer.requirements(requirements.iter().cloned())?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>, LockError>>()?;
+            if current_groups != previous_groups {
                 return Ok(false);
             }
         }
