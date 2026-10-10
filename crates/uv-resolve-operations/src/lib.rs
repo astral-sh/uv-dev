@@ -1,6 +1,5 @@
 //! Dependency resolution workflows used by uv commands.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -333,34 +332,42 @@ pub async fn resolve(
         DependencyMode::Transitive => {
             let constraints = constraints.clone().with_recorder(recorder.clone());
             let modifiers = modifiers.clone().with_recorder(recorder.clone());
-            let lookahead_requirements = if build_dependencies.requirements.is_empty() {
-                Cow::Borrowed(requirements.as_slice())
-            } else {
-                Cow::Owned(
-                    requirements
-                        .iter()
-                        .chain(&build_dependencies.requirements)
-                        .cloned()
-                        .collect::<Vec<_>>(),
+            let build_constraints = (!build_dependencies.requirements.is_empty()).then(|| {
+                Constraints::from_specifications(
+                    constraints
+                        .specifications()
+                        .chain(build_dependencies.constraints.specifications())
+                        .cloned(),
                 )
-            };
-            let (lookaheads, updated_hasher) = LookaheadResolver::new(
-                &lookahead_requirements,
-                &constraints,
-                &modifiers,
-                &hasher,
-                index,
-                DistributionDatabase::new(
-                    client,
-                    build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
+                .with_recorder(recorder.clone())
+            });
+            let contexts = std::iter::once((requirements.as_slice(), &constraints)).chain(
+                build_constraints
+                    .as_ref()
+                    .map(|constraints| (build_dependencies.requirements.as_slice(), constraints)),
+            );
+            let mut lookaheads = Vec::new();
+            // Build constraints apply only while traversing the build roots and their dependencies.
+            for (requirements, constraints) in contexts {
+                let (discovered, updated_hasher) = LookaheadResolver::new(
+                    requirements,
+                    constraints,
+                    &modifiers,
+                    &hasher,
+                    index,
+                    DistributionDatabase::new(
+                        client,
+                        build_dispatch,
+                        concurrency.downloads_semaphore.clone(),
+                    )
+                    .with_recorder(recorder.clone()),
                 )
-                .with_recorder(recorder.clone()),
-            )
-            .with_reporter(Arc::new(ResolverReporter::from(printer)))
-            .resolve(&resolver_env)
-            .await?;
-            hasher = updated_hasher;
+                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .resolve(&resolver_env)
+                .await?;
+                hasher = updated_hasher;
+                lookaheads.extend(discovered);
+            }
             lookaheads
         }
         DependencyMode::Direct => Vec::new(),
