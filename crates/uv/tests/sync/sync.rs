@@ -11199,6 +11199,37 @@ fn build_system_requires_path() -> Result<()> {
 }
 
 #[test]
+#[cfg(unix)]
+fn sync_project_environment_permission_error() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    // System environments do not have `pyvenv.cfg`. An interpreter without execute permission
+    // should report that error instead of treating the environment as absent.
+    let environment = context.temp_dir.child("python-env");
+    environment.child("bin").create_dir_all()?;
+    environment.child("bin/python").write_str("")?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env(EnvVars::UV_PROJECT_ENVIRONMENT, environment.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to query Python interpreter at `[TEMP_DIR]/python-env/bin/python`
+      cause: Permission denied (os error 13)
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn sync_invalid_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_virtualenv_bin()
@@ -11302,11 +11333,23 @@ fn sync_invalid_environment() -> Result<()> {
     fs_err::write(context.temp_dir.join(".venv").join("file"), b"")?;
 
     // We should never delete it
+    #[cfg(not(windows))]
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: Project virtual environment directory `[VENV]/` cannot be used because it is not a compatible environment but cannot be recreated because it is not a virtual environment
+    ");
+
+    // The Windows launcher requires `pyvenv.cfg` to locate its base Python.
+    #[cfg(windows)]
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Querying Python at `[VENV]/[BIN]/[PYTHON]` failed with exit status exit status: 106
+
+    [stderr]
+    No pyvenv.cfg file
     ");
 
     // Even if there's no Python executable
