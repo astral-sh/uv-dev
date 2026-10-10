@@ -169,6 +169,17 @@ pub struct Pep723Script {
 }
 
 impl Pep723Script {
+    /// Return the path to the script's lockfile.
+    pub fn lock_path(&self) -> PathBuf {
+        let mut file_name = self
+            .path
+            .file_name()
+            .expect("Script path has no file name")
+            .to_os_string();
+        file_name.push(".lock");
+        self.path.with_file_name(file_name)
+    }
+
     /// Read the PEP 723 `script` metadata from a Python file, if it exists.
     ///
     /// Returns `None` if the file is missing a PEP 723 metadata block.

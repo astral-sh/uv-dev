@@ -47,7 +47,7 @@ use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
-use uv_preview::{Preview, PreviewFeature};
+use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -408,15 +408,8 @@ pub async fn run(
                 )
                 .await?
                 .into_inner();
-                let environment_mode = if preview
-                    .is_enabled(PreviewFeature::SharedScriptEnvironments)
-                    && active != ActiveEnvironment::Prefer
-                    && script_extra_build_requires.is_empty()
-                {
-                    ScriptEnvironmentMode::Shared
-                } else {
-                    ScriptEnvironmentMode::Isolated
-                };
+                let environment_mode =
+                    ScriptEnvironmentMode::from_script((&script).into(), active, preview);
                 let environment = ScriptEnvironment::get_or_init(
                     environment_mode,
                     (&script).into(),
@@ -1279,6 +1272,7 @@ pub async fn run(
             .into_iter()
             .chain(requirements_env.as_ref().map(PythonEnvironment::scripts))
             .chain(std::iter::once(base_interpreter.scripts()))
+            .chain(shared_interpreter.as_ref().map(Interpreter::scripts))
             .chain(
                 // On Windows, non-virtual Python distributions put `python.exe` in the top-level
                 // directory, rather than in the `Scripts` subdirectory.

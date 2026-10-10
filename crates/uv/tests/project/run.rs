@@ -8384,6 +8384,74 @@ fn run_pep723_shared_entrypoints_follow_dependency_changes() -> Result<()> {
     Ok(())
 }
 
+/// Non-Python commands remain available behind commands installed in the writable overlay.
+#[test]
+#[cfg(unix)]
+fn run_pep723_shared_native_entrypoints() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"shared-native".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "shared_native-1.0.0.data/scripts/uv-shared-native",
+            "#!/bin/sh\nprintf 'shared\\n'\n",
+        )],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-native==1.0.0"]
+        # ///
+        import subprocess
+        import sys
+        subprocess.run(["uv-shared-native"], check=True)
+        print(sys.prefix)
+    "#})?;
+    let first_run = uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels"])
+        .arg("script.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-native==1.0.0
+    ");
+    let first_stdout = std::str::from_utf8(&first_run.stdout)?;
+    let overlay_root = first_stdout
+        .lines()
+        .nth(1)
+        .context("script did not report its overlay environment")?;
+    let overlay_command = venv_bin_path(overlay_root).join("uv-shared-native");
+    fs_err::write(&overlay_command, "#!/bin/sh\nprintf 'overlay\\n'\n")?;
+    fs_err::set_permissions(&overlay_command, std::fs::Permissions::from_mode(0o755))?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels"])
+        .arg("script.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    overlay
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
 /// Immutable cache hits leave configuration untouched; legacy cache entries migrate atomically.
 #[test]
 fn run_cached_environment_configuration_is_stable() -> Result<()> {

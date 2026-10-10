@@ -7,6 +7,7 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
 use uv_errors::ErrorWithHints;
 use uv_fs::Simplified;
+use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::ScriptEnvironmentMode;
@@ -138,10 +139,11 @@ pub async fn find_script(
     python_downloads: PythonDownloads,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
+    preview: Preview,
     printer: Printer,
 ) -> Result<ExitStatus> {
     let interpreter = match ScriptInterpreter::discover(
-        ScriptEnvironmentMode::Isolated,
+        ScriptEnvironmentMode::from_script(script, ActiveEnvironment::Ignore, preview),
         script,
         None,
         client_builder,

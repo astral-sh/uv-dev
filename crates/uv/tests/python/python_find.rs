@@ -1050,11 +1050,147 @@ fn python_find_script() {
     Checked in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py"), @"
+    uv_snapshot!(context.filters(), context.python_find().args(["--no-preview", "--script", "foo.py"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     [CACHE_DIR]/environments-v2/foo-[HASH]/[BIN]/[PYTHON]
     ");
+}
+
+#[test]
+fn python_find_script_shared() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("foo.py").write_str(indoc! {r"
+        # /// script
+        # dependencies = []
+        # ///
+    "})?;
+    context
+        .run()
+        .args(["--no-index", "foo.py"])
+        .assert()
+        .success();
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "foo.py",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--preview-features", "shared-script-environments", "--script", "foo.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-foo-[HASH]/[BIN]/[PYTHON]
+    ");
+    uv_snapshot!(context.filters(), context.python_find().args(["--no-preview", "--script", "foo.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/foo-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
+}
+
+#[test]
+fn python_find_script_shared_locked() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("foo.py").write_str(indoc! {r"
+        # /// script
+        # dependencies = []
+        # ///
+    "})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "foo.py",
+        ])
+        .assert()
+        .success();
+    context
+        .lock()
+        .args(["--script", "foo.py", "--no-index"])
+        .assert()
+        .success();
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "foo.py",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--preview-features", "shared-script-environments", "--script", "foo.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/foo-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
+}
+
+#[test]
+fn python_find_script_shared_extra_build_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    let script = context.temp_dir.child("foo.py");
+    script.write_str(indoc! {r"
+        # /// script
+        # dependencies = []
+        # ///
+    "})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "foo.py",
+        ])
+        .assert()
+        .success();
+    script.write_str(indoc! {r#"
+        # /// script
+        # dependencies = []
+        # [tool.uv.extra-build-dependencies]
+        # unrelated = ["setuptools"]
+        # ///
+    "#})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "foo.py",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--preview-features", "shared-script-environments", "--script", "foo.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/foo-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
 }
 
 #[test]
