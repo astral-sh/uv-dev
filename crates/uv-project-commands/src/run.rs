@@ -1527,7 +1527,10 @@ impl ParsedRunCommand {
         let target_path = PathBuf::from(target);
 
         // Determine whether the user provided a remote script.
-        if target_path.starts_with("http://") || target_path.starts_with("https://") {
+        // Match the first path component so single-slash forms also reach the URL parser.
+        if target_path.iter().next().is_some_and(|scheme| {
+            scheme.eq_ignore_ascii_case("http:") || scheme.eq_ignore_ascii_case("https:")
+        }) {
             // Only continue if we are absolutely certain no local file exists.
             //
             // We don't do this check on Windows since the file path would
