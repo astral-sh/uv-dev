@@ -1685,93 +1685,93 @@ pub enum PubGrubHint {
 /// used for `Eq` and `Hash` implementations. It is used to derive `PartialEq` and
 /// `Hash` implementations for [`PubGrubHint`].
 #[derive(PartialEq, Eq, Hash)]
-enum PubGrubHintCore {
+enum PubGrubHintCore<'a> {
     PrereleaseAvailable {
-        package: PackageName,
+        package: &'a PackageName,
     },
     BuildPrereleaseAvailable {
-        package: PackageName,
+        package: &'a PackageName,
     },
     PrereleaseRequested {
-        package: PackageName,
+        package: &'a PackageName,
     },
     BuildPrereleaseRequested {
-        package: PackageName,
+        package: &'a PackageName,
     },
     NoIndex,
     Offline,
     InvalidPackageMetadata {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InvalidPackageStructure {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InvalidPackageNetwork {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InvalidVersionMetadata {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InconsistentVersionMetadata {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InvalidVersionStructure {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InvalidVersionNetwork {
-        package: PackageName,
+        package: &'a PackageName,
     },
     IncompatibleBuildRequirement {
-        package: PackageName,
+        package: &'a PackageName,
     },
     RequiresPython {
         source: PythonRequirementSource,
-        requires_python: RequiresPython,
+        requires_python: &'a RequiresPython,
     },
     DependsOnWorkspacePackage {
-        package: PackageName,
-        dependency: PackageName,
+        package: &'a PackageName,
+        dependency: &'a PackageName,
         workspace: bool,
     },
     DependsOnItself {
-        package: PackageName,
+        package: &'a PackageName,
         workspace: bool,
     },
     UncheckedIndex {
-        package: PackageName,
+        package: &'a PackageName,
     },
     UnauthorizedIndex {
-        index: IndexUrl,
+        index: &'a IndexUrl,
     },
     ForbiddenIndex {
-        index: IndexUrl,
+        index: &'a IndexUrl,
     },
     NoBuild {
-        package: PackageName,
+        package: &'a PackageName,
     },
     NoBinary {
-        package: PackageName,
+        package: &'a PackageName,
     },
     LanguageTags {
-        package: PackageName,
+        package: &'a PackageName,
     },
     AbiTags {
-        package: PackageName,
+        package: &'a PackageName,
     },
     PlatformTags {
-        package: PackageName,
+        package: &'a PackageName,
     },
     ExcludeNewer {
-        package: PackageName,
+        package: &'a PackageName,
         source: EffectiveExcludeNewerSource,
     },
     DisjointPythonVersion,
     DisjointEnvironment,
 }
 
-impl From<PubGrubHint> for PubGrubHintCore {
+impl<'a> From<&'a PubGrubHint> for PubGrubHintCore<'a> {
     #[inline]
-    fn from(hint: PubGrubHint) -> Self {
+    fn from(hint: &'a PubGrubHint) -> Self {
         match hint {
             PubGrubHint::PrereleaseAvailable { package, .. } => {
                 Self::PrereleaseAvailable { package }
@@ -1816,7 +1816,7 @@ impl From<PubGrubHint> for PubGrubHintCore {
                 requires_python,
                 ..
             } => Self::RequiresPython {
-                source,
+                source: *source,
                 requires_python,
             },
             PubGrubHint::DependsOnWorkspacePackage {
@@ -1826,11 +1826,12 @@ impl From<PubGrubHint> for PubGrubHintCore {
             } => Self::DependsOnWorkspacePackage {
                 package,
                 dependency,
-                workspace,
+                workspace: *workspace,
             },
-            PubGrubHint::DependsOnItself { package, workspace } => {
-                Self::DependsOnItself { package, workspace }
-            }
+            PubGrubHint::DependsOnItself { package, workspace } => Self::DependsOnItself {
+                package,
+                workspace: *workspace,
+            },
             PubGrubHint::UncheckedIndex { name: package, .. } => Self::UncheckedIndex { package },
             PubGrubHint::UnauthorizedIndex { index } => Self::UnauthorizedIndex { index },
             PubGrubHint::ForbiddenIndex { index, .. } => Self::ForbiddenIndex { index },
@@ -1841,7 +1842,10 @@ impl From<PubGrubHint> for PubGrubHintCore {
             PubGrubHint::PlatformTags { package, .. } => Self::PlatformTags { package },
             PubGrubHint::ExcludeNewer {
                 package, source, ..
-            } => Self::ExcludeNewer { package, source },
+            } => Self::ExcludeNewer {
+                package,
+                source: *source,
+            },
             PubGrubHint::DisjointPythonVersion { .. } => Self::DisjointPythonVersion,
             PubGrubHint::DisjointEnvironment => Self::DisjointEnvironment,
         }
@@ -1850,15 +1854,15 @@ impl From<PubGrubHint> for PubGrubHintCore {
 
 impl std::hash::Hash for PubGrubHint {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let core = PubGrubHintCore::from(self.clone());
+        let core = PubGrubHintCore::from(self);
         core.hash(state);
     }
 }
 
 impl PartialEq for PubGrubHint {
     fn eq(&self, other: &Self) -> bool {
-        let core = PubGrubHintCore::from(self.clone());
-        let other_core = PubGrubHintCore::from(other.clone());
+        let core = PubGrubHintCore::from(self);
+        let other_core = PubGrubHintCore::from(other);
         core == other_core
     }
 }
@@ -2780,6 +2784,11 @@ fn padded<'a, T: std::fmt::Display + ?Sized>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::str::FromStr;
+    use std::sync::Arc;
+
     use pubgrub::{DefaultStringReporter, Reporter};
     use uv_distribution_types::RequiresPython;
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
@@ -2891,6 +2900,446 @@ mod tests {
             })?;
 
         assert!(thread.join().is_ok());
+        Ok(())
+    }
+
+    fn hash_hint(hint: &PubGrubHint) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        hint.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn error_chain(message: &str) -> Result<UnavailableErrorChain, std::io::Error> {
+        let metadata = MetadataUnavailable::InvalidMetadata(Arc::new(
+            uv_pypi_types::MetadataError::RequiresTxtContents(std::io::Error::other(
+                message.to_string(),
+            )),
+        ));
+        if let UnavailablePackage::InvalidMetadata(reason) = UnavailablePackage::from(&metadata) {
+            return Ok(reason);
+        }
+        Err(std::io::Error::other(
+            "invalid metadata did not produce an error chain",
+        ))
+    }
+
+    #[test]
+    fn pubgrub_hint_identity_ignores_diagnostic_fields() -> Result<(), Box<dyn std::error::Error>> {
+        let package = PackageName::from_str("example")?;
+        let version1 = Version::from_str("1.0")?;
+        let version2 = Version::from_str("2.0")?;
+        let range1 = Range::singleton(version1.clone());
+        let range2 = Range::singleton(version2.clone());
+        let index1 = IndexUrl::from_str("https://one.example/simple")?;
+        let index2 = IndexUrl::from_str("https://two.example/simple")?;
+        let requires_python = RequiresPython::greater_than_equal_version(&Version::new([3, 12]));
+
+        let hints = [
+            (
+                PubGrubHint::PrereleaseAvailable {
+                    package: package.clone(),
+                    version: version1.clone(),
+                    package_override: false,
+                },
+                PubGrubHint::PrereleaseAvailable {
+                    package: package.clone(),
+                    version: version2.clone(),
+                    package_override: true,
+                },
+            ),
+            (
+                PubGrubHint::BuildPrereleaseAvailable {
+                    package: package.clone(),
+                    version: version1.clone(),
+                },
+                PubGrubHint::BuildPrereleaseAvailable {
+                    package: package.clone(),
+                    version: version2.clone(),
+                },
+            ),
+            (
+                PubGrubHint::PrereleaseRequested {
+                    name: package.clone(),
+                    range: range1.clone(),
+                    package_override: false,
+                },
+                PubGrubHint::PrereleaseRequested {
+                    name: package.clone(),
+                    range: range2.clone(),
+                    package_override: true,
+                },
+            ),
+            (
+                PubGrubHint::BuildPrereleaseRequested {
+                    name: package.clone(),
+                    range: range1.clone(),
+                },
+                PubGrubHint::BuildPrereleaseRequested {
+                    name: package.clone(),
+                    range: range2.clone(),
+                },
+            ),
+            (
+                PubGrubHint::InvalidPackageMetadata {
+                    package: package.clone(),
+                    reason: error_chain("first error")?,
+                },
+                PubGrubHint::InvalidPackageMetadata {
+                    package: package.clone(),
+                    reason: error_chain("second error")?,
+                },
+            ),
+            (
+                PubGrubHint::InvalidPackageStructure {
+                    package: package.clone(),
+                    reason: error_chain("first structure error")?,
+                },
+                PubGrubHint::InvalidPackageStructure {
+                    package: package.clone(),
+                    reason: error_chain("second structure error")?,
+                },
+            ),
+            (
+                PubGrubHint::InvalidPackageNetwork {
+                    package: package.clone(),
+                    status: StatusCode::NOT_FOUND,
+                },
+                PubGrubHint::InvalidPackageNetwork {
+                    package: package.clone(),
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                },
+            ),
+            (
+                PubGrubHint::InvalidVersionMetadata {
+                    package: package.clone(),
+                    version: version1.clone(),
+                    reason: "first error".to_string(),
+                },
+                PubGrubHint::InvalidVersionMetadata {
+                    package: package.clone(),
+                    version: version2.clone(),
+                    reason: "second error".to_string(),
+                },
+            ),
+            (
+                PubGrubHint::InconsistentVersionMetadata {
+                    package: package.clone(),
+                    version: version1.clone(),
+                    reason: "first error".to_string(),
+                },
+                PubGrubHint::InconsistentVersionMetadata {
+                    package: package.clone(),
+                    version: version2.clone(),
+                    reason: "second error".to_string(),
+                },
+            ),
+            (
+                PubGrubHint::InvalidVersionStructure {
+                    package: package.clone(),
+                    version: version1.clone(),
+                    reason: "first structure error".to_string(),
+                },
+                PubGrubHint::InvalidVersionStructure {
+                    package: package.clone(),
+                    version: version2.clone(),
+                    reason: "second structure error".to_string(),
+                },
+            ),
+            (
+                PubGrubHint::IncompatibleBuildRequirement {
+                    package: package.clone(),
+                    version: version1.clone(),
+                    requires_python: VersionSpecifiers::from_str(">=3.10")?,
+                    python_version: Version::new([3, 9]),
+                },
+                PubGrubHint::IncompatibleBuildRequirement {
+                    package: package.clone(),
+                    version: version2.clone(),
+                    requires_python: VersionSpecifiers::from_str(">=3.12")?,
+                    python_version: Version::new([3, 11]),
+                },
+            ),
+            (
+                PubGrubHint::InvalidVersionNetwork {
+                    package: package.clone(),
+                    version: version1.clone(),
+                    status: StatusCode::NOT_FOUND,
+                },
+                PubGrubHint::InvalidVersionNetwork {
+                    package: package.clone(),
+                    version: version2.clone(),
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                },
+            ),
+            (
+                PubGrubHint::RequiresPython {
+                    source: PythonRequirementSource::RequiresPython,
+                    requires_python: requires_python.clone(),
+                    name: PackageName::from_str("first")?,
+                    package_set: range1.clone(),
+                    package_requires_python: range1.clone(),
+                },
+                PubGrubHint::RequiresPython {
+                    source: PythonRequirementSource::RequiresPython,
+                    requires_python,
+                    name: PackageName::from_str("second")?,
+                    package_set: range2.clone(),
+                    package_requires_python: range2.clone(),
+                },
+            ),
+            (
+                PubGrubHint::UncheckedIndex {
+                    name: package.clone(),
+                    range: range1.clone(),
+                    found_index: index1.clone(),
+                    next_index: index2.clone(),
+                },
+                PubGrubHint::UncheckedIndex {
+                    name: package.clone(),
+                    range: range2.clone(),
+                    found_index: index2.clone(),
+                    next_index: index1.clone(),
+                },
+            ),
+            (
+                PubGrubHint::NoBuild {
+                    package: package.clone(),
+                    option: NoBuild::All,
+                },
+                PubGrubHint::NoBuild {
+                    package: package.clone(),
+                    option: NoBuild::Packages(vec![PackageName::from_str("other")?]),
+                },
+            ),
+            (
+                PubGrubHint::NoBinary {
+                    package: package.clone(),
+                    option: NoBinary::All,
+                },
+                PubGrubHint::NoBinary {
+                    package: package.clone(),
+                    option: NoBinary::Packages(vec![PackageName::from_str("other")?]),
+                },
+            ),
+            (
+                PubGrubHint::ForbiddenIndex {
+                    index: index1,
+                    any_successful_response: false,
+                },
+                PubGrubHint::ForbiddenIndex {
+                    index: IndexUrl::from_str("https://one.example/simple")?,
+                    any_successful_response: true,
+                },
+            ),
+            (
+                PubGrubHint::LanguageTags {
+                    package: package.clone(),
+                    version: version1.clone(),
+                    tags: BTreeSet::from([LanguageTag::from_str("cp310")?]),
+                    best: Some(LanguageTag::from_str("cp310")?),
+                },
+                PubGrubHint::LanguageTags {
+                    package: package.clone(),
+                    version: version2.clone(),
+                    tags: BTreeSet::from([LanguageTag::from_str("cp312")?]),
+                    best: None,
+                },
+            ),
+            (
+                PubGrubHint::AbiTags {
+                    package: package.clone(),
+                    version: version1.clone(),
+                    tags: BTreeSet::from([AbiTag::from_str("cp310")?]),
+                    best: Some(AbiTag::from_str("cp310")?),
+                },
+                PubGrubHint::AbiTags {
+                    package: package.clone(),
+                    version: version2.clone(),
+                    tags: BTreeSet::from([AbiTag::from_str("cp312")?]),
+                    best: None,
+                },
+            ),
+            (
+                PubGrubHint::PlatformTags {
+                    package: package.clone(),
+                    version: version1,
+                    tags: BTreeSet::from([PlatformTag::from_str("win_amd64")?]),
+                },
+                PubGrubHint::PlatformTags {
+                    package: package.clone(),
+                    version: version2.clone(),
+                    tags: BTreeSet::from([PlatformTag::from_str("manylinux_2_17_x86_64")?]),
+                },
+            ),
+            (
+                PubGrubHint::ExcludeNewer {
+                    package: package.clone(),
+                    source: EffectiveExcludeNewerSource::Global,
+                    exclude_newer: Timestamp::from_second(1)?,
+                    matching_version: None,
+                },
+                PubGrubHint::ExcludeNewer {
+                    package,
+                    source: EffectiveExcludeNewerSource::Global,
+                    exclude_newer: Timestamp::from_second(2)?,
+                    matching_version: Some(ExcludeNewerVersionDetail {
+                        version: version2.clone(),
+                        publish_date: Some("2025-01-01T00:00:00Z".to_string()),
+                        singleton: true,
+                    }),
+                },
+            ),
+            (
+                PubGrubHint::DisjointPythonVersion {
+                    python_version: Version::new([3, 10]),
+                },
+                PubGrubHint::DisjointPythonVersion {
+                    python_version: Version::new([3, 12]),
+                },
+            ),
+        ];
+
+        for (left, right) in hints {
+            assert_eq!(left, right);
+            assert_eq!(hash_hint(&left), hash_hint(&right));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pubgrub_hint_identity_preserves_core_fields() -> Result<(), Box<dyn std::error::Error>> {
+        let package = PackageName::from_str("example")?;
+        let dependency = PackageName::from_str("dependency")?;
+        let index = IndexUrl::from_str("https://one.example/simple")?;
+        let requires_python = RequiresPython::greater_than_equal_version(&Version::new([3, 10]));
+
+        let hints = [
+            (
+                PubGrubHint::NoBinary {
+                    package: package.clone(),
+                    option: NoBinary::None,
+                },
+                PubGrubHint::NoBinary {
+                    package: PackageName::from_str("other")?,
+                    option: NoBinary::None,
+                },
+            ),
+            (
+                PubGrubHint::RequiresPython {
+                    source: PythonRequirementSource::Interpreter,
+                    requires_python: requires_python.clone(),
+                    name: package.clone(),
+                    package_set: Range::full(),
+                    package_requires_python: Range::full(),
+                },
+                PubGrubHint::RequiresPython {
+                    source: PythonRequirementSource::PythonVersion,
+                    requires_python: requires_python.clone(),
+                    name: package.clone(),
+                    package_set: Range::full(),
+                    package_requires_python: Range::full(),
+                },
+            ),
+            (
+                PubGrubHint::RequiresPython {
+                    source: PythonRequirementSource::Interpreter,
+                    requires_python: requires_python.clone(),
+                    name: package.clone(),
+                    package_set: Range::full(),
+                    package_requires_python: Range::full(),
+                },
+                PubGrubHint::RequiresPython {
+                    source: PythonRequirementSource::Interpreter,
+                    requires_python: RequiresPython::greater_than_equal_version(&Version::new([
+                        3, 12,
+                    ])),
+                    name: package.clone(),
+                    package_set: Range::full(),
+                    package_requires_python: Range::full(),
+                },
+            ),
+            (
+                PubGrubHint::DependsOnWorkspacePackage {
+                    package: package.clone(),
+                    dependency: dependency.clone(),
+                    workspace: true,
+                },
+                PubGrubHint::DependsOnWorkspacePackage {
+                    package: package.clone(),
+                    dependency: PackageName::from_str("other")?,
+                    workspace: true,
+                },
+            ),
+            (
+                PubGrubHint::DependsOnWorkspacePackage {
+                    package: package.clone(),
+                    dependency,
+                    workspace: true,
+                },
+                PubGrubHint::DependsOnWorkspacePackage {
+                    package: package.clone(),
+                    dependency: PackageName::from_str("dependency")?,
+                    workspace: false,
+                },
+            ),
+            (
+                PubGrubHint::DependsOnItself {
+                    package: package.clone(),
+                    workspace: true,
+                },
+                PubGrubHint::DependsOnItself {
+                    package: package.clone(),
+                    workspace: false,
+                },
+            ),
+            (
+                PubGrubHint::ForbiddenIndex {
+                    index: index.clone(),
+                    any_successful_response: false,
+                },
+                PubGrubHint::ForbiddenIndex {
+                    index: IndexUrl::from_str("https://two.example/simple")?,
+                    any_successful_response: false,
+                },
+            ),
+            (
+                PubGrubHint::ExcludeNewer {
+                    package: package.clone(),
+                    source: EffectiveExcludeNewerSource::Global,
+                    exclude_newer: Timestamp::from_second(1)?,
+                    matching_version: None,
+                },
+                PubGrubHint::ExcludeNewer {
+                    package: package.clone(),
+                    source: EffectiveExcludeNewerSource::Package,
+                    exclude_newer: Timestamp::from_second(1)?,
+                    matching_version: None,
+                },
+            ),
+            (
+                PubGrubHint::PrereleaseAvailable {
+                    package: package.clone(),
+                    version: Version::new([1]),
+                    package_override: false,
+                },
+                PubGrubHint::BuildPrereleaseAvailable {
+                    package: package.clone(),
+                    version: Version::new([1]),
+                },
+            ),
+            (
+                PubGrubHint::UnauthorizedIndex { index },
+                PubGrubHint::ForbiddenIndex {
+                    index: IndexUrl::from_str("https://one.example/simple")?,
+                    any_successful_response: false,
+                },
+            ),
+            (PubGrubHint::NoIndex, PubGrubHint::Offline),
+        ];
+
+        for (left, right) in hints {
+            assert_ne!(left, right);
+        }
         Ok(())
     }
 }
