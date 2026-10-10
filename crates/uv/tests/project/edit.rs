@@ -13706,14 +13706,23 @@ async fn lock_forbidden_index_with_available_package() -> Result<()> {
             json!({ "core-metadata": true, "requires-python": ">=3.8" }),
         )
         .await;
+    server
+        .serve_metadata(
+            wheel_filename,
+            indoc! {b"
+                Metadata-Version: 2.3
+                Name: anyio
+                Version: 4.3.0
+                Requires-Dist: idna>=2.8
+            "},
+            1,
+        )
+        .await;
     Mock::given(method("GET"))
-        .and(path(format!("/{wheel_filename}.metadata")))
-        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {"
-            Metadata-Version: 2.3
-            Name: anyio
-            Version: 4.3.0
-            Requires-Dist: idna>=2.8
-        "}))
+        .and(path(format!("/{wheel_filename}")))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .with_priority(1)
         .mount(server.mock_server())
         .await;
     Mock::given(method("GET"))

@@ -1648,15 +1648,17 @@ async fn mount_simple_launcher_index(server: &PackageServer, hash: &str, wheel: 
             json!({ "core-metadata": true }),
         )
         .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/{wheel_filename}.metadata")))
-        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {"
-            Metadata-Version: 2.1
-            Name: simple-launcher
-            Version: 0.1.0
-            Requires-Python: >=3.8
-        "}))
-        .mount(server.mock_server())
+    server
+        .serve_metadata(
+            wheel_filename,
+            indoc! {b"
+                Metadata-Version: 2.1
+                Name: simple-launcher
+                Version: 0.1.0
+                Requires-Python: >=3.8
+            "},
+            ..,
+        )
         .await;
 }
 
