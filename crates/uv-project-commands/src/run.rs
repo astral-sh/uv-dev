@@ -96,6 +96,7 @@ pub async fn run(
     show_resolution: bool,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
+    isolated_lock: bool,
     active: ActiveEnvironment,
     no_sync: bool,
     isolated: bool,
@@ -242,6 +243,8 @@ pub async fn run(
                 LockMode::Frozen(frozen_source.into())
             } else if let LockCheck::Enabled(lock_check) = lock_check {
                 LockMode::Locked(environment.interpreter(), lock_check)
+            } else if isolated_lock {
+                LockMode::DryRun(environment.interpreter())
             } else {
                 LockMode::Write(environment.interpreter())
             };
@@ -756,7 +759,7 @@ pub async fn run(
                     LockMode::Frozen(frozen_source.into())
                 } else if let LockCheck::Enabled(lock_check) = lock_check {
                     LockMode::Locked(venv.interpreter(), lock_check)
-                } else if isolated {
+                } else if isolated || isolated_lock {
                     LockMode::DryRun(venv.interpreter())
                 } else {
                     LockMode::Write(venv.interpreter())
