@@ -708,6 +708,20 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             }
         }
 
+        if let BuildableSource::Dist(SourceDist::Registry(dist)) = source
+            && hashes.validation == HashValidation::None
+            && (hashes.collection != HashCollection::All || !dist.file.hashes.is_empty())
+            && let Some(metadata) = self
+                .client
+                .managed(|client| client.source_metadata(dist))
+                .await?
+        {
+            return Ok(ArchiveMetadata {
+                metadata: Metadata::from_metadata23(metadata).with_force_relative(true),
+                hashes: HashDigests::empty(),
+            });
+        }
+
         let url_hashes = if let BuildableSource::Dist(SourceDist::DirectUrl(dist)) = source {
             parse_url_hashes(&dist.url)
         } else if let BuildableSource::Url(SourceUrl::Direct(url)) = source {

@@ -18,13 +18,14 @@ use url::Url;
 
 use uv_auth::{CredentialsCache, Indexes};
 use uv_cache::{Cache, CacheBucket, CacheEntry, WheelCache};
+use uv_cache_key::cache_digest;
 use uv_configuration::IndexStrategy;
 use uv_configuration::KeyringProviderType;
 use uv_distribution_filename::{DistFilename, WheelFilename};
 use uv_distribution_types::{
     BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations,
     IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl, Name,
-    RegistryBuiltWheel,
+    RegistryBuiltWheel, RegistrySourceDist,
 };
 use uv_extract::hash::Hasher;
 use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
@@ -1059,6 +1060,103 @@ impl RegistryClient {
         })
         .await
         .map_err(|err| ErrorKind::Io(err.into()))?
+    }
+
+    /// Fetch static source metadata advertised through the Simple API.
+    ///
+    /// An absent, unavailable, or dynamic sidecar leaves source extraction to the caller. Declared
+    /// sidecar hashes are checked before parsed metadata can enter the cache.
+    pub async fn source_metadata(
+        &self,
+        dist: &RegistrySourceDist,
+    ) -> Result<Option<ResolutionMetadata>, Error> {
+        let Some(hashes) = &dist.file.dist_info_metadata else {
+            return Ok(None);
+        };
+        let mut url = dist.file.url.to_url().map_err(ErrorKind::InvalidUrl)?;
+        if url.scheme() == "file" {
+            return Ok(None);
+        }
+        let metadata_path = format!("{}.metadata", url.path());
+        url.set_path(&metadata_path);
+        let cache_key = cache_digest(&(
+            url.to_string(),
+            hashes.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ));
+        let cache_entry = self.cache.entry(
+            CacheBucket::SourceDistributions,
+            WheelCache::Index(&dist.index)
+                .wheel_dir(dist.name.as_ref())
+                .join(dist.version.to_string()),
+            format!("core-metadata-{cache_key}.msgpack"),
+        );
+        let cache_control = match self.connectivity {
+            Connectivity::Online
+                if let Some(header) = self.indexes.artifact_cache_control_for(&dist.index) =>
+            {
+                CacheControl::Override(header)
+            }
+            Connectivity::Online => CacheControl::from(
+                self.cache
+                    .freshness(&cache_entry, Some(&dist.name), None)
+                    .map_err(ErrorKind::Io)?,
+            ),
+            Connectivity::Offline => CacheControl::AllowStale,
+        };
+        let response_callback = async |response: Response, _: &mut RetryState| {
+            let bytes = response.bytes().await.map_err(|err| {
+                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
+            })?;
+            for expected in hashes.iter() {
+                let mut hasher = Hasher::from(expected.algorithm());
+                hasher.update(&bytes);
+                let actual = HashDigest::from(hasher);
+                if &actual != expected {
+                    return Err(Error::from(ErrorKind::MetadataHashMismatch {
+                        url: url.clone(),
+                        expected: expected.clone(),
+                        actual,
+                    }));
+                }
+            }
+            let metadata = match ResolutionMetadata::parse_pkg_info(&bytes) {
+                Ok(metadata) => metadata,
+                Err(err) => {
+                    debug!("Ignoring non-static source metadata at {url}: {err}");
+                    return Ok(None);
+                }
+            };
+            if metadata.name != dist.name
+                || (metadata.version != dist.version
+                    && metadata.version.clone().without_local() != dist.version)
+            {
+                debug!("Ignoring mismatched source metadata at {url}");
+                return Ok(None);
+            }
+            Ok(Some(metadata))
+        };
+        let request = self
+            .uncached_client(&url)
+            .get(Url::from(url.clone()))
+            .build()
+            .map_err(|err| {
+                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
+            })?;
+        let result: Result<Option<ResolutionMetadata>, Error> = self
+            .cached_client()
+            .get_serde_with_retry(request, &cache_entry, cache_control, response_callback)
+            .await
+            .map_err(Into::into);
+        match result {
+            Err(err)
+                if err.is_offline()
+                    || matches!(err.kind(), ErrorKind::WrappedReqwestError(_, error)
+                        if error.status() == Some(StatusCode::NOT_FOUND)) =>
+            {
+                Ok(None)
+            }
+            result => result,
+        }
     }
 
     /// Fetch the metadata from a wheel file.
