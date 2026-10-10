@@ -6,7 +6,7 @@ use uv_cache::Cache;
 use uv_configuration::NoSources;
 use uv_distribution_types::{IndexLocations, Requirement};
 use uv_normalize::{GroupName, PackageName};
-use uv_workspace::dependency_groups::FlatDependencyGroups;
+use uv_workspace::dependency_groups::{FlatDependencyGroups, ImportedGroupRequirement};
 use uv_workspace::pyproject::{Sources, ToolUvSources};
 use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache, WorkspaceError,
@@ -93,9 +93,23 @@ impl SourcedDependencyGroups {
         let project =
             VirtualProject::discover(project_dir, &discovery, cache, workspace_cache).await?;
 
+        let project =
+            if !no_sources.is_none() && project.pyproject_toml().has_workspace_group_includes() {
+                let discovery = DiscoveryOptions {
+                    members: MemberDiscovery::Existing,
+                    ..discovery
+                };
+                VirtualProject::discover(project_dir, &discovery, cache, workspace_cache).await?
+            } else {
+                project
+            };
+
         // Collect the dependency groups.
-        let dependency_groups =
-            FlatDependencyGroups::from_pyproject_toml(project.root(), project.pyproject_toml())?;
+        let dependency_groups = FlatDependencyGroups::from_workspace(
+            project.root(),
+            project.pyproject_toml(),
+            project.workspace(),
+        )?;
 
         // Early return if all sources are disabled
         if matches!(no_sources, NoSources::All) {
@@ -106,7 +120,7 @@ impl SourcedDependencyGroups {
                     .map(|(name, group)| {
                         let requirements = group
                             .requirements
-                            .into_iter()
+                            .into_requirements()
                             .map(Requirement::from)
                             .collect();
                         (name, requirements)
@@ -115,18 +129,8 @@ impl SourcedDependencyGroups {
             });
         }
 
-        // Collect any `tool.uv.index` entries.
-        let empty = vec![];
-        let project_indexes = project
-            .pyproject_toml()
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.index.as_deref())
-            .unwrap_or(&empty);
-
         // Collect any `tool.uv.sources` and `tool.uv.dev_dependencies` from `pyproject.toml`.
-        let empty = BTreeMap::default();
+        let empty_sources = BTreeMap::default();
         let project_sources = project
             .pyproject_toml()
             .tool
@@ -134,7 +138,7 @@ impl SourcedDependencyGroups {
             .and_then(|tool| tool.uv.as_ref())
             .and_then(|uv| uv.sources.as_ref())
             .map(ToolUvSources::inner)
-            .unwrap_or(&empty);
+            .unwrap_or(&empty_sources);
 
         // Now that we've resolved the dependency groups, we can validate that each source references
         // a valid extra or group, if present.
@@ -144,22 +148,64 @@ impl SourcedDependencyGroups {
         let mut lowered_dependency_groups = BTreeMap::new();
         for (name, group) in dependency_groups {
             let mut requirements = Vec::new();
-            for requirement in group.requirements {
+            let (local, imported) = group.requirements.partition();
+            let owned_requirements = local
+                .into_iter()
+                .map(|requirement| (requirement, None))
+                .chain(imported.into_iter().map(
+                    |ImportedGroupRequirement {
+                         requirement,
+                         package,
+                         group,
+                     }| { (requirement, Some((package, group))) },
+                ));
+            for (requirement, owner) in owned_requirements {
                 if no_sources.for_package(&requirement.name) {
                     requirements.push(Requirement::from(requirement));
                     continue;
                 }
 
+                // Non-project imports retain the member and group that own their source mappings.
+                // The flattened requirement already contains every inclusion marker.
+                let (owner_name, owner_root, owner_pyproject, source_group) =
+                    if let Some((package, source_group)) = &owner
+                        && let Some(member) = project.workspace().packages().get(package)
+                    {
+                        (
+                            Some(&member.project().name),
+                            member.root().as_path(),
+                            member.pyproject_toml(),
+                            source_group.clone(),
+                        )
+                    } else {
+                        (
+                            project.project_name(),
+                            project.root(),
+                            project.pyproject_toml(),
+                            name.clone(),
+                        )
+                    };
+                let owner_settings = owner_pyproject
+                    .tool
+                    .as_ref()
+                    .and_then(|tool| tool.uv.as_ref());
+                let owner_sources = owner_settings
+                    .and_then(|uv| uv.sources.as_ref())
+                    .map(ToolUvSources::inner)
+                    .unwrap_or(&empty_sources);
+                let owner_indexes = owner_settings
+                    .and_then(|uv| uv.index.as_deref())
+                    .unwrap_or(&[]);
                 let requirement_name = requirement.name.clone();
                 requirements.extend(
                     LoweredRequirement::from_requirement(
                         requirement,
-                        project.project_name(),
-                        project.root(),
-                        project_sources,
-                        project_indexes,
+                        owner_name,
+                        owner_root,
+                        owner_sources,
+                        owner_indexes,
                         None,
-                        Some(&name),
+                        Some(&source_group),
                         locations,
                         project.workspace(),
                         git_member,

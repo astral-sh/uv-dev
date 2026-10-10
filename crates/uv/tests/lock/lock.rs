@@ -31043,7 +31043,7 @@ fn lock_unsupported_version() -> Result<()> {
     // Validate schema, invalid version.
     context.temp_dir.child("uv.lock").write_str(
         r#"
-        version = 2
+        version = 3
         requires-python = ">=3.12"
 
         [options]
@@ -31074,13 +31074,13 @@ fn lock_unsupported_version() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--frozen"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` uses an unsupported schema version (v2, but only v1 is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`.
+    error: The lockfile at `uv.lock` uses an unsupported schema version (v3, supported versions are v1 through v2). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`.
     ");
 
     // Invalid schema (`iniconfig` is referenced, but missing), invalid version.
     context.temp_dir.child("uv.lock").write_str(
         r#"
-        version = 2
+        version = 3
         requires-python = ">=3.12"
 
         [options]
@@ -31102,7 +31102,7 @@ fn lock_unsupported_version() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--frozen"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse `uv.lock`, which uses an unsupported schema version (v2, but only v1 is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`.
+    error: Failed to parse `uv.lock`, which uses an unsupported schema version (v3, supported versions are v1 through v2). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`.
       cause: Dependency `iniconfig` has missing `source` field but has more than one matching package
     ");
 
@@ -48680,5 +48680,658 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
+    Ok(())
+}
+
+/// Conflicts declared by named members apply to groups that include their dependencies.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_member_group_include_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [tool.uv.workspace]
+            members = ["child", "tools"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("tools")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "tools"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            test = [{ include-group = "base" }]
+            base = ["sortedcontainers==2.3.0"]
+            other = ["sortedcontainers==2.4.0"]
+
+            [tool.uv]
+            conflicts = [[{ group = "base" }, { group = "other" }]]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("include-group-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Workspace-group conflicts also apply to member groups that include them transitively.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_group_include_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            lint = [{ include-group = "format" }]
+            format = ["sortedcontainers==2.3.0"]
+            other = ["sortedcontainers==2.4.0"]
+
+            [tool.uv]
+            conflicts = [[{ group = "format" }, { group = "other" }]]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            lint = []
+            dev = [{ include-group = "lint" }]
+
+            [tool.uv.dependency-groups]
+            lint = { include-workspace-groups = ["lint"] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("include-group-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Conflict propagation follows group inclusion depth even when it exceeds the member count.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_group_deep_conflict_propagation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "deep-member-group-conflicts"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        [packages.example.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["a", "b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        g1 = []
+        g2 = ["example==1.0.0"]
+        other = ["example==2.0.0"]
+        [tool.uv]
+        conflicts = [[{ group = "g2" }, { group = "other" }]]
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = [{ package = "b", group = "g0" }] }
+        g1 = { include-workspace-groups = [{ package = "b", group = "g1" }] }
+    "#})?;
+    context
+        .temp_dir
+        .child("b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        g0 = []
+        g1 = []
+        [tool.uv.dependency-groups]
+        g0 = { include-workspace-groups = [{ package = "a", group = "g1" }] }
+        g1 = { include-workspace-groups = [{ package = "a", group = "g2" }] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A non-project root retains the conflict scope of included member groups and root aliases.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_nonproject_group_include_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "nonproject-root-group-conflicts"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        [packages.example.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        lint = [{ include-group = "check" }]
+        check = []
+        [tool.uv.dependency-groups]
+        check = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["tools", "child"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+        other = ["example==2.0.0"]
+        [tool.uv]
+        conflicts = [[{ group = "test" }, { group = "other" }]]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = ["lint"] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 2
+    revision = 5
+    requires-python = ">=3.12"
+    conflicts = [[
+        { package = "tools", group = "other" },
+        { package = "tools", group = "test" },
+    ], [
+        { package = "child", group = "dev" },
+        { package = "tools", group = "other" },
+    ]]
+
+    [manifest]
+    members = [
+        "child",
+        "tools",
+    ]
+
+    [manifest.dependency-groups]
+    check = []
+    lint = []
+
+    [manifest.dependency-group-includes]
+    check = [{ package = "tools", group = "test" }]
+    lint = [{ package = "tools", group = "test" }]
+
+    [[package]]
+    name = "child"
+    version = "0.1.0"
+    source = { virtual = "child" }
+
+    [package.dev-dependencies]
+    dev = [
+        { name = "example", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+    ]
+
+    [package.metadata]
+
+    [package.metadata.requires-dev]
+    dev = [{ name = "example", specifier = "==1.0.0" }]
+
+    [[package]]
+    name = "example"
+    version = "1.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-any.whl", hash = "sha256:b7afa474387cab6d91b2c82e69a9784a246413f090aa97e7ce63a5e6a14e6268", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "example"
+    version = "2.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/example-2.0.0-py3-none-any.whl", hash = "sha256:863c55eed676a5cf37adbad0b27ca4e1360b324cbd354bf73af87718ec9bef03", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "tools"
+    version = "0.1.0"
+    source = { virtual = "tools" }
+
+    [package.dev-dependencies]
+    other = [
+        { name = "example", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+    ]
+    test = [
+        { name = "example", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+    ]
+
+    [package.metadata]
+
+    [package.metadata.requires-dev]
+    other = [{ name = "example", specifier = "==2.0.0" }]
+    test = [{ name = "example", specifier = "==1.0.0" }]
+    "#);
+    });
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--no-hashes", "--no-header"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tools v0.1.0
+    └── example v1.0.0 (group: test)
+    child v0.1.0
+    "#);
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--only-group", "other", "--no-hashes", "--no-header"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Groups `other` and `test` are incompatible with the conflicts: {`tools:other`, `tools:test`}
+    "#);
+
+    Ok(())
+}
+
+/// Root group aliases retain their Python conditions when referencing member groups.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_nonproject_group_include_markers() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let scenario = toml::from_str(indoc! {r#"
+        name = "nonproject-root-group-markers"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [dependency-groups]
+        lint = [{ include-group = "check" }]
+        check = []
+        legacy = []
+        empty = []
+        [tool.uv.dependency-groups]
+        check = { requires-python = ">=3.13", include-workspace-groups = [{ package = "tools", group = "test" }] }
+        legacy = { requires-python = "<3.13", include-workspace-groups = [{ package = "tools", group = "test" }] }
+        empty = { requires-python = ">=3.14", include-workspace-groups = [{ package = "tools", group = "empty" }] }
+        [tool.uv.workspace]
+        members = ["tools"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+        empty = []
+    "#})?;
+    context
+        .lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 2
+        revision = 5
+        requires-python = ">=3.12"
+
+        [manifest]
+        members = [
+            "tools",
+        ]
+
+        [manifest.dependency-groups]
+        check = []
+        empty = []
+        legacy = []
+        lint = []
+
+        [manifest.dependency-group-includes]
+        check = [{ package = "tools", group = "test", marker = "python_full_version >= '3.13'" }]
+        empty = [{ package = "tools", group = "empty", marker = "python_full_version >= '3.14'" }]
+        legacy = [{ package = "tools", group = "test", marker = "python_full_version < '3.13'" }]
+        lint = [{ package = "tools", group = "test", marker = "python_full_version >= '3.13'" }]
+
+        [manifest.group-requires-python]
+        check = ">=3.13"
+        empty = ">=3.14"
+        legacy = "<3.13"
+        lint = ">=3.13"
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-any.whl", hash = "sha256:b7afa474387cab6d91b2c82e69a9784a246413f090aa97e7ce63a5e6a14e6268", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tools"
+        version = "0.1.0"
+        source = { virtual = "tools" }
+
+        [package.dev-dependencies]
+        test = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+
+        [package.metadata.requires-dev]
+        empty = []
+        test = [{ name = "example", specifier = "==1.0.0" }]
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--locked", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--no-hashes", "--no-header"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0 ; python_full_version >= '3.13'
+    "#);
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--only-group", "legacy", "--no-hashes", "--no-header"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--python-version", "3.12"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tools v0.1.0
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    "#);
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--python-version", "3.13"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tools v0.1.0
+    └── example v1.0.0 (group: test)
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    "#);
+    Ok(())
+}
+
+/// Imported members do not inherit a selected project's unrelated group names.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_group_include_selected_member_scope() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "selected-member-group-includes"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        [packages.unrelated.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["tools", "child"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example"]
+        lint = ["unrelated"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_snapshot!(lock["version"].to_string(), @"2");
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--package", "child", "--only-group", "lint", "--no-hashes", "--no-header", "--no-annotate"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--package", "child", "--only-group", "lint"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    "#);
+    Ok(())
+}
+
+/// Imported requirements use the source mapping of the member that declares them.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_group_include_uses_member_workspace_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["tools", "lib"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["lib"]
+        [tool.uv.sources]
+        lib = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("lib/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "lib"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--locked", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tools v0.1.0
+    └── lib v0.1.0 (group: test)
+    lib v0.1.0
+    ");
     Ok(())
 }

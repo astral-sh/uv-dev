@@ -74,7 +74,8 @@ impl<'lock> ExportableRequirements<'lock> {
             .map(|root| (root, InstallableRootKind::Production))
             .chain(
                 target
-                    .group_root(groups)
+                    .group_roots(groups)
+                    .into_iter()
                     .map(|root| (root, InstallableRootKind::DependencyGroups)),
             )
         {
@@ -136,10 +137,11 @@ impl<'lock> ExportableRequirements<'lock> {
                 })
                 .flatten()
             {
-                // Track the activated group in the list of known conflicts.
+                let group_marker = target.group_marker(&dist.id.name, group, groups);
+                // Track the environments where the selected group participates in conflicts.
                 activated_items.insert(
                     ConflictItem::from((dist.id.name.clone(), group.clone())),
-                    MarkerTree::TRUE,
+                    group_marker,
                 );
 
                 if prune.contains(&dep.package_id.name) {
@@ -160,7 +162,10 @@ impl<'lock> ExportableRequirements<'lock> {
                     dep_index,
                     Edge::Dev {
                         group,
-                        marker: dep.simplified_marker.as_simplified_marker_tree(),
+                        marker: dep
+                            .simplified_marker
+                            .as_simplified_marker_tree()
+                            .and(group_marker),
                         dep_extras: dep.extra.iter().collect(),
                     },
                 );

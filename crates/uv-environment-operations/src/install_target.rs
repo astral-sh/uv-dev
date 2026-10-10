@@ -201,13 +201,22 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         includes_root_group.then_some(root.name())
     }
 
-    fn includes_group(
+    fn directly_includes_group(
         &self,
         package: Option<&PackageName>,
         group: &GroupName,
         groups: &DependencyGroupsWithDefaults,
     ) -> bool {
         if !groups.contains(group) {
+            return false;
+        }
+
+        // Included members contribute only their referenced groups. Direct selection applies to
+        // the original targets and, when present, the inherited workspace-root project.
+        if package.is_some_and(|package| {
+            !self.roots().any(|root| root == package)
+                && self.lock().root().is_none_or(|root| root.name() != package)
+        }) {
             return false;
         }
 
@@ -543,7 +552,7 @@ impl<'lock> InstallTarget<'lock> {
                                 .flat_map(|dependency_groups| {
                                     dependency_groups
                                         .into_values()
-                                        .flat_map(|group| group.requirements)
+                                        .flat_map(|group| group.requirements.into_requirements())
                                         .map(Cow::Owned)
                                 }),
                         )
@@ -755,10 +764,9 @@ impl<'lock> InstallTarget<'lock> {
                 // Groups defined directly on a non-project workspace root are not members.
                 let workspace_groups = workspace
                     .is_non_project()
-                    .then(|| workspace.workspace_dependency_groups().ok())
-                    .flatten()
+                    .then_some(lock.dependency_groups())
                     .into_iter()
-                    .flat_map(|dependency_groups| dependency_groups.into_keys().map(Cow::Owned));
+                    .flat_map(|dependency_groups| dependency_groups.keys().map(Cow::Borrowed));
 
                 let known_groups = member_groups
                     .chain(workspace_groups)
@@ -820,7 +828,8 @@ impl<'lock> InstallTarget<'lock> {
                     .copied()
                     .map(|name| (name, InstallableRootKind::Production))
                     .chain(
-                        self.group_root(groups)
+                        self.group_roots(groups)
+                            .into_iter()
                             .map(|name| (name, InstallableRootKind::DependencyGroups)),
                     )
                 {

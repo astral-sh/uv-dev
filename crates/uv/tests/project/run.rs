@@ -7039,6 +7039,766 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
     Ok(())
 }
 
+/// Workspace members can include differently named groups from a project-backed workspace root.
+#[test]
+fn run_target_workspace_discovery_workspace_project_group_include() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            lint = [{ include-group = "format" }]
+            format = ["idna"]
+            dev = ["sniffio"]
+            replaced = ["sniffio"]
+
+            [tool.uv.dependency-groups]
+            lint = { requires-python = ">=3.12" }
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    let child = context.temp_dir.child("child");
+    child.child("pyproject.toml").write_str(indoc! { r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["six"]
+        replaced = ["packaging"]
+
+        [tool.uv.dependency-groups]
+        dev = { requires-python = ">=3.12", include-workspace-groups = ["lint"] }
+        "#
+    })?;
+
+    child
+        .child("scripts")
+        .child("groups.py")
+        .write_str(indoc! { r#"
+            import importlib.util
+
+            installed = [
+                package
+                for package in ("idna", "six", "packaging", "sniffio")
+                if importlib.util.find_spec(package) is not None
+            ]
+            print(f"installed: {', '.join(installed)}")
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--isolated")
+        .arg("--only-group")
+        .arg("dev")
+        .arg("child/scripts/groups.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: idna, six
+
+    ----- stderr -----
+    warning: Including workspace dependency groups (`[tool.uv.dependency-groups]` with `include-workspace-groups = [...]`) is experimental and may change without warning. Pass `--preview-features include-group-workspace` to disable this warning.
+    Resolved 6 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + idna==3.6
+     + six==1.16.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .arg("--package")
+        .arg("child")
+        .arg("--only-group")
+        .arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + idna==3.6
+     + six==1.16.0
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .args(["--no-header", "--no-hashes", "--no-annotate"])
+        .arg("--package")
+        .arg("child")
+        .arg("--only-group")
+        .arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    idna==3.6
+    six==1.16.0
+
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .arg("--isolated")
+        .arg("--only-group")
+        .arg("replaced")
+        .arg("child/scripts/groups.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: packaging
+
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + packaging==24.0
+    ");
+
+    Ok(())
+}
+
+/// Member groups can include multiple differently named workspace-root groups.
+#[test]
+fn run_target_workspace_discovery_workspace_group_includes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [dependency-groups]
+            lint = ["idna"]
+            test = ["six"]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = ["packaging"]
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = ["lint", "test"] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .arg("--package")
+        .arg("child")
+        .arg("--only-group")
+        .arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + idna==3.6
+     + packaging==24.0
+     + six==1.16.0
+    ");
+
+    Ok(())
+}
+
+/// Member groups can include both root groups and groups from named workspace members.
+#[test]
+fn run_target_workspace_discovery_workspace_member_group_include() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [dependency-groups]
+            lint = ["idna"]
+
+            [tool.uv.workspace]
+            members = ["child", "tools"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("tools")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "tools"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            test = ["six"]
+
+            [tool.uv.dependency-groups]
+            test = { include-workspace-groups = ["lint"] }
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = ["packaging"]
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = ["lint", { package = "tools", group = "test" }] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .arg("--package")
+        .arg("child")
+        .arg("--only-group")
+        .arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + idna==3.6
+     + packaging==24.0
+     + six==1.16.0
+    ");
+
+    Ok(())
+}
+
+/// Different groups can include each other across the same workspace members.
+#[test]
+fn run_target_workspace_discovery_workspace_member_group_include_reentrant() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [tool.uv.workspace]
+            members = ["child", "tools"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("tools")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "tools"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            test = ["six"]
+
+            [tool.uv.dependency-groups]
+            test = { include-workspace-groups = [{ package = "child", group = "other" }] }
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = []
+            other = ["packaging"]
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .arg("--package")
+        .arg("child")
+        .arg("--only-group")
+        .arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + packaging==24.0
+     + six==1.16.0
+    ");
+
+    Ok(())
+}
+
+/// Python requirements from named workspace-member groups apply to including groups.
+#[test]
+fn run_target_workspace_discovery_workspace_member_group_include_requires_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [tool.uv.workspace]
+            members = ["child", "tools"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("tools")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "tools"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            test = []
+
+            [tool.uv.dependency-groups]
+            test = { requires-python = ">=3.13" }
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .arg("--package")
+        .arg("child")
+        .arg("--only-group")
+        .arg("dev")
+        .arg("python")
+        .arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.13.[X]
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Invalid named-member references identify the missing package or group.
+#[test]
+fn run_target_workspace_discovery_workspace_member_group_include_missing() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [tool.uv.workspace]
+            members = ["child", "tools"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("tools")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "tools"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            "#
+        })?;
+
+    let child = context.temp_dir.child("child").child("pyproject.toml");
+    child.write_str(indoc! { r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = [{ package = "missing", group = "test" }] }
+        "#
+    })?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("include-group-workspace"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `child @ child` has malformed dependency groups
+      cause: Failed to find workspace package `missing` included by `dev`
+    ");
+
+    child.write_str(indoc! { r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = [{ package = "tools", group = "missing" }] }
+        "#
+    })?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("include-group-workspace"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `child @ child` has malformed dependency groups
+      cause: Failed to find group `missing` in workspace package `tools` included by `dev`
+    ");
+
+    Ok(())
+}
+
+/// Cycles between named workspace-member group references are reported.
+#[test]
+fn run_target_workspace_discovery_workspace_member_group_include_cycle() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [tool.uv.workspace]
+            members = ["child", "tools"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("tools")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "tools"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            test = []
+
+            [tool.uv.dependency-groups]
+            test = { include-workspace-groups = [{ package = "child", group = "dev" }] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("include-group-workspace"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `child @ child` has malformed dependency groups
+      cause: Detected a cycle in workspace dependency groups: `child:dev` -> `tools:test` -> `child:dev`
+    ");
+
+    Ok(())
+}
+
+/// Workspace members can also include groups from a non-project workspace root.
+#[test]
+fn run_target_workspace_discovery_virtual_workspace_group_include() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [dependency-groups]
+            lint = ["idna"]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = ["six"]
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = ["lint"] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .arg("--package")
+        .arg("child")
+        .arg("--only-group")
+        .arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + idna==3.6
+     + six==1.16.0
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .args(["--no-header", "--no-hashes", "--no-annotate"])
+        .arg("--package")
+        .arg("child")
+        .arg("--only-group")
+        .arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    idna==3.6
+    six==1.16.0
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// A workspace group's Python requirement also applies to a member group that includes it.
+#[test]
+fn run_target_workspace_discovery_workspace_group_include_requires_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            lint = []
+
+            [tool.uv.dependency-groups]
+            lint = { requires-python = ">=3.13" }
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = ["lint"] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .arg("--package")
+        .arg("child")
+        .arg("--only-group")
+        .arg("dev")
+        .arg("python")
+        .arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.13.[X]
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Missing workspace-root groups are reported separately from missing local groups.
+#[test]
+fn run_target_workspace_discovery_workspace_group_include_missing() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = ["lint"] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("include-group-workspace"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `child @ child` has malformed dependency groups
+      cause: Failed to find workspace group `lint` included by `dev`
+    ");
+
+    Ok(())
+}
+
+/// Workspace-group includes are not valid for standalone projects or the workspace root itself.
+#[test]
+fn run_target_workspace_discovery_workspace_group_include_without_workspace() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { include-workspace-groups = ["lint"] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("include-group-workspace"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `project` has malformed dependency groups
+      cause: Group `dev` includes workspace group `lint`, but this project is not a workspace member
+    ");
+
+    Ok(())
+}
+
 /// Non-project workspace roots retain manifest-level groups even for selected members.
 #[test]
 fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
@@ -7889,5 +8649,166 @@ fn run_centralized_environment_path_file() -> Result<()> {
     ----- stderr -----
     warning: Using incompatible environment (`project-cp3.12.[X]-[HASH]`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.11`)
     "#);
+    Ok(())
+}
+
+/// Root-group aliases compose with named member includes during locking and freshness checks.
+#[test]
+fn run_workspace_group_root_includes_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "root-member-groups"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["child", "tools"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+        [tool.uv.dependency-groups]
+        test = { requires-python = ">=3.12" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = ["lint"] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "include-group-workspace", "--package", "child", "--only-group", "dev", "--locked"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .args(["python", "-c", "import example; print(example.__version__)"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    ");
+    Ok(())
+}
+
+/// Non-project root groups can include member groups during locking and execution.
+#[test]
+fn run_workspace_group_nonproject_root_includes_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "nonproject-root-member-groups"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["tools"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+        [tool.uv.dependency-groups]
+        test = { requires-python = ">=3.12" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "include-group-workspace", "--only-group", "lint", "--locked"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .args(["python", "-c", "import example; print(example.__version__)"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    ");
     Ok(())
 }

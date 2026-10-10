@@ -20030,3 +20030,288 @@ fn overrides_preserve_alternative_optional_extras() -> Result<()> {
 
     Ok(())
 }
+
+/// Disabled source overrides still permit groups to include ordinary requirements from members.
+#[test]
+fn project_and_group_workspace_includes_without_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "member-groups-without-sources"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["child", "tools", "absent"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--no-sources", "--no-header", "--group", "child/pyproject.toml:dev"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+        # via child (child/pyproject.toml:dev)
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--no-sources-package", "child", "--no-header", "--group", "child/pyproject.toml:dev"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+        # via child (child/pyproject.toml:dev)
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./child\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--no-sources", "--no-header", "requirements.in"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+        exit_code: 0 (success)
+        ----- stdout -----
+        ./child
+            # via -r requirements.in
+
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        ");
+    Ok(())
+}
+
+/// Resolving one root group must not cache an incomplete legacy-only `dev` group.
+#[test]
+fn project_and_group_workspace_includes_modern_and_legacy_dev() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "workspace-modern-legacy-dev"
+        [root]
+        requires = ["example", "other"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        [packages.other.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        lint = []
+        dev = ["example==1.0.0"]
+        [tool.uv]
+        dev-dependencies = ["other==2.0.0"]
+        [tool.uv.workspace]
+        members = ["child"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = ["lint", "dev"] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--no-header", "--group", "child/pyproject.toml:dev"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+        # via child (child/pyproject.toml:dev)
+    other==2.0.0
+        # via child (child/pyproject.toml:dev)
+
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Resolved 2 packages in [TIME]
+    ");
+
+    context.temp_dir.child("child/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        dev = []
+        [tool.uv.dependency-groups]
+        dev = { include-workspace-groups = [{ package = "root", group = "lint" }, { package = "root", group = "dev" }] }
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--no-header", "--group", "child/pyproject.toml:dev"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+        # via child (child/pyproject.toml:dev)
+    other==2.0.0
+        # via child (child/pyproject.toml:dev)
+
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Imported groups retain their member's source mapping and source-specific group selection.
+#[test]
+fn project_group_workspace_include_uses_member_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["tools", "lib"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["lib"]
+        [tool.uv.sources]
+        lib = { workspace = true, group = "test" }
+    "#})?;
+    context
+        .temp_dir
+        .child("lib/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "lib"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--offline", "--group", "lint", "--no-header", "--no-annotate"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e file://[TEMP_DIR]/lib
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Imported groups use their member's index while retaining the importing group's Python marker.
+#[cfg(feature = "test-universal")]
+#[test]
+fn project_group_workspace_include_uses_member_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "pip-group-member-index-and-markers"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = {{ requires-python = ">=3.13", include-workspace-groups = [{{ package = "tools", group = "test" }}] }}
+        [tool.uv.workspace]
+        members = ["tools"]
+        [[tool.uv.index]]
+        name = "owner"
+        url = "{}/missing/"
+        explicit = true
+    "#, server.index_url()})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+        [tool.uv.sources]
+        example = {{ index = "owner", group = "test" }}
+        [[tool.uv.index]]
+        name = "owner"
+        url = "{}"
+        explicit = true
+    "#, server.index_url()})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--preview-features", "include-group-workspace", "--group", "lint", "--universal", "--python-version", "3.12", "--no-header", "--no-annotate"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0 ; python_full_version >= '3.13'
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    Ok(())
+}

@@ -2,7 +2,7 @@
 
 use std::assert_matches;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Display;
@@ -24,7 +24,9 @@ use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
 use uv_once_map::OnceMap;
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerTree, VerbatimUrl};
-use uv_pypi_types::{ConflictError, Conflicts, SupportedEnvironments, VerbatimParsedUrl};
+use uv_pypi_types::{
+    ConflictError, Conflicts, DependencyGroupSpecifier, SupportedEnvironments, VerbatimParsedUrl,
+};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
@@ -868,6 +870,81 @@ impl Workspace {
         for member in self.packages.values() {
             conflicting.append(&mut member.pyproject_toml.conflicts()?);
         }
+        let root_package = self
+            .pyproject_toml()
+            .project
+            .as_ref()
+            .map(|project| &project.name);
+        if let Some(package) = root_package
+            && let Some(groups) = &self.pyproject_toml().dependency_groups
+        {
+            conflicting.expand_transitive_group_includes(package, groups);
+        }
+
+        loop {
+            let initial_conflict_count = conflicting.iter().count();
+            for (package, member) in self.packages() {
+                if let Some(groups) = &member.pyproject_toml().dependency_groups {
+                    for (group, _) in groups {
+                        let mut includes = member
+                            .pyproject_toml()
+                            .workspace_group_includes(group)
+                            .collect::<VecDeque<_>>();
+                        let mut seen = FxHashSet::default();
+                        while let Some((included_package, included_group)) = includes.pop_front() {
+                            if !seen.insert((included_package, included_group)) {
+                                continue;
+                            }
+                            let Some(included_package) = included_package.or(root_package) else {
+                                // A non-project root has no conflict identity of its own. Follow
+                                // its aliases until they reach a named member group.
+                                includes.extend(
+                                    self.pyproject_toml()
+                                        .workspace_group_includes(included_group),
+                                );
+                                if let Some(specifiers) = self
+                                    .pyproject_toml()
+                                    .dependency_groups
+                                    .as_ref()
+                                    .and_then(|groups| groups.get(included_group))
+                                {
+                                    includes.extend(specifiers.iter().filter_map(|specifier| {
+                                        if let DependencyGroupSpecifier::IncludeGroup {
+                                            include_group,
+                                        } = specifier
+                                        {
+                                            Some((None, include_group))
+                                        } else {
+                                            None
+                                        }
+                                    }));
+                                }
+                                continue;
+                            };
+                            if let Some(included_member) = self.packages().get(included_package)
+                                && let Some(included_groups) =
+                                    &included_member.pyproject_toml().dependency_groups
+                            {
+                                conflicting.expand_transitive_group_includes(
+                                    included_package,
+                                    included_groups,
+                                );
+                            }
+                            conflicting.expand_workspace_group_include(
+                                included_package,
+                                included_group,
+                                package,
+                                group,
+                                groups,
+                            );
+                        }
+                    }
+                }
+            }
+            if conflicting.iter().count() == initial_conflict_count {
+                break;
+            }
+        }
         Ok(conflicting)
     }
 
@@ -899,7 +976,7 @@ impl Workspace {
             // Get the requires-python for each enabled group on this package
             // We need to do full flattening here because include-group can transfer requires-python
             let dependency_groups =
-                FlatDependencyGroups::from_pyproject_toml(member.root(), &member.pyproject_toml)?;
+                FlatDependencyGroups::from_workspace(member.root(), &member.pyproject_toml, self)?;
             let group_requires =
                 dependency_groups
                     .into_iter()
@@ -958,9 +1035,10 @@ impl Workspace {
             Ok(BTreeMap::default())
         } else {
             // Otherwise, return the dependency groups in the non-project workspace root.
-            let dependency_groups = FlatDependencyGroups::from_pyproject_toml(
+            let dependency_groups = FlatDependencyGroups::from_workspace(
                 &self.install_path,
                 &self.pyproject_toml,
+                self,
             )?;
             Ok(dependency_groups.into_inner())
         }
@@ -3548,10 +3626,25 @@ mod tests {
 foo = ["a", {include-group = "bar"}]
 bar = ["b"]
 future = [{include-group = "bar", unknown = "value"}]
+workspace = ["c"]
+
+[tool.uv.dependency-groups]
+workspace = {include-workspace-groups = ["root", {package = "other", group = "test"}]}
 "#;
 
         let result = PyProjectToml::from_string(toml.to_string(), "pyproject.toml")
             .expect("Deserialization should succeed");
+
+        let workspace_group = GroupName::from_str("workspace").unwrap();
+        let root_group = GroupName::from_str("root").unwrap();
+        let other_package = PackageName::from_str("other").unwrap();
+        let test_group = GroupName::from_str("test").unwrap();
+        assert_eq!(
+            result
+                .workspace_group_includes(&workspace_group)
+                .collect::<Vec<_>>(),
+            vec![(None, &root_group), (Some(&other_package), &test_group)]
+        );
 
         let groups = result
             .dependency_groups
@@ -3586,6 +3679,14 @@ future = [{include-group = "bar", unknown = "value"}]
                 ("include-group".to_string(), "bar".to_string()),
                 ("unknown".to_string(), "value".to_string()),
             ]))]
+        );
+
+        let workspace = groups
+            .get(&workspace_group)
+            .expect("Group `workspace` should be present");
+        assert_eq!(
+            workspace,
+            &[DependencyGroupSpecifier::Requirement("c".to_string())]
         );
     }
 

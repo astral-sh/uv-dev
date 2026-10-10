@@ -68,7 +68,7 @@ use uv_resolver_types::{
 use uv_small_str::SmallString;
 use uv_types::{BuildContext, HashStrategy};
 use uv_warnings::warn_user_once;
-use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
+use uv_workspace::dependency_groups::{DependencyGroupError, WorkspaceGroupReference};
 use uv_workspace::{Editability, WorkspaceMember};
 
 pub use crate::lock::deserialize::Error as CanonicalLockError;
@@ -94,19 +94,23 @@ mod tree;
 #[cfg(test)]
 mod windows_emulation_tests;
 
-/// The current version of the lockfile format.
+/// The base version of the lockfile format.
 const VERSION: u32 = 1;
+// Reference-only workspace groups require readers that understand their activation context.
+const WORKSPACE_GROUP_VERSION: u32 = 2;
 
 /// An error returned when parsing a lockfile.
 #[derive(Debug, thiserror::Error)]
 pub enum LockParseError {
     /// The lockfile uses an unsupported schema version.
-    #[error("unsupported lockfile schema version (v{version}, but only v{supported} is supported)")]
+    #[error(
+        "unsupported lockfile schema version (v{version}, supported versions are v1 through v{supported})"
+    )]
     UnsupportedVersion { supported: u32, version: u32 },
 
     /// The lockfile cannot be parsed and uses an unsupported schema version.
     #[error(
-        "failed to parse lockfile using an unsupported schema version (v{version}, but only v{supported} is supported)"
+        "failed to parse lockfile using an unsupported schema version (v{version}, supported versions are v1 through v{supported})"
     )]
     UnparsableVersion {
         supported: u32,
@@ -312,12 +316,9 @@ pub(crate) struct HashedDist {
 pub struct Lock {
     /// The (major) version of the lockfile format.
     ///
-    /// Changes to the major version indicate backwards- and forwards-incompatible changes to the
-    /// lockfile format. A given uv version only supports a single major version of the lockfile
-    /// format.
-    ///
-    /// In other words, a version of uv that supports version 2 of the lockfile format will not be
-    /// able to read lockfiles generated under version 1 or 3.
+    /// Version 1 represents the base format. Version 2 additionally supports reference-only
+    /// workspace dependency groups, which older readers must reject instead of silently omitting
+    /// their dependencies. This reader supports both versions.
     version: u32,
     /// The revision of the lockfile format.
     ///
@@ -2673,6 +2674,11 @@ impl Lock {
         required_environments: Vec<MarkerTree>,
         fork_markers: Vec<UniversalMarker>,
     ) -> Result<Self, LockError> {
+        let version = if version == VERSION && !manifest.dependency_group_includes.is_empty() {
+            WORKSPACE_GROUP_VERSION
+        } else {
+            version
+        };
         // Put all dependencies for each package in a canonical order and
         // check for duplicates.
         for package in &mut packages {
@@ -2737,6 +2743,33 @@ impl Lock {
                     && dist.id.source.is_implicit_root());
             if is_member {
                 workspace_members.insert(dist.id.name.clone(), PackageIndex(index));
+            }
+        }
+
+        // Frozen consumers rely on every workspace-group reference naming a declared member group.
+        for (root_group, includes) in &manifest.dependency_group_includes {
+            if !manifest.dependency_groups.contains_key(root_group) {
+                return Err(LockErrorKind::UnknownWorkspaceRootGroup(root_group.clone()).into());
+            }
+            for included in includes {
+                let valid = workspace_members
+                    .get(&included.package)
+                    .is_some_and(|index| {
+                        let package = &packages[index.0];
+                        package.dependency_groups.contains_key(&included.group)
+                            || package
+                                .metadata
+                                .dependency_groups
+                                .contains_key(&included.group)
+                    });
+                if !valid {
+                    return Err(LockErrorKind::UnknownWorkspaceGroupInclude {
+                        root_group: root_group.clone(),
+                        package: included.package.clone(),
+                        group: included.group.clone(),
+                    }
+                    .into());
+                }
             }
         }
 
@@ -2862,16 +2895,16 @@ impl Lock {
     }
 
     /// Record member group metadata, including Python requirements inherited from included groups.
+    #[must_use]
     pub fn with_member_group_metadata(
         mut self,
-        packages: &BTreeMap<PackageName, WorkspaceMember>,
-    ) -> Result<Self, LockError> {
-        let mut metadata = collect_member_group_metadata(packages)?;
+        mut metadata: BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>,
+    ) -> Self {
         for (name, index) in &self.workspace_members {
             self.packages[index.0].group_requires_python =
                 metadata.remove(name).unwrap_or_default();
         }
-        Ok(self)
+        self
     }
 
     /// Record dependency group metadata for a workspace root without a `[project]` table.
@@ -2992,7 +3025,11 @@ impl Lock {
             // a `[project]` table).
             for package in self.packages() {
                 for (group_name, dependencies) in package.resolved_dependency_groups() {
-                    if groups.contains(group_name) {
+                    if groups.contains(group_name)
+                        || self.includes_workspace_group(package.name(), group_name, |group| {
+                            groups.contains(group)
+                        })
+                    {
                         for dependency in dependencies {
                             upgrade_packages.insert(dependency.package_name().clone());
                         }
@@ -3287,6 +3324,49 @@ impl Lock {
         &self.manifest.dependency_groups
     }
 
+    /// Return members referenced by selected dependency groups on a non-project root.
+    fn workspace_group_roots(
+        &self,
+        includes_root: impl Fn(&GroupName) -> bool,
+    ) -> BTreeSet<&PackageName> {
+        self.manifest
+            .dependency_group_includes
+            .iter()
+            .filter(|(group, _)| includes_root(group))
+            .flat_map(|(_, includes)| includes.iter().map(|included| &included.package))
+            .collect()
+    }
+
+    /// Return whether a selected non-project root group includes the given member group.
+    fn includes_workspace_group(
+        &self,
+        package: &PackageName,
+        group: &GroupName,
+        includes_root: impl Fn(&GroupName) -> bool,
+    ) -> bool {
+        !self
+            .workspace_group_marker(package, group, includes_root)
+            .is_false()
+    }
+
+    /// Return the environments where selected root groups include a member group.
+    fn workspace_group_marker(
+        &self,
+        package: &PackageName,
+        group: &GroupName,
+        includes_root: impl Fn(&GroupName) -> bool,
+    ) -> MarkerTree {
+        self.manifest
+            .dependency_group_includes
+            .iter()
+            .filter(|(root_group, _)| includes_root(root_group))
+            .flat_map(|(_, includes)| includes)
+            .filter(|included| &included.package == package && &included.group == group)
+            .fold(MarkerTree::FALSE, |marker, included| {
+                marker.or(included.marker)
+            })
+    }
+
     /// Returns the environment-specific direct dependency selections for a lock target.
     ///
     /// If `project_name` is provided, dependencies attached to that package are used. Otherwise,
@@ -3369,6 +3449,35 @@ impl Lock {
                         selection.extend_requirement(requirement);
                     }
                     groups.insert(group, selection);
+                }
+            }
+            for (group, includes) in &self.manifest.dependency_group_includes {
+                for included in includes {
+                    if !included.marker.evaluate(marker_environment, &[]) {
+                        continue;
+                    }
+                    let Some(member) = self.find_by_name(&included.package)? else {
+                        continue;
+                    };
+                    let Some(selection) = self.find_project_dependency_group(
+                        member,
+                        &included.group,
+                        dependency_name,
+                        marker_environment,
+                    )?
+                    else {
+                        continue;
+                    };
+                    if let Some(previous) = groups.get_mut(group) {
+                        if previous.package.id != selection.package.id {
+                            return Err(format!(
+                                "found multiple packages matching `{dependency_name}` in workspace dependency group `{group}`"
+                            ));
+                        }
+                        previous.extras.extend(selection.extras);
+                    } else {
+                        groups.insert(group, selection);
+                    }
                 }
             }
             (root, None, groups)
@@ -3645,7 +3754,12 @@ impl Lock {
                 for dep in package
                     .dependency_groups
                     .iter()
-                    .filter(|(group, _)| groups.contains(group))
+                    .filter(|(group, _)| {
+                        groups.contains(group)
+                            || self.includes_workspace_group(package.name(), group, |group| {
+                                groups.contains(group)
+                            })
+                    })
                     .flat_map(|(_, deps)| deps)
                 {
                     enqueue_dep(&mut seen, &mut queue, dep);
@@ -3783,10 +3897,10 @@ impl Lock {
                 Ok(lock) => lock,
                 Err(source) => {
                     if let Ok(lock) = toml::from_str::<LockVersion>(input)
-                        && lock.version() != VERSION
+                        && !matches!(lock.version(), VERSION | WORKSPACE_GROUP_VERSION)
                     {
                         return Err(LockParseError::UnparsableVersion {
-                            supported: VERSION,
+                            supported: WORKSPACE_GROUP_VERSION,
                             version: lock.version(),
                             source,
                         });
@@ -3796,9 +3910,9 @@ impl Lock {
             },
         };
 
-        if lock.version() != VERSION {
+        if !matches!(lock.version(), VERSION | WORKSPACE_GROUP_VERSION) {
             return Err(LockParseError::UnsupportedVersion {
-                supported: VERSION,
+                supported: WORKSPACE_GROUP_VERSION,
                 version: lock.version(),
             });
         }
@@ -4209,8 +4323,9 @@ impl Lock {
         overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
         build_constraints: &Constraints,
-        dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
+        dependency_groups: &BTreeMap<GroupName, RootDependencyGroup>,
         workspace_group_metadata: &BTreeMap<GroupName, GroupMetadata>,
+        member_group_metadata: &BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>,
         workspace_default_groups: Option<&DefaultGroups>,
         dependency_metadata: &DependencyMetadata,
         indexes: Option<&IndexLocations>,
@@ -4276,13 +4391,14 @@ impl Lock {
         }
 
         if let Some(actual) = self.member_group_metadata() {
-            let expected = collect_member_group_metadata(packages)?;
+            let expected = member_group_metadata;
             let actual = actual
                 .map(|(name, groups)| (name.clone(), groups.clone()))
                 .collect();
-            if expected != actual {
+            if *expected != actual {
                 return Ok(SatisfiesResult::MismatchedMemberGroupMetadata(
-                    expected, actual,
+                    expected.clone(),
+                    actual,
                 ));
             }
         }
@@ -4447,7 +4563,16 @@ impl Lock {
         }
 
         {
-            let expected = dependency_groups
+            let groups = ManifestDependencyGroups::from_requirements(
+                dependency_groups
+                    .iter()
+                    .map(|(group, requirements)| (group.clone(), requirements.clone())),
+            );
+            if groups.includes != self.manifest.dependency_group_includes {
+                return Ok(SatisfiesResult::MismatchedWorkspaceGroupIncludes);
+            }
+            let expected = groups
+                .requirements
                 .iter()
                 .filter(|(_, requirements)| !requirements.is_empty())
                 .map(|(group, requirements)| {
@@ -4510,9 +4635,11 @@ impl Lock {
         let root_requirements = dependency_modifiers
             .apply(
                 DependencyModifierScope::Global,
-                requirements
-                    .iter()
-                    .chain(dependency_groups.values().flatten()),
+                requirements.iter().chain(
+                    dependency_groups
+                        .values()
+                        .flat_map(|group| &group.requirements),
+                ),
             )
             .collect::<Vec<_>>();
         let dependency_sources = if allow_missing_package_metadata {
@@ -6156,6 +6283,8 @@ pub enum SatisfiesResult<'lock> {
         BTreeMap<GroupName, BTreeSet<Requirement>>,
         BTreeMap<GroupName, BTreeSet<Requirement>>,
     ),
+    /// The lockfile uses different workspace group references.
+    MismatchedWorkspaceGroupIncludes,
     /// The lockfile uses different static metadata.
     MismatchedStaticMetadata(BTreeSet<StaticMetadata>, &'lock BTreeSet<StaticMetadata>),
     /// The lockfile is missing a workspace member.
@@ -6318,6 +6447,9 @@ pub struct ResolverManifest {
     /// `[project]` table would be included here.
     #[serde(default)]
     dependency_groups: BTreeMap<GroupName, BTreeSet<Requirement>>,
+    /// Member groups included by groups on a non-project workspace root.
+    #[serde(default)]
+    dependency_group_includes: BTreeMap<GroupName, BTreeSet<WorkspaceGroupReference>>,
     /// The constraints provided to the resolver.
     #[serde(default)]
     constraints: BTreeSet<Requirement>,
@@ -6333,6 +6465,37 @@ pub struct ResolverManifest {
     /// The static metadata provided to the resolver.
     #[serde(default)]
     dependency_metadata: BTreeSet<StaticMetadata>,
+}
+
+/// Lowered declarations and workspace references for a non-project root dependency group.
+#[derive(Clone, Debug, Default)]
+pub struct RootDependencyGroup {
+    pub requirements: Vec<Requirement>,
+    pub workspace_includes: Vec<WorkspaceGroupReference>,
+}
+
+#[derive(Default)]
+struct ManifestDependencyGroups {
+    requirements: BTreeMap<GroupName, Vec<Requirement>>,
+    includes: BTreeMap<GroupName, BTreeSet<WorkspaceGroupReference>>,
+}
+
+impl ManifestDependencyGroups {
+    fn from_requirements(
+        groups: impl IntoIterator<Item = (GroupName, RootDependencyGroup)>,
+    ) -> Self {
+        let mut manifest = Self::default();
+        for (group, input) in groups {
+            if !input.workspace_includes.is_empty() {
+                manifest.includes.insert(
+                    group.clone(),
+                    input.workspace_includes.into_iter().collect(),
+                );
+            }
+            manifest.requirements.insert(group, input.requirements);
+        }
+        manifest
+    }
 }
 
 /// Omit entries equivalent to the implicit `dev` default.
@@ -6357,33 +6520,6 @@ pub struct GroupMetadata {
     pub requires_python: Option<VersionSpecifiers>,
 }
 
-/// Collect metadata for each member's dependency groups.
-fn collect_member_group_metadata(
-    packages: &BTreeMap<PackageName, WorkspaceMember>,
-) -> Result<BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>, DependencyGroupError> {
-    let mut members = BTreeMap::new();
-    for (name, member) in packages {
-        let groups =
-            FlatDependencyGroups::from_pyproject_toml(member.root(), member.pyproject_toml())?
-                .into_iter()
-                .filter_map(|(group, flat)| {
-                    flat.requires_python.map(|requires_python| {
-                        (
-                            group,
-                            GroupMetadata {
-                                requires_python: Some(requires_python),
-                            },
-                        )
-                    })
-                })
-                .collect::<BTreeMap<_, _>>();
-        if !groups.is_empty() {
-            members.insert(name.clone(), groups);
-        }
-    }
-    Ok(members)
-}
-
 impl ResolverManifest {
     /// Initialize a [`ResolverManifest`] with the given members, requirements, constraints, and
     /// overrides.
@@ -6394,10 +6530,11 @@ impl ResolverManifest {
         overrides: impl IntoIterator<Item = Override<Requirement>>,
         excludes: impl IntoIterator<Item = ExcludeDependency>,
         build_constraints: impl IntoIterator<Item = NameRequirementSpecification>,
-        dependency_groups: impl IntoIterator<Item = (GroupName, Vec<Requirement>)>,
+        dependency_groups: impl IntoIterator<Item = (GroupName, RootDependencyGroup)>,
         dependency_metadata: impl IntoIterator<Item = StaticMetadata>,
     ) -> Self {
         let normalize = uv_preview::is_enabled(PreviewFeature::LockfileNormalization);
+        let groups = ManifestDependencyGroups::from_requirements(dependency_groups);
         Self {
             members: members.into_iter().collect(),
             default_groups: None,
@@ -6414,7 +6551,9 @@ impl ResolverManifest {
             overrides: normalize_collection::<_, NormalizedOverrideEntries>(overrides, normalize),
             excludes: normalize_collection::<_, NormalizedExcludes>(excludes, normalize),
             build_constraints: build_constraints.into_iter().collect(),
-            dependency_groups: dependency_groups
+            dependency_group_includes: groups.includes,
+            dependency_groups: groups
+                .requirements
                 .into_iter()
                 .map(|(group, requirements)| {
                     (
@@ -6433,6 +6572,7 @@ impl ResolverManifest {
             members: self.members,
             default_groups: self.default_groups,
             group_requires_python: self.group_requires_python,
+            dependency_group_includes: self.dependency_group_includes,
             requirements: self
                 .requirements
                 .into_iter()
@@ -9816,6 +9956,18 @@ enum LockErrorKind {
     /// metadata-free lockfile cannot be scoped to their packages.
     #[error(transparent)]
     InvalidScopedOverride(#[from] ScopedOverrideSourceError),
+    /// Includes refer to a group missing from the lockfile manifest.
+    #[error("Workspace dependency group `{0}` has includes but is not declared in the lockfile")]
+    UnknownWorkspaceRootGroup(GroupName),
+    /// A workspace-group include references an unknown member or dependency group.
+    #[error(
+        "Workspace dependency group `{root_group}` includes unknown member group `{package}:{group}`"
+    )]
+    UnknownWorkspaceGroupInclude {
+        root_group: GroupName,
+        package: PackageName,
+        group: GroupName,
+    },
     /// An error that occurs when multiple packages with the same
     /// ID were found.
     #[error("Found duplicate package `{id}`", id = id.cyan())]
