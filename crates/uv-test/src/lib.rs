@@ -221,6 +221,29 @@ impl TestContext {
         self
     }
 
+    /// Bypass proxies for local fixture servers while retaining other host exclusions.
+    #[must_use]
+    pub fn with_loopback_proxy_bypass(self) -> Self {
+        let mut exclusions = "localhost,127.0.0.1,::1".to_string();
+        for key in [EnvVars::NO_PROXY, "no_proxy"] {
+            let value = self
+                .extra_env
+                .iter()
+                .rev()
+                .find(|(name, _)| name == key)
+                .and_then(|(_, value)| value.to_str().map(str::to_owned))
+                .or_else(|| env::var(key).ok());
+            if let Some(value) = value
+                && !value.is_empty()
+            {
+                exclusions.push(',');
+                exclusions.push_str(&value);
+            }
+        }
+        self.with_env(EnvVars::NO_PROXY, &exclusions)
+            .with_env("no_proxy", exclusions)
+    }
+
     /// Set the "exclude newer" timestamp for all commands in this context.
     #[must_use]
     pub fn with_exclude_newer(mut self, exclude_newer: &str) -> Self {

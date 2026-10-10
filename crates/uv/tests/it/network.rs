@@ -253,7 +253,7 @@ where
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
 #[tokio::test]
 async fn invalid_ssl_cert_file_warns_default_roots_are_disabled() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
     let (_server_drop_guard, mock_server_uri) = http_error_server().await;
 
     uv_snapshot!(context.filters(), context
@@ -276,7 +276,7 @@ async fn invalid_ssl_cert_file_warns_default_roots_are_disabled() {
 /// Invalid explicit certificate directories disable the default trust roots rather than being ignored.
 #[tokio::test]
 async fn invalid_ssl_cert_dir_warns_default_roots_are_disabled() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
     let (_server_drop_guard, mock_server_uri) = http_error_server().await;
 
     uv_snapshot!(context.filters(), context
@@ -299,7 +299,7 @@ async fn invalid_ssl_cert_dir_warns_default_roots_are_disabled() {
 /// Check the simple index error message when the server returns HTTP status 500, a retryable error.
 #[tokio::test]
 async fn simple_http_500() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let (_server_drop_guard, mock_server_uri) = http_error_server().await;
 
@@ -320,7 +320,7 @@ async fn simple_http_500() {
 /// Check the simple index error message when the server returns a retryable IO error.
 #[tokio::test]
 async fn simple_io_err() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let (_server_drop_guard, mock_server_uri) = io_error_server().await;
 
@@ -343,7 +343,7 @@ async fn simple_io_err() {
 /// Check the find links error message when the server returns HTTP status 500, a retryable error.
 #[tokio::test]
 async fn find_links_http_500() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let (_server_drop_guard, mock_server_uri) = http_error_server().await;
 
@@ -366,7 +366,7 @@ async fn find_links_http_500() {
 /// Check the find links error message when the server returns a retryable IO error.
 #[tokio::test]
 async fn find_links_io_error() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let (_server_drop_guard, mock_server_uri) = io_error_server().await;
 
@@ -392,7 +392,7 @@ async fn find_links_io_error() {
 /// returns different kinds of retryable errors.
 #[tokio::test]
 async fn find_links_mixed_error() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let (_server_drop_guard, mock_server_uri) = mixed_error_server().await;
 
@@ -415,7 +415,9 @@ async fn find_links_mixed_error() {
 /// Check that a missing direct package URL is classified as a user error.
 #[tokio::test]
 async fn direct_url_http_404() {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12")
+        .with_loopback_proxy_bypass()
+        .with_filtered_http_retries();
 
     let server = MockServer::start().await;
     Mock::given(any())
@@ -458,7 +460,7 @@ async fn direct_url_http_404() {
 /// error.
 #[tokio::test]
 async fn direct_url_http_500() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let (_server_drop_guard, mock_server_uri) = http_error_server().await;
 
@@ -481,7 +483,7 @@ async fn direct_url_http_500() {
 /// Check the direct package URL error message when the server returns a retryable IO error.
 #[tokio::test]
 async fn direct_url_io_error() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let (_server_drop_guard, mock_server_uri) = io_error_server().await;
 
@@ -507,7 +509,7 @@ async fn direct_url_io_error() {
 /// different kinds of retryable errors.
 #[tokio::test]
 async fn direct_url_mixed_error() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let (_server_drop_guard, mock_server_uri) = mixed_error_server().await;
 
@@ -558,6 +560,7 @@ fn write_python_downloads_json(context: &TestContext, mock_server_uri: &String) 
 #[tokio::test]
 async fn python_install_http_500() {
     let context = uv_test::test_context!("3.12")
+        .with_loopback_proxy_bypass()
         .without_python_download_cache()
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -586,6 +589,7 @@ async fn python_install_http_500() {
 #[tokio::test]
 async fn python_install_io_error() {
     let context = uv_test::test_context!("3.12")
+        .with_loopback_proxy_bypass()
         .without_python_download_cache()
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -614,7 +618,7 @@ async fn python_install_io_error() {
 
 #[tokio::test]
 async fn install_http_retries() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let server = MockServer::start().await;
 
@@ -675,7 +679,7 @@ async fn install_http_retries() {
 
 #[tokio::test]
 async fn install_http_retry_low_level() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let server = MockServer::start().await;
 
@@ -707,7 +711,9 @@ async fn install_http_retry_low_level() {
 /// Test problem details with a 403 error containing license compliance information
 #[tokio::test]
 async fn rfc9457_problem_details_license_violation() {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12")
+        .with_loopback_proxy_bypass()
+        .with_filtered_http_retries();
 
     let server = MockServer::start().await;
 
@@ -1053,7 +1059,7 @@ async fn proxy_schemeless_url_in_uv_toml() {
 
 #[test]
 fn connect_timeout_index() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     // Create a server that never responds, causing a timeout for our requests.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1085,7 +1091,7 @@ fn connect_timeout_index() {
 
 #[test]
 fn connect_timeout_stream() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     // Create a server that never responds, causing a timeout for our requests.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1116,7 +1122,9 @@ fn connect_timeout_stream() {
 
 #[tokio::test]
 async fn retry_read_timeout_index() {
-    let context = uv_test::test_context!("3.12").with_fast_http_retry();
+    let context = uv_test::test_context!("3.12")
+        .with_loopback_proxy_bypass()
+        .with_fast_http_retry();
 
     let (server, _guard) = streaming_server(time_out_response);
 
@@ -1137,7 +1145,9 @@ async fn retry_read_timeout_index() {
 
 #[tokio::test]
 async fn retry_read_timeout_python_downloads_json() {
-    let context = uv_test::test_context!("3.12").with_fast_http_retry();
+    let context = uv_test::test_context!("3.12")
+        .with_loopback_proxy_bypass()
+        .with_fast_http_retry();
 
     let (server, _guard) = streaming_server(time_out_response);
 
@@ -1159,7 +1169,9 @@ async fn retry_read_timeout_python_downloads_json() {
 
 #[tokio::test]
 async fn retry_read_timeout_stream() {
-    let context = uv_test::test_context!("3.12").with_fast_http_retry();
+    let context = uv_test::test_context!("3.12")
+        .with_loopback_proxy_bypass()
+        .with_fast_http_retry();
 
     let (server, _guard) = streaming_server(time_out_response);
 
@@ -1334,7 +1346,7 @@ fn assert_wheel_download(
     full_requests: usize,
     resumed_requests: usize,
 ) -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
     let (server, _guard, requests, hash) = wheel_server(&context, range_response, retries);
     write_wheel_lockfile(&context, &server, 932, &hash)?;
     allow_duplicates! {
@@ -1387,7 +1399,7 @@ fn assert_wheel_download_timeout(
     full_requests: usize,
     resumed_requests: usize,
 ) {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
     let (server, _guard, requests, _) = wheel_server(&context, range_response, retries);
 
     let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");
@@ -1429,7 +1441,7 @@ fn write_wheel_lockfile(context: &TestContext, server: &str, size: u64, hash: &s
 
 #[test]
 fn direct_url_content_length_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
     let (server, _guard, requests, hash) = wheel_server(&context, RangeResponse::NotAdvertised, 1);
     write_wheel_lockfile(&context, &server, 1, &hash)?;
 
@@ -1497,7 +1509,7 @@ fn direct_url_unsatisfiable_range_does_not_bypass_retry() {
 /// An invalid continuation response does not bypass regular retry handling.
 #[test]
 fn direct_url_invalid_range_does_not_bypass_retry() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
 
     let (server, _guard, requests, _) =
         wheel_server(&context, RangeResponse::InvalidContentRange, 1);
@@ -1526,7 +1538,7 @@ fn direct_url_invalid_range_does_not_bypass_retry() {
 /// A complete HTTP body with the wrong range length fails without retrying the full download.
 #[test]
 fn direct_url_range_size_mismatch() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_loopback_proxy_bypass();
     let (server, _guard, requests, _) = wheel_server(&context, RangeResponse::ShortBody, 1);
 
     let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");
