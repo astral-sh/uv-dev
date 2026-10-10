@@ -668,14 +668,11 @@ impl RegistryClient {
                         })?;
 
                         self.parse_simple_body(bytes.len(), move || {
-                            let data: PypiSimpleDetail = serde_json::from_slice(bytes.as_ref())
-                                .map_err(|err| Error::from_json_err(err, url.clone()))?;
-                            let unarchived = SimpleDetailMetadata::from_pypi_files(
-                                data.files,
+                            let unarchived = SimpleDetailMetadata::from_json(
+                                bytes.as_ref(),
                                 &package_name,
-                                data.project_status,
                                 &url,
-                            );
+                            )?;
                             OwnedArchive::from_unarchived(&unarchived)
                         })
                         .await
@@ -1648,65 +1645,29 @@ impl SimpleDetailMetadata {
         project_status: ProjectStatus,
         base: &Url,
     ) -> Self {
-        let mut version_map: BTreeMap<Version, VersionFiles> = BTreeMap::default();
-
-        // Convert to a reference-counted string.
-        let base = SmallString::from(base.as_str());
-
-        // Group the distributions by version and kind
+        let mut builder = SimpleDetailBuilder::new(package_name, base);
         for file in files {
-            let filename =
-                match DistFilename::try_from_filename_with_reason(&file.filename, package_name) {
-                    Ok(filename) => filename,
-                    Err(err) => {
-                        debug!(
-                            "Skipping file for {package_name}: {:?} ({err})",
-                            file.filename
-                        );
-                        continue;
-                    }
-                };
-            let file = match File::try_from_pypi(file, &base) {
-                Ok(file) => file,
-                Err(err) => {
-                    // Ignore files with unparsable version specifiers.
-                    debug!("Skipping file for {package_name}: {err}");
-                    continue;
-                }
-            };
-            match version_map.entry(filename.version().clone()) {
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().push(&filename, file);
-                }
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    let mut files = VersionFiles::default();
-                    files.push(&filename, file);
-                    entry.insert(files);
-                }
-            }
+            builder.push(file);
         }
+        builder.finish(project_status)
+    }
 
-        // Keep file ordering deterministic without sorting the complete Simple API response.
-        for files in version_map.values_mut() {
-            files
-                .wheels
-                .sort_unstable_by(|left, right| left.filename().cmp(right.filename()));
-            files
-                .source_dists
-                .sort_unstable_by(|left, right| left.filename().cmp(right.filename()));
-        }
-
-        Self {
-            versions: version_map
-                .into_iter()
-                .map(|(version, files)| SimpleDetailMetadatum {
-                    version,
-                    files,
-                    metadata: None,
-                })
-                .collect(),
-            project_status,
-        }
+    /// Read the [`SimpleDetailMetadata`] from a JSON index without retaining expanded files.
+    fn from_json(
+        bytes: &[u8],
+        package_name: &PackageName,
+        url: &DisplaySafeUrl,
+    ) -> Result<Self, Error> {
+        let mut builder = SimpleDetailBuilder::new(package_name, url);
+        let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+        let project_status = PypiSimpleDetail::deserialize_with(&mut deserializer, |file| {
+            builder.push(file);
+        })
+        .map_err(|err| Error::from_json_err(err, url.clone()))?;
+        deserializer
+            .end()
+            .map_err(|err| Error::from_json_err(err, url.clone()))?;
+        Ok(builder.finish(project_status))
     }
 
     /// Read the [`SimpleDetailMetadata`] from an HTML index.
@@ -1728,6 +1689,81 @@ impl SimpleDetailMetadata {
             project_status,
             base.as_url(),
         ))
+    }
+}
+
+/// Accumulate compact files while a Simple response is decoded.
+struct SimpleDetailBuilder<'a> {
+    package_name: &'a PackageName,
+    base: SmallString,
+    version_map: BTreeMap<Version, VersionFiles>,
+}
+
+impl<'a> SimpleDetailBuilder<'a> {
+    fn new(package_name: &'a PackageName, base: &Url) -> Self {
+        Self {
+            package_name,
+            base: SmallString::from(base.as_str()),
+            version_map: BTreeMap::new(),
+        }
+    }
+
+    fn push(&mut self, file: uv_pypi_types::PypiFile) {
+        let package_name = self.package_name;
+        let filename =
+            match DistFilename::try_from_filename_with_reason(&file.filename, self.package_name) {
+                Ok(filename) => filename,
+                Err(err) => {
+                    debug!(
+                        "Skipping file for {package_name}: {:?} ({err})",
+                        file.filename
+                    );
+                    return;
+                }
+            };
+        let file = match File::try_from_pypi(file, &self.base) {
+            Ok(file) => file,
+            Err(err) => {
+                // Ignore files with unparsable version specifiers.
+                debug!("Skipping file for {package_name}: {err}");
+                return;
+            }
+        };
+        match self.version_map.entry(filename.version().clone()) {
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().push(&filename, file);
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                let mut files = VersionFiles::default();
+                files.push(&filename, file);
+                entry.insert(files);
+            }
+        }
+    }
+
+    fn finish(mut self, project_status: ProjectStatus) -> SimpleDetailMetadata {
+        // Keep file ordering deterministic without sorting the complete Simple API response.
+        for files in self.version_map.values_mut() {
+            files
+                .wheels
+                .sort_unstable_by(|left, right| left.filename().cmp(right.filename()));
+            files
+                .source_dists
+                .sort_unstable_by(|left, right| left.filename().cmp(right.filename()));
+        }
+
+        SimpleDetailMetadata {
+            versions: self
+                .version_map
+                .into_iter()
+                .map(|(version, files)| SimpleDetailMetadatum {
+                    version,
+                    files,
+                    metadata: None,
+                })
+                .collect(),
+            project_status,
+        }
     }
 }
 
@@ -2121,6 +2157,47 @@ mod tests {
             "Requests should succeed for relative URL"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_json_matches_collected_buckets() -> Result<(), Error> {
+        let files = r#"[
+            {"filename":"example-2.0-py3-none-any.whl","hashes":{},"url":"../../files/b.whl","requires-python":">=3.8","data-dist-info-metadata":true},
+            {"filename":"example-1.0.tar.gz","hashes":{},"url":"first.tar.gz","url":"a.tar.gz","requires-python":">=3.8","yanked":"reason"},
+            {"filename":"example-2.0.tar.gz","hashes":{},"url":"b.tar.gz","requires-python":"invalid"},
+            {"filename":"other-3.0.tar.gz","hashes":{},"url":"other.tar.gz"},
+            {"filename":"invalid","hashes":{},"url":"invalid"},
+            {"filename":"example-2.0-py2-none-any.whl","hashes":{},"url":"a.whl","core-metadata":true,"dist-info-metadata":false}
+        ]"#;
+        let package_name = PackageName::from_str("example")?;
+        let base = DisplaySafeUrl::parse("https://example.com/simple/example/")?;
+        for response in [
+            format!(r#"{{"files":{files}}}"#),
+            format!(
+                r#"{{"project-status":{{"status":"archived","reason":"retired"}},"files":{files}}}"#
+            ),
+            format!(
+                r#"{{"files":{files},"ignored":{{"nested":[null]}},"project-status":{{"status":"archived","reason":"retired"}}}}"#
+            ),
+            format!(r#"[{{"status":"active"}},{files}]"#),
+        ] {
+            let data: PypiSimpleDetail = serde_json::from_str(&response)?;
+            let expected = SimpleDetailMetadata::from_pypi_files(
+                data.files,
+                &package_name,
+                data.project_status,
+                &base,
+            );
+            let actual =
+                SimpleDetailMetadata::from_json(response.as_bytes(), &package_name, &base)?;
+            // Compare the complete compact representation, including relative URLs, status,
+            // metadata aliases, filename filtering, specifier filtering and deterministic order.
+            assert_eq!(
+                rkyv::to_bytes::<rkyv::rancor::Error>(&actual)?.as_slice(),
+                rkyv::to_bytes::<rkyv::rancor::Error>(&expected)?.as_slice()
+            );
+        }
         Ok(())
     }
 
