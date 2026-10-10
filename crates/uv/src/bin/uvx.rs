@@ -1,9 +1,13 @@
 use std::convert::Infallible;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::{
     ffi::OsString,
     process::{Command, ExitCode, ExitStatus},
 };
+
+mod launcher;
+
+use launcher::get_uv_path;
 
 /// Spawns a command exec style.
 fn exec_spawn(cmd: &mut Command) -> std::io::Result<Infallible> {
@@ -24,48 +28,6 @@ fn get_uvx_suffix(current_exe: &Path) -> Option<&str> {
     let os_file_name = current_exe.file_name()?;
     let file_name_str = os_file_name.to_str()?;
     file_name_str.strip_prefix("uvx")
-}
-
-/// Gets the path to `uv`, given info about `uvx`
-fn get_uv_path(current_exe_parent: &Path, uvx_suffix: Option<&str>) -> std::io::Result<PathBuf> {
-    // First try to find a matching suffixed `uv`, e.g. `uv@1.2.3(.exe)`
-    let uv_with_suffix = uvx_suffix.map(|suffix| current_exe_parent.join(format!("uv{suffix}")));
-    if let Some(uv_with_suffix) = &uv_with_suffix {
-        #[expect(clippy::print_stderr, reason = "printing a very rare warning")]
-        match uv_with_suffix.try_exists() {
-            Ok(true) => return Ok(uv_with_suffix.to_owned()),
-            Ok(false) => { /* definitely not there, proceed to fallback */ }
-            Err(err) => {
-                // We don't know if `uv@1.2.3` exists, something errored when checking.
-                // We *could* blindly use `uv@1.2.3` in this case, as the code below does, however
-                // in this extremely narrow corner case it's *probably* better to default to `uv`,
-                // since we don't want to mess up existing users who weren't using suffixes?
-                eprintln!(
-                    "warning: failed to determine if `{}` exists, trying `uv` instead: {err}",
-                    uv_with_suffix.display()
-                );
-            }
-        }
-    }
-
-    // Then just look for good ol' `uv`
-    let uv = current_exe_parent.join(format!("uv{}", std::env::consts::EXE_SUFFIX));
-    // If we are sure the `uv` binary does not exist, display a clearer error message.
-    // If we're not certain if uv exists (try_exists == Err), keep going and hope it works.
-    if matches!(uv.try_exists(), Ok(false)) {
-        let message = if let Some(uv_with_suffix) = uv_with_suffix {
-            format!(
-                "Could not find the `uv` binary at either of:\n  {}\n  {}",
-                uv_with_suffix.display(),
-                uv.display(),
-            )
-        } else {
-            format!("Could not find the `uv` binary at: {}", uv.display())
-        };
-        Err(std::io::Error::new(std::io::ErrorKind::NotFound, message))
-    } else {
-        Ok(uv)
-    }
 }
 
 fn run() -> std::io::Result<ExitStatus> {
