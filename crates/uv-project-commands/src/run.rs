@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::env::VarError;
 use std::ffi::OsString;
 use std::fmt::Write;
@@ -34,16 +35,16 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     EnvironmentError, EnvironmentSpecification, LinkErrorReporting, PreferenceLocation,
-    ProjectEnvironment, ProjectEnvironmentTarget, ScriptEnvironment, sync_from_lock,
-    update_environment,
+    ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
+    ScriptEnvironment, discover_workspace_groups, sync_from_lock, update_environment,
 };
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
-use uv_lock::{Installable, Lock};
-use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
-use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
+use uv_lock::Lock;
+use uv_lock_operations::{LockError, LockMode, LockOperation, LockResult, LockTarget};
+use uv_normalize::{DefaultExtras, DefaultGroups, GroupName, PackageName};
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
@@ -86,6 +87,12 @@ struct GistFile {
     raw_url: String,
 }
 
+use crate::lock::{
+    CommandWorkspaceSelection, command_workspace_group, command_workspace_group_from_lock,
+    provisional_command_workspace_group, select_workspace_group_lock,
+    select_workspace_group_result, workspace_selection_members,
+};
+
 /// Run a command.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn run(
@@ -101,6 +108,7 @@ pub async fn run(
     isolated: bool,
     all_packages: bool,
     package: Option<PackageName>,
+    workspace_group: Option<GroupName>,
     no_project: bool,
     config_discovery: ConfigDiscovery,
     extras: ExtrasSpecification,
@@ -184,6 +192,9 @@ pub async fn run(
     // Determine whether the command to execute is a PEP 723 script.
     let temp_dir;
     let script_interpreter = if let Some(script) = script {
+        if workspace_group.is_some() {
+            bail!("Workspace groups are not supported for scripts");
+        }
         match &script {
             Pep723Item::Script(script) => {
                 debug!(
@@ -284,7 +295,7 @@ pub async fn run(
             let install_options = InstallOptions::default();
 
             match sync_from_lock(
-                target,
+                &target.select_workspace_context()?,
                 &environment,
                 &extras.with_defaults(DefaultExtras::default()),
                 &groups.with_defaults(DefaultGroups::default()),
@@ -630,7 +641,116 @@ pub async fn run(
             }
         }
 
+        if project.is_none() && workspace_group.is_some() {
+            bail!("Workspace groups require a project");
+        }
         if let Some(project) = project {
+            let mut selection_members =
+                workspace_selection_members(&project, package.as_slice(), all_packages);
+            let frozen_lock = if let Some(frozen) = frozen {
+                let target = LockTarget::Workspace(project.workspace());
+                if no_sync && workspace_group.is_none() {
+                    // An unqualified no-sync invocation does not require a lockfile to exist.
+                    target.read().await?
+                } else {
+                    Some(
+                        target
+                            .read_frozen(frozen.into())
+                            .await
+                            .map_err(UvError::from)?,
+                    )
+                }
+            } else {
+                None
+            };
+            let mut workspace_group = if let Some(lock) = frozen_lock.as_ref() {
+                command_workspace_group_from_lock(
+                    lock,
+                    workspace_group.as_ref(),
+                    Some(&selection_members),
+                    package.is_none(),
+                )
+                .map(|selection| selection.map(CommandWorkspaceSelection::Finalized))?
+            } else if no_sync {
+                provisional_command_workspace_group(
+                    project.workspace(),
+                    workspace_group.as_ref(),
+                    Some(&selection_members),
+                    package.is_none(),
+                    &project
+                        .workspace()
+                        .workspace_groups_with_dependency_metadata(
+                            &settings.resolver.sources,
+                            &settings.resolver.dependency_metadata,
+                        )?,
+                )
+                .map(|selection| selection.map(CommandWorkspaceSelection::Pending))
+                .map_err(UvError::from)?
+            } else if frozen.is_some() {
+                None
+            } else {
+                command_workspace_group(
+                    project.workspace(),
+                    workspace_group.as_ref(),
+                    Some(&selection_members),
+                    package.is_none(),
+                    &discover_workspace_groups(
+                        project.workspace(),
+                        project_dir,
+                        python.as_deref(),
+                        lock_check,
+                        &settings.resolver,
+                        &client_builder,
+                        &lock_state,
+                        &BTreeSet::new(),
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        &concurrency,
+                        config_discovery,
+                        &cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .await?,
+                )
+                .map_err(UvError::from)?
+            };
+            let select_group_roots = workspace_group
+                .as_ref()
+                .is_some_and(|group| group.name().is_some());
+            if select_group_roots
+                && package.is_none()
+                && let Some(group) = &workspace_group
+            {
+                selection_members.clone_from(group.members());
+            }
+            let group_members = workspace_group
+                .as_ref()
+                .filter(|_| select_group_roots)
+                .map(|group| group.members().iter().cloned().collect::<Vec<_>>());
+            let projected_frozen_lock = workspace_group
+                .as_mut()
+                .and_then(CommandWorkspaceSelection::take_selected_lock);
+            let selected_workspace_group = workspace_group
+                .as_ref()
+                .filter(|_| select_group_roots)
+                .and_then(|group| group.name().cloned());
+            let selected_frozen_lock = if let Some(lock) = projected_frozen_lock {
+                Some(lock)
+            } else {
+                frozen_lock
+                    .map(|lock| {
+                        select_workspace_group_lock(
+                            lock,
+                            selected_workspace_group.as_ref(),
+                            &selection_members,
+                        )
+                    })
+                    .transpose()?
+            };
             if let Some(project_name) = project.project_name() {
                 debug!(
                     "Discovered project `{project_name}` at: {}",
@@ -643,10 +763,93 @@ pub async fn run(
                 );
             }
             // Determine the groups and extras to include.
-            let default_groups = project.default_groups()?;
+            let default_packages = if package.is_none() && !all_packages {
+                group_members.as_deref().unwrap_or(package.as_slice())
+            } else {
+                package.as_slice()
+            };
+            let default_groups = project.default_groups_for_packages(default_packages)?;
             let default_extras = DefaultExtras::default();
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);
+
+            let mut resolved_before_environment = None;
+            let mut projected_resolved_lock = None;
+            let group_workspace = match workspace_group {
+                Some(selection) if no_sync => {
+                    Some(selection.provisional_workspace(project.workspace(), &selection_members))
+                }
+                Some(CommandWorkspaceSelection::Pending(selection)) => {
+                    let workspace = selection.provisional_workspace(project.workspace());
+                    let project_python = ProjectPythonRequest::from_request(
+                        python.as_deref().map(PythonRequest::parse),
+                        Some(&workspace),
+                        &groups,
+                        &settings.resolver.sources,
+                        project_dir,
+                        config_discovery,
+                    )
+                    .await?;
+                    let interpreter = ProjectInterpreter::discover(
+                        ProjectEnvironmentTarget::from(&workspace),
+                        project_python.environment_probe(),
+                        &client_builder,
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        ProjectEnvironmentPolicy::Optional,
+                        active.without_warning(),
+                        &cache,
+                        if printer == Printer::Verbose {
+                            printer
+                        } else {
+                            Printer::Silent
+                        },
+                    )
+                    .await?
+                    .into_interpreter();
+                    let mode = if let LockCheck::Enabled(source) = lock_check {
+                        LockMode::Locked(&interpreter, source)
+                    } else if isolated {
+                        LockMode::DryRun(&interpreter)
+                    } else {
+                        LockMode::Write(&interpreter)
+                    };
+                    let result = Box::pin(
+                        LockOperation::new(
+                            mode,
+                            &settings.resolver,
+                            &client_builder,
+                            &lock_state,
+                            if show_resolution {
+                                Box::new(DefaultResolveLogger)
+                            } else {
+                                Box::new(SummaryResolveLogger)
+                            },
+                            &concurrency,
+                            &cache,
+                            workspace_cache,
+                            printer,
+                            preview,
+                        )
+                        .execute(project.workspace().into()),
+                    )
+                    .await
+                    .map_err(UvError::from)?;
+                    let mut finalized = selection.finalize(result.lock())?;
+                    projected_resolved_lock = finalized.take_selected_lock();
+                    resolved_before_environment = Some(result);
+                    Some(finalized.environment_workspace(project.workspace()))
+                }
+                Some(CommandWorkspaceSelection::Finalized(selection)) => {
+                    Some(selection.environment_workspace(project.workspace()))
+                }
+                None => None,
+            };
+            let environment_workspace = group_workspace
+                .as_ref()
+                .unwrap_or_else(|| project.workspace());
 
             let venv = if isolated {
                 debug!("Creating isolated virtual environment");
@@ -657,18 +860,25 @@ pub async fn run(
                 // Resolve the Python request and requirement for the workspace.
                 let project_python = ProjectPythonRequest::from_request(
                     python.as_deref().map(PythonRequest::parse),
-                    Some(project.workspace()),
+                    Some(environment_workspace),
                     &groups,
+                    &settings.resolver.sources,
                     project_dir,
                     config_discovery,
                 )
                 .await?;
 
+                let project_python = if no_sync {
+                    project_python.without_environment_constraints()
+                } else {
+                    project_python
+                };
                 let interpreter = project_python
                     .find_or_download(
                         EnvironmentPreference::Any,
                         python_preference,
                         python_arch,
+                        python_platform.as_ref(),
                         python_downloads,
                         &client_builder,
                         &cache,
@@ -695,14 +905,16 @@ pub async fn run(
                 // If we're not isolating the environment, reuse the base environment for the
                 // project.
                 ProjectEnvironment::get_or_init(
-                    ProjectEnvironmentTarget::from(project.workspace()),
+                    ProjectEnvironmentTarget::from(environment_workspace),
                     None,
                     &groups,
+                    &settings.resolver.sources,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
                     &client_builder,
                     python_preference,
                     python_arch,
+                    python_platform.as_ref(),
                     python_downloads,
                     no_sync,
                     config_discovery,
@@ -722,12 +934,28 @@ pub async fn run(
                 // If we're not syncing, we should still attempt to respect the locked preferences
                 // in any `--with` requirements.
                 if !isolated && !requirements.is_empty() {
-                    base_lock = LockTarget::from(project.workspace())
-                        .read()
-                        .await
-                        .ok()
-                        .flatten()
-                        .map(|lock| (lock, project.workspace().install_path().to_owned()));
+                    let lock = if let Some(lock) = selected_frozen_lock {
+                        Some(lock)
+                    } else if frozen.is_none() {
+                        LockTarget::from(project.workspace())
+                            .read()
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|lock| {
+                                select_workspace_group_lock(
+                                    lock,
+                                    selected_workspace_group.as_ref(),
+                                    &selection_members,
+                                )
+                            })
+                            .transpose()?
+                    } else {
+                        None
+                    };
+                    if let Some(lock) = lock {
+                        base_lock = Some((lock, project.workspace().install_path().to_owned()));
+                    }
                 }
                 // `--with` may still build an overlay under `--no-sync`. Unless explicitly frozen,
                 // use the current project build constraints, not those recorded in `uv.lock`.
@@ -762,41 +990,61 @@ pub async fn run(
                     LockMode::Write(venv.interpreter())
                 };
 
-                let result = match Box::pin(
-                    LockOperation::new(
-                        mode,
-                        &settings.resolver,
-                        &client_builder,
-                        &lock_state,
-                        if show_resolution {
-                            Box::new(DefaultResolveLogger)
-                        } else {
-                            Box::new(SummaryResolveLogger)
-                        },
-                        &concurrency,
-                        &cache,
-                        workspace_cache,
-                        printer,
-                        preview,
+                let result = if let Some(lock) = selected_frozen_lock {
+                    LockResult::Unchanged(lock)
+                } else if let Some(result) = resolved_before_environment.take() {
+                    select_workspace_group_result(
+                        result,
+                        projected_resolved_lock.take(),
+                        selected_workspace_group.as_ref(),
+                        &selection_members,
+                    )?
+                } else {
+                    match Box::pin(
+                        LockOperation::new(
+                            mode,
+                            &settings.resolver,
+                            &client_builder,
+                            &lock_state,
+                            if show_resolution {
+                                Box::new(DefaultResolveLogger)
+                            } else {
+                                Box::new(SummaryResolveLogger)
+                            },
+                            &concurrency,
+                            &cache,
+                            workspace_cache,
+                            printer,
+                            preview,
+                        )
+                        .execute(project.workspace().into()),
                     )
-                    .execute(project.workspace().into()),
-                )
-                .await
-                {
-                    Ok(result) => result,
-                    Err(err) => return Err(UvError::from(err).into()),
+                    .await
+                    {
+                        Ok(result) => select_workspace_group_result(
+                            result,
+                            None,
+                            selected_workspace_group.as_ref(),
+                            &selection_members,
+                        )?,
+                        Err(err) => return Err(UvError::from(err).into()),
+                    }
                 };
 
                 // Identify the installation target.
-                let target = InstallTarget::from_project(
-                    &project,
-                    result.lock(),
+                let selection = if let Some(names) = group_members.as_deref()
+                    && package.is_none()
+                    && !all_packages
+                {
+                    PackageSelection::Projects(names)
+                } else {
                     PackageSelection::from_args(
                         all_packages,
                         package.as_slice(),
                         project.project_name(),
-                    ),
-                );
+                    )
+                };
+                let target = InstallTarget::from_project(&project, result.lock(), selection);
 
                 let install_options = InstallOptions::default();
                 // Validate that the set of requested extras and development groups are defined in the lockfile.
@@ -804,7 +1052,7 @@ pub async fn run(
                 target.validate_groups(&groups)?;
 
                 match sync_from_lock(
-                    target,
+                    &target.select_workspace_context()?,
                     &venv,
                     &extras,
                     &groups,

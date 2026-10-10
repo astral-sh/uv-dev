@@ -1,0 +1,1241 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use itertools::Itertools;
+
+use uv_distribution_types::{RequiresPython, SimplifiedMarkerTree};
+use uv_normalize::{ExtraName, GroupName, PackageName};
+use uv_pep508::MarkerTree;
+use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
+use uv_resolver_types::{ConflictMarker, UniversalMarker};
+use uv_workspace::{ResolvedWorkspaceGroup, WorkspaceGroup};
+
+use super::{
+    Dependency, Lock, LockError, LockErrorKind, Package, PackageId, ResolverManifest, VERSION,
+    WORKSPACE_GROUPS_VERSION,
+};
+
+/// The definition and effective Python domain of a locked workspace group.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct LockedWorkspaceGroup {
+    #[serde(flatten)]
+    pub definition: WorkspaceGroup,
+    pub effective_requires_python: RequiresPython,
+    #[serde(default)]
+    pub environment: Option<MarkerTree>,
+}
+
+impl LockedWorkspaceGroup {
+    fn effective_environment(&self) -> MarkerTree {
+        self.environment
+            .unwrap_or_else(|| self.effective_requires_python.to_exact_marker_tree())
+    }
+}
+
+impl From<ResolvedWorkspaceGroup> for LockedWorkspaceGroup {
+    fn from(group: ResolvedWorkspaceGroup) -> Self {
+        let (definition, effective_requires_python, environment) = group.into_parts();
+        Self {
+            definition,
+            effective_requires_python,
+            environment: Some(environment),
+        }
+    }
+}
+
+/// A failure to select one compatible workspace context for the requested roots.
+#[derive(Debug, thiserror::Error)]
+pub enum WorkspaceGroupSelectionError {
+    #[error("Workspace group `{0}` is not present in the lockfile; run `uv lock`")]
+    Missing(GroupName),
+    #[error("The selected packages are not all reachable in workspace group `{0}`")]
+    Target(GroupName),
+    #[error(
+        "Workspace members are not reachable from any workspace group: {}",
+        .0.iter().map(|name| format!("`{name}`")).join(", ")
+    )]
+    Uncovered(Vec<PackageName>),
+    #[error(
+        "The lockfile contains multiple workspace contexts; select one with `--workspace-group`"
+    )]
+    Ambiguous,
+    #[error(transparent)]
+    Lock(#[from] LockError),
+}
+
+impl Lock {
+    /// Select compatible workspace contexts for a named group or ordinary package roots.
+    pub fn select_workspace_context(
+        &self,
+        name: Option<&GroupName>,
+        members: &BTreeSet<PackageName>,
+    ) -> Result<Self, WorkspaceGroupSelectionError> {
+        if self.workspace_groups.is_empty() {
+            return if let Some(name) = name {
+                Err(WorkspaceGroupSelectionError::Missing(name.clone()))
+            } else {
+                Ok(self.clone())
+            };
+        }
+        let members = if members.is_empty() {
+            self.members()
+        } else {
+            members
+        };
+        let name = name.or_else(|| {
+            self.workspace_groups
+                .iter()
+                .find(|group| group.definition.default)
+                .map(|group| &group.definition.name)
+        });
+        if let Some(name) = name {
+            let selected = self
+                .select_workspace_group(name)?
+                .ok_or_else(|| WorkspaceGroupSelectionError::Missing(name.clone()))?;
+            let selected = selected
+                .select_workspace_members(members)?
+                .ok_or_else(|| WorkspaceGroupSelectionError::Target(name.clone()))?;
+            return Self::merge_workspace_resolutions(vec![selected])?
+                .ok_or_else(|| WorkspaceGroupSelectionError::Target(name.clone()));
+        }
+        let mut candidates = Vec::new();
+        let mut covered = BTreeSet::new();
+        for group in &self.workspace_groups {
+            let Some(candidate) = self.select_workspace_group(&group.definition.name)? else {
+                continue;
+            };
+            let available = candidate
+                .workspace_member_paths()
+                .map(|(name, _)| name)
+                .collect::<BTreeSet<_>>();
+            let contained = members
+                .iter()
+                .filter(|name| available.contains(name))
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if contained.is_empty() {
+                continue;
+            }
+            let Some(candidate) = candidate.select_workspace_members(&contained)? else {
+                continue;
+            };
+            covered.extend(contained);
+            candidates.push(candidate);
+        }
+        if covered != *members {
+            return Err(WorkspaceGroupSelectionError::Uncovered(
+                members.difference(&covered).cloned().collect(),
+            ));
+        }
+        Self::merge_workspace_resolutions(candidates)?
+            .ok_or(WorkspaceGroupSelectionError::Ambiguous)
+    }
+
+    fn contains_workspace_members(&self, members: &BTreeSet<PackageName>) -> bool {
+        members.iter().all(|name| {
+            self.workspace_member_paths()
+                .any(|(member, _)| member == name)
+        })
+    }
+
+    /// Return the workspace contexts recorded in this lockfile.
+    pub fn workspace_groups(&self) -> &[LockedWorkspaceGroup] {
+        &self.workspace_groups
+    }
+
+    /// Attach unambiguous group definitions whose roots exist in their projected package graphs.
+    pub(super) fn with_workspace_groups(
+        mut self,
+        groups: Vec<LockedWorkspaceGroup>,
+    ) -> Result<Self, LockError> {
+        let mut names = BTreeSet::new();
+        let mut default = None;
+        for group in &groups {
+            if !names.insert(&group.definition.name) {
+                return Err(
+                    LockErrorKind::DuplicateWorkspaceGroup(group.definition.name.clone()).into(),
+                );
+            }
+            if group.definition.default
+                && let Some(previous) = default.replace(&group.definition.name)
+            {
+                return Err(LockErrorKind::MultipleDefaultWorkspaceGroups(
+                    previous.clone(),
+                    group.definition.name.clone(),
+                )
+                .into());
+            }
+        }
+        self.workspace_groups = groups;
+        for group in &self.workspace_groups {
+            let selected = self.select_workspace_group(&group.definition.name)?;
+            for name in &group.definition.members {
+                if !selected
+                    .as_ref()
+                    .is_some_and(|lock| lock.packages.iter().any(|package| package.name() == name))
+                {
+                    return Err(LockErrorKind::MissingWorkspaceGroupRoot {
+                        group: group.definition.name.clone(),
+                        name: name.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    /// Combine successful workspace-group forks into one package graph.
+    pub fn from_workspace_groups(
+        groups: Vec<ResolvedWorkspaceGroup>,
+        resolutions: Vec<(Vec<GroupName>, Self)>,
+    ) -> Result<Option<Self>, LockError> {
+        let Some(requires_python) =
+            RequiresPython::union(groups.iter().map(ResolvedWorkspaceGroup::requires_python))
+        else {
+            return Ok(None);
+        };
+        let mut resolutions = resolutions.into_iter();
+        let Some((first_names, first)) = resolutions.next() else {
+            return Ok(None);
+        };
+        let mut manifest = first.manifest.clone();
+        manifest.members = groups
+            .iter()
+            .flat_map(|group| group.definition().members.iter().cloned())
+            .collect();
+        let mut options = first.options.clone();
+        let conflicts = first.conflicts.clone();
+        let mut supported_environments = MarkerTree::FALSE;
+        let required_environments = first.required_environments.clone();
+        let revision = first.revision;
+        let mut packages = BTreeMap::<PackageId, Package>::new();
+        let mut fork_markers = BTreeSet::new();
+        let mut member_ids = BTreeSet::new();
+        let mut group_roots = BTreeMap::<GroupName, BTreeSet<PackageId>>::new();
+
+        for (names, lock) in std::iter::once((first_names, first)).chain(resolutions) {
+            let context_members = lock.workspace_member_ids();
+            for group in &groups {
+                if names.contains(&group.definition().name) {
+                    group_roots
+                        .entry(group.definition().name.clone())
+                        .or_default()
+                        .extend(
+                            context_members
+                                .iter()
+                                .filter(|id| group.definition().members.contains(&id.name))
+                                .cloned(),
+                        );
+                }
+            }
+            member_ids.extend(context_members);
+            merge_manifest(&mut manifest, lock.manifest);
+            options
+                .exclude_newer
+                .package
+                .extend(lock.options.exclude_newer.package);
+            if lock.supported_environments.is_empty() {
+                supported_environments = MarkerTree::TRUE;
+            } else {
+                for environment in &lock.supported_environments {
+                    supported_environments = supported_environments.or(*environment);
+                }
+            }
+            let mut scope = UniversalMarker::from_combined(MarkerTree::FALSE);
+            for group in &groups {
+                if names.contains(&group.definition().name) {
+                    let mut marker = UniversalMarker::workspace_group(&group.definition().name);
+                    marker.and(UniversalMarker::from_combined(group.environments()));
+                    scope.or(marker);
+                }
+            }
+            let markers = if lock.fork_markers.is_empty() {
+                vec![UniversalMarker::new(
+                    lock.requires_python.to_marker_tree(),
+                    ConflictMarker::TRUE,
+                )]
+            } else {
+                lock.fork_markers.clone()
+            };
+            for mut marker in markers {
+                marker.and(scope);
+                if !marker.is_false() {
+                    fork_markers.insert(marker);
+                }
+            }
+            for mut package in lock.packages {
+                if package.fork_markers.is_empty() {
+                    package.fork_markers.push(UniversalMarker::new(
+                        lock.requires_python.to_marker_tree(),
+                        ConflictMarker::TRUE,
+                    ));
+                }
+                for marker in &mut package.fork_markers {
+                    marker.and(scope);
+                }
+                scope_dependencies(&mut package.dependencies, scope, &requires_python);
+                for dependencies in package
+                    .optional_dependencies
+                    .values_mut()
+                    .chain(package.dependency_groups.values_mut())
+                {
+                    scope_dependencies(dependencies, scope, &requires_python);
+                }
+                merge_package(&mut packages, package, &requires_python);
+            }
+        }
+        let supported_environments = if requires_python
+            .simplify_markers(supported_environments)
+            .is_true()
+        {
+            vec![]
+        } else {
+            vec![supported_environments]
+        };
+        let fork_markers =
+            canonical_workspace_markers(&fork_markers.into_iter().collect::<Vec<_>>(), &groups);
+        normalize_workspace_graph(
+            &mut packages,
+            &groups,
+            &group_roots,
+            &manifest,
+            &requires_python,
+        );
+        manifest.set_workspace_members(packages.values(), &member_ids);
+        Self::new(
+            WORKSPACE_GROUPS_VERSION,
+            revision,
+            packages.into_values().collect(),
+            requires_python,
+            options,
+            manifest,
+            conflicts,
+            supported_environments,
+            required_environments,
+            fork_markers,
+        )?
+        .with_workspace_groups(groups.into_iter().map(LockedWorkspaceGroup::from).collect())
+        .map(Some)
+    }
+
+    /// Select a workspace context without resolving or consulting package metadata.
+    pub fn select_workspace_group(&self, name: &GroupName) -> Result<Option<Self>, LockError> {
+        let Some(group) = self
+            .workspace_groups
+            .iter()
+            .find(|group| group.definition.name == *name)
+        else {
+            return Ok(None);
+        };
+        let requires_python = group.effective_requires_python.clone();
+        let environment = group.effective_environment();
+        let select_markers = |markers: &[UniversalMarker]| {
+            markers
+                .iter()
+                .copied()
+                .map(|marker| {
+                    let mut marker = marker.select_workspace_group(name);
+                    marker.and(UniversalMarker::from_combined(environment));
+                    marker
+                })
+                .filter(|marker| !marker.is_false())
+                .collect::<Vec<_>>()
+        };
+        let mut packages = Vec::new();
+        for package in &self.packages {
+            let mut package = package.clone();
+            package.fork_markers = select_markers(&package.fork_markers);
+            if package.fork_markers.is_empty() {
+                continue;
+            }
+            select_dependencies(
+                &mut package.dependencies,
+                name,
+                environment,
+                &requires_python,
+            );
+            for dependencies in package
+                .optional_dependencies
+                .values_mut()
+                .chain(package.dependency_groups.values_mut())
+            {
+                select_dependencies(dependencies, name, environment, &requires_python);
+            }
+            if package.fork_markers.iter().any(|marker| marker.is_true()) {
+                package.fork_markers.clear();
+            }
+            packages.push(package);
+        }
+        let mut manifest = self.manifest.clone();
+        manifest.members.clone_from(&group.definition.members);
+        retain_reachable(self, &mut packages, &group.definition.members, &manifest);
+        manifest.set_workspace_members(packages.iter(), &self.workspace_member_ids());
+        let fork_markers = select_markers(&self.fork_markers);
+        Self::new(
+            VERSION,
+            self.revision,
+            packages,
+            requires_python,
+            self.options.clone(),
+            manifest,
+            self.conflicts.clone(),
+            if self.supported_environments.is_empty() {
+                vec![environment]
+            } else {
+                self.supported_environments
+                    .iter()
+                    .map(|marker| marker.and(environment))
+                    .filter(|marker| !marker.is_false())
+                    .collect()
+            },
+            self.required_environments.clone(),
+            fork_markers,
+        )
+        .map(Some)
+    }
+
+    /// Retain an ordinary project target within an already selected workspace context.
+    fn select_workspace_members(
+        &self,
+        members: &BTreeSet<PackageName>,
+    ) -> Result<Option<Self>, LockError> {
+        if !self.contains_workspace_members(members) {
+            return Ok(None);
+        }
+        let mut selected = self.clone();
+        retain_reachable(self, &mut selected.packages, members, &selected.manifest);
+        let ambiguous = specialize_member_dependencies(
+            &mut selected.packages,
+            members,
+            &self.requires_python,
+            &self.conflicts,
+        );
+        if !ambiguous.is_false() {
+            let environment = super::implicit_constraints_marker(
+                self.requires_python.to_exact_marker_tree(),
+                &self.supported_environments,
+            )
+            .and(ambiguous.negate());
+            // Keep an empty domain explicit so another context can still cover these members.
+            selected.supported_environments = vec![environment];
+        }
+        retain_reachable(self, &mut selected.packages, members, &selected.manifest);
+        selected.manifest.members.clone_from(members);
+        selected
+            .manifest
+            .set_workspace_members(selected.packages.iter(), &self.workspace_member_ids());
+        Self::new(
+            selected.version,
+            selected.revision,
+            selected.packages,
+            selected.requires_python,
+            selected.options,
+            selected.manifest,
+            selected.conflicts,
+            selected.supported_environments,
+            selected.required_environments,
+            selected.fork_markers,
+        )
+        .map(Some)
+    }
+
+    /// Merge ordinary-target views when their package choices agree in overlapping environments.
+    fn merge_workspace_resolutions(resolutions: Vec<Self>) -> Result<Option<Self>, LockError> {
+        Self::merge_workspace_contexts(resolutions, true)
+    }
+
+    /// Reconstruct compatible prior contexts as preferences for another shared resolution.
+    pub fn merge_workspace_group_preferences(
+        resolutions: Vec<Self>,
+    ) -> Result<Option<Self>, LockError> {
+        Self::merge_workspace_contexts(resolutions, false)
+    }
+
+    fn merge_workspace_contexts(
+        resolutions: Vec<Self>,
+        require_all_roots: bool,
+    ) -> Result<Option<Self>, LockError> {
+        let mut member_markers = BTreeMap::<PackageName, MarkerTree>::new();
+        let mut context_conflicts = MarkerTree::TRUE;
+        for lock in &resolutions {
+            let conflicts = UniversalMarker::new(
+                MarkerTree::TRUE,
+                ConflictMarker::from_conflicts(&lock.conflicts),
+            )
+            .combined();
+            context_conflicts = context_conflicts.and(conflicts);
+            let environment = super::implicit_constraints_marker(
+                lock.requires_python.to_exact_marker_tree(),
+                &lock.supported_environments,
+            );
+            for member in &lock.manifest.members {
+                let mut active = UniversalMarker::from_combined(
+                    lock.workspace_members
+                        .get(member)
+                        .map_or(MarkerTree::FALSE, |&index| {
+                            package_environment(lock.package(index), &lock.requires_python)
+                        })
+                        .and(conflicts),
+                );
+                // Selecting a member does not infer extras or groups on another selected root.
+                // Keep such contexts outside the ordinary member view instead of dropping its
+                // required dependencies when those selections are absent.
+                if require_all_roots {
+                    for item in lock.conflicts.iter().flat_map(ConflictSet::iter) {
+                        if item.package() != member
+                            && lock.manifest.members.contains(item.package())
+                        {
+                            match item.kind() {
+                                ConflictKind::Extra(_) | ConflictKind::Group(_) => {
+                                    active.assume_not_conflict_item(item);
+                                }
+                                ConflictKind::Project => {}
+                            }
+                        }
+                    }
+                }
+                let active = active.combined().and(environment);
+                let supported = member_markers
+                    .entry(member.clone())
+                    .or_insert(MarkerTree::FALSE);
+                *supported = supported.or(active);
+            }
+        }
+        // Every ordinary target is required, even when its compatible contexts differ.
+        let environment = if require_all_roots {
+            member_markers
+                .values()
+                .fold(MarkerTree::TRUE, |environment, member| {
+                    environment.and(*member)
+                })
+        } else {
+            member_markers
+                .values()
+                .fold(MarkerTree::FALSE, |environment, member| {
+                    environment.or(*member)
+                })
+        }
+        .and(context_conflicts)
+        .without_extras();
+        let Some(requires_python) = RequiresPython::from_marker_tree(environment) else {
+            return Ok(None);
+        };
+        let mut resolutions = resolutions.into_iter();
+        let Some(first) = resolutions.next() else {
+            return Ok(None);
+        };
+        let revision = first.revision;
+        let mut manifest = first.manifest.clone();
+        manifest.members = member_markers.into_keys().collect();
+        let mut options = first.options.clone();
+        let conflicts = first.conflicts.clone();
+        let required_environments = first.required_environments.clone();
+        let mut packages = BTreeMap::<PackageId, Package>::new();
+        let mut supported_environments = MarkerTree::FALSE;
+        let mut fork_markers = BTreeSet::new();
+        let mut member_ids = BTreeSet::new();
+        for lock in std::iter::once(first).chain(resolutions) {
+            member_ids.extend(lock.workspace_member_ids());
+            merge_manifest(&mut manifest, lock.manifest);
+            options
+                .exclude_newer
+                .package
+                .extend(lock.options.exclude_newer.package);
+            let environment = environment.and(super::implicit_constraints_marker(
+                lock.requires_python.to_exact_marker_tree(),
+                &lock.supported_environments,
+            ));
+            if environment.is_false() {
+                continue;
+            }
+            supported_environments = supported_environments.or(environment);
+            let mut previous = BTreeMap::<&PackageName, Vec<(&PackageId, MarkerTree)>>::new();
+            for package in packages.values() {
+                previous
+                    .entry(&package.id.name)
+                    .or_default()
+                    .push((&package.id, package_environment(package, &requires_python)));
+            }
+            for package in &lock.packages {
+                let marker = package_environment(package, &lock.requires_python).and(environment);
+                if previous.get(&package.id.name).is_some_and(|choices| {
+                    choices
+                        .iter()
+                        .any(|(id, previous)| **id != package.id && !previous.is_disjoint(marker))
+                }) {
+                    return Ok(None);
+                }
+            }
+            let scope = UniversalMarker::from_combined(environment);
+            if lock.fork_markers.is_empty() {
+                fork_markers.insert(scope);
+            } else {
+                for mut marker in lock.fork_markers {
+                    marker.and(scope);
+                    if !marker.is_false() {
+                        fork_markers.insert(marker);
+                    }
+                }
+            }
+            for mut package in lock.packages {
+                if package.fork_markers.is_empty() {
+                    package.fork_markers.push(scope);
+                }
+                for marker in &mut package.fork_markers {
+                    marker.and(scope);
+                }
+                package.fork_markers.retain(|marker| !marker.is_false());
+                if package.fork_markers.is_empty() {
+                    continue;
+                }
+                for dependencies in std::iter::once(&mut package.dependencies)
+                    .chain(package.optional_dependencies.values_mut())
+                    .chain(package.dependency_groups.values_mut())
+                {
+                    scope_dependencies(dependencies, scope, &requires_python);
+                    // A scoped edge can retain impossible conflict assignments after its target
+                    // has left the environment domain. Remove those edges without adding new
+                    // conflict guards to the remaining dependencies.
+                    dependencies.retain(|dependency| {
+                        !dependency
+                            .complexified_marker
+                            .combined()
+                            .and(context_conflicts)
+                            .is_false()
+                    });
+                }
+                merge_package(&mut packages, package, &requires_python);
+            }
+        }
+        manifest.set_workspace_members(packages.values(), &member_ids);
+        Self::new(
+            VERSION,
+            revision,
+            packages.into_values().collect(),
+            requires_python,
+            options,
+            manifest,
+            conflicts,
+            vec![supported_environments],
+            required_environments,
+            remove_redundant_markers(&fork_markers),
+        )
+        .map(Some)
+    }
+}
+
+/// Discharge inherited activation while retaining a package's own and explicit-root selections.
+/// Return the environment domain where omitted owners still control a dependency choice.
+fn specialize_member_dependencies(
+    packages: &mut [Package],
+    members: &BTreeSet<PackageName>,
+    requires_python: &RequiresPython,
+    conflicts: &Conflicts,
+) -> MarkerTree {
+    let valid_conflicts =
+        UniversalMarker::new(MarkerTree::TRUE, ConflictMarker::from_conflicts(conflicts));
+    let mut ambiguous = MarkerTree::FALSE;
+    for package in packages {
+        let mut world =
+            UniversalMarker::from_combined(package_environment(package, requires_python));
+        let requested_extras = package
+            .all_dependencies()
+            .flat_map(|dependency| {
+                dependency
+                    .extra
+                    .iter()
+                    .map(|extra| (&dependency.package_id.name, extra))
+            })
+            .collect::<BTreeSet<_>>();
+        let omitted = conflicts
+            .iter()
+            .flat_map(ConflictSet::iter)
+            .filter(|item| item.package() != &package.id.name && !members.contains(item.package()))
+            .filter(|item| match item.kind() {
+                ConflictKind::Extra(extra) => !requested_extras.contains(&(item.package(), extra)),
+                ConflictKind::Group(_) | ConflictKind::Project => true,
+            })
+            .collect::<BTreeSet<_>>();
+        let references_omitted = std::iter::once(world)
+            .chain(
+                package
+                    .all_dependencies()
+                    .map(|dependency| dependency.complexified_marker),
+            )
+            .any(|marker| {
+                let (present, absent) = selection_outcomes(marker, valid_conflicts, &omitted);
+                !present.combined().is_disjoint(absent.combined())
+            });
+        if !references_omitted {
+            continue;
+        }
+        world.and(valid_conflicts);
+        let mut default = world;
+        let mut inactive = UniversalMarker::TRUE;
+        for item in &omitted {
+            default.assume_not_conflict_item(item);
+            inactive.and(UniversalMarker::new(
+                MarkerTree::TRUE,
+                ConflictMarker::from_conflict_item(item).negate(),
+            ));
+        }
+        // Use one inactive upstream context for every edge whenever it admits the parent.
+        // Infer upstream activation only in the remaining part of the parent's domain.
+        world.and(UniversalMarker::from_combined(default.combined().negate()));
+        default.and(inactive);
+        world.or(default);
+        let mut specialized = BTreeMap::new();
+        for dependencies in std::iter::once(&mut package.dependencies)
+            .chain(package.optional_dependencies.values_mut())
+            .chain(package.dependency_groups.values_mut())
+        {
+            for dependency in dependencies.iter_mut() {
+                let original = dependency.complexified_marker;
+                let marker = *specialized.entry(original).or_insert_with(|| {
+                    let (present, absent) = selection_outcomes(original, world, &omitted);
+                    // Choices are ambiguous only when both outcomes are possible under valid
+                    // assignments with the same retained selections and environment.
+                    ambiguous =
+                        ambiguous.or(present.combined().and(absent.combined()).without_extras());
+                    present
+                });
+                dependency.complexified_marker = marker;
+                dependency.simplified_marker =
+                    SimplifiedMarkerTree::new(requires_python, marker.combined());
+            }
+            dependencies.retain(|dependency| !dependency.complexified_marker.is_false());
+            merge_dependencies(dependencies, requires_python);
+        }
+    }
+    ambiguous
+}
+
+/// Project both outcomes into the same retained selections and environment.
+fn selection_outcomes(
+    marker: UniversalMarker,
+    world: UniversalMarker,
+    omitted: &BTreeSet<&ConflictItem>,
+) -> (UniversalMarker, UniversalMarker) {
+    let mut present = marker;
+    present.and(world);
+    let mut absent = UniversalMarker::from_combined(marker.combined().negate());
+    absent.and(world);
+    for item in omitted {
+        present = without_conflict_item(present, item);
+        absent = without_conflict_item(absent, item);
+    }
+    (present, absent)
+}
+
+/// Existentially remove one conflict selection while retaining the other marker variables.
+fn without_conflict_item(mut marker: UniversalMarker, item: &ConflictItem) -> UniversalMarker {
+    let mut included = marker;
+    included.assume_conflict_item(item);
+    marker.assume_not_conflict_item(item);
+    marker.or(included);
+    marker
+}
+
+/// Canonicalize each selector independently so projecting and recombining contexts is stable.
+fn canonical_workspace_markers(
+    markers: &[UniversalMarker],
+    groups: &[ResolvedWorkspaceGroup],
+) -> Vec<UniversalMarker> {
+    let mut canonical = BTreeSet::new();
+    for group in groups {
+        let selected = markers
+            .iter()
+            .map(|marker| {
+                let mut marker = marker.select_workspace_group(&group.definition().name);
+                marker.and(UniversalMarker::from_combined(group.environments()));
+                marker
+            })
+            .filter(|marker| !marker.is_false())
+            .collect::<BTreeSet<_>>();
+        for mut marker in remove_redundant_markers(&selected) {
+            marker.and(UniversalMarker::workspace_group(&group.definition().name));
+            canonical.insert(marker);
+        }
+    }
+    canonical.into_iter().collect()
+}
+
+fn remove_redundant_markers(markers: &BTreeSet<UniversalMarker>) -> Vec<UniversalMarker> {
+    markers
+        .iter()
+        .copied()
+        .filter(|marker| {
+            !markers.iter().any(|other| {
+                marker != other && marker.combined().implies(other.combined()).is_true()
+            })
+        })
+        .collect()
+}
+
+fn package_environment(package: &Package, requires_python: &RequiresPython) -> MarkerTree {
+    if package.fork_markers.is_empty() {
+        requires_python.to_exact_marker_tree()
+    } else {
+        package
+            .fork_markers
+            .iter()
+            .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.combined()))
+    }
+}
+
+fn normalize_workspace_graph(
+    packages: &mut BTreeMap<PackageId, Package>,
+    groups: &[ResolvedWorkspaceGroup],
+    group_roots: &BTreeMap<GroupName, BTreeSet<PackageId>>,
+    manifest: &ResolverManifest,
+    requires_python: &RequiresPython,
+) {
+    let contexts = groups
+        .iter()
+        .map(|group| {
+            let mut pending = packages
+                .values()
+                .filter_map(|package| {
+                    root_marker(
+                        package,
+                        group_roots
+                            .get(&group.definition().name)
+                            .is_some_and(|roots| roots.contains(&package.id)),
+                        manifest,
+                    )
+                    .map(|marker| (package.id.clone(), marker.and(group.environments())))
+                })
+                .collect::<Vec<_>>();
+            let mut reached = BTreeMap::<PackageId, MarkerTree>::new();
+            while let Some((id, active)) = pending.pop() {
+                let Some(package) = packages.get(&id) else {
+                    continue;
+                };
+                let available =
+                    UniversalMarker::from_combined(package_environment(package, requires_python))
+                        .select_workspace_group(&group.definition().name)
+                        .combined();
+                let active = active.and(available);
+                let previous = reached.entry(id).or_insert(MarkerTree::FALSE);
+                let active = previous.or(active);
+                if active == *previous {
+                    continue;
+                }
+                *previous = active;
+                for dependency in package.all_dependencies() {
+                    let marker = active.and(
+                        dependency
+                            .complexified_marker
+                            .select_workspace_group(&group.definition().name)
+                            .combined(),
+                    );
+                    if !marker.is_false() {
+                        pending.push((dependency.package_id.clone(), marker));
+                    }
+                }
+            }
+            (group, reached)
+        })
+        .collect::<Vec<_>>();
+    for package in packages.values_mut() {
+        let scopes = contexts
+            .iter()
+            .filter_map(|(group, reached)| {
+                reached
+                    .get(&package.id)
+                    .filter(|marker| !marker.is_false())
+                    .map(|marker| {
+                        let mut scope = UniversalMarker::workspace_group(&group.definition().name);
+                        scope.and(UniversalMarker::from_combined(*marker));
+                        (&group.definition().name, scope)
+                    })
+            })
+            .collect::<Vec<_>>();
+        package.fork_markers = scopes.iter().map(|(_, scope)| *scope).collect();
+        for dependencies in std::iter::once(&mut package.dependencies)
+            .chain(package.optional_dependencies.values_mut())
+            .chain(package.dependency_groups.values_mut())
+        {
+            for dependency in dependencies.iter_mut() {
+                let mut marker = UniversalMarker::FALSE;
+                for (name, scope) in &scopes {
+                    let mut selected = dependency.complexified_marker.select_workspace_group(name);
+                    selected.and(*scope);
+                    marker.or(selected);
+                }
+                dependency.complexified_marker = marker;
+                dependency.simplified_marker =
+                    SimplifiedMarkerTree::new(requires_python, marker.combined());
+            }
+            dependencies.retain(|dependency| !dependency.complexified_marker.is_false());
+            merge_dependencies(dependencies, requires_python);
+        }
+    }
+    packages.retain(|_, package| !package.fork_markers.is_empty());
+}
+
+fn root_marker(
+    package: &Package,
+    is_root: bool,
+    manifest: &ResolverManifest,
+) -> Option<MarkerTree> {
+    let mut marker = if is_root {
+        MarkerTree::TRUE
+    } else {
+        MarkerTree::FALSE
+    };
+    for requirement in manifest
+        .requirements
+        .iter()
+        .chain(manifest.dependency_groups.values().flatten())
+    {
+        if requirement.name == package.id.name
+            && requirement
+                .source
+                .version_specifiers()
+                .zip(package.id.version.as_ref())
+                .is_none_or(|(specifiers, version)| specifiers.contains(version))
+        {
+            marker = marker.or(requirement.marker);
+        }
+    }
+    (!marker.is_false()).then_some(marker)
+}
+
+/// Retain inputs consulted by every independently resolved workspace context.
+fn merge_manifest(target: &mut ResolverManifest, manifest: ResolverManifest) {
+    let ResolverManifest {
+        members,
+        workspace_members,
+        workspace_member_ids,
+        default_groups,
+        group_requires_python,
+        requirements,
+        dependency_groups,
+        constraints,
+        overrides,
+        excludes,
+        build_constraints,
+        dependency_metadata,
+    } = manifest;
+    let full_members = target
+        .workspace_members
+        .get_or_insert_with(|| target.members.clone());
+    full_members.extend(workspace_members.unwrap_or(members));
+    target.workspace_member_ids.extend(workspace_member_ids);
+    if target.default_groups.is_none() {
+        target.default_groups = default_groups;
+    }
+    target.group_requires_python.extend(group_requires_python);
+    target.requirements.extend(requirements);
+    for (group, requirements) in dependency_groups {
+        target
+            .dependency_groups
+            .entry(group)
+            .or_default()
+            .extend(requirements);
+    }
+    target.constraints.extend(constraints);
+    target.overrides.extend(overrides);
+    target.excludes.extend(excludes);
+    target.build_constraints.extend(build_constraints);
+    target.dependency_metadata.extend(dependency_metadata);
+}
+
+fn merge_package(
+    packages: &mut BTreeMap<PackageId, Package>,
+    package: Package,
+    requires_python: &RequiresPython,
+) {
+    match packages.entry(package.id.clone()) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(package);
+        }
+        std::collections::btree_map::Entry::Occupied(mut entry) => {
+            let target = entry.get_mut();
+            if target.default_groups.is_none() {
+                target.default_groups = package.default_groups;
+            }
+            target
+                .group_requires_python
+                .extend(package.group_requires_python);
+            target.fork_markers.extend(package.fork_markers);
+            target.fork_markers.sort();
+            target.fork_markers.dedup();
+            for wheel in package.wheels {
+                if !target.wheels.contains(&wheel) {
+                    target.wheels.push(wheel);
+                }
+            }
+            target.dependencies.extend(package.dependencies);
+            merge_dependencies(&mut target.dependencies, requires_python);
+            for (extra, dependencies) in package.optional_dependencies {
+                let target = target.optional_dependencies.entry(extra).or_default();
+                target.extend(dependencies);
+                merge_dependencies(target, requires_python);
+            }
+            for (group, dependencies) in package.dependency_groups {
+                let target = target.dependency_groups.entry(group).or_default();
+                target.extend(dependencies);
+                merge_dependencies(target, requires_python);
+            }
+        }
+    }
+}
+
+fn retain_reachable(
+    lock: &Lock,
+    packages: &mut Vec<Package>,
+    members: &BTreeSet<PackageName>,
+    manifest: &ResolverManifest,
+) {
+    let mut pending = packages
+        .iter()
+        .filter(|package| {
+            root_marker(
+                package,
+                members.contains(&package.id.name) && lock.is_workspace_member(package),
+                manifest,
+            )
+            .is_some()
+        })
+        .map(|package| package.id.clone())
+        .collect::<Vec<_>>();
+    let by_id = packages
+        .iter()
+        .map(|package| (&package.id, package))
+        .collect::<BTreeMap<_, _>>();
+    let mut reachable = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if reachable.insert(id.clone())
+            && let Some(package) = by_id.get(&id)
+        {
+            pending.extend(
+                package
+                    .all_dependencies()
+                    .map(|dependency| dependency.package_id.clone()),
+            );
+        }
+    }
+    packages.retain(|package| reachable.contains(&package.id));
+}
+
+fn scope_dependencies(
+    dependencies: &mut Vec<Dependency>,
+    scope: UniversalMarker,
+    requires_python: &RequiresPython,
+) {
+    for dependency in dependencies.iter_mut() {
+        dependency.complexified_marker.and(scope);
+        dependency.simplified_marker =
+            SimplifiedMarkerTree::new(requires_python, dependency.complexified_marker.combined());
+    }
+    dependencies.retain(|dependency| !dependency.complexified_marker.is_false());
+    merge_dependencies(dependencies, requires_python);
+}
+
+fn select_dependencies(
+    dependencies: &mut Vec<Dependency>,
+    name: &GroupName,
+    environment: MarkerTree,
+    requires_python: &RequiresPython,
+) {
+    for dependency in dependencies.iter_mut() {
+        dependency.complexified_marker =
+            dependency.complexified_marker.select_workspace_group(name);
+        dependency
+            .complexified_marker
+            .and(UniversalMarker::from_combined(environment));
+        dependency.simplified_marker =
+            SimplifiedMarkerTree::new(requires_python, dependency.complexified_marker.combined());
+    }
+    dependencies.retain(|dependency| !dependency.complexified_marker.is_false());
+    merge_dependencies(dependencies, requires_python);
+}
+
+fn merge_dependencies(dependencies: &mut Vec<Dependency>, requires_python: &RequiresPython) {
+    let mut merged = BTreeMap::<(PackageId, BTreeSet<ExtraName>), UniversalMarker>::new();
+    for dependency in dependencies.drain(..) {
+        merged
+            .entry((dependency.package_id, dependency.extra))
+            .and_modify(|marker| marker.or(dependency.complexified_marker))
+            .or_insert(dependency.complexified_marker);
+    }
+    dependencies.extend(merged.into_iter().map(|((package_id, extras), marker)| {
+        Dependency::new(
+            requires_python,
+            package_id,
+            extras,
+            SimplifiedMarkerTree::new(requires_python, marker.combined()),
+        )
+    }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Lock;
+
+    #[test]
+    fn workspace_group_lock_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let lock = Lock::from_toml(
+            r#"
+version = 2
+revision = 3
+requires-python = ">=3.12,<3.15"
+resolution-markers = ["python_full_version < '3.13' and extra == 'workspace-main'", "extra == 'workspace-next'"]
+
+[[workspace-group]]
+name = "main"
+members = ["app"]
+effective-requires-python = "==3.12.*"
+default = true
+
+[[workspace-group]]
+name = "next"
+members = ["app"]
+effective-requires-python = ">=3.12,<3.15"
+
+[manifest]
+members = ["app"]
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { virtual = "." }
+resolution-markers = ["python_full_version < '3.13' and extra == 'workspace-main'", "extra == 'workspace-next'"]
+dependencies = [
+  { name = "leaf", version = "1.0.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'workspace-main'" },
+  { name = "leaf", version = "2.0.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'workspace-next'" },
+]
+
+[[package]]
+name = "leaf"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = ["python_full_version < '3.13' and extra == 'workspace-main'"]
+
+[[package]]
+name = "leaf"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = ["extra == 'workspace-next'"]
+"#,
+        )?;
+        let serialized = lock.to_toml()?;
+        assert_eq!(serialized, Lock::from_toml(&serialized)?.to_toml()?);
+        let selected = lock
+            .select_workspace_group(&"next".parse()?)?
+            .ok_or("missing group")?;
+        let leaf = selected
+            .find_by_name(&"leaf".parse()?)?
+            .ok_or("missing leaf")?;
+        assert_eq!(
+            leaf.version().map(ToString::to_string).as_deref(),
+            Some("2.0.0")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_group_lock_rejects_duplicate_names() {
+        let error = Lock::from_toml(
+            r#"
+version = 2
+revision = 5
+requires-python = ">=3.12,<3.14"
+resolution-markers = ["extra == 'workspace-main'"]
+
+[[workspace-group]]
+name = "main"
+members = ["app"]
+effective-requires-python = "==3.12.*"
+
+[[workspace-group]]
+name = "main"
+members = ["app"]
+effective-requires-python = "==3.13.*"
+
+[manifest]
+members = ["app"]
+
+[[package]]
+name = "app"
+version = "1.0.0"
+source = { virtual = "." }
+resolution-markers = ["extra == 'workspace-main'"]
+"#,
+        )
+        .expect_err("group names must identify one locked context");
+        insta::assert_snapshot!(error.to_string(), @"Workspace group `main` is defined more than once");
+    }
+
+    #[test]
+    fn workspace_group_lock_rejects_multiple_defaults() {
+        let error = Lock::from_toml(
+            r#"
+version = 2
+revision = 5
+requires-python = ">=3.12,<3.14"
+resolution-markers = ["extra == 'workspace-main'", "extra == 'workspace-next'"]
+
+[[workspace-group]]
+name = "main"
+members = ["app"]
+effective-requires-python = "==3.12.*"
+default = true
+
+[[workspace-group]]
+name = "next"
+members = ["app"]
+effective-requires-python = "==3.13.*"
+default = true
+
+[manifest]
+members = ["app"]
+
+[[package]]
+name = "app"
+version = "1.0.0"
+source = { virtual = "." }
+resolution-markers = ["extra == 'workspace-main'", "extra == 'workspace-next'"]
+"#,
+        )
+        .expect_err("the default workspace group must be unique");
+        insta::assert_snapshot!(error.to_string(), @"Workspace groups `main` and `next` are both marked as default");
+    }
+
+    #[test]
+    fn workspace_group_lock_rejects_missing_root() {
+        let error = Lock::from_toml(
+            r#"
+version = 2
+revision = 5
+requires-python = ">=3.12"
+resolution-markers = ["extra == 'workspace-main'", "extra == 'workspace-next'"]
+
+[[workspace-group]]
+name = "main"
+members = ["app"]
+effective-requires-python = ">=3.12"
+default = true
+
+[[workspace-group]]
+name = "next"
+members = ["app"]
+effective-requires-python = ">=3.12"
+
+[manifest]
+members = ["app"]
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { virtual = "." }
+resolution-markers = ["extra == 'workspace-next'"]
+"#,
+        )
+        .expect_err("the main group's root is absent from its graph");
+        insta::assert_snapshot!(error.to_string(), @"Workspace group `main` contains member `app` with no locked package");
+    }
+}

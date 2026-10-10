@@ -28,6 +28,9 @@ pub enum EnvironmentError {
     #[error("PEP 723 scripts do not support dependency groups, but group `{0}` was specified")]
     MissingGroupScript(GroupName),
 
+    #[error(transparent)]
+    WorkspaceGroupSelection(#[from] uv_lock::WorkspaceGroupSelectionError),
+
     #[error("Extra `{0}` is not defined in the `optional-dependencies` table for `{1}`")]
     MissingExtraProject(ExtraName, PackageName),
 
@@ -212,6 +215,7 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::MissingGroupProject(..)
             | EnvironmentError::MissingGroupProjects(..)
             | EnvironmentError::MissingGroupScript(..)
+            | EnvironmentError::WorkspaceGroupSelection(..)
             | EnvironmentError::MissingExtraProject(..)
             | EnvironmentError::MissingExtraProjects(..)
             | EnvironmentError::MissingExtraScript(..)
@@ -265,6 +269,7 @@ impl uv_errors::Hinted for EnvironmentError {
             | Self::MissingGroupProject(..)
             | Self::MissingGroupProjects(..)
             | Self::MissingGroupScript(..)
+            | Self::WorkspaceGroupSelection(..)
             | Self::MissingExtraProject(..)
             | Self::MissingExtraProjects(..)
             | Self::MissingExtraScript(..)

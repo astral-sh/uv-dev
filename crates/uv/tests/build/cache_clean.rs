@@ -15,6 +15,8 @@ use uv_cache::Cache;
 use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_static::EnvVars;
 
+#[cfg(unix)]
+use uv_test::assert_path_missing;
 use uv_test::uv_snapshot;
 
 /// `cache clean` should remove all packages.
@@ -354,7 +356,7 @@ fn clean_package_pypi() -> Result<()> {
     // Assert that the `.rkyv` file is created for `iniconfig`.
     let rkyv = context
         .cache_dir
-        .child("simple-v25")
+        .child("simple-v26")
         .child("pypi")
         .child("iniconfig.rkyv");
     assert!(
@@ -417,7 +419,7 @@ fn clean_package_index() -> Result<()> {
     // Assert that the `.rkyv` file is created for `iniconfig`.
     let rkyv = context
         .cache_dir
-        .child("simple-v25")
+        .child("simple-v26")
         .child("index")
         .child("e8208120cae3ba69")
         .child("iniconfig.rkyv");
@@ -452,7 +454,7 @@ fn clean_package_does_not_follow_symlinks() -> Result<()> {
     let archive_entry = context.cache_dir.child("archive-v0").child("archive");
     let package_entry = context
         .cache_dir
-        .child("wheels-v6")
+        .child("wheels-v7")
         .child("pypi")
         .child("demo");
 
@@ -492,8 +494,8 @@ fn clean_package_does_not_follow_symlinks() -> Result<()> {
 
     assert!(victim_dir.is_dir());
     assert!(victim_dir.child("payload.txt").is_file());
-    assert!(fs_err::symlink_metadata(package_entry).is_err());
-    assert!(fs_err::symlink_metadata(archive_entry).is_err());
+    assert_path_missing(package_entry);
+    assert_path_missing(archive_entry);
     assert!(!shard.child("orphan").exists());
     assert!(!shard.child("nested").exists());
     assert!(fs_err::symlink_metadata(files.child("escape"))?.is_symlink());
@@ -555,7 +557,7 @@ fn clean_handles_verbatim_paths() -> Result<()> {
     // Cached sdist path resembling the uwsgi==2.0.31 build failure.
     let uwsgi_shard = context
         .cache_dir
-        .child("sdists-v9")
+        .child("sdists-v10")
         .child("pypi")
         .child("uwsgi")
         .child("2.0.31")

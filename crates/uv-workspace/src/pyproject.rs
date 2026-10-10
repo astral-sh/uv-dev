@@ -38,7 +38,7 @@ use uv_pypi_types::{
 use uv_redacted::DisplaySafeUrl;
 use uv_toml::deserialize_unique_map;
 
-use crate::DefaultGroupsError;
+use crate::{DefaultGroupsError, WorkspaceGroup};
 
 #[derive(Error, Debug)]
 pub enum PyprojectTomlError {
@@ -227,7 +227,10 @@ pub struct Project {
     /// The name of the project
     pub name: PackageName,
     /// The version of the project
-    version: Option<Version>,
+    pub(crate) version: Option<Version>,
+    /// Metadata fields supplied by the build backend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) dynamic: Option<Vec<String>>,
     /// The Python versions this project is compatible with.
     pub(crate) requires_python: Option<VersionSpecifiers>,
     /// The dependencies of the project.
@@ -277,6 +280,7 @@ impl TryFrom<ProjectWire> for Project {
         Ok(Self {
             name,
             version: value.version,
+            dynamic: value.dynamic,
             requires_python: value.requires_python,
             dependencies: value.dependencies,
             optional_dependencies: value.optional_dependencies,
@@ -1055,6 +1059,20 @@ pub(crate) struct ToolUvWorkspace {
         "#
     )]
     pub(crate) exclude: Option<Vec<SerdePattern>>,
+    /// Named sets of workspace members to resolve together.
+    ///
+    /// All groups share one lockfile, using shared versions where possible and separate solutions
+    /// when their requirements conflict. Group members are package names, not paths. A group can
+    /// restrict `requires-python`; at most one group can set `default = true`.
+    #[option(
+        default = "[]",
+        value_type = "list[dict]",
+        example = r#"
+            groups = [{ name = "main", members = ["api", "worker"], default = true }]
+        "#
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) groups: Option<Vec<WorkspaceGroup>>,
 }
 
 /// (De)serialize globs as strings.

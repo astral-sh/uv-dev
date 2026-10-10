@@ -71,6 +71,19 @@ pub struct TreeDisplay<'env> {
     conflict_marker: UniversalMarker,
 }
 
+/// Existentially project the named workspace contexts without activating conflicting selectors.
+fn project_workspace_marker(lock: &Lock, marker: UniversalMarker) -> UniversalMarker {
+    if lock.workspace_groups().is_empty() || !marker.has_workspace_group() {
+        return marker;
+    }
+    lock.workspace_groups()
+        .iter()
+        .fold(UniversalMarker::FALSE, |mut projected, group| {
+            projected.or(marker.select_workspace_group(&group.definition.name));
+            projected
+        })
+}
+
 impl<'env> TreeDisplay<'env> {
     /// Create a new [`DisplayDependencyGraph`] for the set of installed packages.
     pub fn new(
@@ -173,8 +186,9 @@ impl<'env> TreeDisplay<'env> {
                     continue;
                 }
 
-                if markers
-                    .is_some_and(|markers| !dep.complexified_marker.evaluate_no_extras(markers))
+                let marker = project_workspace_marker(lock, dep.complexified_marker);
+                if marker.is_false()
+                    || markers.is_some_and(|markers| !marker.evaluate_no_extras(markers))
                 {
                     continue;
                 }
@@ -187,11 +201,7 @@ impl<'env> TreeDisplay<'env> {
                 graph.add_edge(
                     index,
                     dep_index,
-                    Edge::Dev(
-                        group,
-                        Some(RequestedExtras::Dependency(&dep.extra)),
-                        dep.complexified_marker,
-                    ),
+                    Edge::Dev(group, Some(RequestedExtras::Dependency(&dep.extra)), marker),
                 );
 
                 // Push its dependencies on the queue.
@@ -353,8 +363,9 @@ impl<'env> TreeDisplay<'env> {
                     continue;
                 }
 
-                if markers
-                    .is_some_and(|markers| !dep.complexified_marker.evaluate_no_extras(markers))
+                let marker = project_workspace_marker(lock, dep.complexified_marker);
+                if marker.is_false()
+                    || markers.is_some_and(|markers| !marker.evaluate_no_extras(markers))
                 {
                     continue;
                 }
@@ -368,16 +379,9 @@ impl<'env> TreeDisplay<'env> {
                     index,
                     dep_index,
                     if let Some(extra) = extra {
-                        Edge::Optional(
-                            extra,
-                            Some(RequestedExtras::Dependency(&dep.extra)),
-                            dep.complexified_marker,
-                        )
+                        Edge::Optional(extra, Some(RequestedExtras::Dependency(&dep.extra)), marker)
                     } else {
-                        Edge::Prod(
-                            Some(RequestedExtras::Dependency(&dep.extra)),
-                            dep.complexified_marker,
-                        )
+                        Edge::Prod(Some(RequestedExtras::Dependency(&dep.extra)), marker)
                     },
                 );
 

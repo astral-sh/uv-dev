@@ -25,7 +25,6 @@ use uv_install_wheel::LinkMode;
 use uv_normalize::DefaultGroups;
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
-use uv_python_discovery::PythonInstallation;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -150,33 +149,47 @@ pub(crate) async fn venv(
         None => DefaultGroups::default(),
     };
     let groups = DependencyGroups::default().with_defaults(default_groups);
+    // Interpreter-only commands do not build project metadata to refine workspace groups.
+    let discovery_workspace = project
+        .as_ref()
+        .map(|project| {
+            let workspace = project.workspace();
+            workspace
+                .workspace_groups_with_sources(&NoSources::None)
+                .and_then(|groups| workspace.with_provisional_workspace_groups(&groups))
+        })
+        .transpose()?;
     let project_python = ProjectPythonRequest::from_request(
         python_request,
-        project.as_ref().map(VirtualProject::workspace),
+        discovery_workspace.as_ref(),
         &groups,
+        &NoSources::None,
         project_dir,
         config_discovery,
     )
     .await?;
 
-    // Locate the Python interpreter to use in the environment
-    let interpreter = {
-        let python = PythonInstallation::find_or_download(
-            project_python.python_request.as_ref(),
+    // Locate the Python interpreter to use in the environment.
+    let (project_python, python) = project_python
+        .find_or_download_for_environment(
             EnvironmentPreference::OnlySystem,
             python_preference,
             python_arch,
+            None,
             python_downloads,
             client_builder,
             cache,
-            Some(&reporter),
-            install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url.as_deref(),
+            &reporter,
+            &install_mirrors,
+            |error| {
+                // A venv can use the requested interpreter outside the project domain.
+                warn_user!("{error}");
+                Ok(())
+            },
         )
         .await?;
-        report_interpreter(&python, false, printer)?;
-        python.into_interpreter()
-    };
+    report_interpreter(&python, false, printer)?;
+    let interpreter = python.into_interpreter();
 
     let upgrade_policy = UpgradePolicy::from_request(
         project_python
@@ -361,7 +374,7 @@ pub(crate) async fn venv(
         // Since the virtual environment is empty, and the set of requirements is trivial (no
         // constraints, no editables, etc.), we can use the build dispatch APIs directly.
         let requirements = build_dispatch
-            .resolve(&requirements, &build_stack)
+            .resolve(&requirements, None, &build_stack)
             .await
             .map_err(|err| VenvError::Seed(err.into()))?;
         let installed = build_dispatch

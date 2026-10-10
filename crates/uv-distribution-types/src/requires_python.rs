@@ -1,4 +1,4 @@
-use std::collections::Bound;
+use std::collections::{BTreeMap, Bound};
 
 use version_ranges::Ranges;
 
@@ -7,7 +7,9 @@ use uv_pep440::{
     LowerBound, UpperBound, Version, VersionSpecifier, VersionSpecifiers,
     release_specifiers_to_ranges,
 };
-use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion};
+use uv_pep508::{
+    CanonicalMarkerValueVersion, MarkerExpression, MarkerTree, MarkerTreeKind, MarkerValueVersion,
+};
 use uv_platform_tags::{AbiTag, CPythonAbiVariants, LanguageTag};
 
 /// The `Requires-Python` requirement specifier.
@@ -81,6 +83,136 @@ impl RequiresPython {
         let range = RequiresPythonRange::from_range(&range);
 
         Some(Self { specifiers, range })
+    }
+
+    /// Returns the union of the given Python requirements.
+    ///
+    /// Returns `None` if the union is empty or cannot be represented exactly by PEP 440 specifiers.
+    pub fn union<'a>(requirements: impl Iterator<Item = &'a Self>) -> Option<Self> {
+        let range = requirements
+            .map(|requires_python| release_specifiers_to_ranges(requires_python.specifiers.clone()))
+            .reduce(|left, right| left.union(&right))?;
+        if range.is_empty() {
+            return None;
+        }
+        let specifiers = VersionSpecifiers::from_release_only_bounds(range.iter());
+        if release_specifiers_to_ranges(specifiers.clone()) != range {
+            return None;
+        }
+        Some(Self {
+            specifiers,
+            range: RequiresPythonRange::from_range(&range),
+        })
+    }
+
+    /// Project an environment marker onto the Python versions it can support.
+    fn marker_python_ranges(marker: MarkerTree) -> Ranges<Version> {
+        fn project(
+            marker: MarkerTree,
+            memo: &mut BTreeMap<MarkerTree, Ranges<Version>>,
+        ) -> Ranges<Version> {
+            if let Some(range) = memo.get(&marker) {
+                return range.clone();
+            }
+            let mut range = Ranges::empty();
+            match marker.kind() {
+                MarkerTreeKind::True => range = Ranges::full(),
+                MarkerTreeKind::False => {}
+                MarkerTreeKind::Version(node) => {
+                    for (edge, child) in node.edges() {
+                        let child = project(child, memo);
+                        let child = match node.key() {
+                            CanonicalMarkerValueVersion::PythonFullVersion => {
+                                edge.intersection(&child)
+                            }
+                            CanonicalMarkerValueVersion::ImplementationVersion => child,
+                        };
+                        range = range.union(&child);
+                    }
+                }
+                MarkerTreeKind::VersionString(node) => {
+                    for (_, child) in node.edges() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+                MarkerTreeKind::String(node) => {
+                    for (_, child) in node.children() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+                MarkerTreeKind::In(node) => {
+                    for (_, child) in node.children() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+                MarkerTreeKind::Contains(node) => {
+                    for (_, child) in node.children() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+                MarkerTreeKind::List(node) => {
+                    for (_, child) in node.children() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+                MarkerTreeKind::Extra(node) => {
+                    for (_, child) in node.children() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+            }
+            memo.insert(marker, range.clone());
+            range
+        }
+        project(marker, &mut BTreeMap::new())
+    }
+
+    /// Project an environment marker onto the Python versions it can support.
+    ///
+    /// Returns `None` if the domain is empty or cannot be represented exactly by PEP 440 specifiers.
+    pub fn from_marker_tree(marker: MarkerTree) -> Option<Self> {
+        let range = Self::marker_python_ranges(marker);
+        if range.is_empty() {
+            return None;
+        }
+        let specifiers = VersionSpecifiers::from_release_only_bounds(range.iter());
+        if release_specifiers_to_ranges(specifiers.clone()) != range {
+            return None;
+        }
+        Some(Self {
+            specifiers,
+            range: RequiresPythonRange::from_range(&range),
+        })
+    }
+
+    /// Project an environment onto a disjunction of exact, individually representable intervals.
+    ///
+    /// This retains domains whose gaps cannot be expressed by a single PEP 440 conjunction.
+    pub fn from_marker_tree_parts(marker: MarkerTree) -> Vec<Self> {
+        Self::marker_python_ranges(marker)
+            .iter()
+            .map(|(lower, upper)| {
+                let range = Ranges::from_range_bounds((lower.cloned(), upper.cloned()));
+                let specifiers = VersionSpecifiers::from_release_only_bounds(range.iter());
+                debug_assert_eq!(release_specifiers_to_ranges(specifiers.clone()), range);
+                Self {
+                    specifiers,
+                    range: RequiresPythonRange::from_range(&range),
+                }
+            })
+            .collect()
+    }
+
+    /// Convert the complete declaration, including excluded versions, to a marker.
+    pub fn to_exact_marker_tree(&self) -> MarkerTree {
+        self.specifiers
+            .iter()
+            .fold(MarkerTree::TRUE, |marker, specifier| {
+                marker.and(MarkerTree::expression(MarkerExpression::Version {
+                    key: MarkerValueVersion::PythonFullVersion,
+                    specifier: specifier.clone(),
+                }))
+            })
     }
 
     /// Split the [`RequiresPython`] at the given version.
@@ -627,8 +759,65 @@ mod tests {
 
     use uv_distribution_filename::WheelFilename;
     use uv_pep440::{LowerBound, UpperBound, Version, VersionSpecifiers};
+    use uv_pep508::MarkerTree;
 
     use crate::RequiresPython;
+
+    #[test]
+    fn marker_python_projection() -> Result<(), Box<dyn std::error::Error>> {
+        let marker = MarkerTree::from_str(
+            "(sys_platform == 'win32' and python_version == '3.12') or (sys_platform != 'win32' and python_version >= '3.14')",
+        )?;
+        let requires_python = RequiresPython::from_marker_tree(marker).expect("nonempty domain");
+        assert_eq!(
+            requires_python.to_exact_marker_tree(),
+            MarkerTree::from_str("python_version == '3.12' or python_version >= '3.14'")?
+        );
+        let marker =
+            MarkerTree::from_str("platform_release >= '24.0.0' and python_version >= '3.12'")?;
+        let requires_python = RequiresPython::from_marker_tree(marker).expect("nonempty domain");
+        assert_eq!(
+            requires_python.to_exact_marker_tree(),
+            MarkerTree::from_str("python_version >= '3.12'")?
+        );
+        assert!(RequiresPython::from_marker_tree(MarkerTree::FALSE).is_none());
+        assert!(
+            RequiresPython::from_marker_tree(MarkerTree::TRUE)
+                .expect("all versions")
+                .to_exact_marker_tree()
+                .is_true()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn requires_python_union_preserves_patch_gaps() -> Result<(), Box<dyn std::error::Error>> {
+        let requirements = [
+            RequiresPython::from_specifiers(">=3.12,<3.12.4".parse()?),
+            RequiresPython::from_specifiers(">=3.12.8,<3.13".parse()?),
+        ];
+        let requirement = RequiresPython::union(requirements.iter()).expect("representable union");
+        assert!(requirement.contains(&"3.12.3".parse()?));
+        assert!(!requirement.contains(&"3.12.6".parse()?));
+        assert!(requirement.contains(&"3.12.8".parse()?));
+        let marker = "(python_full_version >= '3.12' and python_full_version < '3.12.4') or (python_full_version >= '3.12.8' and python_full_version < '3.13')".parse()?;
+        assert_eq!(requirement.to_exact_marker_tree(), marker);
+        assert_eq!(RequiresPython::from_marker_tree(marker), Some(requirement));
+        Ok(())
+    }
+
+    #[test]
+    fn requires_python_union_rejects_unrepresentable_gaps() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let requirements = [
+            RequiresPython::from_specifiers(">=3.12,<3.12.3".parse()?),
+            RequiresPython::from_specifiers(">=3.13,<3.14".parse()?),
+        ];
+        assert!(RequiresPython::union(requirements.iter()).is_none());
+        let marker = "(python_full_version >= '3.12' and python_full_version < '3.12.3') or (python_full_version >= '3.13' and python_full_version < '3.14')".parse()?;
+        assert!(RequiresPython::from_marker_tree(marker).is_none());
+        Ok(())
+    }
 
     #[test]
     fn requires_python_included() {

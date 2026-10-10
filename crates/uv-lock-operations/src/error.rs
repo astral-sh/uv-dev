@@ -73,13 +73,19 @@ pub enum LockError {
     )]
     LockWorkspaceMismatch(PackageName, MissingLockfileSource),
 
+    #[error("Failed to resolve workspace group `{0}`")]
+    WorkspaceGroupResolution(GroupName, #[source] Box<Self>),
+
+    #[error("Workspace group resolution did not produce a lockfile")]
+    MissingWorkspaceGroupResolution,
+
     #[error(
-        "The lockfile at `uv.lock` uses an unsupported schema version (v{1}, but only v{0} is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
+        "The lockfile at `uv.lock` uses an unsupported schema version (v{1}, but versions up to v{0} are supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
     )]
     UnsupportedLockVersion(u32, u32),
 
     #[error(
-        "Failed to parse `uv.lock`, which uses an unsupported schema version (v{1}, but only v{0} is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
+        "Failed to parse `uv.lock`, which uses an unsupported schema version (v{1}, but versions up to v{0} are supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
     )]
     UnparsableLockVersion(u32, u32, #[source] toml::de::Error),
 
@@ -98,7 +104,7 @@ pub enum LockError {
     EmptyEnvironment,
 
     #[error("Failed to parse `uv.lock`")]
-    UvLockParse(#[source] toml::de::Error),
+    UvLockParse(#[source] LockParseError),
 
     #[error("Group `{0}` is not defined in the project's `dependency-groups` table")]
     MissingGroupProject(GroupName),
@@ -175,7 +181,10 @@ impl From<LockParseError> for LockError {
                 version,
                 source,
             } => Self::UnparsableLockVersion(supported, version, source),
-            LockParseError::Toml(source) => Self::UvLockParse(source),
+            source @ (LockParseError::Toml(_) | LockParseError::Validation(_)) => {
+                Self::UvLockParse(source)
+            }
+            LockParseError::MissingWorkspaceMemberIdentity(source) => Self::Lock(source),
         }
     }
 }
@@ -188,9 +197,18 @@ impl From<LockError> for UvError {
             | LockError::MissingLockfile(..)
             | LockError::LockWorkspaceMismatch(..)) => Self::user(error),
             LockError::Resolve(error) => Self::from(*error),
+            LockError::WorkspaceGroupResolution(name, error) => {
+                let context = format!("Failed to resolve workspace group `{name}`");
+                match Self::from(*error) {
+                    Self::User(error) => Self::User(error.context(context)),
+                    Self::Argument(error) => Self::Argument(error.context(context)),
+                    Self::Unexpected(error) => Self::Unexpected(error.context(context)),
+                }
+            }
             error @ (LockError::UnsupportedLockVersion(..)
             | LockError::UnparsableLockVersion(..)
             | LockError::LockSerialization(_)
+            | LockError::MissingWorkspaceGroupResolution
             | LockError::OverlappingMarkers(..)
             | LockError::DisjointEnvironment(..)
             | LockError::EmptyEnvironment
@@ -232,9 +250,11 @@ impl Hinted for LockError {
                 Hints::from(format!("replace `{rhs}` with `{replacement}`"))
             }
             Self::Resolve(error) => error.hints(),
+            Self::WorkspaceGroupResolution(_, error) => error.hints(),
             Self::Lock(error) => error.hints(),
             Self::PythonSelection(error) => error.hints(),
             Self::MissingLockfile(..)
+            | Self::MissingWorkspaceGroupResolution
             | Self::UnsupportedLockVersion(..)
             | Self::UnparsableLockVersion(..)
             | Self::LockSerialization(_)

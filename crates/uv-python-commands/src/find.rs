@@ -4,7 +4,7 @@ use std::path::Path;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
+use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults, NoSources};
 use uv_errors::ErrorWithHints;
 use uv_fs::Simplified;
 use uv_python_discovery::ConfigDiscovery;
@@ -75,26 +75,97 @@ pub async fn find(
 
     // Don't enable the requires-python settings on groups
     let groups = DependencyGroupsWithDefaults::none();
-    let project_python = ProjectPythonRequest::from_request(
+    // Interpreter-only commands do not build project metadata to refine workspace groups.
+    let discovery_workspace = project
+        .as_ref()
+        .map(|project| {
+            let workspace = project.workspace();
+            workspace
+                .workspace_groups_with_sources(&NoSources::None)
+                .and_then(|groups| workspace.with_provisional_workspace_groups(&groups))
+        })
+        .transpose()?;
+    let mut project_python = ProjectPythonRequest::from_request(
         request.map(|request| PythonRequest::parse(&request)),
-        project.as_ref().map(VirtualProject::workspace),
+        discovery_workspace.as_ref(),
         &groups,
+        &NoSources::None,
         project_dir,
         config_discovery,
     )
     .await?;
 
-    let python_request = project_python
-        .python_request
-        .as_ref()
-        .unwrap_or(&PythonRequest::Default);
-    let python = PythonInstallation::find_existing(
-        python_request,
+    let probe_request = if project_python.has_environment_constraints() {
+        project_python.environment_probe()
+    } else {
+        project_python.clone()
+    };
+    let mut python = PythonInstallation::find_existing(
+        probe_request
+            .python_request
+            .as_ref()
+            .unwrap_or(&PythonRequest::Default),
         environment_preference,
         python_preference,
         python_arch,
         cache,
     )?;
+    if project_python.has_environment_constraints() {
+        let requests = match project_python
+            .clone()
+            .for_environment(python.interpreter().markers())
+        {
+            Ok(mut requests) => {
+                ProjectPythonRequest::prefer_existing(
+                    &mut requests,
+                    python.interpreter(),
+                    environment_preference,
+                    python_preference,
+                    python_arch,
+                    cache,
+                )?;
+                requests
+            }
+            // Explicit interpreter queries report project incompatibility without rejecting the
+            // requested interpreter, including a platform outside the selected workspace domain.
+            Err(error) => {
+                warn_user!("{error}");
+                vec![project_python.clone()]
+            }
+        };
+        let mut missing = None;
+        let mut selected = None;
+        for request in requests {
+            match PythonInstallation::find_existing(
+                request
+                    .python_request
+                    .as_ref()
+                    .unwrap_or(&PythonRequest::Default),
+                environment_preference,
+                python_preference,
+                python_arch,
+                cache,
+            ) {
+                Ok(installation) => {
+                    selected = Some((request, installation));
+                    break;
+                }
+                Err(error) if error.can_try_another_request() => missing = Some(error),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let Some((request, installation)) = selected else {
+            return Err(missing
+                .expect("at least one environment request was attempted")
+                .into());
+        };
+        project_python = request;
+        python = installation;
+    }
+    let python_request = project_python
+        .python_request
+        .as_ref()
+        .unwrap_or(&PythonRequest::Default);
     python
         .download_and_warn_if_outdated_prerelease(
             python_request,

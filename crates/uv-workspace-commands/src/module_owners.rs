@@ -11,13 +11,13 @@ use uv_configuration::{
 };
 use uv_dispatch::UniversalState;
 use uv_distribution_types::{Dist, Name, ResolvedDist};
-use uv_environment_operations::install_target::InstallTarget;
+use uv_environment_operations::install_target::{InstallTarget, SelectedInstallTarget};
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::sync_from_lock;
 use uv_fs::PortablePathBuf;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_installer::SitePackages;
-use uv_lock::{Installable, Metadata};
+use uv_lock::Metadata;
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_pypi_types::ModuleName;
@@ -33,7 +33,7 @@ use uv_workspace::WorkspaceCache;
 /// synchronization removes those unrelated packages instead. Only distributions in the selected
 /// resolution are assigned package IDs.
 pub(super) async fn collect_module_owners(
-    target: InstallTarget<'_>,
+    target: &SelectedInstallTarget<'_>,
     venv: &PythonEnvironment,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
@@ -45,7 +45,7 @@ pub(super) async fn collect_module_owners(
     malware_settings: &MalwareCheckSettings,
     sync: Option<Modifications>,
 ) -> Result<BTreeMap<ModuleName, Vec<String>>> {
-    let (extras, groups) = target_selection(target);
+    let (extras, groups) = target_selection(target.as_target());
     let package_ids = selected_package_ids(target, venv, &extras, &groups, settings)?;
     if package_ids.is_none() && !matches!(sync, Some(Modifications::Exact)) {
         return Ok(BTreeMap::new());
@@ -61,6 +61,7 @@ pub(super) async fn collect_module_owners(
             config_setting: &settings.config_setting,
             config_settings_package: &settings.config_settings_package,
             build_isolation: &settings.build_isolation,
+            build_hash_checking: settings.build_hash_checking,
             extra_build_dependencies: &settings.extra_build_dependencies,
             extra_build_variables: &settings.extra_build_variables,
             exclude_newer: &settings.exclude_newer,
@@ -105,7 +106,7 @@ pub(super) async fn collect_module_owners(
 
 /// Select the package IDs that can own modules in the target resolution.
 fn selected_package_ids(
-    target: InstallTarget<'_>,
+    target: &SelectedInstallTarget<'_>,
     venv: &PythonEnvironment,
     extras: &ExtrasSpecificationWithDefaults,
     groups: &DependencyGroupsWithDefaults,
@@ -126,7 +127,7 @@ fn selected_package_ids(
         return Ok(None);
     }
 
-    let workspace_root = PortablePathBuf::from(target.install_path());
+    let workspace_root = PortablePathBuf::from(target.as_target().install_path());
     let mut package_ids = BTreeMap::<PackageName, String>::new();
     for dist in resolution.distributions().filter(|dist| !is_virtual(dist)) {
         package_ids.insert(

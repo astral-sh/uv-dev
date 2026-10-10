@@ -27,10 +27,16 @@ pub enum ProjectError {
     Lock(#[from] uv_lock_operations::LockError),
 
     #[error(transparent)]
+    LockData(#[from] uv_lock::LockError),
+
+    #[error(transparent)]
     Environment(#[from] EnvironmentError),
 
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),
+
+    #[error(transparent)]
+    WorkspaceGroupSelection(#[from] uv_lock::WorkspaceGroupSelectionError),
 
     #[error(transparent)]
     MissingProjectVersion(WorkspaceError),
@@ -55,7 +61,9 @@ impl From<ProjectError> for UvError {
             | ProjectError::Pep723ScriptTomlParse(_)
             | ProjectError::PyprojectMut(_)
             | ProjectError::Workspace(_)
+            | ProjectError::WorkspaceGroupSelection(..)
             | ProjectError::MissingProjectVersion(_)
+            | ProjectError::LockData(_)
             | ProjectError::Fmt(_)
             | ProjectError::Io(_)
             | ProjectError::Anyhow(_)) => Self::unexpected(error.into()),
@@ -77,6 +85,8 @@ impl Hinted for ProjectError {
             | Self::Pep723ScriptTomlParse(_)
             | Self::PyprojectMut(_)
             | Self::Workspace(_)
+            | Self::WorkspaceGroupSelection(..)
+            | Self::LockData(_)
             | Self::Fmt(_)
             | Self::Io(_)
             | Self::Anyhow(_) => Hints::none(),

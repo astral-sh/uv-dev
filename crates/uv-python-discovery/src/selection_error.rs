@@ -2,7 +2,10 @@
 
 use uv_distribution_types::RequiresPython;
 use uv_pep440::Version;
-use uv_workspace::{RequiresPythonSources, dependency_groups::DependencyGroupError};
+use uv_pep508::MarkerTreeContents;
+use uv_workspace::{
+    RequiresPythonSources, WorkspaceError, dependency_groups::DependencyGroupError,
+};
 
 use crate::{PythonRequirementConflicts, format_requires_python_sources};
 
@@ -50,11 +53,19 @@ pub enum PythonSelectionError {
     )]
     DisjointRequiresPython(RequiresPythonSources),
 
+    #[error(
+        "The selected Python environment is not compatible with the project's supported environments: `{0}`"
+    )]
+    UnsupportedEnvironment(MarkerTreeContents),
+
     #[error(transparent)]
     Python(#[from] crate::Error),
 
     #[error(transparent)]
     DependencyGroup(#[from] DependencyGroupError),
+
+    #[error(transparent)]
+    Workspace(#[from] WorkspaceError),
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -71,7 +82,9 @@ impl uv_errors::Hinted for PythonSelectionError {
             | Self::DotPythonVersionScriptIncompatibility(..)
             | Self::RequiresPythonScriptIncompatibility(..)
             | Self::DisjointRequiresPython(..)
+            | Self::UnsupportedEnvironment(..)
             | Self::DependencyGroup(..)
+            | Self::Workspace(..)
             | Self::Io(..) => uv_errors::Hints::none(),
         }
     }

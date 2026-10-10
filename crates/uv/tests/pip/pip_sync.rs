@@ -2453,7 +2453,7 @@ fn sync_editable() -> Result<()> {
 
     // Modify the `pyproject.toml` file.
     let pyproject_toml = poetry_editable.path().join("pyproject.toml");
-    let pyproject_toml_contents = fs_err::read_to_string(&pyproject_toml)?;
+    let pyproject_toml_contents = context.read("poetry_editable/pyproject.toml");
     fs_err::write(
         &pyproject_toml,
         pyproject_toml_contents.replace("0.1.0", "0.1.1"),
@@ -2475,7 +2475,7 @@ fn sync_editable() -> Result<()> {
 
     // Modify the `pyproject.toml` file.
     let pyproject_toml = poetry_editable.path().join("pyproject.toml");
-    let pyproject_toml_contents = fs_err::read_to_string(&pyproject_toml)?;
+    let pyproject_toml_contents = context.read("poetry_editable/pyproject.toml");
     fs_err::write(
         &pyproject_toml,
         pyproject_toml_contents.replace("0.1.0", "0.1.1"),
@@ -3271,7 +3271,7 @@ fn compile() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled 3 files in [TIME]
+    Bytecode compiled 2 files in [TIME]
      + markupsafe==2.1.3
     "
     );
@@ -3317,7 +3317,7 @@ fn recompile() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Bytecode compiled 3 files in [TIME]
+    Bytecode compiled 2 files in [TIME]
     "
     );
 
@@ -5609,6 +5609,18 @@ fn compatible_build_constraint() -> Result<()> {
     let constraints_txt = context.temp_dir.child("build_constraints.txt");
     // Verify mode ignores hashes on unpinned constraints and does not activate extras.
     constraints_txt.write_str("setuptools[foo]>=40 --hash=sha256:incorrect")?;
+
+    uv_snapshot!(context.pip_sync()
+        .arg("requirements.txt")
+        .arg("--verify-hashes")
+        .arg("--build-constraint")
+        .arg("build_constraints.txt")
+        .env(EnvVars::UV_REQUIRE_BUILD_HASHES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
+    error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: setuptools[foo]>=40
+    ");
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")

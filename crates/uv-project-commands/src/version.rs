@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 use std::str::FromStr;
@@ -18,7 +19,7 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, sync_from_lock,
+    ProjectInterpreter, discover_workspace_groups, sync_from_lock,
 };
 use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
@@ -42,6 +43,7 @@ use uv_workspace::{
 
 use crate::ProjectError;
 use crate::edit::{ProjectEdit, PythonTarget};
+use crate::lock::{CommandWorkspaceDiscovery, workspace_for_project_groups};
 
 /// Version information for a project (`uv version`).
 #[derive(serde::Serialize)]
@@ -529,58 +531,107 @@ async fn lock_and_sync(
     let extras = ExtrasSpecification::default().with_defaults(default_extras);
     let install_options = InstallOptions::default();
 
-    // Discover the interpreter or environment used to lock and sync the project.
-    let python_target = if no_sync {
-        // Discover the interpreter.
-        let project_python = ProjectPythonRequest::from_request(
-            python.as_deref().map(PythonRequest::parse),
-            Some(project.workspace()),
-            &groups,
-            project_dir,
-            config_discovery,
-        )
-        .await?;
-        let interpreter = ProjectInterpreter::discover(
-            ProjectEnvironmentTarget::from(project.workspace()),
-            project_python,
-            &client_builder,
-            python_preference,
-            python_arch,
-            python_downloads,
-            &install_mirrors,
-            ProjectEnvironmentPolicy::Optional,
-            active,
-            cache,
-            printer,
-        )
-        .await?
-        .into_interpreter();
+    let state = UniversalState::default();
+    let workspace_cache = WorkspaceCache::default();
 
-        PythonTarget::Interpreter(interpreter)
-    } else {
-        // Discover or create the virtual environment.
-        let environment = ProjectEnvironment::get_or_init(
-            ProjectEnvironmentTarget::from(project.workspace()),
-            None,
-            &groups,
-            python.as_deref().map(PythonRequest::parse),
-            &install_mirrors,
-            &client_builder,
-            python_preference,
-            python_arch,
-            python_downloads,
-            no_sync,
-            config_discovery,
-            active,
-            cache,
-            DryRun::Disabled,
-            LinkErrorReporting::User,
-            printer,
-        )
-        .await?
-        .into_environment()?;
+    let discovered = discover_workspace_groups(
+        project.workspace(),
+        project_dir,
+        python.as_deref(),
+        lock_check,
+        &settings.resolver,
+        &client_builder,
+        &state,
+        &BTreeSet::new(),
+        python_preference,
+        python_arch,
+        python_downloads,
+        &install_mirrors,
+        concurrency,
+        config_discovery,
+        cache,
+        &workspace_cache,
+        printer,
+        preview,
+    )
+    .await?;
+    let discovery = workspace_for_project_groups(&project, &[], false, &discovered, no_sync)?;
+    let mut pending_selection = None;
 
-        PythonTarget::Environment(environment)
+    // Discover an interpreter for a provisional scope, or create a finalized environment.
+    let mut python_target = match discovery {
+        CommandWorkspaceDiscovery::Provisional {
+            workspace,
+            selection,
+        } => {
+            pending_selection = selection;
+            // Discover the interpreter.
+            let project_python = ProjectPythonRequest::from_request(
+                python.as_deref().map(PythonRequest::parse),
+                Some(&workspace),
+                &groups,
+                &settings.resolver.sources,
+                project_dir,
+                config_discovery,
+            )
+            .await?;
+            let interpreter = ProjectInterpreter::discover(
+                ProjectEnvironmentTarget::from(&workspace),
+                if pending_selection.is_some() {
+                    project_python.environment_probe()
+                } else {
+                    project_python
+                },
+                &client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                &install_mirrors,
+                ProjectEnvironmentPolicy::Optional,
+                if no_sync {
+                    active
+                } else {
+                    active.without_warning()
+                },
+                cache,
+                if no_sync || printer == Printer::Verbose {
+                    printer
+                } else {
+                    Printer::Silent
+                },
+            )
+            .await?
+            .into_interpreter();
+
+            PythonTarget::Interpreter(interpreter)
+        }
+        CommandWorkspaceDiscovery::Finalized(workspace) => {
+            // Discover or create the virtual environment.
+            let environment = ProjectEnvironment::get_or_init(
+                ProjectEnvironmentTarget::from(&workspace),
+                None,
+                &groups,
+                &settings.resolver.sources,
+                python.as_deref().map(PythonRequest::parse),
+                &install_mirrors,
+                &client_builder,
+                python_preference,
+                python_arch,
+                None,
+                python_downloads,
+                no_sync,
+                config_discovery,
+                active,
+                cache,
+                DryRun::Disabled,
+                LinkErrorReporting::User,
+                printer,
+            )
+            .await?
+            .into_environment()?;
+
+            PythonTarget::Environment(environment)
+        }
     };
 
     // Determine the lock mode.
@@ -590,12 +641,8 @@ async fn lock_and_sync(
         LockMode::Write(python_target.interpreter())
     };
 
-    // Initialize any shared state.
-    let state = UniversalState::default();
-    let workspace_cache = WorkspaceCache::default();
-
     // Lock and sync the environment, if necessary.
-    let lock = match Box::pin(
+    let mut lock = match Box::pin(
         LockOperation::new(
             mode,
             &settings.resolver,
@@ -616,6 +663,38 @@ async fn lock_and_sync(
         Err(err) => return Err(UvError::from(err).into()),
     };
 
+    if let Some(selection) = pending_selection {
+        let mut finalized = selection.finalize(&lock)?;
+        let workspace = finalized.environment_workspace(project.workspace());
+        if let Some(selected_lock) = finalized.take_selected_lock() {
+            lock = selected_lock;
+        }
+        python_target = PythonTarget::Environment(
+            ProjectEnvironment::get_or_init(
+                ProjectEnvironmentTarget::from(&workspace),
+                None,
+                &groups,
+                &settings.resolver.sources,
+                python.as_deref().map(PythonRequest::parse),
+                &install_mirrors,
+                &client_builder,
+                python_preference,
+                python_arch,
+                None,
+                python_downloads,
+                false,
+                config_discovery,
+                active,
+                cache,
+                DryRun::Disabled,
+                LinkErrorReporting::User,
+                printer,
+            )
+            .await?
+            .into_environment()?,
+        );
+    }
+
     let PythonTarget::Environment(venv) = &python_target else {
         // If we're not syncing, exit early.
         return Ok(ExitStatus::Success);
@@ -633,7 +712,7 @@ async fn lock_and_sync(
     let state = state.fork();
 
     match sync_from_lock(
-        target,
+        &target.select_workspace_context()?,
         venv,
         &extras,
         &groups,

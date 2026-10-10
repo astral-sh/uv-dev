@@ -1,7 +1,8 @@
+use std::collections::BTreeSet;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
@@ -13,9 +14,9 @@ use uv_dispatch::UniversalState;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, ScriptEnvironment,
+    ProjectInterpreter, ScriptEnvironment, discover_workspace_groups,
 };
-use uv_lock::{Lock, Metadata, Package};
+use uv_lock::{Lock, Metadata, Package, WorkspaceGroupSelectionError};
 use uv_lock_operations::{
     DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockTarget,
 };
@@ -97,6 +98,39 @@ pub async fn metadata(
     let groups = DependencyGroupsWithDefaults::none();
     let state = UniversalState::default();
 
+    let group_workspace = if frozen.is_none() {
+        if let MetadataSource::Manifest(LockTarget::Workspace(workspace)) = &source {
+            let groups = discover_workspace_groups(
+                workspace,
+                project_dir,
+                python.as_deref(),
+                lock_check,
+                &settings,
+                &client_builder,
+                &state,
+                &BTreeSet::new(),
+                python_preference,
+                python_arch,
+                python_downloads,
+                &install_mirrors,
+                &concurrency,
+                config_discovery,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            )
+            .await?;
+            (!groups.is_empty())
+                .then(|| workspace.with_workspace_groups(&groups))
+                .transpose()?
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let resolved_lock;
     let lock: &Lock = match &source {
         MetadataSource::Lockfile(workspace) => workspace.lock(),
@@ -124,10 +158,12 @@ pub async fn metadata(
                     .await?
                     .into_interpreter(),
                     LockTarget::Workspace(workspace) => {
+                        let workspace = group_workspace.as_ref().unwrap_or(workspace);
                         let project_python = ProjectPythonRequest::from_request(
                             python.as_deref().map(PythonRequest::parse),
                             Some(workspace),
                             &groups,
+                            &settings.sources,
                             project_dir,
                             config_discovery,
                         )
@@ -208,18 +244,36 @@ pub async fn metadata(
         },
     };
     let mut export = metadata_for_target(install_target);
+    let selected_target = sync
+        .is_some()
+        .then(|| {
+            install_target
+                .select_workspace_context()
+                .map_err(|error| match error {
+                    WorkspaceGroupSelectionError::Ambiguous => anyhow!(
+                        "Cannot synchronize workspace metadata across incompatible contexts; configure a default workspace group"
+                    ),
+                    error => error.into(),
+                })
+        })
+        .transpose()?;
+    let environment_target = selected_target
+        .as_ref()
+        .map_or(install_target, |target| target.as_target());
     let environment = if sync.is_some() {
         Some(match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
                 ProjectEnvironment::get_or_init(
-                    ProjectEnvironmentTarget::from(*workspace),
-                    None,
+                    ProjectEnvironmentTarget::from(group_workspace.as_ref().unwrap_or(workspace)),
+                    (!lock.workspace_groups().is_empty()).then_some(environment_target),
                     &groups,
+                    &settings.sources,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
                     &client_builder,
                     python_preference,
                     python_arch,
+                    None,
                     python_downloads,
                     false,
                     config_discovery,
@@ -254,13 +308,15 @@ pub async fn metadata(
                     root: workspace.root(),
                     lock,
                 },
-                Some(install_target),
+                Some(environment_target),
                 &groups,
+                &settings.sources,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
                 &client_builder,
                 python_preference,
                 python_arch,
+                None,
                 python_downloads,
                 false,
                 config_discovery,
@@ -295,24 +351,35 @@ pub async fn metadata(
                 tracing::warn!("Failed to acquire environment lock: {err}");
             })
             .ok();
-        let module_owners = collect_module_owners(
-            install_target,
-            &environment,
-            &settings,
-            &client_builder,
-            &state,
-            &concurrency,
-            cache,
-            workspace_cache,
-            preview,
-            &malware_settings,
-            sync,
-        )
-        .await
-        .context("Failed to collect module owners")?;
-        export = export
-            .with_environment(&environment)
-            .with_module_owners(module_owners);
+        export = export.with_environment(&environment);
+        let selected_target = if let Some(target) = selected_target {
+            Some(target)
+        } else {
+            match install_target.select_workspace_context() {
+                Ok(target) => Some(target),
+                // Full-graph metadata can describe contexts that cannot share one installation.
+                Err(WorkspaceGroupSelectionError::Ambiguous) if sync.is_none() => None,
+                Err(error) => return Err(error).context("Failed to collect module owners"),
+            }
+        };
+        if let Some(selected_target) = selected_target {
+            let module_owners = collect_module_owners(
+                &selected_target,
+                &environment,
+                &settings,
+                &client_builder,
+                &state,
+                &concurrency,
+                cache,
+                workspace_cache,
+                preview,
+                &malware_settings,
+                sync,
+            )
+            .await
+            .context("Failed to collect module owners")?;
+            export = export.with_module_owners(module_owners);
+        }
     }
 
     print_metadata(&export, printer)

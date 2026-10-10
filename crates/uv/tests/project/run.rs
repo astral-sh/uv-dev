@@ -6242,6 +6242,77 @@ fn run_pep723_script_with_constraints() -> Result<()> {
     Ok(())
 }
 
+/// Skipping synchronization keeps an existing environment on an unsupported project platform.
+#[cfg(target_os = "linux")]
+#[test]
+fn run_no_sync_unsupported_platform() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.venv().assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12,<3.14"
+        [tool.uv]
+        package = false
+        environments = ["sys_platform == 'win32'"]
+    "#})?;
+    let environment = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.run().args([
+        "--offline", "--no-sync", "python", "-c", "print('preserved')",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    preserved
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// A preserved environment does not require another interpreter merely to probe the platform.
+#[cfg(target_os = "linux")]
+#[test]
+fn run_no_sync_platform_incompatible_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.venv().assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.13,<3.14"
+        [tool.uv]
+        package = false
+        environments = ["sys_platform == 'linux'"]
+    "#})?;
+    let environment = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.run().args([
+        "--offline", "--no-sync", "python", "-c", "print('preserved')",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    preserved
+
+    ----- stderr -----
+    warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python ==3.13.*`)
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
 #[test]
 fn run_no_sync_incompatible_python() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11", "3.9"]);
@@ -7889,5 +7960,29 @@ fn run_centralized_environment_path_file() -> Result<()> {
     ----- stderr -----
     warning: Using incompatible environment (`project-cp3.12.[X]-[HASH]`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.11`)
     "#);
+    Ok(())
+}
+
+#[test]
+fn run_no_sync_frozen_without_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-sync", "--frozen", "python", "-c", "print('no lock required')",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    no lock required
+    ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
     Ok(())
 }

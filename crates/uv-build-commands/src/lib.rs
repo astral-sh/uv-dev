@@ -250,6 +250,7 @@ pub async fn build_frontend(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -422,6 +423,7 @@ pub async fn build_frontend(
             index_locations,
             client_builder.clone(),
             hash_checking,
+            *build_hash_checking,
             build_logs,
             gitignore,
             force_pep517,
@@ -495,6 +497,7 @@ async fn build_package(
     index_locations: &IndexLocations,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
+    build_hash_checking: HashCheckingMode,
     build_logs: bool,
     gitignore: bool,
     force_pep517: bool,
@@ -554,12 +557,24 @@ async fn build_package(
     if interpreter_request.is_none() {
         if let Ok(workspace) = workspace {
             let groups = DependencyGroupsWithDefaults::none();
-            interpreter_request =
-                find_requires_python(workspace, &groups)?
-                    .as_ref()
-                    .and_then(|requires_python| {
-                        PythonRequest::from_specifiers(requires_python.specifiers())
-                    });
+            // The interpreter is needed to build this member's dynamic metadata.
+            let provisional_groups = workspace
+                .workspace_groups_with_dependency_metadata(&sources, dependency_metadata)
+                .map_err(PythonSelectionError::from)?;
+            let workspace = if let Source::Directory(directory) = &source.source
+                && let Some(member) = workspace.packages().values().find(|member| {
+                    normalize_path(member.root()) == normalize_path(directory.as_ref())
+                }) {
+                workspace.with_provisional_workspace_member(&provisional_groups, member)
+            } else {
+                workspace.with_provisional_workspace_groups(&provisional_groups)
+            }
+            .map_err(PythonSelectionError::from)?;
+            interpreter_request = find_requires_python(&workspace, &groups, &sources)?
+                .as_ref()
+                .and_then(|requires_python| {
+                    PythonRequest::from_specifiers(requires_python.specifiers())
+                });
         }
     }
 
@@ -589,14 +604,22 @@ async fn build_package(
             .chain(build_constraints_from_workspace.iter().cloned()),
     );
 
+    let hash_checking = match build_hash_checking {
+        HashCheckingMode::Require => Some(HashCheckingMode::Require),
+        HashCheckingMode::Verify => hash_checking,
+    };
     let hasher = if let Some(hash_checking) = hash_checking {
-        // Under `--require-hashes`, include all command-line constraints, but only workspace
-        // constraints with supplied hashes. Other workspace constraints still restrict builds.
+        // `uv build --require-hashes` requires hashes only for command-line build constraints;
+        // `--require-build-hashes` also includes workspace build constraints.
         let hash_constraints = Constraints::from_specifications(
             command_line_constraints.iter().cloned().chain(
                 build_constraints_from_workspace
                     .iter()
-                    .filter(|entry| !hash_checking.is_require() || !entry.hashes.is_empty())
+                    .filter(|entry| {
+                        !hash_checking.is_require()
+                            || build_hash_checking.is_require()
+                            || !entry.hashes.is_empty()
+                    })
                     .cloned(),
             ),
         );
@@ -667,7 +690,8 @@ async fn build_package(
         workspace_cache.clone(),
         concurrency.clone(),
         preview,
-    );
+    )
+    .with_build_hash_checking(build_hash_checking);
     let dependency_check = match types_build_isolation {
         uv_types::BuildIsolation::Isolated => None,
         uv_types::BuildIsolation::Shared(_) | uv_types::BuildIsolation::SharedPackage(..) => {
@@ -797,7 +821,13 @@ async fn build_package(
             let ext = SourceDistExtension::from_path(path.as_path())
                 .map_err(|err| Error::InvalidSourceDistExt(path.user_display().to_string(), err))?;
             let temp_dir = tempfile::tempdir_in(cache.bucket(CacheBucket::SourceDistributions))?;
-            let (temp_dir, _) = uv_extract::stream::archive(&mut reader, ext, temp_dir).await?;
+            let (temp_dir, _) = uv_extract::stream::archive(
+                &mut reader,
+                ext,
+                temp_dir,
+                build_dispatch.tar_backend(),
+            )
+            .await?;
             drop(reader);
 
             // Extract the top-level directory from the archive.
@@ -910,7 +940,13 @@ async fn build_package(
                 Error::InvalidSourceDistExt(source.path().user_display().to_string(), err)
             })?;
             let temp_dir = tempfile::tempdir_in(&output_dir)?;
-            let (temp_dir, _) = uv_extract::stream::archive(&mut reader, ext, temp_dir).await?;
+            let (temp_dir, _) = uv_extract::stream::archive(
+                &mut reader,
+                ext,
+                temp_dir,
+                build_dispatch.tar_backend(),
+            )
+            .await?;
             drop(reader);
 
             // If the source distribution has a normalized filename, check its identity.
@@ -1094,12 +1130,14 @@ async fn build_sdist(
             let source_tree = source_tree.to_path_buf();
             let output_dir_ = output_dir.to_path_buf();
             let sources_enabled = sources.is_none();
+            let tar_backend = build_dispatch.tar_backend();
             let filename = tokio::task::spawn_blocking(move || {
                 uv_build_backend::build_source_dist(
                     &source_tree,
                     &output_dir_,
                     uv_version::version(),
                     sources_enabled,
+                    tar_backend,
                 )
             })
             .await??

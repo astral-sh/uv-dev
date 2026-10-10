@@ -13,8 +13,8 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
-    AuthorFrom, DependencyGroupsWithDefaults, InitKind, InitProjectKind, ProjectBuildBackend,
-    VersionControlError, VersionControlSystem,
+    AuthorFrom, DependencyGroupsWithDefaults, InitKind, InitProjectKind, NoSources,
+    ProjectBuildBackend, VersionControlError, VersionControlSystem,
 };
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
@@ -651,7 +651,16 @@ async fn determine_requires_python(
         Ok((requires_python, python_pin))
     } else if let Some(requires_python) = workspace
         .as_ref()
-        .map(|workspace| find_requires_python(workspace, &DependencyGroupsWithDefaults::none()))
+        .map(|workspace| {
+            let workspace = workspace.with_provisional_workspace_groups(
+                &workspace.workspace_groups_with_sources(&NoSources::None)?,
+            )?;
+            find_requires_python(
+                &workspace,
+                &DependencyGroupsWithDefaults::none(),
+                &NoSources::None,
+            )
+        })
         .transpose()?
         .flatten()
     {

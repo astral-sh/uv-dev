@@ -171,6 +171,12 @@ impl uv_errors::Hinted for Error {
 }
 
 impl Error {
+    /// Whether another compatible Python request may be tried after this discovery failure.
+    pub fn can_try_another_request(&self) -> bool {
+        matches!(self, Self::MissingPython(..))
+            || matches!(self, Self::Discovery(error) if !error.is_critical())
+    }
+
     fn with_hint(self, hint: MissingPythonHint) -> Self {
         match self {
             Self::MissingPython(err, _) => Self::MissingPython(err, Some(Box::new(hint))),

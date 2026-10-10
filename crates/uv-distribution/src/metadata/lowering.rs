@@ -24,20 +24,14 @@ use uv_pypi_types::{
 };
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_workspace::pyproject::{PyProjectToml, Source, Sources, WorkspaceReference};
-use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
+use uv_workspace::{
+    DiscoveryOptions, SourceOrigin, SourceSelection, Workspace, WorkspaceCache, WorkspaceError,
+};
 
 use crate::metadata::GitWorkspaceMember;
 
 #[derive(Debug, Clone)]
 pub struct LoweredRequirement(Requirement);
-
-#[derive(Debug, Clone, Copy)]
-enum RequirementOrigin {
-    /// The `tool.uv.sources` were read from the project.
-    Project,
-    /// The `tool.uv.sources` were read from the workspace root.
-    Workspace,
-}
 
 impl LoweredRequirement {
     /// Combine `project.dependencies` or `project.optional-dependencies` with `tool.uv.sources`.
@@ -57,37 +51,14 @@ impl LoweredRequirement {
         workspace_cache: &'data WorkspaceCache,
         credentials_cache: &'data CredentialsCache,
     ) -> impl Iterator<Item = Result<Self, LoweringError>> + use<'data> + 'data {
-        // Identify the source from the `tool.uv.sources` table.
-        let (sources, origin) = if let Some(source) = project_sources.get(&requirement.name) {
-            (Some(source), RequirementOrigin::Project)
-        } else if let Some(source) = workspace.sources().get(&requirement.name) {
-            (Some(source), RequirementOrigin::Workspace)
-        } else {
-            (None, RequirementOrigin::Project)
-        };
-
-        // If the source only applies to a given extra or dependency group, filter it out.
-        let sources = sources.map(|sources| {
-            sources
-                .iter()
-                .filter(|source| {
-                    if let Some(target) = source.extra()
-                        && extra != Some(target)
-                    {
-                        return false;
-                    }
-
-                    if let Some(target) = source.group()
-                        && group != Some(target)
-                    {
-                        return false;
-                    }
-
-                    true
-                })
-                .cloned()
-                .collect::<Sources>()
-        });
+        let sources = SourceSelection::new(
+            &requirement.name,
+            requirement.marker,
+            Some(project_sources),
+            workspace.sources(),
+            extra,
+            group,
+        );
 
         // If you use a package that's part of the workspace...
         if workspace.packages().contains_key(&requirement.name) {
@@ -102,7 +73,7 @@ impl LoweredRequirement {
                     )));
                 };
 
-                for source in sources.iter() {
+                for (source, _) in sources.iter() {
                     match source {
                         Source::Git { .. } => {
                             return Either::Left(std::iter::once(Err(
@@ -159,30 +130,18 @@ impl LoweredRequirement {
             )));
         };
 
-        // Determine whether the markers cover the full space for the requirement. If not, fill the
-        // remaining space with the negation of the sources.
-        let remaining = {
-            // Determine the space covered by the sources.
-            let mut total = MarkerTree::FALSE;
-            for source in sources.iter() {
-                total = total.or(source.marker());
-            }
-
-            // Determine the space covered by the requirement.
-            let mut remaining = total.negate();
-            remaining = remaining.and(requirement.marker);
-
-            Self(Requirement {
-                marker: remaining,
-                ..Requirement::from(requirement.clone())
-            })
-        };
+        let origin = sources.origin();
+        let remaining = Self(Requirement {
+            marker: sources.remaining_marker(),
+            ..Requirement::from(requirement.clone())
+        });
 
         Either::Right(
-            join_all(sources.into_iter().map(|source| {
+            join_all(sources.iter().map(|(source, marker)| {
+                let source = source.clone();
                 let requirement = &requirement;
                 async move {
-                    let (source, mut marker) = match source {
+                    let source = match source {
                         Source::Git {
                             git,
                             subdirectory,
@@ -191,54 +150,39 @@ impl LoweredRequirement {
                             tag,
                             branch,
                             lfs,
-                            marker,
                             ..
-                        } => {
-                            let source = git_source(
-                                git,
-                                subdirectory.map(Box::<Path>::from),
-                                path.map(Box::<Path>::from).map(PathBuf::from),
-                                rev,
-                                tag,
-                                branch,
-                                lfs,
-                            )?;
-                            (source, marker)
-                        }
+                        } => git_source(
+                            git,
+                            subdirectory.map(Box::<Path>::from),
+                            path.map(Box::<Path>::from).map(PathBuf::from),
+                            rev,
+                            tag,
+                            branch,
+                            lfs,
+                        )?,
                         Source::Url {
-                            url,
-                            subdirectory,
-                            marker,
-                            ..
-                        } => {
-                            let source =
-                                url_source(requirement, url, subdirectory.map(Box::<Path>::from))?;
-                            (source, marker)
-                        }
+                            url, subdirectory, ..
+                        } => url_source(requirement, url, subdirectory.map(Box::<Path>::from))?,
                         Source::Path {
                             path,
                             editable,
                             package,
-                            marker,
                             ..
-                        } => {
-                            let source = path_source(
-                                path,
-                                git_member,
-                                origin,
-                                project_dir,
-                                workspace.install_path(),
-                                editable,
-                                package,
-                                true,
-                            )?;
-                            (source, marker)
-                        }
+                        } => path_source(
+                            path,
+                            git_member,
+                            origin,
+                            project_dir,
+                            workspace.install_path(),
+                            editable,
+                            package,
+                            true,
+                        )?,
                         Source::Registry {
                             index,
-                            marker,
                             extra,
                             group,
+                            ..
                         } => {
                             // Identify the named index from either the project indexes or the workspace indexes,
                             // in that order.
@@ -274,16 +218,14 @@ impl LoweredRequirement {
                                     })
                                 }
                             });
-                            let source = registry_source(requirement, index, conflict);
-                            (source, marker)
+                            registry_source(requirement, index, conflict)
                         }
                         Source::Workspace {
                             workspace: workspace_ref,
                             editable: source_editable,
-                            marker,
                             ..
                         } => {
-                            let source = workspace_source(
+                            workspace_source(
                                 requirement,
                                 &workspace_ref,
                                 source_editable,
@@ -296,12 +238,9 @@ impl LoweredRequirement {
                                 cache,
                                 workspace_cache,
                             )
-                            .await?;
-                            (source, marker)
+                            .await?
                         }
                     };
-
-                    marker = marker.and(requirement.marker);
 
                     Ok(Self(Requirement {
                         name: requirement.name.clone(),
@@ -422,7 +361,7 @@ impl LoweredRequirement {
                             let source = path_source(
                                 path,
                                 None,
-                                RequirementOrigin::Project,
+                                SourceOrigin::Project,
                                 dir,
                                 dir,
                                 editable,
@@ -469,7 +408,7 @@ impl LoweredRequirement {
                                 &workspace_ref,
                                 editable,
                                 true,
-                                RequirementOrigin::Project,
+                                SourceOrigin::Project,
                                 dir,
                                 dir,
                                 None,
@@ -818,7 +757,7 @@ async fn workspace_source(
     workspace_ref: &WorkspaceReference,
     source_editable: Option<bool>,
     default_editable: bool,
-    origin: RequirementOrigin,
+    origin: SourceOrigin,
     project_dir: &Path,
     workspace_root: &Path,
     current_workspace: Option<&Workspace>,
@@ -827,8 +766,8 @@ async fn workspace_source(
     workspace_cache: &WorkspaceCache,
 ) -> Result<RequirementSource, LoweringError> {
     let base = match origin {
-        RequirementOrigin::Project => project_dir,
-        RequirementOrigin::Workspace => workspace_root,
+        SourceOrigin::Project => project_dir,
+        SourceOrigin::Workspace => workspace_root,
     };
 
     match workspace_ref {
@@ -913,7 +852,7 @@ async fn workspace_source(
 fn path_source(
     path: impl AsRef<Path>,
     git_member: Option<&GitWorkspaceMember>,
-    origin: RequirementOrigin,
+    origin: SourceOrigin,
     project_dir: &Path,
     workspace_root: &Path,
     editable: Option<bool>,
@@ -922,8 +861,8 @@ fn path_source(
 ) -> Result<RequirementSource, LoweringError> {
     let path = path.as_ref();
     let base = match origin {
-        RequirementOrigin::Project => project_dir,
-        RequirementOrigin::Workspace => workspace_root,
+        SourceOrigin::Project => project_dir,
+        SourceOrigin::Workspace => workspace_root,
     };
     let url = VerbatimUrl::from_path(path, base)?;
     let url = if preserve_given {

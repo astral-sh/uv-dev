@@ -2,7 +2,8 @@ use anyhow::Result;
 
 use uv_configuration::{BuildOptions, DependencyGroupsWithDefaults, InstallOptions};
 use uv_distribution_types::Resolution;
-use uv_lock::{Lock, SelectedDependency};
+use uv_environment_operations::install_target::SelectedInstallTarget;
+use uv_lock::SelectedDependency;
 use uv_normalize::{GroupName, PackageName};
 use uv_python_interpreter::Interpreter;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
@@ -29,14 +30,15 @@ impl<'lock> LockedTool<'lock> {
 /// dependencies.
 pub(super) fn find_locked_tool<'lock>(
     project: &VirtualProject,
-    lock: &'lock Lock,
+    target: &'lock SelectedInstallTarget<'_>,
     interpreter: &Interpreter,
     package_name: &PackageName,
     dependency_group: &GroupName,
     groups: &DependencyGroupsWithDefaults,
 ) -> Result<Option<LockedTool<'lock>>> {
     let marker_environment = interpreter.to_resolver_marker_environment();
-    let selection = lock
+    let selection = target
+        .lock()
         .dependency_selection(
             project.project_name(),
             package_name,
@@ -60,14 +62,14 @@ pub(super) fn find_locked_tool<'lock>(
 /// Materialize the exact dependency subgraph for a locked tool selection.
 pub(super) fn resolution_from_lock(
     project: &VirtualProject,
-    lock: &Lock,
+    target: &SelectedInstallTarget<'_>,
     tool: &LockedTool<'_>,
     interpreter: &Interpreter,
     build_options: &BuildOptions,
 ) -> Result<Resolution> {
     let marker_environment = resolution_markers(None, None, interpreter);
     let tags = resolution_tags(None, None, interpreter)?;
-    Ok(lock.to_resolution_from_dependency(
+    Ok(target.lock().to_resolution_from_dependency(
         project.workspace().install_path(),
         tool.dependency(),
         project.project_name(),

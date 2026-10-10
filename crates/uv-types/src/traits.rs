@@ -17,9 +17,10 @@ use uv_distribution_types::{
 use uv_git::GitResolver;
 use uv_normalize::PackageName;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
+use uv_static::TarBackend;
 use uv_workspace::WorkspaceCache;
 
-use crate::{BuildArena, BuildIsolation, ResolvedRequirements};
+use crate::{BuildArena, BuildIsolation, HashStrategy, ResolvedRequirements};
 
 /// Controls how source tree requirements influence workspace-member editability during lowering.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -91,6 +92,9 @@ impl SourceTreeEditablePolicy {
 pub trait BuildContext {
     type SourceDistBuilder: SourceBuildTrait;
 
+    /// The tar implementation used for source archives.
+    fn tar_backend(&self) -> TarBackend;
+
     // Note: this function is async deliberately, because downstream code may need to
     // run async code to get the interpreter, to resolve the Python version.
     /// Return a reference to the interpreter.
@@ -145,10 +149,16 @@ pub trait BuildContext {
     /// Get the extra build variables.
     fn extra_build_variables(&self) -> &ExtraBuildVariables;
 
-    /// Resolve the given requirements into a ready-to-install set of package versions.
+    /// Resolve build requirements.
+    ///
+    /// Pass `None` for the initial requirements, such as `build-system.requires`. When adding
+    /// requirements returned by a build backend, pass the previous resolution's [`HashStrategy`]
+    /// to preserve the hashes already collected. When build dependency hashes are required,
+    /// backend output cannot add hashes to this set.
     fn resolve<'a>(
         &'a self,
         requirements: &'a [Requirement],
+        hash_override: Option<&'a HashStrategy>,
         build_stack: &'a BuildStack,
     ) -> impl Future<Output = Result<ResolvedRequirements, impl IsBuildBackendError>> + 'a;
 

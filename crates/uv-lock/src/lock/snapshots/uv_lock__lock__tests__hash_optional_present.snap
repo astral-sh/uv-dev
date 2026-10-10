@@ -4,6 +4,7 @@ expression: result
 ---
 Ok(
     Lock {
+        workspace_groups: [],
         version: 1,
         revision: 0,
         fork_markers: [],
@@ -134,6 +135,8 @@ Ok(
         workspace_members: {},
         manifest: ResolverManifest {
             members: {},
+            workspace_members: None,
+            workspace_member_ids: {},
             default_groups: None,
             group_requires_python: {},
             requirements: {},

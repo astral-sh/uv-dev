@@ -5230,7 +5230,7 @@ fn generate_hashes_registry_sha512_source() -> Result<()> {
             .join("test/links/basic_package-0.1.0.tar.gz"),
         &sdist,
     )?;
-    let archive = fs_err::read(&sdist)?;
+    let archive = context.read_bytes(&sdist);
     let sha256 = hex::encode(Sha256::digest(&archive));
     let sha512 = hex::encode(Sha512::digest(&archive));
     package.child("index.html").write_str(&format!(
@@ -15072,6 +15072,17 @@ fn compatible_build_constraint() -> Result<()> {
     uv_snapshot!(context.pip_compile()
         .arg("requirements.txt")
         .arg("--build-constraint")
+        .arg("build_constraints.txt")
+        .env(EnvVars::UV_REQUIRE_BUILD_HASHES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
+    error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: setuptools>=40
+    ");
+
+    uv_snapshot!(context.pip_compile()
+        .arg("requirements.txt")
+        .arg("--build-constraint")
         .arg("build_constraints.txt"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -18544,7 +18555,7 @@ fn pep_751_compile_preferences() -> Result<()> {
 
     // Empty hash tables should warn without discarding version preferences.
     let pylock_toml = context.temp_dir.child("pylock.toml");
-    let content = fs_err::read_to_string(&pylock_toml)?;
+    let content = context.read("pylock.toml");
     pylock_toml
         .write_str(&Regex::new(r"hashes = \{[^}]*\}")?.replace_all(&content, "hashes = {}"))?;
 
@@ -19671,7 +19682,7 @@ fn compile_missing_python_version_default_fallback() -> Result<()> {
         # via anyio
 
     ----- stderr -----
-    warning: The requested Python version 3.99.99 is not available; 3.14.[LATEST] will be used to build dependencies instead.
+    warning: The requested Python version 3.99.99 is not available; 3.15.[LATEST] will be used to build dependencies instead.
     Resolved 3 packages in [TIME]
     ");
 

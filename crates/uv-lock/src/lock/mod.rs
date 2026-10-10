@@ -16,6 +16,7 @@ use owo_colors::OwoColorize;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::de::Error as _;
 use tracing::{debug, instrument, trace};
 use url::Url;
 
@@ -93,20 +94,25 @@ mod serialize;
 mod tree;
 #[cfg(test)]
 mod windows_emulation_tests;
+mod workspace_groups;
+pub use workspace_groups::{LockedWorkspaceGroup, WorkspaceGroupSelectionError};
 
 /// The current version of the lockfile format.
 const VERSION: u32 = 1;
+const WORKSPACE_GROUPS_VERSION: u32 = 2;
 
 /// An error returned when parsing a lockfile.
 #[derive(Debug, thiserror::Error)]
 pub enum LockParseError {
     /// The lockfile uses an unsupported schema version.
-    #[error("unsupported lockfile schema version (v{version}, but only v{supported} is supported)")]
+    #[error(
+        "unsupported lockfile schema version (v{version}, but versions up to v{supported} are supported)"
+    )]
     UnsupportedVersion { supported: u32, version: u32 },
 
     /// The lockfile cannot be parsed and uses an unsupported schema version.
     #[error(
-        "failed to parse lockfile using an unsupported schema version (v{version}, but only v{supported} is supported)"
+        "failed to parse lockfile using an unsupported schema version (v{version}, but versions up to v{supported} are supported)"
     )]
     UnparsableVersion {
         supported: u32,
@@ -114,6 +120,14 @@ pub enum LockParseError {
         #[source]
         source: toml::de::Error,
     },
+
+    /// An older lockfile does not distinguish a workspace member from another local package.
+    #[error(transparent)]
+    MissingWorkspaceMemberIdentity(LockError),
+
+    /// The lockfile contains an invalid package graph.
+    #[error(transparent)]
+    Validation(LockError),
 
     /// The lockfile is not valid TOML or cannot be deserialized.
     #[error(transparent)]
@@ -310,14 +324,12 @@ pub(crate) struct HashedDist {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(try_from = "LockWire")]
 pub struct Lock {
+    workspace_groups: Vec<LockedWorkspaceGroup>,
     /// The (major) version of the lockfile format.
     ///
     /// Changes to the major version indicate backwards- and forwards-incompatible changes to the
-    /// lockfile format. A given uv version only supports a single major version of the lockfile
-    /// format.
-    ///
-    /// In other words, a version of uv that supports version 2 of the lockfile format will not be
-    /// able to read lockfiles generated under version 1 or 3.
+    /// lockfile format. Version 1 represents an ordinary resolution, while version 2 records named
+    /// workspace resolution contexts that version 1 readers must not combine.
     version: u32,
     /// The revision of the lockfile format.
     ///
@@ -2719,6 +2731,17 @@ impl Lock {
         // Check for duplicate package IDs and index packages by ID and workspace member name.
         let mut by_id = FxHashMap::default();
         let mut workspace_members = BTreeMap::new();
+        let mut local_candidates = FxHashMap::<&PackageName, usize>::default();
+        for package in &packages {
+            if package.id.source.is_source_tree() {
+                *local_candidates.entry(&package.id.name).or_default() += 1;
+            }
+        }
+        let qualified_members = manifest
+            .workspace_member_ids
+            .iter()
+            .map(|id| &id.name)
+            .collect::<BTreeSet<_>>();
         for (index, dist) in packages.iter().enumerate() {
             if by_id.insert(dist.id.clone(), PackageIndex(index)).is_some() {
                 return Err(LockErrorKind::DuplicatePackage {
@@ -2728,8 +2751,14 @@ impl Lock {
             }
 
             // A single-project lockfile can omit its root from the manifest's member list.
-            let is_member = manifest.members.contains(&dist.id.name)
-                || (manifest.members.is_empty()
+            let is_member = (dist.id.source.is_source_tree()
+                && manifest.workspace_members().contains(&dist.id.name)
+                && if qualified_members.contains(&dist.id.name) {
+                    manifest.workspace_member_ids.contains(&dist.id)
+                } else {
+                    local_candidates.get(&dist.id.name) == Some(&1)
+                })
+                || (manifest.workspace_members().is_empty()
                     && workspace_members.is_empty()
                     && dist.id.source.is_implicit_root());
             if is_member {
@@ -2800,6 +2829,7 @@ impl Lock {
             }
         }
         let lock = Self {
+            workspace_groups: Vec::new(),
             version,
             revision,
             fork_markers,
@@ -2831,6 +2861,37 @@ impl Lock {
             .map(|marker| self.requires_python.complexify_markers(marker))
             .collect();
         self
+    }
+
+    /// Record resolved local members independently of a workspace context's resolution roots.
+    #[must_use]
+    pub fn with_workspace_members(
+        mut self,
+        packages: &BTreeMap<PackageName, WorkspaceMember>,
+        root: &Path,
+    ) -> Self {
+        self.workspace_members = self.resolved_workspace_members(packages, root);
+        let member_ids = self.workspace_member_ids();
+        self.manifest
+            .set_workspace_members(self.packages.iter(), &member_ids);
+        self
+    }
+
+    fn resolved_workspace_members(
+        &self,
+        packages: &BTreeMap<PackageName, WorkspaceMember>,
+        root: &Path,
+    ) -> BTreeMap<PackageName, PackageIndex> {
+        self.packages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, package)| {
+                let member = packages.get(&package.id.name)?;
+                let source = package.id.source.as_source_tree()?;
+                (uv_fs::normalize_path(root.join(source)) == *member.root())
+                    .then(|| (package.id.name.clone(), PackageIndex(index)))
+            })
+            .collect()
     }
 
     /// Record the default groups for workspace members in a revision 5 or newer lockfile.
@@ -3239,6 +3300,19 @@ impl Lock {
         })
     }
 
+    /// Validate package selections against the local workspace members recorded in the lockfile.
+    pub fn validate_workspace_members(&self, names: &[PackageName]) -> Result<(), LockError> {
+        for name in names {
+            if !self
+                .workspace_member_paths()
+                .any(|(member, _)| member == name)
+            {
+                return Err(LockErrorKind::MissingWorkspaceMember(name.clone()).into());
+            }
+        }
+        Ok(())
+    }
+
     /// Returns `true` if the package is a workspace member.
     fn is_workspace_member(&self, package: &Package) -> bool {
         self.workspace_members
@@ -3251,6 +3325,40 @@ impl Lock {
         self.workspace_members
             .values()
             .map(|&index| self.package(index))
+    }
+
+    /// Return the exact identities retained across workspace context projections and merges.
+    fn workspace_member_ids(&self) -> BTreeSet<PackageId> {
+        self.workspace_packages()
+            .map(|package| package.id.clone())
+            .collect()
+    }
+
+    /// Validate recorded identities before a serialized lock can be used without its manifests.
+    fn validate_workspace_member_ids(&self) -> Result<(), LockError> {
+        let mut qualified_members = BTreeSet::new();
+        for id in &self.manifest.workspace_member_ids {
+            if !self.manifest.workspace_members().contains(&id.name)
+                || !id.source.is_source_tree()
+                || !self.by_id.contains_key(id)
+                || !qualified_members.insert(&id.name)
+            {
+                return Err(LockErrorKind::InvalidWorkspaceMemberIdentity(id.clone()).into());
+            }
+        }
+        for name in self.manifest.workspace_members() {
+            if !qualified_members.contains(name)
+                && self
+                    .packages_for_name(name)
+                    .iter()
+                    .filter(|package| package.id.source.is_source_tree())
+                    .count()
+                    > 1
+            {
+                return Err(LockErrorKind::MissingWorkspaceMemberIdentity(name.clone()).into());
+            }
+        }
+        Ok(())
     }
 
     /// Returns the root requirements that were used to generate this lock.
@@ -3774,28 +3882,43 @@ impl Lock {
     /// TOML parser, preserving its compatibility and error reporting. Lockfiles
     /// that use an unsupported schema version are rejected.
     pub fn from_toml(input: &str) -> Result<Self, LockParseError> {
-        let lock = match Self::from_canonical_toml(input) {
-            Ok(lock) => lock,
-            Err(_) => match toml::from_str(input) {
-                Ok(lock) => lock,
-                Err(source) => {
-                    if let Ok(lock) = toml::from_str::<LockVersion>(input)
-                        && lock.version() != VERSION
-                    {
-                        return Err(LockParseError::UnparsableVersion {
-                            supported: VERSION,
-                            version: lock.version(),
-                            source,
-                        });
-                    }
-                    return Err(LockParseError::Toml(source));
+        let lock = if let Ok(lock) = Self::from_canonical_toml(input) {
+            lock
+        } else {
+            let wire = toml::from_str::<LockWire>(input).map_err(|source| {
+                if let Ok(lock) = toml::from_str::<LockVersion>(input)
+                    && lock.version() != VERSION
+                    && lock.version() != WORKSPACE_GROUPS_VERSION
+                {
+                    return LockParseError::UnparsableVersion {
+                        supported: WORKSPACE_GROUPS_VERSION,
+                        version: lock.version(),
+                        source,
+                    };
                 }
-            },
+                LockParseError::Toml(source)
+            })?;
+            let version = wire.version;
+            Self::try_from(wire).map_err(|error| {
+                if version != VERSION && version != WORKSPACE_GROUPS_VERSION {
+                    LockParseError::UnparsableVersion {
+                        supported: WORKSPACE_GROUPS_VERSION,
+                        version,
+                        source: toml::de::Error::custom(error),
+                    }
+                } else if let LockErrorKind::MissingWorkspaceMemberIdentity(_) = &*error.kind {
+                    // Older locks can omit the identity needed to distinguish two local
+                    // packages. Unlocked commands can regenerate these from their manifests.
+                    LockParseError::MissingWorkspaceMemberIdentity(error)
+                } else {
+                    LockParseError::Validation(error)
+                }
+            })?
         };
 
-        if lock.version() != VERSION {
+        if lock.version() != VERSION && lock.version() != WORKSPACE_GROUPS_VERSION {
             return Err(LockParseError::UnsupportedVersion {
-                supported: VERSION,
+                supported: WORKSPACE_GROUPS_VERSION,
                 version: lock.version(),
             });
         }
@@ -3830,6 +3953,14 @@ impl Lock {
     /// Return whether a source tree belongs to the workspace or represents its root.
     fn is_workspace_package(&self, package: &Package) -> bool {
         self.members().contains(&package.id.name) || package.id.source.is_implicit_root()
+    }
+
+    /// Resolve an installation root by its local workspace identity before considering other sources.
+    fn find_root_by_name(&self, name: &PackageName) -> Result<Option<&Package>, String> {
+        if let Some(&index) = self.workspace_members.get(name) {
+            return Ok(Some(self.package(index)));
+        }
+        self.find_by_name(name)
     }
 
     /// Returns the package with the given name. If there are multiple
@@ -4230,6 +4361,21 @@ impl Lock {
         {
             let expected = members.iter().cloned().collect::<BTreeSet<_>>();
             let actual = &self.manifest.members;
+            if expected != *actual {
+                return Ok(SatisfiesResult::MismatchedMembers(expected, actual));
+            }
+        }
+
+        // Context roots can omit local members that are reached transitively. Refresh older
+        // contexts before frozen commands rely on their membership and group metadata.
+        if !members.is_empty()
+            && (self.manifest.workspace_members.is_some() || members.len() < packages.len())
+        {
+            let expected = self
+                .resolved_workspace_members(packages, root)
+                .into_keys()
+                .collect::<BTreeSet<_>>();
+            let actual = self.manifest.workspace_members();
             if expected != *actual {
                 return Ok(SatisfiesResult::MismatchedMembers(expected, actual));
             }
@@ -6296,6 +6442,12 @@ pub struct ResolverManifest {
     /// The workspace members included in the lockfile.
     #[serde(default)]
     members: BTreeSet<PackageName>,
+    /// Resolved workspace members when the context's roots are only a subset of the workspace.
+    #[serde(default)]
+    workspace_members: Option<BTreeSet<PackageName>>,
+    /// Exact identities when multiple local packages share a workspace member's name.
+    #[serde(default)]
+    workspace_member_ids: BTreeSet<PackageId>,
     /// Default dependency groups for a workspace root without a `[project]` table.
     #[serde(default)]
     default_groups: Option<DefaultGroups>,
@@ -6382,6 +6534,38 @@ fn collect_member_group_metadata(
 }
 
 impl ResolverManifest {
+    fn workspace_members(&self) -> &BTreeSet<PackageName> {
+        self.workspace_members.as_ref().unwrap_or(&self.members)
+    }
+
+    /// Retain resolved member identities, qualifying only names shared by local packages.
+    fn set_workspace_members<'a>(
+        &mut self,
+        packages: impl Iterator<Item = &'a Package>,
+        member_ids: &BTreeSet<PackageId>,
+    ) {
+        let mut local_candidates = BTreeMap::<&PackageName, usize>::new();
+        let mut resolved_members = BTreeSet::new();
+        for package in packages {
+            if package.id.source.is_source_tree() {
+                *local_candidates.entry(&package.id.name).or_default() += 1;
+            }
+            if member_ids.contains(&package.id) {
+                resolved_members.insert(package.id.clone());
+            }
+        }
+        let members = resolved_members.iter().map(|id| id.name.clone()).collect();
+        self.workspace_members = Some(members).filter(|members| *members != self.members);
+        self.workspace_member_ids = resolved_members
+            .into_iter()
+            .filter(|id| {
+                local_candidates
+                    .get(&id.name)
+                    .is_some_and(|count| *count > 1)
+            })
+            .collect();
+    }
+
     /// Initialize a [`ResolverManifest`] with the given members, requirements, constraints, and
     /// overrides.
     pub fn new(
@@ -6397,6 +6581,8 @@ impl ResolverManifest {
         let normalize = uv_preview::is_enabled(PreviewFeature::LockfileNormalization);
         Self {
             members: members.into_iter().collect(),
+            workspace_members: None,
+            workspace_member_ids: BTreeSet::new(),
             default_groups: None,
             group_requires_python: BTreeMap::new(),
             requirements: normalize_collection::<_, NormalizedRequirements>(
@@ -6428,6 +6614,8 @@ impl ResolverManifest {
     pub fn relative_to(self, root: &Path) -> Result<Self, io::Error> {
         Ok(Self {
             members: self.members,
+            workspace_members: self.workspace_members,
+            workspace_member_ids: self.workspace_member_ids,
             default_groups: self.default_groups,
             group_requires_python: self.group_requires_python,
             requirements: self
@@ -6488,6 +6676,8 @@ impl ResolverManifest {
 struct LockWire {
     version: u32,
     revision: Option<u32>,
+    #[serde(rename = "workspace-group", default)]
+    workspace_groups: Vec<LockedWorkspaceGroup>,
     requires_python: RequiresPython,
     /// If this lockfile was built from a forking resolution with non-identical forks, store the
     /// forks in the lockfile so we can recreate them in subsequent resolutions.
@@ -6588,8 +6778,8 @@ impl TryFrom<LockWire> for Lock {
             required_environments,
             fork_markers,
         )?;
-
-        Ok(lock)
+        lock.validate_workspace_member_ids()?;
+        lock.with_workspace_groups(wire.workspace_groups)
     }
 }
 
@@ -9424,6 +9614,10 @@ impl uv_errors::Hinted for LockError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if let Some(hint) = &self.hint {
             uv_errors::Hints::from(hint.to_string())
+        } else if let LockErrorKind::MissingWorkspaceMemberIdentity(_) = &*self.kind {
+            uv_errors::Hints::from(
+                "Run `uv lock` to record workspace member identities".to_string(),
+            )
         } else {
             uv_errors::Hints::none()
         }
@@ -9806,6 +10000,24 @@ impl std::fmt::Display for WheelTagHint {
 /// is with the caller somewhere in such cases.
 #[derive(Debug, thiserror::Error)]
 enum LockErrorKind {
+    /// A legacy lock cannot distinguish a workspace member from another local package.
+    #[error("Lockfile does not identify workspace member `{0}` among multiple local packages")]
+    MissingWorkspaceMemberIdentity(PackageName),
+    /// A recorded member identity does not refer to a unique declared local workspace package.
+    #[error("Invalid workspace member identity `{0}` in lockfile")]
+    InvalidWorkspaceMemberIdentity(PackageId),
+    /// Group names must uniquely identify their lockfile context.
+    #[error("Workspace group `{0}` is defined more than once")]
+    DuplicateWorkspaceGroup(GroupName),
+    /// At most one workspace group can be selected by default.
+    #[error("Workspace groups `{0}` and `{1}` are both marked as default")]
+    MultipleDefaultWorkspaceGroups(GroupName, GroupName),
+    /// A group root is absent from that group's projected graph.
+    #[error("Workspace group `{group}` contains member `{name}` with no locked package")]
+    MissingWorkspaceGroupRoot { group: GroupName, name: PackageName },
+    /// A selected package is not a local workspace member.
+    #[error("Package `{0}` not found in lockfile workspace")]
+    MissingWorkspaceMember(PackageName),
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),
@@ -10324,6 +10536,20 @@ fn canonical_marker_trees(
     markers: &[UniversalMarker],
     requires_python: &RequiresPython,
 ) -> Vec<MarkerTree> {
+    if markers.iter().any(|marker| marker.has_workspace_group()) {
+        let mut markers = markers
+            .iter()
+            .map(|marker| {
+                SimplifiedMarkerTree::new(requires_python, marker.combined())
+                    .as_simplified_marker_tree()
+            })
+            .collect::<Vec<_>>();
+        // Marker node IDs depend on interning order. Use the wire representation so a
+        // freshly resolved graph and a parsed graph have identical lockfile ordering.
+        markers.sort_by_cached_key(|marker| marker.try_to_string());
+        markers.dedup();
+        return markers;
+    }
     let mut pep508_only = vec![];
     let mut seen = FxHashSet::default();
     for marker in markers {

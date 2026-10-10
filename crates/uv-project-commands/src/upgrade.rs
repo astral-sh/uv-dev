@@ -11,13 +11,14 @@ use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, Upgrade,
+    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, NoSources, Upgrade,
 };
 use uv_dispatch::UniversalState;
 use uv_distribution::{ArchiveMetadata, Metadata};
 use uv_distribution_types::{Identifier, RequiresPython};
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
+    discover_workspace_groups,
 };
 use uv_lock::implicit_constraints_marker;
 use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget};
@@ -34,7 +35,7 @@ use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference};
 use uv_redacted::DisplaySafeUrl;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolver::MetadataResponse;
-use uv_settings::{PythonInstallMirrors, ResolverSettings};
+use uv_settings::{LockCheck, PythonInstallMirrors, ResolverSettings};
 use uv_workspace::pyproject::{DependencyType, Source};
 use uv_workspace::{
     DiscoveryOptions, ProjectWorkspace, VirtualProject, WorkspaceCache, WorkspaceErrorKind,
@@ -201,59 +202,82 @@ pub async fn upgrade(
         }
         Err(err) => return Err(err.into()),
     };
+    let provisional_workspace = project.workspace().with_provisional_workspace_groups(
+        &project
+            .workspace()
+            .workspace_groups_with_dependency_metadata(
+                &settings.sources,
+                &settings.dependency_metadata,
+            )?,
+    )?;
     // Locking defaults a missing `requires-python` to the discovered interpreter's minor version.
     // Use that same bound when deciding whether selected declarations and sources can apply.
-    let fallback_interpreter = if requires_fallback_interpreter(&project, &packages, &exclude)? {
-        let selection = select_requirements(&project, &packages, &exclude, None)?;
-        if selection.active.is_empty() {
-            render_skipped_requirements(&selection.skipped, printer)?;
-            return Ok(ExitStatus::Success);
-        }
-
-        let groups = DependencyGroupsWithDefaults::none();
-        let project_python = ProjectPythonRequest::from_request(
-            None,
-            Some(project.workspace()),
-            &groups,
-            project_dir,
-            config_discovery,
-        )
-        .await?;
-        match ProjectInterpreter::discover(
-            ProjectEnvironmentTarget::from(project.workspace()),
-            project_python,
-            &client_builder,
-            python_preference,
-            python_arch,
-            python_downloads,
-            &install_mirrors,
-            ProjectEnvironmentPolicy::Optional,
-            ActiveEnvironment::Ignore,
-            cache,
-            printer,
-        )
-        .await
-        {
-            Ok(interpreter) => Some(interpreter.into_interpreter()),
-            Err(error) => {
-                let DeclarationSelection {
-                    active,
-                    skipped,
-                    packages,
-                } = select_requirements(&project, &packages, &exclude, None)?;
-                render_skipped_requirements(&skipped, printer)?;
-                validate_requirements(&project, &active, &packages)?;
-                return Err(error.into());
+    let fallback_interpreter =
+        if requires_fallback_interpreter(&project, &packages, &exclude, &settings.sources)? {
+            let selection =
+                select_requirements(&project, &packages, &exclude, &settings.sources, None)?;
+            if selection.active.is_empty() {
+                render_skipped_requirements(&selection.skipped, printer)?;
+                return Ok(ExitStatus::Success);
             }
-        }
-    } else {
-        None
-    };
+
+            let groups = DependencyGroupsWithDefaults::none();
+            let project_python = ProjectPythonRequest::from_request(
+                None,
+                Some(&provisional_workspace),
+                &groups,
+                &settings.sources,
+                project_dir,
+                config_discovery,
+            )
+            .await?;
+            match ProjectInterpreter::discover(
+                ProjectEnvironmentTarget::from(&provisional_workspace),
+                project_python,
+                &client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                &install_mirrors,
+                ProjectEnvironmentPolicy::Optional,
+                ActiveEnvironment::Ignore,
+                cache,
+                printer,
+            )
+            .await
+            {
+                Ok(interpreter) => Some(interpreter.into_interpreter()),
+                Err(error) => {
+                    let DeclarationSelection {
+                        active,
+                        skipped,
+                        packages,
+                    } = select_requirements(
+                        &project,
+                        &packages,
+                        &exclude,
+                        &settings.sources,
+                        None,
+                    )?;
+                    render_skipped_requirements(&skipped, printer)?;
+                    validate_requirements(&project, &active, &packages)?;
+                    return Err(error.into());
+                }
+            }
+        } else {
+            None
+        };
     let DeclarationSelection {
         active: requirements,
         skipped,
         packages: mut selected_packages,
-    } = select_requirements(&project, &packages, &exclude, fallback_interpreter.as_ref())?;
+    } = select_requirements(
+        &project,
+        &packages,
+        &exclude,
+        &settings.sources,
+        fallback_interpreter.as_ref(),
+    )?;
     render_skipped_requirements(&skipped, printer)?;
     validate_requirements(&project, &requirements, &selected_packages)?;
     let mut declaration_outcomes = Vec::new();
@@ -366,35 +390,6 @@ pub async fn upgrade(
     )
     .await?;
 
-    let interpreter = if let Some(interpreter) = fallback_interpreter {
-        interpreter
-    } else {
-        let groups = DependencyGroupsWithDefaults::none();
-        let project_python = ProjectPythonRequest::from_request(
-            None,
-            Some(project.workspace()),
-            &groups,
-            project_dir,
-            config_discovery,
-        )
-        .await?;
-        ProjectInterpreter::discover(
-            ProjectEnvironmentTarget::from(project.workspace()),
-            project_python,
-            &client_builder,
-            python_preference,
-            python_arch,
-            python_downloads,
-            &install_mirrors,
-            ProjectEnvironmentPolicy::Optional,
-            ActiveEnvironment::Ignore,
-            &cache,
-            printer,
-        )
-        .await?
-        .into_interpreter()
-    };
-
     let state = UniversalState::default();
     let distribution_id = DisplaySafeUrl::from_file_path(project.project_root())
         .map_err(|()| anyhow!("Project root is not a valid file URL"))?
@@ -403,6 +398,60 @@ pub async fn upgrade(
         distribution_id,
         Arc::new(MetadataResponse::Found(ArchiveMetadata::from(metadata))),
     );
+
+    let discovered = discover_workspace_groups(
+        project.workspace(),
+        project_dir,
+        None,
+        LockCheck::Disabled,
+        &settings,
+        &client_builder,
+        &state,
+        &BTreeSet::new(),
+        python_preference,
+        python_arch,
+        python_downloads,
+        &install_mirrors,
+        &concurrency,
+        config_discovery,
+        &cache,
+        workspace_cache,
+        printer,
+        preview,
+    )
+    .await?;
+    let workspace = project.workspace().with_workspace_groups(&discovered)?;
+
+    let interpreter =
+        if let Some(interpreter) = fallback_interpreter.filter(|_| discovered.is_empty()) {
+            interpreter
+        } else {
+            let groups = DependencyGroupsWithDefaults::none();
+            let project_python = ProjectPythonRequest::from_request(
+                None,
+                Some(&workspace),
+                &groups,
+                &settings.sources,
+                project_dir,
+                config_discovery,
+            )
+            .await?;
+            ProjectInterpreter::discover(
+                ProjectEnvironmentTarget::from(&workspace),
+                project_python,
+                &client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                &install_mirrors,
+                ProjectEnvironmentPolicy::Optional,
+                ActiveEnvironment::Ignore,
+                &cache,
+                printer,
+            )
+            .await?
+            .into_interpreter()
+        };
 
     let result = match Box::pin(
         LockOperation::new(
@@ -564,9 +613,10 @@ fn requires_fallback_interpreter(
     project: &ProjectWorkspace,
     packages: &[PackageName],
     exclude: &[PackageName],
+    sources: &NoSources,
 ) -> Result<bool> {
     let target = LockTarget::from(project.workspace());
-    if target.requires_python()?.is_some() {
+    if target.requires_python(sources)?.is_some() {
         return Ok(false);
     }
 
@@ -614,6 +664,7 @@ fn select_requirements(
     project: &ProjectWorkspace,
     packages: &[PackageName],
     exclude: &[PackageName],
+    sources: &NoSources,
     fallback_interpreter: Option<&Interpreter>,
 ) -> Result<DeclarationSelection> {
     if project.workspace().packages().len() != 1 {
@@ -621,7 +672,7 @@ fn select_requirements(
     }
 
     let is_explicit_selection = !packages.is_empty();
-    let resolution_marker = project_resolution_marker(project, fallback_interpreter)?;
+    let resolution_marker = project_resolution_marker(project, sources, fallback_interpreter)?;
     let dependencies = project
         .current_project()
         .project()
@@ -846,10 +897,11 @@ fn render_declaration_outcomes(outcomes: &[DeclarationOutcome], printer: Printer
 /// Return the marker domain that the project will resolve for dependency declarations.
 fn project_resolution_marker(
     project: &ProjectWorkspace,
+    sources: &NoSources,
     fallback_interpreter: Option<&Interpreter>,
 ) -> Result<MarkerTree> {
     let target = LockTarget::from(project.workspace());
-    let requires_python = match target.requires_python()? {
+    let requires_python = match target.requires_python(sources)? {
         Some(requires_python) => requires_python.to_marker_tree(),
         None => fallback_interpreter.map_or(MarkerTree::TRUE, |interpreter| {
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version())

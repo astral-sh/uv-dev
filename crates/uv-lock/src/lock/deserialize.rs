@@ -337,6 +337,7 @@ impl<'de> de::Deserializer<'de> for DocumentDeserializer<'_, 'de> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MapKind {
     Root,
+    WorkspaceGroup,
     Options,
     OptionsExcludeNewerPackage,
     Manifest,
@@ -353,6 +354,7 @@ enum MapKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SequenceKind {
+    WorkspaceGroups,
     Packages,
     ManifestDependencyMetadata,
 }
@@ -481,6 +483,11 @@ impl<'de> DocumentMapAccess<'_, 'de> {
                     .deserialize(de::value::BorrowedStrDeserializer::new("manifest"))
                     .map(Some);
             }
+            (MapKind::Root, "[[workspace-group]]") => Some((
+                "workspace-group",
+                Pending::Sequence(SequenceKind::WorkspaceGroups),
+                "[[workspace-group]]",
+            )),
             (MapKind::Root, "[[package]]") => Some((
                 "package",
                 Pending::Sequence(SequenceKind::Packages),
@@ -617,6 +624,7 @@ impl<'de> SeqAccess<'de> for SectionSequenceAccess<'_, 'de> {
             }
 
             let expected = match self.kind {
+                SequenceKind::WorkspaceGroups => "[[workspace-group]]",
                 SequenceKind::Packages => "[[package]]",
                 SequenceKind::ManifestDependencyMetadata => "[[manifest.dependency-metadata]]",
             };
@@ -628,6 +636,7 @@ impl<'de> SeqAccess<'de> for SectionSequenceAccess<'_, 'de> {
 
         self.started = true;
         let kind = match self.kind {
+            SequenceKind::WorkspaceGroups => MapKind::WorkspaceGroup,
             SequenceKind::Packages => MapKind::Package,
             SequenceKind::ManifestDependencyMetadata => MapKind::ManifestDependencyMetadata,
         };
@@ -896,10 +905,11 @@ impl<'de> VariantAccess<'de> for InlineVariantAccess<'_, 'de> {
 mod tests {
     use std::assert_matches;
     use std::fmt::Write as _;
+    use std::path::Path;
 
     use serde::Deserialize;
 
-    use super::super::{LockParseError, VERSION};
+    use super::super::{LockErrorKind, LockParseError, WORKSPACE_GROUPS_VERSION};
     use super::{Cursor, Error, Lock, ValueDeserializer, from_str};
 
     const CANONICAL_LOCK: &str = r#"version = 1
@@ -919,6 +929,89 @@ dependencies = [
     { name = "dependency" },
 ]
 "#;
+
+    const LOCAL_MEMBER_LOCK: &str = r#"version = 1
+requires-python = ">=3.12"
+
+[manifest]
+members = ["leaf"]
+workspace-member-ids = [{ name = "leaf", version = "1.0.0", source = { virtual = "leaf" } }]
+
+[[package]]
+name = "leaf"
+version = "1.0.0"
+source = { virtual = "leaf" }
+
+[[package]]
+name = "leaf"
+version = "2.0.0"
+source = { virtual = "../external/leaf" }
+"#;
+
+    #[test]
+    fn local_member_identity_matches_toml() {
+        let expected: Lock = toml::from_str(LOCAL_MEMBER_LOCK).expect("valid TOML member identity");
+        let actual = from_str(LOCAL_MEMBER_LOCK).expect("valid canonical member identity");
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual.workspace_member_paths().collect::<Vec<_>>(),
+            vec![(
+                &"leaf".parse().expect("valid package name"),
+                Path::new("leaf")
+            )]
+        );
+        let serialized = actual.to_toml().expect("serializable member identity");
+        assert_eq!(
+            Lock::from_toml(&serialized).expect("member identity round trip"),
+            actual
+        );
+    }
+
+    #[test]
+    fn local_member_identity_rejects_missing_package() {
+        let input = LOCAL_MEMBER_LOCK.replacen(
+            "name = \"leaf\", version = \"1.0.0\"",
+            "name = \"leaf\", version = \"3.0.0\"",
+            1,
+        );
+        let error = Lock::from_toml(&input).expect_err("identity must reference a locked package");
+        insta::assert_snapshot!(error.to_string(), @r#"
+    Invalid workspace member identity `leaf==3.0.0 @ virtual+leaf` in lockfile
+    "#);
+    }
+
+    #[test]
+    fn local_member_identity_rejects_undeclared_member() {
+        let input = LOCAL_MEMBER_LOCK.replacen("members = [\"leaf\"]", "members = [\"other\"]", 1);
+        let error = Lock::from_toml(&input).expect_err("identity must reference a declared member");
+        insta::assert_snapshot!(error.to_string(), @r#"
+    Invalid workspace member identity `leaf==1.0.0 @ virtual+leaf` in lockfile
+    "#);
+    }
+
+    #[test]
+    fn local_member_identity_rejects_registry_package() {
+        let input = LOCAL_MEMBER_LOCK.replace(
+            "{ virtual = \"leaf\" }",
+            "{ registry = \"https://example.com/simple\" }",
+        );
+        let error = Lock::from_toml(&input).expect_err("workspace members must be source trees");
+        insta::assert_snapshot!(error.to_string(), @r#"
+    Invalid workspace member identity `leaf==1.0.0 @ registry+https://example.com/simple` in lockfile
+    "#);
+    }
+
+    #[test]
+    fn local_member_identity_rejects_conflicting_references() {
+        let input = LOCAL_MEMBER_LOCK.replace(
+            "workspace-member-ids = [{ name = \"leaf\", version = \"1.0.0\", source = { virtual = \"leaf\" } }]",
+            "workspace-member-ids = [{ name = \"leaf\", version = \"1.0.0\", source = { virtual = \"leaf\" } }, { name = \"leaf\", version = \"2.0.0\", source = { virtual = \"../external/leaf\" } }]",
+        );
+        let error = Lock::from_toml(&input).expect_err("a member must have one identity");
+        insta::assert_snapshot!(error.to_string(), @r#"
+    Invalid workspace member identity `leaf==2.0.0 @ virtual+../external/leaf` in lockfile
+    "#);
+    }
 
     #[test]
     fn canonical_lock_matches_toml() {
@@ -1085,15 +1178,38 @@ version = "1.0.0"
     }
 
     #[test]
+    fn invalid_graph_retains_validation_error() {
+        let input = CANONICAL_LOCK.replace("{ name = \"dependency\" }", "{ name = \"missing\" }");
+        let expected = toml::from_str::<Lock>(&input).expect_err("missing dependency is invalid");
+        let error = Lock::from_toml(&input).expect_err("invalid graph is rejected");
+
+        assert_eq!(error.to_string(), expected.message());
+        assert_matches!(error, LockParseError::Validation(error)
+            if matches!(*error.kind, LockErrorKind::MissingDependencySource { .. }));
+    }
+
+    #[test]
+    fn missing_member_identity_retains_recoverable_error() {
+        let input = LOCAL_MEMBER_LOCK.replace(
+            "workspace-member-ids = [{ name = \"leaf\", version = \"1.0.0\", source = { virtual = \"leaf\" } }]\n",
+            "",
+        );
+        let error = Lock::from_toml(&input).expect_err("ambiguous member identity is rejected");
+
+        assert_matches!(error, LockParseError::MissingWorkspaceMemberIdentity(error)
+            if matches!(*error.kind, LockErrorKind::MissingWorkspaceMemberIdentity(_)));
+    }
+
+    #[test]
     fn unsupported_lock_version_is_rejected() {
-        let version = VERSION + 1;
+        let version = WORKSPACE_GROUPS_VERSION + 1;
         let input = CANONICAL_LOCK.replacen("version = 1", &format!("version = {version}"), 1);
         let error = Lock::from_toml(&input).expect_err("unsupported lock versions are rejected");
 
         assert_matches!(
             error,
             LockParseError::UnsupportedVersion {
-                supported: VERSION,
+                supported: WORKSPACE_GROUPS_VERSION,
                 version: actual,
             } if actual == version
         );
@@ -1101,7 +1217,7 @@ version = "1.0.0"
 
     #[test]
     fn unparsable_unsupported_lock_version_is_identified() {
-        let version = VERSION + 1;
+        let version = WORKSPACE_GROUPS_VERSION + 1;
         let input = CANONICAL_LOCK
             .replacen("version = 1", &format!("version = {version}"), 1)
             .replacen("name = \"dependency\"", "name = false", 1);
@@ -1111,11 +1227,27 @@ version = "1.0.0"
         assert_matches!(
             error,
             LockParseError::UnparsableVersion {
-                supported: VERSION,
+                supported: WORKSPACE_GROUPS_VERSION,
                 version: actual,
                 ..
             } if actual == version
         );
+    }
+
+    #[test]
+    fn invalid_graph_with_unsupported_version_is_identified() {
+        let version = WORKSPACE_GROUPS_VERSION + 1;
+        let input = CANONICAL_LOCK
+            .replacen("version = 1", &format!("version = {version}"), 1)
+            .replace("{ name = \"dependency\" }", "{ name = \"missing\" }");
+        let expected = toml::from_str::<Lock>(&input).expect_err("missing dependency is invalid");
+        let error = Lock::from_toml(&input).expect_err("invalid unsupported graph is rejected");
+
+        assert_matches!(error, LockParseError::UnparsableVersion {
+            supported: WORKSPACE_GROUPS_VERSION,
+            version: actual,
+            source,
+        } if actual == version && source.to_string() == expected.to_string());
     }
 
     #[test]
@@ -1606,6 +1738,89 @@ version = "1.0.0"
         assert_eq!(
             Lock::from_canonical_toml(&canonical).expect("writer output uses fast path"),
             lock
+        );
+    }
+
+    #[test]
+    fn canonical_workspace_group_round_trip_uses_fast_path() {
+        let input = r#"version = 2
+revision = 3
+requires-python = ">=3.12"
+resolution-markers = ["extra == 'workspace-main'"]
+
+[[workspace-group]]
+name = "main"
+members = ["project"]
+effective-requires-python = ">=3.12"
+
+[manifest]
+members = ["project"]
+
+[[package]]
+name = "project"
+version = "0.1.0"
+source = { virtual = "." }
+resolution-markers = ["extra == 'workspace-main'"]
+"#;
+        let lock: Lock = toml::from_str(input).expect("valid grouped TOML lock");
+        let canonical = lock.to_toml().expect("grouped lock serializes canonically");
+
+        assert_eq!(
+            Lock::from_canonical_toml(&canonical).expect("grouped writer output uses fast path"),
+            lock
+        );
+    }
+
+    #[test]
+    fn canonical_workspace_groups_with_metadata_round_trip_uses_fast_path() {
+        let input = r#"version = 2
+revision = 3
+requires-python = ">=3.12,<3.15"
+resolution-markers = ["python_full_version < '3.13' and extra == 'workspace-main'", "extra == 'workspace-next'"]
+
+[[workspace-group]]
+name = "main"
+members = ["project"]
+requires-python = "==3.12.*"
+effective-requires-python = "==3.12.*"
+environment = "python_full_version >= '3.12' and python_full_version < '3.13'"
+default = true
+
+[[workspace-group]]
+name = "next"
+members = ["project"]
+effective-requires-python = ">=3.12,<3.15"
+
+[options]
+resolution-mode = "lowest"
+
+[manifest]
+members = ["project"]
+
+[[package]]
+name = "dependency"
+version = "1.0.0"
+source = { registry = "https://example.com/simple" }
+resolution-markers = ["python_full_version < '3.13' and extra == 'workspace-main'", "extra == 'workspace-next'"]
+
+[[package]]
+name = "project"
+version = "0.1.0"
+source = { virtual = "." }
+resolution-markers = ["python_full_version < '3.13' and extra == 'workspace-main'", "extra == 'workspace-next'"]
+dependencies = [{ name = "dependency" }]
+
+[package.metadata]
+requires-dist = [{ name = "dependency", specifier = ">=1" }]
+"#;
+        let lock: Lock = toml::from_str(input).expect("valid grouped TOML lock with metadata");
+        let canonical = lock.to_toml().expect("grouped lock serializes canonically");
+        // The writer canonicalizes marker order before either reader consumes the lock.
+        let expected: Lock = toml::from_str(&canonical).expect("valid canonical TOML lock");
+
+        assert_eq!(
+            Lock::from_canonical_toml(&canonical).expect("grouped writer output uses fast path"),
+            expected
         );
     }
 }

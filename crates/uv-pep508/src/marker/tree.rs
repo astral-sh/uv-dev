@@ -1006,6 +1006,63 @@ impl MarkerTree {
         )
     }
 
+    /// Evaluate string-valued environment markers while retaining version and selection markers.
+    ///
+    /// Python and implementation versions remain free, as do extras and dependency groups. This
+    /// permits selecting another Python version for the same concrete platform and implementation.
+    #[must_use]
+    pub fn evaluate_environment_strings(self, environment: &MarkerEnvironment) -> Self {
+        Self(INTERNER.lock().restrict_nodes(self.0, &|node| {
+            match Self(node).kind() {
+                MarkerTreeKind::True => Some(NodeId::TRUE),
+                MarkerTreeKind::False => Some(NodeId::FALSE),
+                MarkerTreeKind::String(marker) => Some(
+                    marker
+                        .children()
+                        .find_map(|(range, child)| {
+                            range
+                                .contains(environment.get_string(marker.key()))
+                                .then_some(child.0)
+                        })
+                        .unwrap_or(NodeId::FALSE),
+                ),
+                MarkerTreeKind::VersionString(marker) => Some(
+                    environment
+                        .get_string(marker.key())
+                        .parse::<Version>()
+                        .ok()
+                        .and_then(|version| {
+                            marker.edges().find_map(|(range, child)| {
+                                range.contains(&version).then_some(child.0)
+                            })
+                        })
+                        .unwrap_or(NodeId::FALSE),
+                ),
+                MarkerTreeKind::In(marker) => Some(
+                    marker
+                        .edge(
+                            marker
+                                .value()
+                                .contains(environment.get_string(marker.key())),
+                        )
+                        .0,
+                ),
+                MarkerTreeKind::Contains(marker) => Some(
+                    marker
+                        .edge(
+                            environment
+                                .get_string(marker.key())
+                                .contains(marker.value()),
+                        )
+                        .0,
+                ),
+                MarkerTreeKind::Version(_) | MarkerTreeKind::Extra(_) | MarkerTreeKind::List(_) => {
+                    None
+                }
+            }
+        }))
+    }
+
     /// Evaluate a marker in the context of a PEP 751 lockfile, which exposes several additional
     /// markers (`extras` and `dependency_groups`) that are not available in any other context,
     /// per the spec.
@@ -3463,6 +3520,22 @@ mod test {
             m("python_full_version < '3.10'"),
         );
         assert_eq!(
+            complexify(Some([3, 12]), Some([3, 15]), "extra == 'feature'"),
+            m(
+                "python_full_version >= '3.12' and python_full_version < '3.15' and extra == 'feature'"
+            ),
+        );
+        assert_eq!(
+            complexify(
+                Some([3, 12]),
+                Some([3, 15]),
+                "sys_platform == 'win32' or extra == 'feature'"
+            ),
+            m(
+                "python_full_version >= '3.12' and python_full_version < '3.15' and (sys_platform == 'win32' or extra == 'feature')"
+            ),
+        );
+        assert_eq!(
             complexify(Some([3, 8]), None, "python_full_version < '3.10'"),
             m("python_full_version >= '3.8' and python_full_version < '3.10'"),
         );
@@ -3644,6 +3717,59 @@ mod test {
                or (sys_platform == 'Linux' and extra != 'foo')")
             .without_extras(),
             m("os_name == 'Darwin' or sys_platform == 'Linux'"),
+        );
+    }
+
+    #[test]
+    fn environment_strings_retain_versions_and_selections() {
+        let marker = m(
+            "sys_platform == 'linux' and sys_platform in 'linux darwin' \
+             and sys_platform not in 'win32 cygwin' and 'nux' in sys_platform \
+             and 'win' not in sys_platform and python_full_version >= '3.13' \
+             and implementation_version >= '3.13' and extra == 'feature' \
+             and 'dev' in dependency_groups",
+        );
+        let expected = m(
+            "python_full_version >= '3.13' and implementation_version >= '3.13' \
+             and extra == 'feature' and 'dev' in dependency_groups",
+        );
+        assert_eq!(marker.evaluate_environment_strings(&env37()), expected);
+        assert_eq!(
+            marker.negate().evaluate_environment_strings(&env37()),
+            expected.negate()
+        );
+        assert!(
+            marker
+                .evaluate_environment_strings(&env37().with_sys_platform("win32"))
+                .is_false()
+        );
+    }
+
+    #[test]
+    fn environment_strings_evaluate_platform_versions() {
+        let marker = m("sys_platform == 'darwin' and platform_release >= '24.9.0' \
+             and python_full_version >= '3.13'");
+        let environment = env37()
+            .with_sys_platform("darwin")
+            .with_platform_release("24.10.0");
+        assert_eq!(
+            marker.evaluate_environment_strings(&environment),
+            m("python_full_version >= '3.13'")
+        );
+        assert!(
+            marker
+                .evaluate_environment_strings(&environment.clone().with_platform_release("24.8.0"))
+                .is_false()
+        );
+        let invalid = environment.with_platform_release("invalid");
+        assert!(!marker.evaluate(&invalid, &[]));
+        assert!(!marker.negate().evaluate(&invalid, &[]));
+        assert!(marker.evaluate_environment_strings(&invalid).is_false());
+        assert!(
+            marker
+                .negate()
+                .evaluate_environment_strings(&invalid)
+                .is_false()
         );
     }
 

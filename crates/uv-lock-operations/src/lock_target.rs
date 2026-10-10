@@ -183,7 +183,7 @@ impl<'lock> LockTarget<'lock> {
     /// Returns the set of all members within the target.
     pub(crate) fn members_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
         match self {
-            Self::Workspace(workspace) => Either::Left(workspace.members_requirements()),
+            Self::Workspace(workspace) => Either::Left(workspace.root_requirements()),
             Self::Script(_) => Either::Right(std::iter::empty()),
         }
     }
@@ -200,13 +200,19 @@ impl<'lock> LockTarget<'lock> {
     pub(crate) fn members(self) -> Vec<PackageName> {
         match self {
             Self::Workspace(workspace) => {
-                let mut members = workspace.packages().keys().cloned().collect::<Vec<_>>();
+                let mut members = workspace
+                    .root_requirements()
+                    .map(|requirement| requirement.name)
+                    .collect::<Vec<_>>();
                 members.sort();
 
                 // If this is a non-virtual project with a single member, we can omit it from the lockfile.
                 // If any members are added or removed, it will inherently mismatch. If the member is
                 // renamed, it will also mismatch.
-                if members.len() == 1 && !workspace.is_non_project() {
+                if members.len() == 1
+                    && !workspace.is_non_project()
+                    && !workspace.is_workspace_group_resolution()
+                {
                     members.clear();
                 }
 
@@ -306,12 +312,12 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Return the `Requires-Python` bound for the [`LockTarget`].
-    pub fn requires_python(self) -> Result<Option<RequiresPython>, LockError> {
+    pub fn requires_python(self, sources: &NoSources) -> Result<Option<RequiresPython>, LockError> {
         match self {
             Self::Workspace(workspace) => {
                 // When locking, don't try to enforce requires-python bounds that appear on groups
                 let groups = DependencyGroupsWithDefaults::none();
-                Ok(find_requires_python(workspace, &groups)?)
+                Ok(find_requires_python(workspace, &groups, sources)?)
             }
             Self::Script(script) => Ok(script
                 .metadata
@@ -371,6 +377,11 @@ impl<'lock> LockTarget<'lock> {
 
         // Check if the discovered workspace members match the locked workspace members.
         if let Self::Workspace(workspace) = self {
+            if !existing.workspace_groups().is_empty() {
+                // Named groups define the locked roots. Other discovered members are only
+                // present when reachable from one of those roots.
+                return Ok(existing);
+            }
             for package_name in workspace.packages().keys() {
                 existing
                     .find_by_name(package_name)

@@ -14,7 +14,6 @@ use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
 use uv_installer::{InstallationStrategy, SitePackages};
-use uv_lock::Installable;
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
@@ -26,7 +25,7 @@ use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::pyproject::Source;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache};
 
-use crate::install_target::InstallTarget;
+use crate::install_target::{InstallTarget, SelectedInstallTarget};
 use crate::malware::{MalwareCheckContext, maybe_check_malware};
 use crate::{EnvironmentError, detect_conflicts};
 use uv_requirements::script_extra_build_requires;
@@ -35,7 +34,7 @@ use uv_requirements::script_extra_build_requires;
 ///
 /// Validates interpreter, platform, extras, and groups before planning or applying changes.
 pub async fn sync_from_lock(
-    target: InstallTarget<'_>,
+    selected_target: &SelectedInstallTarget<'_>,
     venv: &PythonEnvironment,
     extras: &ExtrasSpecificationWithDefaults,
     groups: &DependencyGroupsWithDefaults,
@@ -56,6 +55,8 @@ pub async fn sync_from_lock(
     preview: Preview,
     malware_context: MalwareCheckContext<'_>,
 ) -> Result<Changelog, EnvironmentError> {
+    let target = selected_target.as_target();
+
     // Extract the project settings.
     let InstallerSettingsRef {
         index_locations,
@@ -65,6 +66,7 @@ pub async fn sync_from_lock(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -199,7 +201,7 @@ pub async fn sync_from_lock(
         .map_err(EnvironmentError::from)?;
 
     // Read the lockfile.
-    let resolution = target.to_resolution(
+    let resolution = selected_target.to_resolution(
         &marker_env,
         &tags,
         extras,
@@ -289,7 +291,7 @@ pub async fn sync_from_lock(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&venv.interpreter().to_resolver_marker_environment()),
-        uv_configuration::HashCheckingMode::Verify,
+        build_hash_checking,
     )?;
     // Also verify artifacts in the full lockfile, including unselected extras and groups.
     let build_hasher = target

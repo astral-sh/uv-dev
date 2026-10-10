@@ -21,6 +21,82 @@ use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
 use uv_test::{site_packages_path, uv_snapshot};
 
+/// An unavailable global default is ignored when its version cannot run the host environment.
+#[cfg(target_os = "linux")]
+#[test]
+fn venv_platform_missing_global_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .python_pin()
+        .args(["--global", "3.13"])
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12,<3.14"
+        [tool.uv]
+        package = false
+        environments = ["sys_platform != 'linux' or python_version < '3.13'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.venv(), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    "#);
+    assert_eq!(
+        context.read(context.user_config_dir.child("uv/.python-version")),
+        "3.13\n"
+    );
+    Ok(())
+}
+
+/// Warning-only platform checks still select the original global request after a generic probe.
+#[cfg(target_os = "linux")]
+#[test]
+fn venv_unsupported_platform_retains_global_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .python_pin()
+        .args(["--global", "3.13"])
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12,<3.14"
+        [tool.uv]
+        package = false
+        environments = ["sys_platform == 'win32'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.venv(), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The selected Python environment is not compatible with the project's supported environments: `sys_platform == 'win32'`
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    "#);
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
+        .success();
+    assert_eq!(
+        context.read(context.user_config_dir.child("uv/.python-version")),
+        "3.13\n"
+    );
+    Ok(())
+}
+
 #[test]
 fn create_venv() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
@@ -177,40 +253,36 @@ fn create_venv_caches_upgradeable_interpreter() -> Result<()> {
 }
 
 #[test]
-fn create_venv_preview_skips_distutils_patch_on_py310_plus() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+fn create_venv_skips_distutils_patch_on_py310() {
+    let context = uv_test::test_context_with_versions!(&["3.10"]);
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
         .arg("--python")
-        .arg("3.12")
-        .arg("--preview-features")
-        .arg("no-distutils-patch"), @"
+        .arg("3.10"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     "
     );
 
     context.venv.assert(predicates::path::is_dir());
-    let site_packages = site_packages_path(context.venv.path(), "python3.12");
+    let site_packages = site_packages_path(context.venv.path(), "python3.10");
     assert!(!site_packages.join("_virtualenv.py").exists());
     assert!(!site_packages.join("_virtualenv.pth").exists());
 }
 
 #[test]
 #[cfg(feature = "test-python-eol")]
-fn create_venv_preview_keeps_distutils_patch_on_py39() {
+fn create_venv_keeps_distutils_patch_on_py39() {
     let context = uv_test::test_context_with_versions!(&["3.9"]);
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
         .arg("--python")
-        .arg("3.9")
-        .arg("--preview-features")
-        .arg("no-distutils-patch"), @"
+        .arg("3.9"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
@@ -223,6 +295,61 @@ fn create_venv_preview_keeps_distutils_patch_on_py39() {
     let site_packages = site_packages_path(context.venv.path(), "python3.9");
     assert!(site_packages.join("_virtualenv.py").is_file());
     assert!(site_packages.join("_virtualenv.pth").is_file());
+}
+
+#[test]
+fn create_venv_with_removed_distutils_patch_preview() {
+    let context = uv_test::test_context_with_versions!(&["3.10"]);
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg("3.10")
+        .arg("--preview-features")
+        .arg("no-distutils-patch"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Unknown preview feature: `no-distutils-patch`
+    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    let site_packages = site_packages_path(context.venv.path(), "python3.10");
+    assert!(!site_packages.join("_virtualenv.py").exists());
+    assert!(!site_packages.join("_virtualenv.pth").exists());
+}
+
+#[test]
+fn create_venv_preserves_existing_distutils_patch() -> Result<()> {
+    let context = uv_test::test_context!("3.10");
+    let site_packages = site_packages_path(context.venv.path(), "python3.10");
+    fs_err::write(site_packages.join("_virtualenv.py"), "")?;
+    fs_err::write(site_packages.join("_virtualenv.pth"), "import _virtualenv")?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--allow-existing")
+        .arg("--python")
+        .arg("3.10"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    assert!(site_packages.join("_virtualenv.py").is_file());
+    assert!(site_packages.join("_virtualenv.pth").is_file());
+
+    context
+        .venv()
+        .arg("--clear")
+        .arg("--python")
+        .arg("3.10")
+        .assert()
+        .success();
+    assert!(!site_packages.join("_virtualenv.py").exists());
+    assert!(!site_packages.join("_virtualenv.pth").exists());
+    Ok(())
 }
 
 #[test]
@@ -241,7 +368,6 @@ fn create_centralized_project_environment_bypasses() -> Result<()> {
     "
     );
     context.venv.assert(predicates::path::is_dir());
-    assert!(fs_err::read_link(context.venv.path()).is_err());
 
     fs_err::remove_dir_all(&context.venv)?;
     context
@@ -267,7 +393,6 @@ fn create_centralized_project_environment_bypasses() -> Result<()> {
     );
     let explicit = context.temp_dir.child("explicit");
     explicit.assert(predicates::path::is_dir());
-    assert!(fs_err::read_link(explicit.path()).is_err());
 
     // Pathless invocations outside the project root are not centralized.
     let child = context.temp_dir.child("child");
@@ -281,7 +406,6 @@ fn create_centralized_project_environment_bypasses() -> Result<()> {
         .success();
     let environment = child.child(".venv");
     environment.assert(predicates::path::is_dir());
-    assert!(fs_err::read_link(environment.path()).is_err());
     Ok(())
 }
 
@@ -547,7 +671,7 @@ fn create_centralized_project_environment() -> Result<()> {
     // Without the preview, `.venv` is replaced locally without clearing its cached target.
     context.venv().assert().success();
 
-    assert!(fs_err::read_link(environment.path()).is_err());
+    environment.assert(predicates::path::is_dir());
     assert!(cache_marker.is_file());
     let local_marker = environment.child("local-marker");
     local_marker.touch()?;
@@ -714,8 +838,10 @@ fn create_centralized_project_environment_no_cache() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     "#);
 
-    assert!(context.temp_dir.child(".venv").is_dir());
-    assert!(fs_err::read_link(context.temp_dir.child(".venv").path()).is_err());
+    context
+        .temp_dir
+        .child(".venv")
+        .assert(predicates::path::is_dir());
     Ok(())
 }
 
@@ -1334,6 +1460,9 @@ fn seed() {
     );
 
     context.venv.assert(predicates::path::is_dir());
+    let site_packages = site_packages_path(context.venv.path(), "python3.12");
+    assert!(!site_packages.join("_virtualenv.py").exists());
+    assert!(!site_packages.join("_virtualenv.pth").exists());
 }
 
 #[test]
@@ -1357,6 +1486,54 @@ fn seed_older_python_version() {
     );
 
     context.venv.assert(predicates::path::is_dir());
+}
+
+#[test]
+#[cfg(feature = "test-pypi")]
+fn seed_skips_distutils_patch_on_py310() {
+    let context = uv_test::test_context_with_versions!(&["3.10"]);
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--seed")
+        .arg("--python")
+        .arg("3.10"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
+    Creating virtual environment with seed packages at: .venv
+     + pip==24.0
+     + setuptools==69.2.0
+     + wheel==0.43.0
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    let site_packages = site_packages_path(context.venv.path(), "python3.10");
+    assert!(!site_packages.join("_virtualenv.py").exists());
+    assert!(!site_packages.join("_virtualenv.pth").exists());
+}
+
+#[test]
+#[cfg(all(feature = "test-pypi", feature = "test-python-eol"))]
+fn seed_keeps_distutils_patch_on_py39() {
+    let context = uv_test::test_context_with_versions!(&["3.9"]);
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--seed")
+        .arg("--python")
+        .arg("3.9"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+    Creating virtual environment with seed packages at: .venv
+     + pip==24.0
+     + setuptools==69.2.0
+     + wheel==0.43.0
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    let site_packages = site_packages_path(context.venv.path(), "python3.9");
+    assert!(site_packages.join("_virtualenv.py").is_file());
+    assert!(site_packages.join("_virtualenv.pth").is_file());
 }
 
 #[test]
@@ -1941,7 +2118,7 @@ fn relocatable_envs_default_no_relocatable() {
 
 /// Ensure that a nested virtual environment uses the same `home` directory as the parent.
 #[test]
-fn verify_nested_pyvenv_cfg() -> Result<()> {
+fn verify_nested_pyvenv_cfg() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a virtual environment at `.venv`.
@@ -1959,7 +2136,7 @@ fn verify_nested_pyvenv_cfg() -> Result<()> {
     pyvenv_cfg.assert(predicates::path::is_file());
 
     // Extract the "home" line from the pyvenv.cfg file.
-    let contents = fs_err::read_to_string(pyvenv_cfg.path())?;
+    let contents = context.read(".venv/pyvenv.cfg");
     let venv_home = contents
         .lines()
         .find(|line| line.starts_with("home"))
@@ -1976,10 +2153,8 @@ fn verify_nested_pyvenv_cfg() -> Result<()> {
         .assert()
         .success();
 
-    let sub_pyvenv_cfg = subvenv.child("pyvenv.cfg");
-
     // Extract the "home" line from the pyvenv.cfg file.
-    let contents = fs_err::read_to_string(sub_pyvenv_cfg.path())?;
+    let contents = context.read(".subvenv/pyvenv.cfg");
     let sub_venv_home = contents
         .lines()
         .find(|line| line.starts_with("home"))
@@ -1987,8 +2162,6 @@ fn verify_nested_pyvenv_cfg() -> Result<()> {
 
     // Check that both directories point to the same home.
     assert_eq!(sub_venv_home, venv_home);
-
-    Ok(())
 }
 
 /// See <https://github.com/astral-sh/uv/issues/3280>

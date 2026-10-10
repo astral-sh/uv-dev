@@ -108,6 +108,27 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
         writer.raw("]\n");
     }
 
+    for group in &lock.workspace_groups {
+        writer.array_of_tables(&["workspace-group"])?;
+        writer.key_value("name", group.definition.name.as_ref())?;
+        writer.key_multiline_array("members", &group.definition.members, |writer, member| {
+            writer.value(member.as_ref())
+        })?;
+        if let Some(requires_python) = &group.definition.requires_python {
+            writer.key_value("requires-python", requires_python.to_string())?;
+        }
+        writer.key_value(
+            "effective-requires-python",
+            group.effective_requires_python.to_string(),
+        )?;
+        if let Some(environment) = group.environment.and_then(MarkerTree::contents) {
+            writer.key_value("environment", environment.to_string())?;
+        }
+        if group.definition.default {
+            writer.key_value("default", true)?;
+        }
+    }
+
     write_options(writer, &lock.options)?;
     write_manifest(writer, &lock.manifest)?;
 
@@ -214,6 +235,8 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
 fn write_manifest(writer: &mut LockWriter, manifest: &ResolverManifest) -> Result<(), WriteError> {
     let has_dependency_groups = !manifest.dependency_groups.is_empty();
     let has_manifest = manifest.default_groups.is_some()
+        || manifest.workspace_members.is_some()
+        || !manifest.workspace_member_ids.is_empty()
         || !manifest.members.is_empty()
         || !manifest.requirements.is_empty()
         || !manifest.constraints.is_empty()
@@ -229,6 +252,24 @@ fn write_manifest(writer: &mut LockWriter, manifest: &ResolverManifest) -> Resul
         writer.key_multiline_array("members", &manifest.members, |writer, member| {
             writer.value(member.as_ref())
         })?;
+    }
+    if let Some(members) = &manifest.workspace_members {
+        writer.key_multiline_array("workspace-members", members, |writer, member| {
+            writer.value(member.as_ref())
+        })?;
+    }
+    if !manifest.workspace_member_ids.is_empty() {
+        writer.key_multiline_array(
+            "workspace-member-ids",
+            &manifest.workspace_member_ids,
+            |writer, id| {
+                let mut first = true;
+                writer.start_inline_table();
+                write_package_id(writer, id, None, PackageIdLocation::Inline(&mut first))?;
+                writer.finish_inline_table(first);
+                Ok(())
+            },
+        )?;
     }
     if let Some(groups) = &manifest.default_groups {
         writer.key_value("default-groups", serialize_value(groups)?)?;

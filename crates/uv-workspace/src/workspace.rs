@@ -18,12 +18,14 @@ use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
 use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults, ExcludeDependency};
-use uv_distribution_types::{Index, MinimumLibcVersion, Requirement, RequirementSource};
+use uv_distribution_types::{
+    Index, MinimumLibcVersion, Requirement, RequirementSource, RequiresPython,
+};
 use uv_fs::{CWD, Simplified, normalize_path};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
 use uv_once_map::OnceMap;
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::{MarkerTree, VerbatimUrl};
+use uv_pep508::{MarkerTree, Pep508Error, VerbatimUrl};
 use uv_pypi_types::{ConflictError, Conflicts, SupportedEnvironments, VerbatimParsedUrl};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
@@ -33,6 +35,7 @@ use crate::pyproject::{
     BuildConstraintDependency, OverrideDependency, Project, PyProjectToml, PyprojectTomlError,
     Source, Sources, ToolUvSources, ToolUvWorkspace, WorkspaceReference,
 };
+use crate::workspace_groups::WorkspaceResolution;
 
 /// The workspace project environment selected by configuration and command-line options.
 #[derive(Debug)]
@@ -277,6 +280,34 @@ impl Error for WorkspaceError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum WorkspaceErrorKind {
+    #[error("Workspace group `{0}` is defined more than once")]
+    DuplicateWorkspaceGroup(GroupName),
+    #[error("Workspace groups `{0}` and `{1}` are both marked as default")]
+    MultipleDefaultWorkspaceGroups(GroupName, GroupName),
+    #[error("Workspace group `{0}` has no members")]
+    EmptyWorkspaceGroup(GroupName),
+    #[error("Workspace group `{0}` contains unknown member `{1}`")]
+    UnknownWorkspaceGroupMember(GroupName, PackageName),
+    #[error("Workspace group `{0}` is not defined")]
+    UnknownWorkspaceGroup(GroupName),
+    #[error("Workspace group `{0}` has incompatible `requires-python` declarations")]
+    DisjointWorkspaceGroupPython(GroupName),
+    #[error("Workspace group `{0}` requires dynamic metadata before selecting its Python domain")]
+    PendingWorkspaceGroupMetadata(GroupName),
+    #[error(
+        "Workspace group `{0}` has a Python domain that cannot be represented by `requires-python`"
+    )]
+    UnrepresentableWorkspaceGroupPython(GroupName),
+    #[error("The combined Python domain of workspace groups {} cannot be represented by `requires-python`", _0.iter().map(|group| format!("`{group}`")).join(", "))]
+    UnrepresentableWorkspaceGroupUnion(Vec<GroupName>),
+    #[error("Invalid dependency in workspace group `{0}` member `{1}`")]
+    InvalidWorkspaceGroupDependency(
+        GroupName,
+        PackageName,
+        #[source] Box<Pep508Error<VerbatimParsedUrl>>,
+    ),
+    #[error(transparent)]
+    WorkspaceGroupModifiers(uv_configuration::ScopedOverrideSourceError),
     // Workspace structure errors.
     #[error("No `pyproject.toml` found in current directory or any parent directory")]
     MissingPyprojectToml,
@@ -385,6 +416,8 @@ pub type Editability = Option<bool>;
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(serde::Serialize))]
 pub struct Workspace {
+    #[cfg_attr(test, serde(skip))]
+    resolution: Option<WorkspaceResolution>,
     /// The path to the workspace root.
     ///
     /// The workspace root is the directory containing the top level `pyproject.toml` with
@@ -688,6 +721,14 @@ impl Workspace {
         })
     }
 
+    /// Return workspace members selected as resolution roots, with their activation markers.
+    pub fn root_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
+        self.members_requirements().filter_map(|mut requirement| {
+            requirement.marker = self.root_marker(&requirement.name)?;
+            Some(requirement)
+        })
+    }
+
     /// The workspace members that are required my another member of the workspace.
     pub fn required_members(&self) -> &BTreeMap<PackageName, Editability> {
         &self.required_members
@@ -768,6 +809,7 @@ impl Workspace {
     /// Returns the set of all workspace member dependency groups.
     pub fn group_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
         self.packages.iter().filter_map(|(name, member)| {
+            let marker = self.root_marker(name)?;
             let url = VerbatimUrl::from_absolute_path(&member.root).expect("path is valid URL");
 
             let groups = {
@@ -802,7 +844,7 @@ impl Workspace {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
                 extras: Box::new([]),
                 groups: groups.into_boxed_slice(),
-                marker: MarkerTree::TRUE,
+                marker,
                 source: if member.pyproject_toml().is_package(!is_required_member) {
                     RequirementSource::Directory {
                         install_path: member.root.clone().into_boxed_path(),
@@ -826,6 +868,9 @@ impl Workspace {
 
     /// Returns the set of supported environments for the workspace.
     pub fn environments(&self) -> Option<&SupportedEnvironments> {
+        if let Some(resolution) = &self.resolution {
+            return Some(&resolution.environments);
+        }
         self.pyproject_toml
             .tool
             .as_ref()
@@ -878,6 +923,9 @@ impl Workspace {
     ) -> Result<RequiresPythonSources, DependencyGroupError> {
         let mut requires = RequiresPythonSources::new();
         for (name, member) in self.packages() {
+            if self.root_marker(name).is_none() {
+                continue;
+            }
             // Get the top-level requires-python for this package, which is always active
             //
             // Arguably we could check groups.prod() to disable this, since, the requires-python
@@ -1045,6 +1093,34 @@ impl Workspace {
         &self.packages
     }
 
+    /// Scope the workspace to the given resolution roots and environment.
+    #[must_use]
+    pub fn with_resolution(&self, resolution: WorkspaceResolution) -> Self {
+        Self {
+            resolution: Some(resolution),
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn resolution_requires_python(&self) -> Option<&RequiresPython> {
+        self.resolution
+            .as_ref()
+            .map(|resolution| &resolution.requires_python)
+    }
+
+    /// Returns whether this workspace is one scoped resolution attempt.
+    pub fn is_workspace_group_resolution(&self) -> bool {
+        self.resolution.is_some()
+    }
+
+    fn root_marker(&self, name: &PackageName) -> Option<MarkerTree> {
+        self.resolution
+            .as_ref()
+            .map_or(Some(MarkerTree::TRUE), |resolution| {
+                resolution.roots.get(name).copied()
+            })
+    }
+
     /// The sources table from the workspace `pyproject.toml`.
     pub fn sources(&self) -> &BTreeMap<PackageName, Sources> {
         &self.sources
@@ -1176,6 +1252,7 @@ impl Workspace {
         }
 
         let workspace = Self {
+            resolution: None,
             install_path: workspace_root,
             packages: workspace_members,
             required_members,
@@ -1821,6 +1898,7 @@ impl ProjectWorkspace {
             )?;
 
             let workspace = Workspace {
+                resolution: None,
                 install_path: project_path.to_path_buf(),
                 packages: current_project_as_members,
                 required_members,

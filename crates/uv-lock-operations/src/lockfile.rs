@@ -140,14 +140,7 @@ impl FrozenWorkspace {
 
     /// Validate the selected packages against the workspace recorded in the lockfile.
     pub fn validate_packages(&self, names: &[PackageName]) -> Result<()> {
-        for name in names {
-            if !(self.lock.members().contains(name)
-                || self.lock.members().is_empty()
-                    && self.lock.root().is_some_and(|root| root.name() == name))
-            {
-                bail!("Package `{name}` not found in lockfile workspace");
-            }
-        }
+        self.lock.validate_workspace_members(names)?;
         Ok(())
     }
 }

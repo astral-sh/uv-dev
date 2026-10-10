@@ -32,7 +32,7 @@ use uv_distribution_types::{
     PackageConfigSettings, Requirement,
 };
 use uv_install_wheel::LinkMode;
-use uv_normalize::{ExtraName, PackageName, PipGroupName};
+use uv_normalize::{ExtraName, GroupName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
 use uv_preview::Preview;
@@ -46,7 +46,7 @@ use uv_settings::{
     IndexOptions, LockCheck, LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions,
     PreviewFeaturesOption, PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds,
     ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
-    ResolverSettings, resolve_prerelease,
+    ResolverSettings, resolve_build_hash_checking, resolve_prerelease,
 };
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
@@ -684,6 +684,7 @@ fn resolve_lock_check(
 /// The resolved settings to use for a `run` invocation.
 #[derive(Debug, Clone)]
 pub struct RunSettings {
+    pub workspace_group: Option<GroupName>,
     pub lock_check: LockCheck,
     pub frozen: Option<FrozenSource>,
     pub extras: ExtrasSpecification,
@@ -726,6 +727,7 @@ impl RunSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let RunArgs {
+            workspace_group,
             extra,
             all_extras,
             no_extra,
@@ -859,6 +861,7 @@ impl RunSettings {
             show_resolution,
             all_packages,
             package,
+            workspace_group,
             no_project,
             no_sync: no_sync.is_enabled(),
             active: flag(active, no_active, "active")?.into(),
@@ -1014,18 +1017,12 @@ impl ToolRunSettings {
                 .into_iter()
                 .filter_map(Maybe::into_option)
                 .collect(),
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            overrides: overrides
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
+            overrides: requirement_files(overrides, environment.overrides.clone()),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
             isolated,
             show_resolution,
             lfs,
@@ -1148,22 +1145,13 @@ impl ToolInstallSettings {
                 .into_iter()
                 .flat_map(CommaSeparatedRequirements::into_iter)
                 .collect(),
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            overrides: overrides
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            excludes: excludes
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
+            overrides: requirement_files(overrides, environment.overrides.clone()),
+            excludes: requirement_files(excludes, environment.excludes.clone()),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
             lfs,
             python: python.and_then(Maybe::into_option),
             python_platform,
@@ -1807,6 +1795,7 @@ impl PythonPinSettings {
 /// The resolved settings to use for a `sync` invocation.
 #[derive(Debug, Clone)]
 pub struct SyncSettings {
+    pub workspace_group: Option<GroupName>,
     pub lock_check: LockCheck,
     pub frozen: Option<FrozenSource>,
     pub dry_run: DryRun,
@@ -1836,6 +1825,7 @@ impl SyncSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let SyncArgs {
+            workspace_group,
             extra,
             all_extras,
             no_extra,
@@ -2012,6 +2002,7 @@ impl SyncSettings {
             all_packages,
             package,
             python: python.and_then(Maybe::into_option),
+            workspace_group,
             python_platform,
             refresh: Refresh::try_from(refresh)?,
             settings,
@@ -2457,10 +2448,7 @@ impl AddSettings {
             no_sync: no_sync.is_enabled(),
             packages,
             requirements,
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
             marker,
             dependency_type,
             raw,
@@ -2807,6 +2795,7 @@ impl TreeSettings {
 #[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct ExportSettings {
+    pub workspace_group: Option<GroupName>,
     pub format: Option<ExportFormat>,
     pub all_packages: bool,
     pub package: Vec<PackageName>,
@@ -2839,6 +2828,7 @@ impl ExportSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let ExportArgs {
+            workspace_group,
             format,
             all_packages,
             package,
@@ -2926,6 +2916,7 @@ impl ExportSettings {
 
         Ok(Self {
             format,
+            workspace_group,
             all_packages,
             package,
             prune,
@@ -3338,6 +3329,22 @@ fn workspace_overrides(filesystem: Option<&FilesystemOptions>) -> Vec<Override<R
     overrides
 }
 
+/// Resolve requirements-file arguments, using environment values only when the CLI did not
+/// provide the corresponding option.
+fn requirement_files(
+    arguments: Vec<Maybe<RequirementsInput>>,
+    environment: Option<Vec<RequirementsInput>>,
+) -> Vec<RequirementsInput> {
+    if arguments.is_empty() {
+        environment.unwrap_or_default()
+    } else {
+        arguments
+            .into_iter()
+            .filter_map(Maybe::into_option)
+            .collect()
+    }
+}
+
 /// The resolved settings to use for a `pip compile` invocation.
 #[derive(Debug, Clone)]
 pub struct PipCompileSettings {
@@ -3347,6 +3354,7 @@ pub struct PipCompileSettings {
     pub overrides: Vec<RequirementsInput>,
     pub excludes: Vec<RequirementsInput>,
     pub build_constraints: Vec<RequirementsInput>,
+    pub build_hash_checking: HashCheckingMode,
     pub constraints_from_workspace: Vec<Requirement>,
     pub overrides_from_workspace: Vec<Override<Requirement>>,
     pub excludes_from_workspace: Vec<ExcludeDependency>,
@@ -3377,6 +3385,8 @@ impl PipCompileSettings {
             extra,
             all_extras,
             no_all_extras,
+            require_build_hashes,
+            no_require_build_hashes,
             refresh,
             no_deps,
             deps,
@@ -3489,22 +3499,22 @@ impl PipCompileSettings {
         Ok(Self {
             format,
             src_file,
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            overrides: overrides
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            excludes: excludes
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
+            build_hash_checking: resolve_pip_build_hash_checking(
+                flag(
+                    require_build_hashes,
+                    no_require_build_hashes,
+                    "require-build-hashes",
+                )?,
+                filesystem.as_ref(),
+                &environment,
+            ),
+            overrides: requirement_files(overrides, environment.overrides.clone()),
+            excludes: requirement_files(excludes, environment.excludes.clone()),
             constraints_from_workspace,
             overrides_from_workspace,
             excludes_from_workspace,
@@ -3569,6 +3579,7 @@ pub struct PipSyncSettings {
     pub src_file: Vec<RequirementsInput>,
     pub constraints: Vec<RequirementsInput>,
     pub build_constraints: Vec<RequirementsInput>,
+    pub build_hash_checking: HashCheckingMode,
     pub dry_run: DryRun,
     pub output_format: PipInstallFormat,
     pub refresh: Refresh,
@@ -3586,6 +3597,8 @@ impl PipSyncSettings {
             src_file,
             constraints,
             build_constraints,
+            require_build_hashes,
+            no_require_build_hashes,
             extra,
             all_extras,
             no_all_extras,
@@ -3625,14 +3638,20 @@ impl PipSyncSettings {
 
         Ok(Self {
             src_file,
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
+            build_hash_checking: resolve_pip_build_hash_checking(
+                flag(
+                    require_build_hashes,
+                    no_require_build_hashes,
+                    "require-build-hashes",
+                )?,
+                filesystem.as_ref(),
+                &environment,
+            ),
             dry_run: if check {
                 DryRun::Check
             } else {
@@ -3688,6 +3707,7 @@ pub struct PipInstallSettings {
     pub overrides: Vec<RequirementsInput>,
     pub excludes: Vec<RequirementsInput>,
     pub build_constraints: Vec<RequirementsInput>,
+    pub build_hash_checking: HashCheckingMode,
     pub dry_run: DryRun,
     pub output_format: PipInstallFormat,
     pub constraints_from_workspace: Vec<Requirement>,
@@ -3719,6 +3739,8 @@ impl PipInstallSettings {
                     excludes,
                     build_constraints,
                 },
+            require_build_hashes,
+            no_require_build_hashes,
             extra,
             all_extras,
             no_all_extras,
@@ -3807,22 +3829,22 @@ impl PipInstallSettings {
             package,
             requirements,
             editables: editable,
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            overrides: overrides
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            excludes: excludes
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
+            overrides: requirement_files(overrides, environment.overrides.clone()),
+            excludes: requirement_files(excludes, environment.excludes.clone()),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
+            build_hash_checking: resolve_pip_build_hash_checking(
+                flag(
+                    require_build_hashes,
+                    no_require_build_hashes,
+                    "require-build-hashes",
+                )?,
+                filesystem.as_ref(),
+                &environment,
+            ),
             dry_run: if check {
                 DryRun::Check
             } else {
@@ -4277,10 +4299,10 @@ impl BuildSettings {
             clear,
             gitignore: flag(create_gitignore, no_create_gitignore, "create-gitignore")?
                 .unwrap_or(true),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
             build_constraints_from_workspace,
             hash_checking: HashCheckingMode::from_args(
                 flag(require_hashes, no_require_hashes, "require-hashes")?,
@@ -4403,6 +4425,26 @@ impl VenvSettings {
     }
 }
 
+/// Resolve the `uv pip` build-hash policy from CLI, environment, and configuration settings.
+fn resolve_pip_build_hash_checking(
+    require_build_hashes: Option<bool>,
+    filesystem: Option<&FilesystemOptions>,
+    environment: &EnvironmentOptions,
+) -> HashCheckingMode {
+    let configured = filesystem.and_then(|filesystem| {
+        filesystem
+            .pip
+            .as_ref()
+            .and_then(|pip| pip.require_build_hashes)
+            .or(filesystem.top_level.require_build_hashes)
+    });
+    resolve_build_hash_checking(
+        require_build_hashes
+            .or(environment.require_build_hashes)
+            .or(configured),
+    )
+}
+
 /// Return the indexes from the effective filesystem configuration.
 fn configured_indexes(filesystem: Option<&FilesystemOptions>) -> &[Index] {
     filesystem
@@ -4428,6 +4470,9 @@ fn combine_resolver_settings(
     filesystem: Option<FilesystemOptions>,
     environment: &EnvironmentOptions,
 ) -> ResolverSettings {
+    args.require_build_hashes = args
+        .require_build_hashes
+        .or(environment.require_build_hashes);
     args.no_binary_package = args
         .no_binary_package
         .or(environment.no_binary_package.clone());
@@ -4500,6 +4545,9 @@ fn resolver_installer_options_with_environment(
     mut options: ResolverInstallerOptions,
     environment: &EnvironmentOptions,
 ) -> ResolverInstallerOptions {
+    options.require_build_hashes = options
+        .require_build_hashes
+        .or(environment.require_build_hashes);
     options.no_binary_package = options
         .no_binary_package
         .or(environment.no_binary_package.clone());
@@ -4605,6 +4653,7 @@ impl PipSettings {
             no_binary,
             only_binary,
             no_build_isolation,
+            require_build_hashes: _,
             no_build_isolation_package,
             extra_build_dependencies,
             extra_build_variables,
@@ -4687,6 +4736,7 @@ impl PipSettings {
             no_binary_package: top_level_no_binary_package,
             exclude_newer_package: top_level_exclude_newer_package,
             torch_backend: top_level_torch_backend,
+            require_build_hashes: _,
         } = top_level;
 
         // Merge the top-level options (`tool.uv`) with the pip-specific options (`tool.uv.pip`),
@@ -5170,6 +5220,8 @@ mod tests {
                     index_strategy: None,
                     keyring_provider: None,
                 },
+                require_build_hashes: false,
+                no_require_build_hashes: false,
             },
             None,
             EnvironmentOptions::new()?,

@@ -570,6 +570,40 @@ impl InternerGuard<'_> {
         self.create_node(node.var.clone(), children)
     }
 
+    /// Select known branches while retaining unresolved variables and shared subgraphs.
+    pub(crate) fn restrict_nodes(
+        &mut self,
+        node: NodeId,
+        select: &impl Fn(NodeId) -> Option<NodeId>,
+    ) -> NodeId {
+        self.restrict_nodes_cached(node, select, &mut FxHashMap::default())
+    }
+
+    fn restrict_nodes_cached(
+        &mut self,
+        node: NodeId,
+        select: &impl Fn(NodeId) -> Option<NodeId>,
+        cache: &mut FxHashMap<NodeId, NodeId>,
+    ) -> NodeId {
+        if node.is_true() || node.is_false() {
+            return node;
+        }
+        if let Some(&result) = cache.get(&node) {
+            return result;
+        }
+        let result = if let Some(child) = select(node) {
+            self.restrict_nodes_cached(child, select, cache)
+        } else {
+            let current = self.shared.node(node);
+            let children = current.children.map(node, |child| {
+                self.restrict_nodes_cached(child, select, cache)
+            });
+            self.create_node(current.var.clone(), children)
+        };
+        cache.insert(node, result);
+        result
+    }
+
     /// Restrict a marker by assuming that another marker is true.
     ///
     /// The returned marker is equivalent to `value` wherever `assumption` is true. Its value
@@ -849,6 +883,18 @@ impl InternerGuard<'_> {
         }
 
         let node = self.shared.node(i);
+        let python_variable = Variable::Version(CanonicalMarkerValueVersion::PythonFullVersion);
+        if node.var > python_variable {
+            // Version variables precede extras and list markers. Inserting the Python bound
+            // below one of those variables would break the decision tree's canonical ordering.
+            let python = self.create_node(
+                python_variable,
+                Edges::Version {
+                    edges: Edges::from_range(&py_range),
+                },
+            );
+            return self.and(i, python);
+        }
         let Node {
             var: Variable::Version(CanonicalMarkerValueVersion::PythonFullVersion),
             children: Edges::Version { edges },

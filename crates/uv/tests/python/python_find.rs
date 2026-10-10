@@ -9,6 +9,70 @@ use uv_static::EnvVars;
 
 use uv_test::{uv_snapshot, venv_bin_path};
 
+/// An unavailable global default is ignored when its version cannot run the host environment.
+#[cfg(target_os = "linux")]
+#[test]
+fn python_find_platform_missing_global_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .python_pin()
+        .args(["--global", "3.13t"])
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12,<3.14"
+        [tool.uv]
+        package = false
+        environments = ["sys_platform != 'linux' or python_version < '3.13'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.python_find().arg("--show-version"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    "#);
+    assert_eq!(
+        context.read(context.user_config_dir.child("uv/.python-version")),
+        "3.13+freethreaded\n"
+    );
+    Ok(())
+}
+
+/// A global implementation request is evaluated in its own implementation's environment domain.
+#[test]
+fn python_find_platform_implementation_global_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
+    context
+        .python_pin()
+        .args(["--global", "pypy@3.10"])
+        .assert()
+        .success();
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.10,<3.14"
+        [tool.uv]
+        package = false
+        environments = ["(implementation_name == 'pypy' and python_version >= '3.10') or (implementation_name == 'cpython' and python_version >= '3.12')"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.python_find().arg("--show-version"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for PyPy 3.10 in [PYTHON SOURCES]
+    "#);
+    assert_eq!(
+        context.read(context.user_config_dir.child("uv/.python-version")),
+        "pypy@3.10\n"
+    );
+    Ok(())
+}
+
 #[test]
 fn python_find_default_arch() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
@@ -1132,7 +1196,7 @@ fn python_find_script_no_such_version() {
     script
         .write_str(indoc! {r#"
             # /// script
-            # requires-python = ">=3.15"
+            # requires-python = ">=3.16"
             # dependencies = []
             # ///
         "#})
@@ -1141,7 +1205,7 @@ fn python_find_script_no_such_version() {
     uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    No interpreter found for Python >=3.15 in [PYTHON SOURCES]
+    No interpreter found for Python >=3.16 in [PYTHON SOURCES]
     ");
 }
 

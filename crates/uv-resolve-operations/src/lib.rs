@@ -14,7 +14,7 @@ use uv_configuration::{
     ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
-use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
+use uv_distribution::{DistributionDatabase, FirstPartyPackages, SourcedDependencyGroups};
 use uv_distribution_types::{
     Diagnostic, NameRequirementSpecification, Requirement, RequirementScope, RequirementSource,
     ResolutionDiagnostic, ResolutionRecorder, UnresolvedRequirement,
@@ -101,6 +101,7 @@ pub async fn resolve(
     source_trees: Vec<SourceTree>,
     mut project: Option<PackageName>,
     workspace_members: BTreeMap<PackageName, RequirementSource>,
+    first_party_packages: Option<&FirstPartyPackages>,
     extras: &ExtrasSpecification,
     groups: &BTreeMap<PathBuf, DependencyGroups>,
     preferences: Vec<Preference>,
@@ -124,6 +125,19 @@ pub async fn resolve(
     printer: Printer,
 ) -> Result<(ResolverOutput, HashStrategy), Error> {
     let start = std::time::Instant::now();
+    let database = || {
+        let database = DistributionDatabase::new(
+            client,
+            build_dispatch,
+            concurrency.downloads_semaphore.clone(),
+        )
+        .with_recorder(recorder.clone());
+        if let Some(first_party_packages) = first_party_packages {
+            database.with_first_party_packages(first_party_packages)
+        } else {
+            database
+        }
+    };
 
     // Resolve the requirements from the provided sources.
     let requirements = {
@@ -143,38 +157,19 @@ pub async fn resolve(
         // Resolve any unnamed requirements.
         if !unnamed.is_empty() {
             requirements.extend(
-                NamedRequirementsResolver::new(
-                    hasher,
-                    index,
-                    DistributionDatabase::new(
-                        client,
-                        build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
-                    )
-                    .with_recorder(recorder.clone()),
-                )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(unnamed.into_iter())
-                .await?,
+                NamedRequirementsResolver::new(hasher, index, database())
+                    .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                    .resolve(unnamed.into_iter())
+                    .await?,
             );
         }
 
         // Resolve any source trees into requirements.
         if !source_trees.is_empty() {
-            let resolutions = SourceTreeResolver::new(
-                extras,
-                hasher,
-                index,
-                DistributionDatabase::new(
-                    client,
-                    build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
-                )
-                .with_recorder(recorder.clone()),
-            )
-            .with_reporter(Arc::new(ResolverReporter::from(printer)))
-            .resolve(source_trees.iter())
-            .await?;
+            let resolutions = SourceTreeResolver::new(extras, hasher, index, database())
+                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .resolve(source_trees.iter())
+                .await?;
 
             // If we resolved a single project, use it for the project name.
             project = project.or_else(|| {
@@ -287,19 +282,10 @@ pub async fn resolve(
         // Resolve any unnamed overrides.
         if !unnamed.is_empty() {
             overrides.extend(
-                NamedRequirementsResolver::new(
-                    &hasher,
-                    index,
-                    DistributionDatabase::new(
-                        client,
-                        build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
-                    )
-                    .with_recorder(recorder.clone()),
-                )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(unnamed.into_iter())
-                .await?,
+                NamedRequirementsResolver::new(&hasher, index, database())
+                    .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                    .resolve(unnamed.into_iter())
+                    .await?,
             );
         }
 
@@ -334,12 +320,7 @@ pub async fn resolve(
                 &modifiers,
                 &hasher,
                 index,
-                DistributionDatabase::new(
-                    client,
-                    build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
-                )
-                .with_recorder(recorder.clone()),
+                database(),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
             .resolve(&resolver_env)
@@ -389,12 +370,7 @@ pub async fn resolve(
             &hasher,
             build_dispatch,
             installed_packages,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            )
-            .with_recorder(recorder.clone()),
+            database(),
         )?
         .with_reporter(Arc::new(reporter));
 

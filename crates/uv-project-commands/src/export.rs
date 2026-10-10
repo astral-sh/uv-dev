@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -22,6 +24,7 @@ use uv_distribution_types::Verbatim;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, detect_conflicts,
+    discover_workspace_groups,
 };
 use uv_fs::CWD;
 use uv_lock::{Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
@@ -38,6 +41,11 @@ use uv_scripts::Pep723Script;
 use uv_settings::{FrozenSource, LockCheck, PythonInstallMirrors, ResolverSettings};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
+
+use crate::lock::{
+    CommandWorkspaceSelection, command_workspace_group, command_workspace_group_from_lock,
+    lockfile_selection_members, select_workspace_group_lock, workspace_selection_members,
+};
 
 #[derive(Debug, Clone)]
 #[expect(clippy::large_enum_variant)]
@@ -156,7 +164,8 @@ pub async fn export(
     project_dir: &Path,
     format: Option<ExportFormat>,
     all_packages: bool,
-    package: Vec<PackageName>,
+    mut package: Vec<PackageName>,
+    workspace_group: Option<GroupName>,
     prune: Vec<PackageName>,
     hashes: bool,
     install_options: InstallOptions,
@@ -264,10 +273,111 @@ pub async fn export(
         }
     };
 
-    let resolved_lock;
-    let lock = match &source {
-        ExportSource::Lockfile { workspace, .. } => workspace.lock(),
-        ExportSource::Manifest(target) => {
+    let state = UniversalState::default();
+    let mut selection_members = match &source {
+        ExportSource::Manifest(ExportTarget::Project(project)) => {
+            workspace_selection_members(project, &package, all_packages)
+        }
+        ExportSource::Lockfile {
+            workspace,
+            project_name,
+        } => lockfile_selection_members(
+            workspace.lock(),
+            project_name.as_ref(),
+            &package,
+            all_packages,
+        ),
+        ExportSource::Manifest(ExportTarget::Script(_)) => BTreeSet::default(),
+    };
+    let frozen_lock = if let Some(frozen) = frozen
+        && let ExportSource::Manifest(ExportTarget::Project(project)) = &source
+    {
+        Some(
+            LockTarget::Workspace(project.workspace())
+                .read_frozen(frozen.into())
+                .await
+                .map_err(UvError::from)?,
+        )
+    } else {
+        None
+    };
+    let mut workspace_group = match &source {
+        ExportSource::Manifest(ExportTarget::Project(project)) => {
+            if let Some(lock) = frozen_lock.as_ref() {
+                command_workspace_group_from_lock(
+                    lock,
+                    workspace_group.as_ref(),
+                    batch.is_none().then_some(&selection_members),
+                    package.is_empty(),
+                )
+                .map(|selection| selection.map(CommandWorkspaceSelection::Finalized))
+            } else {
+                command_workspace_group(
+                    project.workspace(),
+                    workspace_group.as_ref(),
+                    batch.is_none().then_some(&selection_members),
+                    package.is_empty(),
+                    &discover_workspace_groups(
+                        project.workspace(),
+                        project_dir,
+                        python.as_deref(),
+                        lock_check,
+                        &settings,
+                        &client_builder,
+                        &state,
+                        &BTreeSet::new(),
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        &concurrency,
+                        config_discovery,
+                        cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .await?,
+                )
+            }
+            .map_err(UvError::from)?
+        }
+        ExportSource::Lockfile { workspace, .. } => command_workspace_group_from_lock(
+            workspace.lock(),
+            workspace_group.as_ref(),
+            batch.is_none().then_some(&selection_members),
+            package.is_empty(),
+        )
+        .map(|selection| selection.map(CommandWorkspaceSelection::Finalized))
+        .map_err(UvError::from)?,
+        ExportSource::Manifest(ExportTarget::Script(_)) => {
+            if workspace_group.is_some() {
+                bail!("Workspace groups are not supported for scripts");
+            }
+            None
+        }
+    };
+
+    if let Some(group) = &workspace_group
+        && (group.name().is_some())
+        && package.is_empty()
+    {
+        selection_members.clone_from(group.members());
+        if !all_packages {
+            package.extend(group.members().iter().cloned());
+        }
+    }
+    let group_workspace = match (&source, &workspace_group) {
+        (ExportSource::Manifest(ExportTarget::Project(project)), Some(group)) => {
+            Some(group.provisional_workspace(project.workspace(), &selection_members))
+        }
+        _ => None,
+    };
+
+    let resolved_lock = match (&source, frozen_lock) {
+        (_, Some(lock)) => lock,
+        (ExportSource::Lockfile { workspace, .. }, None) => workspace.lock().clone(),
+        (ExportSource::Manifest(target), None) => {
             // Find an interpreter for the project, unless `--frozen` is set.
             let interpreter = if frozen.is_some() {
                 None
@@ -297,18 +407,27 @@ pub async fn export(
                         let interpreter_groups = if batch.is_some() {
                             DependencyGroupsWithDefaults::none()
                         } else {
-                            groups.with_defaults(project.default_groups()?)
+                            groups.with_defaults(project.default_groups_for_packages(&package)?)
                         };
                         let project_python = ProjectPythonRequest::from_request(
                             python.as_deref().map(PythonRequest::parse),
-                            Some(project.workspace()),
+                            Some(
+                                group_workspace
+                                    .as_ref()
+                                    .unwrap_or_else(|| project.workspace()),
+                            ),
                             &interpreter_groups,
+                            &settings.sources,
                             project_dir,
                             config_discovery,
                         )
                         .await?;
                         ProjectInterpreter::discover(
-                            ProjectEnvironmentTarget::from(project.workspace()),
+                            ProjectEnvironmentTarget::from(
+                                group_workspace
+                                    .as_ref()
+                                    .unwrap_or_else(|| project.workspace()),
+                            ),
                             project_python,
                             &client_builder,
                             python_preference,
@@ -340,10 +459,7 @@ pub async fn export(
                 LockMode::Write(interpreter.as_ref().unwrap())
             };
 
-            // Initialize any shared state.
-            let state = UniversalState::default();
-
-            resolved_lock = match Box::pin(
+            match Box::pin(
                 LockOperation::new(
                     mode,
                     &settings,
@@ -362,14 +478,53 @@ pub async fn export(
             {
                 Ok(result) => result.into_lock(),
                 Err(err) => return Err(UvError::from(err).into()),
-            };
-            &resolved_lock
+            }
         }
     };
-
     if let Some(batch) = &batch {
+        let selected_group = workspace_group
+            .as_ref()
+            .filter(|group| group.name().is_some());
         let mut writers = Vec::with_capacity(batch.export.len());
         for entry in &batch.export {
+            let entry_packages = if entry.package.is_empty() && !entry.all_packages {
+                selected_group
+                    .map(|group| group.members().iter().cloned().collect())
+                    .unwrap_or_default()
+            } else {
+                entry.package.clone()
+            };
+            let members = if entry.all_packages
+                && let Some(group) = selected_group
+            {
+                group.members().clone()
+            } else {
+                match &source {
+                    ExportSource::Manifest(ExportTarget::Project(project)) => {
+                        workspace_selection_members(project, &entry_packages, entry.all_packages)
+                    }
+                    ExportSource::Lockfile {
+                        workspace,
+                        project_name,
+                    } => lockfile_selection_members(
+                        workspace.lock(),
+                        project_name.as_ref(),
+                        &entry_packages,
+                        entry.all_packages,
+                    ),
+                    ExportSource::Manifest(ExportTarget::Script(_)) => {
+                        bail!("`--batch` does not support scripts")
+                    }
+                }
+            };
+            let group_name = selected_group.and_then(|group| group.name());
+            let selected_lock =
+                if resolved_lock.workspace_groups().is_empty() && group_name.is_none() {
+                    Cow::Borrowed(&resolved_lock)
+                } else {
+                    Cow::Owned(resolved_lock.select_workspace_context(group_name, &members)?)
+                };
+
             let groups = DependencyGroups::from_args(
                 None,
                 entry.group.clone(),
@@ -380,18 +535,29 @@ pub async fn export(
             );
             let groups = match &source {
                 ExportSource::Manifest(ExportTarget::Project(project)) => {
-                    groups.with_defaults(project.default_groups_for_packages(&entry.package)?)
+                    let defaults = if frozen.is_some() {
+                        selected_lock.validate_workspace_members(&entry_packages)?;
+                        match entry_packages.as_slice() {
+                            [name] => selected_lock.member_default_groups(name),
+                            _ => None,
+                        }
+                        .map(Ok)
+                        .unwrap_or_else(|| project.default_groups())?
+                    } else {
+                        project.default_groups_for_packages(&entry_packages)?
+                    };
+                    groups.with_defaults(defaults)
                 }
                 ExportSource::Lockfile {
                     workspace,
                     project_name,
                 } => {
-                    workspace.validate_packages(&entry.package)?;
+                    workspace.validate_packages(&entry_packages)?;
                     resolve_lockfile_groups(
                         &groups,
                         workspace,
                         project_name.as_ref(),
-                        &entry.package,
+                        &entry_packages,
                     )
                     .with_context(|| {
                         format!(
@@ -415,10 +581,10 @@ pub async fn export(
             writers.push(
                 render_export(
                     &source,
-                    lock,
+                    &selected_lock,
                     format,
                     entry.all_packages,
-                    &entry.package,
+                    &entry_packages,
                     &prune,
                     hashes,
                     &install_options,
@@ -448,9 +614,33 @@ pub async fn export(
         return Ok(ExitStatus::Success);
     }
 
+    let resolved_lock = if let Some(lock) = workspace_group
+        .as_mut()
+        .and_then(CommandWorkspaceSelection::take_selected_lock)
+    {
+        lock
+    } else {
+        select_workspace_group_lock(
+            resolved_lock,
+            workspace_group.as_ref().and_then(|group| group.name()),
+            &selection_members,
+        )?
+    };
+    let lock = &resolved_lock;
+
     let groups = match &source {
         ExportSource::Manifest(ExportTarget::Project(project)) => {
-            groups.with_defaults(project.default_groups()?)
+            let defaults = if frozen.is_some() {
+                match package.as_slice() {
+                    [name] => lock.member_default_groups(name),
+                    _ => None,
+                }
+                .map(Ok)
+                .unwrap_or_else(|| project.default_groups())?
+            } else {
+                project.default_groups_for_packages(&package)?
+            };
+            groups.with_defaults(defaults)
         }
         ExportSource::Manifest(ExportTarget::Script(_)) => {
             groups.with_defaults(DefaultGroups::default())
@@ -587,6 +777,9 @@ async fn render_export<'output>(
     if !matches!(format, ExportFormat::CycloneDX1_5) {
         detect_conflicts(&target, extras, groups)?;
     }
+
+    let selected_target = target.select_workspace_context()?;
+    let target = &selected_target;
 
     // If the user is exporting to PEP 751, ensure the filename matches the specification.
     if matches!(format, ExportFormat::PylockToml) {

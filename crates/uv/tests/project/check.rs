@@ -907,6 +907,75 @@ fn check_virtual_workspace_only_checks_declared_members() -> Result<()> {
     Ok(())
 }
 
+/// A default workspace group limits analysis to its roots, including nested-member exclusions.
+#[test]
+fn check_virtual_workspace_default_group_targets() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [tool.uv.workspace]
+            members = ["packages/*", "packages/parent/child"]
+
+            [[tool.uv.workspace.groups]]
+            name = "main"
+            members = ["parent"]
+            default = true
+
+            [[tool.uv.workspace.groups]]
+            name = "other"
+            members = ["child", "other"]
+        "#})?;
+    write_workspace_member(&context, "parent", "value: int = 'selected'\n")?;
+    write_workspace_member(&context, "other", "value: int = 'unselected'\n")?;
+
+    let child = context.temp_dir.child("packages/parent/child");
+    child.create_dir_all()?;
+    child.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    child
+        .child("main.py")
+        .write_str("value: int = 'unselected-nested'\n")?;
+
+    uv_snapshot!(context.filters(), workspace_check(&context), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    packages/parent/main.py:1:14: error[invalid-assignment] Object of type `Literal["selected"]` is not assignable to `int`
+    Found 1 diagnostic
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    "#);
+
+    uv_snapshot!(context.filters(), workspace_check(&context).arg("--frozen"), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    packages/parent/main.py:1:14: error[invalid-assignment] Object of type `Literal["selected"]` is not assignable to `int`
+    Found 1 diagnostic
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    "#);
+
+    uv_snapshot!(context.filters(), workspace_check(&context).arg("--all-packages"), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    packages/parent/main.py:1:14: error[invalid-assignment] Object of type `Literal["selected"]` is not assignable to `int`
+    Found 1 diagnostic
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    "#);
+
+    Ok(())
+}
+
 /// Include workspace members located outside the workspace root with `--all-packages`.
 #[test]
 fn check_workspace_all_packages_includes_external_members() -> Result<()> {

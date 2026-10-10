@@ -10,17 +10,21 @@ use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun};
 use uv_dispatch::UniversalState;
+use uv_distribution_types::RequiresPython;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
+    discover_workspace_groups,
 };
 use uv_git_types::GitOid;
-use uv_lock::{Lock, Package};
+use uv_lock::{Lock, Package, WorkspaceGroupSelectionError, implicit_constraints_marker};
 use uv_lock_operations::{
     LockError, LockMode, LockOperation, LockResult, LockTarget, MissingLockfileSource,
 };
-use uv_normalize::PackageName;
+use uv_normalize::{GroupName, PackageName};
 use uv_pep440::Version;
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
+use uv_pypi_types::SupportedEnvironments;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -31,9 +35,497 @@ use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
 use uv_settings::{FrozenSource, LockCheck, PythonInstallMirrors, ResolverSettings};
 use uv_warnings::warn_user;
-use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
+use uv_workspace::{
+    DiscoveryOptions, ProvisionalWorkspaceGroup, ResolvedWorkspaceGroup, VirtualProject, Workspace,
+    WorkspaceCache, WorkspaceGroup, WorkspaceResolution,
+};
 
-use crate::ScriptPath;
+use crate::{ProjectError, ScriptPath};
+
+pub(crate) fn select_workspace_group_result(
+    result: LockResult,
+    selected_lock: Option<Lock>,
+    name: Option<&GroupName>,
+    members: &BTreeSet<PackageName>,
+) -> Result<LockResult, ProjectError> {
+    let select_current = |lock| {
+        if let Some(selected_lock) = selected_lock {
+            Ok(selected_lock)
+        } else {
+            select_workspace_group_lock(lock, name, members)
+        }
+    };
+    Ok(match result {
+        LockResult::Unchanged(lock) => LockResult::Unchanged(select_current(lock)?),
+        LockResult::Changed(previous, lock) => {
+            let previous = match previous {
+                Some(previous) if !previous.workspace_groups().is_empty() => {
+                    select_workspace_group_lock(previous, name, members).ok()
+                }
+                previous => previous,
+            };
+            LockResult::Changed(previous, select_current(lock)?)
+        }
+    })
+}
+
+pub(crate) fn select_workspace_group_lock(
+    lock: Lock,
+    name: Option<&GroupName>,
+    members: &BTreeSet<PackageName>,
+) -> Result<Lock, ProjectError> {
+    if name.is_none() && lock.workspace_groups().is_empty() {
+        return Ok(lock);
+    }
+    Ok(lock.select_workspace_context(name, members)?)
+}
+
+/// The ordinary project target, before applying a named workspace-group default.
+pub(crate) fn workspace_selection_members(
+    project: &VirtualProject,
+    packages: &[PackageName],
+    all_packages: bool,
+) -> BTreeSet<PackageName> {
+    if all_packages || (packages.is_empty() && project.is_non_project()) {
+        project.workspace().packages().keys().cloned().collect()
+    } else if packages.is_empty() {
+        project.project_name().into_iter().cloned().collect()
+    } else {
+        packages.iter().cloned().collect()
+    }
+}
+
+/// The workspace scope available for interpreter discovery or environment creation.
+pub(crate) enum CommandWorkspaceDiscovery {
+    /// Read-only discovery, with an optional member selection that still requires a lock.
+    Provisional {
+        workspace: Workspace,
+        selection: Option<PendingCommandWorkspaceSelection>,
+    },
+    /// A complete domain that can be used to create or replace an environment.
+    Finalized(Workspace),
+}
+
+/// Select the same Python domain that synchronization uses for the command's project target.
+pub(crate) fn workspace_for_project_groups(
+    project: &VirtualProject,
+    packages: &[PackageName],
+    all_packages: bool,
+    groups: &[ResolvedWorkspaceGroup],
+    no_sync: bool,
+) -> Result<CommandWorkspaceDiscovery, ProjectError> {
+    if no_sync {
+        return Ok(CommandWorkspaceDiscovery::Provisional {
+            workspace: project.workspace().with_workspace_groups(groups)?,
+            selection: None,
+        });
+    }
+    let selection = project_workspace_selection(project, packages, all_packages, groups)?;
+    Ok(match selection {
+        Some(CommandWorkspaceSelection::Pending(selection)) => {
+            CommandWorkspaceDiscovery::Provisional {
+                workspace: selection.provisional_workspace(project.workspace()),
+                selection: Some(selection),
+            }
+        }
+        Some(CommandWorkspaceSelection::Finalized(selection)) => {
+            CommandWorkspaceDiscovery::Finalized(
+                selection.environment_workspace(project.workspace()),
+            )
+        }
+        None => CommandWorkspaceDiscovery::Finalized(project.workspace().clone()),
+    })
+}
+
+/// Select a project's command domain without exposing a provisional environment workspace.
+pub(crate) fn project_workspace_selection(
+    project: &VirtualProject,
+    packages: &[PackageName],
+    all_packages: bool,
+    groups: &[ResolvedWorkspaceGroup],
+) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
+    let members = workspace_selection_members(project, packages, all_packages);
+    let workspace_target = all_packages || (packages.is_empty() && project.is_non_project());
+    command_workspace_group(
+        project.workspace(),
+        None,
+        Some(&members),
+        workspace_target,
+        groups,
+    )
+}
+
+/// Select workspace members when only a lockfile is available.
+pub(crate) fn lockfile_selection_members(
+    lock: &Lock,
+    project_name: Option<&PackageName>,
+    packages: &[PackageName],
+    all_packages: bool,
+) -> BTreeSet<PackageName> {
+    if all_packages || (packages.is_empty() && project_name.is_none()) {
+        let mut members = lock.members().clone();
+        if members.is_empty()
+            && let Some(root) = lock.root()
+        {
+            members.insert(root.name().clone());
+        }
+        members
+    } else if packages.is_empty() {
+        project_name.iter().copied().cloned().collect()
+    } else {
+        packages.iter().cloned().collect()
+    }
+}
+
+/// A command selection whose complete member domain may still require resolution.
+pub(crate) enum CommandWorkspaceSelection {
+    Pending(PendingCommandWorkspaceSelection),
+    Finalized(FinalizedCommandWorkspaceSelection),
+}
+
+/// A selection available only for read-only interpreter probes or no-sync commands.
+pub(crate) struct PendingCommandWorkspaceSelection {
+    scope: CommandWorkspaceDomain,
+}
+
+/// A complete command selection that can expose an environment scope.
+pub(crate) struct FinalizedCommandWorkspaceSelection {
+    scope: CommandWorkspaceDomain,
+    selected_lock: Option<Box<Lock>>,
+}
+
+struct CommandWorkspaceDomain {
+    name: Option<GroupName>,
+    members: BTreeSet<PackageName>,
+    requires_python: RequiresPython,
+    environments: MarkerTree,
+    target_members: BTreeSet<PackageName>,
+}
+
+impl CommandWorkspaceSelection {
+    fn scope(&self) -> &CommandWorkspaceDomain {
+        match self {
+            Self::Pending(selection) => &selection.scope,
+            Self::Finalized(selection) => &selection.scope,
+        }
+    }
+
+    pub(crate) fn name(&self) -> Option<&GroupName> {
+        self.scope().name.as_ref()
+    }
+
+    pub(crate) fn members(&self) -> &BTreeSet<PackageName> {
+        &self.scope().members
+    }
+
+    /// Expose an explicitly provisional scope for probes and commands that skip synchronization.
+    pub(crate) fn provisional_workspace(
+        &self,
+        workspace: &Workspace,
+        members: &BTreeSet<PackageName>,
+    ) -> Workspace {
+        self.scope().workspace_with_members(workspace, members)
+    }
+
+    fn into_provisional(self) -> PendingCommandWorkspaceSelection {
+        match self {
+            Self::Pending(selection) => selection,
+            Self::Finalized(selection) => PendingCommandWorkspaceSelection {
+                scope: selection.scope,
+            },
+        }
+    }
+
+    /// Reuse the graph projected while deriving a selection's Python domain.
+    pub(crate) fn take_selected_lock(&mut self) -> Option<Lock> {
+        match self {
+            Self::Pending(_) => None,
+            Self::Finalized(selection) => selection.take_selected_lock(),
+        }
+    }
+}
+
+impl PendingCommandWorkspaceSelection {
+    pub(crate) fn provisional_workspace(&self, workspace: &Workspace) -> Workspace {
+        self.scope.workspace(workspace)
+    }
+
+    /// Consume the pending selection only after its complete activation domain is resolved.
+    pub(crate) fn finalize(
+        mut self,
+        lock: &Lock,
+    ) -> Result<FinalizedCommandWorkspaceSelection, ProjectError> {
+        let selected =
+            lock.select_workspace_context(self.scope.name.as_ref(), &self.scope.target_members)?;
+        self.scope.requires_python = selected.requires_python().clone();
+        self.scope.environments = implicit_constraints_marker(
+            selected.requires_python().to_exact_marker_tree(),
+            selected.supported_environments(),
+        );
+        Ok(FinalizedCommandWorkspaceSelection {
+            scope: self.scope,
+            selected_lock: Some(Box::new(selected)),
+        })
+    }
+}
+
+impl FinalizedCommandWorkspaceSelection {
+    /// The roots selected for this command, after applying workspace-group defaults.
+    pub(crate) fn target_members(&self) -> &BTreeSet<PackageName> {
+        &self.scope.target_members
+    }
+
+    pub(crate) fn environment_workspace(&self, workspace: &Workspace) -> Workspace {
+        self.scope.workspace(workspace)
+    }
+
+    pub(crate) fn take_selected_lock(&mut self) -> Option<Lock> {
+        self.selected_lock.take().map(|lock| *lock)
+    }
+}
+
+impl CommandWorkspaceDomain {
+    fn workspace(&self, workspace: &Workspace) -> Workspace {
+        self.workspace_with_members(workspace, &self.target_members)
+    }
+
+    fn workspace_with_members(
+        &self,
+        workspace: &Workspace,
+        members: &BTreeSet<PackageName>,
+    ) -> Workspace {
+        workspace.with_resolution(WorkspaceResolution {
+            roots: members
+                .iter()
+                .cloned()
+                .map(|name| (name, self.environments))
+                .collect(),
+            requires_python: self.requires_python.clone(),
+            environments: SupportedEnvironments::from_markers(vec![self.environments]),
+        })
+    }
+}
+
+/// Select group metadata for Python discovery from an existing lockfile.
+///
+/// Whole-group commands replace their ordinary roots with the named or default group's roots;
+/// explicit member selections retain their narrower activation domain.
+pub(crate) fn command_workspace_group_from_lock(
+    lock: &Lock,
+    name: Option<&GroupName>,
+    members: Option<&BTreeSet<PackageName>>,
+    use_group_roots: bool,
+) -> Result<Option<FinalizedCommandWorkspaceSelection>, ProjectError> {
+    if lock.workspace_groups().is_empty() {
+        return if let Some(name) = name {
+            Err(WorkspaceGroupSelectionError::Missing(name.clone()).into())
+        } else {
+            Ok(None)
+        };
+    }
+    let group = name
+        .and_then(|name| {
+            lock.workspace_groups()
+                .iter()
+                .find(|group| group.definition.name == *name)
+        })
+        .or_else(|| {
+            name.is_none()
+                .then(|| {
+                    lock.workspace_groups()
+                        .iter()
+                        .find(|group| group.definition.default)
+                })
+                .flatten()
+        });
+    if let Some(name) = name
+        && group.is_none()
+    {
+        return Err(WorkspaceGroupSelectionError::Missing(name.clone()).into());
+    }
+    let members = if use_group_roots {
+        group.map(|group| &group.definition.members).or(members)
+    } else {
+        members.or_else(|| group.map(|group| &group.definition.members))
+    };
+    let Some(members) = members else {
+        return Ok(None);
+    };
+    let members = if members.is_empty() {
+        lock.members()
+    } else {
+        members
+    };
+    let name = group.map(|group| &group.definition.name);
+    let selected = lock.select_workspace_context(name, members)?;
+    Ok(Some(FinalizedCommandWorkspaceSelection {
+        scope: CommandWorkspaceDomain {
+            name: name.cloned(),
+            members: group
+                .map_or_else(|| members.clone(), |group| group.definition.members.clone()),
+            requires_python: selected.requires_python().clone(),
+            environments: implicit_constraints_marker(
+                selected.requires_python().to_exact_marker_tree(),
+                selected.supported_environments(),
+            ),
+            target_members: members.clone(),
+        },
+        selected_lock: Some(Box::new(selected)),
+    }))
+}
+
+/// Select completed group metadata for Python discovery with the command's root selection.
+pub(crate) fn command_workspace_group(
+    workspace: &Workspace,
+    name: Option<&GroupName>,
+    members: Option<&BTreeSet<PackageName>>,
+    use_group_roots: bool,
+    groups: &[ResolvedWorkspaceGroup],
+) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
+    select_command_workspace_group(
+        workspace,
+        name,
+        members,
+        use_group_roots,
+        &groups
+            .iter()
+            .map(|group| CommandGroupDomain {
+                definition: group.definition(),
+                requires_python: group.requires_python(),
+                environments: group.environments(),
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Select an upper-bound domain for metadata probes and commands that skip synchronization.
+pub(crate) fn provisional_command_workspace_group(
+    workspace: &Workspace,
+    name: Option<&GroupName>,
+    members: Option<&BTreeSet<PackageName>>,
+    use_group_roots: bool,
+    groups: &[ProvisionalWorkspaceGroup],
+) -> Result<Option<PendingCommandWorkspaceSelection>, ProjectError> {
+    Ok(select_command_workspace_group(
+        workspace,
+        name,
+        members,
+        use_group_roots,
+        &groups
+            .iter()
+            .map(|group| CommandGroupDomain {
+                definition: group.definition(),
+                requires_python: group.requires_python(),
+                environments: group.environments(),
+            })
+            .collect::<Vec<_>>(),
+    )?
+    .map(CommandWorkspaceSelection::into_provisional))
+}
+
+struct CommandGroupDomain<'a> {
+    definition: &'a WorkspaceGroup,
+    requires_python: &'a RequiresPython,
+    environments: MarkerTree,
+}
+
+impl CommandGroupDomain<'_> {
+    fn selection(&self, members: Option<&BTreeSet<PackageName>>) -> CommandWorkspaceSelection {
+        // Configured roots are active throughout the group. Transitive members can gain paths
+        // through extras or dependency groups beyond their production reachability, so their
+        // preliminary domain must remain the complete group until lock projection refines it.
+        let scope = CommandWorkspaceDomain {
+            name: Some(self.definition.name.clone()),
+            members: self.definition.members.clone(),
+            requires_python: self.requires_python.clone(),
+            environments: self.environments,
+            target_members: members
+                .cloned()
+                .unwrap_or_else(|| self.definition.members.clone()),
+        };
+        if members.is_some_and(|members| {
+            members
+                .iter()
+                .any(|member| !self.definition.members.contains(member))
+        }) {
+            CommandWorkspaceSelection::Pending(PendingCommandWorkspaceSelection { scope })
+        } else {
+            CommandWorkspaceSelection::Finalized(FinalizedCommandWorkspaceSelection {
+                scope,
+                selected_lock: None,
+            })
+        }
+    }
+}
+
+fn select_command_workspace_group(
+    workspace: &Workspace,
+    name: Option<&GroupName>,
+    members: Option<&BTreeSet<PackageName>>,
+    use_group_roots: bool,
+    groups: &[CommandGroupDomain<'_>],
+) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
+    if let Some(name) = name {
+        let group = groups
+            .iter()
+            .find(|group| group.definition.name == *name)
+            .ok_or_else(|| {
+                uv_workspace::WorkspaceError::from(
+                    uv_workspace::WorkspaceErrorKind::UnknownWorkspaceGroup(name.clone()),
+                )
+            })?;
+        return Ok(Some(group.selection(if use_group_roots {
+            None
+        } else {
+            members
+        })));
+    }
+    if let Some(group) = groups.iter().find(|group| group.definition.default) {
+        return Ok(Some(group.selection(if use_group_roots {
+            None
+        } else {
+            members
+        })));
+    }
+    if groups.is_empty() {
+        return Ok(None);
+    }
+    let all_environments = groups.iter().fold(MarkerTree::FALSE, |environment, group| {
+        environment.or(group.environments)
+    });
+    // A member can also be reached transitively in another context. Only configured roots
+    // guarantee complete activation information before resolution; otherwise keep the union as
+    // an upper bound and derive the selected domain from the resolved graph.
+    let needs_lock_resolution = members.is_some_and(|members| {
+        groups.iter().any(|group| {
+            members
+                .iter()
+                .any(|member| !group.definition.members.contains(member))
+        })
+    });
+    let environments = all_environments;
+    let requires_python = RequiresPython::from_marker_tree(environments)
+        .ok_or(WorkspaceGroupSelectionError::Ambiguous)?;
+    let scope = CommandWorkspaceDomain {
+        name: None,
+        members: members
+            .cloned()
+            .unwrap_or_else(|| workspace.packages().keys().cloned().collect()),
+        requires_python,
+        environments,
+        target_members: members
+            .cloned()
+            .unwrap_or_else(|| workspace.packages().keys().cloned().collect()),
+    };
+    Ok(Some(if needs_lock_resolution {
+        CommandWorkspaceSelection::Pending(PendingCommandWorkspaceSelection { scope })
+    } else {
+        CommandWorkspaceSelection::Finalized(FinalizedCommandWorkspaceSelection {
+            scope,
+            selected_lock: None,
+        })
+    }))
+}
 
 /// Resolve the project requirements into a lockfile.
 pub async fn lock(
@@ -96,6 +588,9 @@ pub async fn lock(
         LockTarget::Workspace(workspace.workspace())
     };
 
+    // Share discovered metadata with the lock operation.
+    let state = UniversalState::default();
+
     // Determine the lock mode.
     let interpreter;
     let mode = if let Some(frozen_source) = frozen {
@@ -103,12 +598,38 @@ pub async fn lock(
     } else {
         interpreter = match target {
             LockTarget::Workspace(workspace) => {
-                // Don't enable any groups' requires-python for interpreter discovery
+                let workspace_groups = discover_workspace_groups(
+                    workspace,
+                    project_dir,
+                    python.as_deref(),
+                    lock_check,
+                    &settings,
+                    &client_builder,
+                    &state,
+                    &BTreeSet::new(),
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    &install_mirrors,
+                    &concurrency,
+                    config_discovery,
+                    cache,
+                    workspace_cache,
+                    printer,
+                    preview,
+                )
+                .await?;
+                let grouped_workspace = (!workspace_groups.is_empty())
+                    .then(|| workspace.with_workspace_groups(&workspace_groups))
+                    .transpose()?;
+                let workspace = grouped_workspace.as_ref().unwrap_or(workspace);
+                // Don't enable dependency groups' requires-python for interpreter discovery.
                 let groups = DependencyGroupsWithDefaults::none();
                 let project_python = ProjectPythonRequest::from_request(
                     python.as_deref().map(PythonRequest::parse),
                     Some(workspace),
                     &groups,
+                    &settings.sources,
                     project_dir,
                     config_discovery,
                 )
@@ -155,9 +676,6 @@ pub async fn lock(
             LockMode::Write(&interpreter)
         }
     };
-
-    // Initialize any shared state.
-    let state = UniversalState::default();
 
     // Perform the lock operation.
     match Box::pin(
