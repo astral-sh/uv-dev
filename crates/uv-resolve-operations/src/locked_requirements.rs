@@ -5,13 +5,11 @@ use anyhow::Result;
 use tracing::info_span;
 
 use uv_configuration::Upgrade;
-use uv_distribution_types::{
-    BuiltDist, Dist, IndexUrl, MinimumLibcVersion, ResolvedDist, SourceDist,
-};
+use uv_distribution_types::{BuiltDist, Dist, IndexUrl, ResolvedDist, SourceDist};
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
-use uv_pep508::{MarkerTree, VerbatimUrl};
+use uv_pep508::VerbatimUrl;
 use uv_requirements_txt::RequirementsTxt;
 use uv_resolver::{
     Preference, PreferenceError, ResolverOutput, UpgradePackages, implied_markers_for_wheels,
@@ -112,9 +110,8 @@ pub fn read_lock_requirements(
 pub fn retain_wheel_ready_preferences(
     preferences: &mut Vec<Preference>,
     resolution: &ResolverOutput,
-    required_environments: &[MarkerTree],
-    minimum_libc_version: Option<MinimumLibcVersion>,
 ) -> bool {
+    let required_environments = &resolution.options.wheel_preference_environments;
     if preferences.is_empty() || required_environments.is_empty() {
         return false;
     }
@@ -143,7 +140,7 @@ pub fn retain_wheel_ready_preferences(
                 .iter()
                 .filter(|wheel| wheel.index == *index)
                 .map(|wheel| &wheel.filename),
-            minimum_libc_version,
+            resolution.options.minimum_libc_version,
         );
         for (preference, marker) in &distribution.preferences {
             let activation = resolution

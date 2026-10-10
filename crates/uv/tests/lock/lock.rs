@@ -51004,7 +51004,7 @@ async fn lock_required_environment_revalidated_parent_preserves_reintroduced_pin
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12,<3.14"
-        dependencies = ["parent"]
+        dependencies = ["child; python_version < '3.13'", "parent"]
     "#})?;
     let index_url = format!("{}/simple/", index.uri());
     uv_snapshot!(context.filters(), context.lock()
@@ -52267,5 +52267,84 @@ fn lock_required_environment_skips_parent_with_unbuildable_child() -> Result<()>
     Removed example v1.0.0
     Updated parent v1.0.0 -> v2.0.0
     ");
+    Ok(())
+}
+
+/// Preferences copied from an earlier fork retain the identity of the input pin that selected them.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_preserves_sibling_preference_identity() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "required-environment-sibling-preference-identity"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64", "cp313-cp313-manylinux_2_17_x86_64"]
+    "#})?);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example"]
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = ["python_version == '3.12'", "python_version == '3.13'"]
+        required-environments = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "example==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    pyproject.write_str(&context.read("pyproject.toml").replace(
+        "required-environments = []",
+        "required-environments = [\"python_version == '3.13' and sys_platform == 'linux'\"]",
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated example v1.0.0 -> v1.0.0, v2.0.0
+    ");
+    let lock = context.read("uv.lock");
+    let parsed = toml::from_str::<toml::Value>(&lock)?;
+    let example_forks = parsed["package"]
+        .as_array()
+        .expect("lockfile has a package array")
+        .iter()
+        .filter(|package| package["name"].as_str() == Some("example"))
+        .map(|package| {
+            json!({
+                "version": package["version"],
+                "markers": package["resolution-markers"],
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        example_forks,
+        vec![
+            json!({"version": "1.0.0", "markers": ["python_full_version < '3.13'"]}),
+            json!({"version": "2.0.0", "markers": ["python_full_version >= '3.13'"]}),
+        ],
+    );
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }

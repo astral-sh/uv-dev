@@ -281,7 +281,7 @@ impl Preferences {
         Self(map)
     }
 
-    /// Insert a preference at the back.
+    /// Insert a preference at the back, retaining the input identities that selected it.
     pub(crate) fn insert(
         &mut self,
         package_name: PackageName,
@@ -289,14 +289,24 @@ impl Preferences {
         markers: UniversalMarker,
         pin: impl Into<Pin>,
         source: PreferenceSource,
+        preference_ids: &[PreferenceId],
     ) {
-        self.0.entry(package_name).or_default().push(Entry {
+        let entry = Entry {
             preference_id: None,
             marker: markers,
             index: PreferenceIndex::from(index),
             pin: pin.into(),
             source,
-        });
+        };
+        let entries = self.0.entry(package_name).or_default();
+        if preference_ids.is_empty() {
+            entries.push(entry);
+        } else {
+            entries.extend(preference_ids.iter().map(|preference_id| Entry {
+                preference_id: Some(*preference_id),
+                ..entry.clone()
+            }));
+        }
     }
 
     /// Returns an iterator over the preferences.
