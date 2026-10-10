@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -24,7 +25,8 @@ use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, Dist, ExtraBuildVariables, HashCollection, Identifier,
     Index, IndexLocations, MinimumLibcVersion, NameRequirementSpecification, Origin,
-    PackageConfigSettings, Requirement, RequiresPython, ResolvedDist, Verbatim,
+    PackageConfigSettings, Requirement, RequirementScope, RequirementSource, RequiresPython,
+    ResolvedDist, Verbatim,
 };
 use uv_fs::{CWD, Simplified};
 use uv_git::ResolvedRepositoryReference;
@@ -660,12 +662,31 @@ pub async fn pip_compile(
         loop {
             let mut active_requirements = Vec::new();
             let mut active_seen = FxHashSet::default();
-            let selection = resolution
-                .distributions()
-                .map(Identifier::distribution_id)
-                .collect::<FxHashSet<_>>();
-            let discovery_constraints =
-                Constraints::from_specifications(constraints.iter().cloned());
+            let selection = Arc::new(
+                resolution
+                    .distributions()
+                    .map(Identifier::distribution_id)
+                    .collect::<FxHashSet<_>>(),
+            );
+            // Backend declarations must use direct sources already selected in this resolution.
+            let selected_sources = resolution.base_dists().filter_map(|(_, distribution)| {
+                let source = RequirementSource::from(&distribution.dist);
+                if matches!(source, RequirementSource::Registry { .. }) {
+                    return None;
+                }
+                Some(NameRequirementSpecification::from(Requirement {
+                    name: distribution.name.clone(),
+                    extras: Box::new([]),
+                    groups: Box::new([]),
+                    marker: distribution.marker.pep508(),
+                    source,
+                    scope: RequirementScope::Global,
+                    origin: None,
+                }))
+            });
+            let discovery_constraints = Constraints::from_specifications(
+                constraints.iter().cloned().chain(selected_sources),
+            );
             let preferences = resolution
                 .base_dists()
                 .map(|(_, distribution)| {
@@ -704,7 +725,7 @@ pub async fn pip_compile(
                                 UvError::Unexpected(err.into())
                             }
                         })?;
-                    requirements_by_source.insert(id.clone(), (selection.clone(), discovered));
+                    requirements_by_source.insert(id.clone(), (Arc::clone(&selection), discovered));
                 }
                 if let Some((_, build_requirements)) = requirements_by_source.get(&id) {
                     active_requirements.extend(
