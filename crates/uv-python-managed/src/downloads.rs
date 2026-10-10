@@ -243,6 +243,7 @@ pub enum DownloadResult {
 
 impl ManagedPythonDownloadList {
     /// Iterate over all [`ManagedPythonDownload`]s.
+    #[cfg(test)]
     fn iter_all(&self) -> impl Iterator<Item = &ManagedPythonDownload> {
         self.downloads.iter()
     }
@@ -252,7 +253,9 @@ impl ManagedPythonDownloadList {
         &self,
         request: &PythonDownloadRequest,
     ) -> impl Iterator<Item = &ManagedPythonDownload> {
-        self.iter_all()
+        request
+            .narrow_sorted(&self.downloads, ManagedPythonDownload::key)
+            .iter()
             .filter(move |download| download.matches_request(request))
     }
 
@@ -1336,6 +1339,48 @@ mod tests {
             request.with_version(VersionRequest::from_str("3.10").expect("valid version"));
         let download = downloads.find(&request).expect("x86_64 fallback available");
         assert_eq!(*download.key.arch(), x86_64_arch);
+    }
+
+    #[test]
+    fn test_python_download_lookup_preserves_matching_order() {
+        let download_list = ManagedPythonDownloadList::new_only_embedded()
+            .expect("embedded download metadata should load");
+        let requests = [
+            "cpython-3",
+            "cpython-3.12",
+            "cpython-3.12.0",
+            "cpython-3.14.0rc1",
+            "cpython-3.13t",
+            "pypy-3.10-linux-x86_64-gnu",
+            "any-3.12-any-x86_64-any",
+        ]
+        .map(|request| {
+            PythonDownloadRequest::from_str(request).expect("test request should be parsed")
+        })
+        .into_iter()
+        .chain([PythonDownloadRequest::default()
+            .with_implementation(ImplementationName::CPython)
+            .with_version(
+                VersionRequest::from_str(">=3.12,<3.14").expect("test range should be parsed"),
+            )]);
+
+        for request in requests {
+            let narrowed =
+                request.narrow_sorted(&download_list.downloads, ManagedPythonDownload::key);
+            if request.implementation.is_some() {
+                assert!(
+                    narrowed.len() < download_list.downloads.len(),
+                    "candidates were not narrowed for `{request}`"
+                );
+            }
+            let expected = download_list
+                .iter_all()
+                .filter(|download| download.matches_request(&request))
+                .collect::<Vec<_>>();
+            let actual = download_list.iter_matching(&request).collect::<Vec<_>>();
+
+            assert_eq!(actual, expected, "matching order changed for `{request}`");
+        }
     }
 
     fn cpython_download_for_url(url: &'static str) -> ManagedPythonDownload {
