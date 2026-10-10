@@ -1,5 +1,3 @@
-#![expect(clippy::single_match_else)]
-
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -849,7 +847,10 @@ async fn do_lock(
 
         // The lockfile did not contain enough information to obtain a resolution, fallback
         // to a fresh resolve.
-        _ => {
+        Some(
+            ValidatedLock::Unusable(_) | ValidatedLock::Versions(_) | ValidatedLock::Preferable(_),
+        )
+        | None => {
             let recorder = if preview.is_enabled(PreviewFeature::ResolutionInputs) {
                 Some(ResolutionRecorder::default())
             } else {
