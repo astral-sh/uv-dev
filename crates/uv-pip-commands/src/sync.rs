@@ -33,7 +33,9 @@ use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
     PythonRequest, PythonVersion, Target,
 };
-use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{
+    GroupsSpecification, LoweringContext, RequirementsSource, RequirementsSpecification,
+};
 use uv_resolver::{
     DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
     ResolutionMode, ResolverEnvironment,
@@ -109,6 +111,13 @@ pub async fn pip_sync(
     preview: Preview,
 ) -> Result<ExitStatus> {
     let client_builder = client_builder.clone().keyring(keyring_provider);
+    let lowering_context = LoweringContext::new(
+        &sources,
+        &index_locations,
+        &cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Initialize a few defaults.
     let overrides = &[];
@@ -130,6 +139,7 @@ pub async fn pip_sync(
         pylock_groups,
         source_trees,
         groups,
+        indexes,
         index_url,
         extra_index_urls,
         no_index,
@@ -146,6 +156,7 @@ pub async fn pip_sync(
         extras,
         Some(groups),
         &client_builder,
+        lowering_context,
     )
     .await?;
 
@@ -161,10 +172,16 @@ pub async fn pip_sync(
         }
     }
 
-    // Read build constraints.
-    let build_constraints = Constraints::from_specifications(
-        uv_resolve_operations::read_constraints(build_constraints, &client_builder).await?,
-    );
+    // Read build constraints and retain index policies selected by inline metadata.
+    let mut build_spec = uv_resolve_operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        lowering_context,
+    )
+    .await?;
+    build_spec.extend_indexes(indexes)?;
+    let indexes = build_spec.indexes;
+    let build_constraints = Constraints::from_specifications(build_spec.constraints);
 
     // Validate that the requirements are non-empty.
     if !allow_empty_requirements {
@@ -298,7 +315,7 @@ pub async fn pip_sync(
     };
 
     // Incorporate any index locations from the provided sources.
-    let index_locations = index_locations.combine(
+    let index_locations = index_locations.with_source_indexes(indexes)?.combine(
         extra_index_urls
             .into_iter()
             .map(Index::from_extra_index_url)

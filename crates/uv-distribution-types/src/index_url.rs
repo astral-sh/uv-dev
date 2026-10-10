@@ -17,7 +17,103 @@ use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
-use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Verbatim};
+use crate::{
+    ExcludeNewerOverride, Index, IndexMetadata, IndexStatusCodeStrategy, Origin, Verbatim,
+};
+
+/// Full index definitions selected by requirements sources, validated before composition.
+#[derive(Debug, Default, Clone)]
+pub struct SourceIndexes(Vec<Index>);
+
+/// Conflicting source-index definitions would discard a selected policy in index clients.
+#[derive(Debug, Error)]
+pub enum SourceIndexError {
+    #[error("Conflicting definitions for index `{0}` in requirements sources")]
+    ConflictingName(crate::IndexName),
+    #[error("Multiple default indexes in requirements sources")]
+    MultipleDefaults,
+    #[error(
+        "A default index from requirements sources conflicts with the command-line default index"
+    )]
+    ConfiguredDefault,
+    #[error("Conflicting policies for index URL `{0}` in requirements sources")]
+    ConflictingUrl(IndexUrl),
+    #[error("Index URL `{0}` pinned by requirements no longer has its configured policy")]
+    MissingPinnedIndex(IndexUrl),
+}
+
+impl SourceIndexes {
+    /// Construct a collection while rejecting conflicting selected policies.
+    pub fn try_from_iter(
+        indexes: impl IntoIterator<Item = Index>,
+    ) -> Result<Self, SourceIndexError> {
+        let mut result = Self::default();
+        result.try_extend(indexes)?;
+        Ok(result)
+    }
+
+    /// Merge definitions without losing policies to client name or default-index selection.
+    pub fn try_extend(
+        &mut self,
+        indexes: impl IntoIterator<Item = Index>,
+    ) -> Result<(), SourceIndexError> {
+        for index in indexes {
+            if let Some(name) = index.name.as_ref()
+                && let Some(existing) = self
+                    .0
+                    .iter()
+                    .find(|existing| existing.name.as_ref() == Some(name))
+            {
+                if existing != &index {
+                    return Err(SourceIndexError::ConflictingName(name.clone()));
+                }
+                continue;
+            }
+            for existing in &self.0 {
+                validate_source_index_policy(existing, &index)?;
+                if index.default && existing.default && !is_same_index(&existing.url, &index.url) {
+                    return Err(SourceIndexError::MultipleDefaults);
+                }
+            }
+            self.0.push(index);
+        }
+        Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn iter(&self) -> std::slice::Iter<'_, Index> {
+        self.0.iter()
+    }
+}
+
+/// URL-based policy lookups must agree even when an endpoint has multiple names.
+fn validate_source_index_policy(existing: &Index, index: &Index) -> Result<(), SourceIndexError> {
+    if is_same_index(&existing.url, &index.url) && !existing.has_same_policy(index) {
+        return Err(SourceIndexError::ConflictingUrl(index.url.clone()));
+    }
+    Ok(())
+}
+
+impl<'a> IntoIterator for &'a SourceIndexes {
+    type Item = &'a Index;
+    type IntoIter = std::slice::Iter<'a, Index>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl IntoIterator for SourceIndexes {
+    type Item = Index;
+    type IntoIter = std::vec::IntoIter<Index>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
 
 pub static PYPI_URL: LazyLock<DisplaySafeUrl> =
     LazyLock::new(|| DisplaySafeUrl::parse("https://pypi.org/simple").unwrap());
@@ -288,6 +384,78 @@ impl IndexLocations {
             flat_index: self.flat_index.into_iter().chain(flat_index).collect(),
             no_index: self.no_index || no_index,
         }
+    }
+
+    /// Ensure persisted index pins retain the policies they selected before settings overrides.
+    pub fn validate_pinned_indexes<'index>(
+        &self,
+        original: &Self,
+        pins: impl IntoIterator<Item = &'index IndexMetadata>,
+    ) -> Result<(), SourceIndexError> {
+        let original_indexes = original.allowed_indexes();
+        let retained_indexes = self.allowed_indexes();
+        for pin in pins {
+            let Some(original) = original_indexes
+                .iter()
+                .rev()
+                .find(|index| is_same_index(&index.url, &pin.url))
+            else {
+                continue;
+            };
+            let Some(retained) = retained_indexes
+                .iter()
+                .rev()
+                .find(|index| is_same_index(&index.url, &pin.url))
+            else {
+                return Err(SourceIndexError::MissingPinnedIndex(pin.url.clone()));
+            };
+            validate_source_index_policy(original, retained)?;
+        }
+        Ok(())
+    }
+
+    /// Add index definitions from sources, retaining command-line precedence.
+    pub fn with_source_indexes(mut self, indexes: SourceIndexes) -> Result<Self, SourceIndexError> {
+        if indexes.is_empty() {
+            return Ok(self);
+        }
+        if indexes.iter().any(|index| index.default)
+            && self
+                .indexes
+                .iter()
+                .any(|index| index.default && index.origin == Some(Origin::Cli))
+        {
+            return Err(SourceIndexError::ConfiguredDefault);
+        }
+        let (mut command_line, mut configured): (Vec<_>, Vec<_>) = self
+            .indexes
+            .into_iter()
+            .partition(|index| index.origin == Some(Origin::Cli));
+        // Use the same first-name precedence as configured_indexes before comparing policies.
+        let mut names = FxHashSet::default();
+        let mut keep_first_name = |index: &Index| {
+            index
+                .name
+                .as_ref()
+                .is_none_or(|name| names.insert(name.clone()))
+        };
+        command_line.retain(&mut keep_first_name);
+        let indexes = indexes
+            .into_iter()
+            .filter(&mut keep_first_name)
+            .collect::<Vec<_>>();
+        configured.retain(keep_first_name);
+        for index in &indexes {
+            for existing in command_line.iter().chain(&configured) {
+                validate_source_index_policy(existing, index)?;
+            }
+        }
+        self.indexes = command_line
+            .into_iter()
+            .chain(indexes)
+            .chain(configured)
+            .collect();
+        Ok(self)
     }
 
     /// Returns `true` if no index configuration is set, i.e., the [`IndexLocations`] matches the

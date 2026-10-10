@@ -48,7 +48,9 @@ use uv_python_discovery::init_script_python_requirement;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::DisplaySafeUrl;
-use uv_requirements::{NamedRequirementsResolver, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{
+    LoweringContext, NamedRequirementsResolver, RequirementsSource, RequirementsSpecification,
+};
 use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolver::FlatIndex;
@@ -384,6 +386,14 @@ pub async fn add(
     let client_builder = client_builder
         .clone()
         .keyring(settings.resolver.keyring_provider);
+    let workspace_cache = WorkspaceCache::default();
+    let lowering_context = LoweringContext::new(
+        &settings.resolver.sources,
+        &settings.resolver.index_locations,
+        cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Read the requirements.
     let RequirementsSpecification {
@@ -397,6 +407,7 @@ pub async fn add(
         &[],
         None,
         &client_builder,
+        lowering_context,
     )
     .await?;
 

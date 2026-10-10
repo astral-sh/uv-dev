@@ -47,7 +47,7 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::RequirementsSource;
+use uv_requirements::{LoweringContext, RequirementsSource};
 use uv_resolve_operations as operations;
 use uv_resolver::{ExcludeNewer, FlatIndex};
 use uv_settings::PythonInstallMirrors;
@@ -65,6 +65,8 @@ use uv_settings::ResolverSettings;
 pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error(transparent)]
+    SourceIndex(#[from] uv_distribution_types::SourceIndexError),
     #[error(transparent)]
     FindOrDownloadPython(#[from] uv_python_discovery::Error),
     #[error(transparent)]
@@ -603,8 +605,22 @@ async fn build_package(
     .into_interpreter();
 
     // Read build constraints.
-    let command_line_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+    let command_line_constraints = operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        LoweringContext::new(
+            &sources,
+            index_locations,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
+    )
+    .await?;
+    let index_locations = &index_locations
+        .clone()
+        .with_source_indexes(command_line_constraints.indexes)?;
+    let command_line_constraints = command_line_constraints.constraints;
     let build_constraints = Constraints::from_specifications(
         command_line_constraints
             .iter()

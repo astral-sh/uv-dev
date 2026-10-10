@@ -14,7 +14,11 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
+use uv_test::{
+    TestContext,
+    packse::{PackseServer, scenario::Scenario},
+    uv_snapshot,
+};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -857,7 +861,7 @@ fn run_pep723_script_relative_index() -> Result<()> {
     let elsewhere = context.temp_dir.child("elsewhere");
     elsewhere.create_dir_all()?;
 
-    uv_snapshot!(context.filters(), context.run().current_dir(elsewhere).arg("--offline").arg(test_script.path()), @r"
+    uv_snapshot!(context.filters(), context.run().current_dir(&elsewhere).arg("--offline").arg(test_script.path()), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -867,12 +871,193 @@ fn run_pep723_script_relative_index() -> Result<()> {
      + validation==1.0.0
     ");
 
+    let requirements = scripts.child("requirements.py");
+    requirements.write_str(indoc! { r#"
+        # /// script
+        # dependencies = ["ok", "validation"]
+        #
+        # [[tool.uv.index]]
+        # name = "local"
+        # url = "./links"
+        # format = "flat"
+        # explicit = true
+        #
+        # [tool.uv.sources]
+        # ok = { path = "./links/ok-1.0.0-py3-none-any.whl" }
+        # validation = { index = "local" }
+        # ///
+        "#
+    })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .current_dir(&elsewhere)
+        .arg("--offline")
+        .arg("--with-requirements")
+        .arg(requirements.path())
+        .arg("python")
+        .arg("-c")
+        .arg("import ok, validation"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + ok==1.0.0 (from file://[TEMP_DIR]/scripts/links/ok-1.0.0-py3-none-any.whl)
+     + validation==1.0.0
+    ");
+
     Ok(())
 }
 
-/// Package-scoped source disabling must not discard unrelated script sources or indexes.
+/// Selected source indexes do not reorder the complete configuration of a direct script.
 #[test]
-fn run_pep723_script_no_sources_package() -> Result<()> {
+fn run_script_preserves_index_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = toml::from_str::<Scenario>(indoc! {r#"
+        name = "first-script-index"
+        [root]
+        requires = ["a"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let second = toml::from_str::<Scenario>(indoc! {r#"
+        name = "second-script-index"
+        [root]
+        requires = ["a", "b"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."2.0.0"]
+        sdist = false
+        [packages.b.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let first = PackseServer::from_scenario(&first);
+    let second = PackseServer::from_scenario(&second);
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a", "b"]
+        # [[tool.uv.index]]
+        # name = "first"
+        # url = "{first}"
+        # [[tool.uv.index]]
+        # name = "second"
+        # url = "{second}"
+        # [tool.uv.sources]
+        # b = {{ index = "second" }}
+        # ///
+        import importlib.metadata
+        print(importlib.metadata.version("a"))
+        print(importlib.metadata.version("b"))
+    "#, first = first.index_url(), second = second.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.run().arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + a==1.0.0
+     + b==1.0.0
+    ");
+
+    context
+        .sync()
+        .arg("--script")
+        .arg("script.py")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.run().arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    1.0.0
+    ");
+    Ok(())
+}
+
+/// Index authentication policies from requirements scripts apply to ephemeral environments.
+#[test]
+fn run_with_script_index_authentication() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        #
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{index}"
+        # explicit = true
+        # authenticate = "always"
+        #
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, index = server.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--with-requirements").arg("requirements.py")
+        .arg("python").arg("-c").arg("import a"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/a/
+      cause: Missing credentials for: http://[LOCALHOST]/simple/a/
+    ");
+    Ok(())
+}
+
+/// A command-line index replaces the corresponding script definition, including its policy.
+#[test]
+fn run_with_script_index_command_line_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        #
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "https://example.invalid/simple"
+        # explicit = true
+        # authenticate = "always"
+        #
+        # [tool.uv.sources]
+        # a = { index = "private" }
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--index").arg(format!("private={}", server.index_url()))
+        .arg("--with-requirements").arg("requirements.py")
+        .arg("python").arg("-c").arg("import a"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    ");
+    Ok(())
+}
+
+#[test]
+fn run_pep723_script_source_policy_unrelated() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let explicit = PackseServer::new("simple/single-package.toml");
     let default = PackseServer::new("extras/missing-extra.toml");
@@ -899,26 +1084,254 @@ fn run_pep723_script_no_sources_package() -> Result<()> {
         index = explicit.index_url(),
     })?;
 
-    uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(default.index_url()).arg("--no-sources-package").arg("unrelated").arg("main.py"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==2.0.0
+    uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(default.index_url()).arg("--no-sources-package").arg("unrelated").args(["main.py"]), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==2.0.0
     ");
+    Ok(())
+}
 
-    fs_err::remove_dir_all(&context.cache_dir)?;
+#[test]
+fn run_pep723_script_source_policy_selected() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let explicit = PackseServer::new("simple/single-package.toml");
+    let default = PackseServer::new("extras/missing-extra.toml");
 
-    uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(default.index_url()).arg("--no-sources-package").arg("a").arg("main.py"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(&formatdoc! { r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = [
+        #   "a",
+        # ]
+        #
+        # [[tool.uv.index]]
+        # name = "test"
+        # url = "{index}"
+        # explicit = true
+        #
+        # [tool.uv.sources]
+        # a = {{ index = "test" }}
+        # ///
+
+        import a
+       "#,
+        index = explicit.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(default.index_url()).arg("--no-sources-package").arg("a").args(["main.py"]), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==1.0.0
     ");
+    Ok(())
+}
 
+#[test]
+fn run_pep723_script_source_policy_all() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let explicit = PackseServer::new("simple/single-package.toml");
+    let default = PackseServer::new("extras/missing-extra.toml");
+
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(&formatdoc! { r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = [
+        #   "a",
+        # ]
+        #
+        # [[tool.uv.index]]
+        # name = "test"
+        # url = "{index}"
+        # explicit = true
+        #
+        # [tool.uv.sources]
+        # a = {{ index = "test" }}
+        # ///
+
+        import a
+       "#,
+        index = explicit.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.run()
+            .arg("--default-index").arg(default.index_url())
+            .arg("--no-sources").args(["main.py"]), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==1.0.0
+    ");
+    Ok(())
+}
+
+#[test]
+fn run_pep723_script_source_policy_cli_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let explicit = PackseServer::new("simple/single-package.toml");
+    let default = PackseServer::new("extras/missing-extra.toml");
+
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(&formatdoc! { r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = [
+        #   "a",
+        # ]
+        #
+        # [[tool.uv.index]]
+        # name = "test"
+        # url = "{index}"
+        # explicit = true
+        #
+        # [tool.uv.sources]
+        # a = {{ index = "test" }}
+        # ///
+
+        import a
+       "#,
+        index = explicit.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.run()
+            .arg("--index").arg(format!("test={}", default.index_url()))
+            .args(["main.py"]), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==1.0.0
+    ");
+    Ok(())
+}
+
+#[test]
+fn run_pep723_requirements_source_policy_unrelated() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let explicit = PackseServer::new("simple/single-package.toml");
+    let default = PackseServer::new("extras/missing-extra.toml");
+
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(&formatdoc! { r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = [
+        #   "a",
+        # ]
+        #
+        # [[tool.uv.index]]
+        # name = "test"
+        # url = "{index}"
+        # explicit = true
+        #
+        # [tool.uv.sources]
+        # a = {{ index = "test" }}
+        # ///
+
+        import a
+       "#,
+        index = explicit.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(default.index_url()).arg("--no-sources-package").arg("unrelated").args(["--with-requirements", "main.py", "python", "-c", "import a"]), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==2.0.0
+    ");
+    Ok(())
+}
+
+#[test]
+fn run_pep723_requirements_source_policy_selected() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let explicit = PackseServer::new("simple/single-package.toml");
+    let default = PackseServer::new("extras/missing-extra.toml");
+
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(&formatdoc! { r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = [
+        #   "a",
+        # ]
+        #
+        # [[tool.uv.index]]
+        # name = "test"
+        # url = "{index}"
+        # explicit = true
+        #
+        # [tool.uv.sources]
+        # a = {{ index = "test" }}
+        # ///
+
+        import a
+       "#,
+        index = explicit.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(default.index_url()).arg("--no-sources-package").arg("a").args(["--with-requirements", "main.py", "python", "-c", "import a"]), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==1.0.0
+    ");
+    Ok(())
+}
+
+#[test]
+fn run_pep723_requirements_source_policy_all() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let explicit = PackseServer::new("simple/single-package.toml");
+    let default = PackseServer::new("extras/missing-extra.toml");
+
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(&formatdoc! { r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = [
+        #   "a",
+        # ]
+        #
+        # [[tool.uv.index]]
+        # name = "test"
+        # url = "{index}"
+        # explicit = true
+        #
+        # [tool.uv.sources]
+        # a = {{ index = "test" }}
+        # ///
+
+        import a
+       "#,
+        index = explicit.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.run()
+            .arg("--default-index").arg(default.index_url())
+            .arg("--no-sources").args(["--with-requirements", "main.py", "python", "-c", "import a"]), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==1.0.0
+    ");
     Ok(())
 }
 
@@ -7889,5 +8302,515 @@ fn run_centralized_environment_path_file() -> Result<()> {
     ----- stderr -----
     warning: Using incompatible environment (`project-cp3.12.[X]-[HASH]`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.11`)
     "#);
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_index_policies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = wiremock::MockServer::start().await;
+    let second = wiremock::MockServer::start().await;
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = first.uri()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["b"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # b = {{ index = "private" }}
+        # ///
+    "#, url = second.uri()})?;
+    uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting definitions for index `private` in requirements sources
+    ");
+    assert!(
+        first
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        second
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+
+    // Conflicting authentication policies are also invalid when both names refer to one URL.
+    context.temp_dir.child("second.py").write_str(
+        &context
+            .read("second.py")
+            .replace(&second.uri(), &first.uri()),
+    )?;
+    uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting definitions for index `private` in requirements sources
+    ");
+    assert!(
+        first
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
+fn run_pep723_requirements_shared_index_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/dependency-groups.toml");
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # iniconfig = {{ index = "private" }}
+        # ///
+    "#, url = server.index_url()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["sniffio==1.3.1"]
+        # [[tool.uv.index]]
+        # name = "alias"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # sniffio = {{ index = "alias" }}
+        # ///
+    "#, url = server.index_url()})?;
+    uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "import iniconfig, sniffio"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+    "#);
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_default_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = wiremock::MockServer::start().await;
+    let second = wiremock::MockServer::start().await;
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "first"
+        # url = "{url}/simple"
+        # default = true
+        # [tool.uv.sources]
+        # a = {{ index = "first" }}
+        # ///
+    "#, url = first.uri()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["b"]
+        # [[tool.uv.index]]
+        # name = "second"
+        # url = "{url}/simple"
+        # default = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # b = {{ index = "second" }}
+        # ///
+    "#, url = second.uri()})?;
+    uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Multiple default indexes in requirements sources
+    ");
+    assert!(
+        first
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        second
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// An explicit CLI default must not discard a pinned script index's authentication policy.
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_cli_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let private = wiremock::MockServer::start().await;
+    let default = wiremock::MockServer::start().await;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # default = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = private.uri()})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--with-requirements", "requirements.py", "--default-index"])
+        .arg(format!("{}/simple", default.uri()))
+        .args(["python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: A default index from requirements sources conflicts with the command-line default index
+    ");
+    assert!(
+        private
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        default
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// An unused same-URL alias does not conflict with another script's selected definition.
+#[test]
+fn run_pep723_requirements_ignore_unused_index_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::new("simple/dependency-groups.toml");
+    let second = PackseServer::new("simple/dependency-groups.toml");
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # [[tool.uv.index]]
+        # name = "used"
+        # url = "{url}"
+        # explicit = true
+        # [[tool.uv.index]]
+        # name = "spare"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # iniconfig = {{ index = "used" }}
+        # ///
+    "#, url = first.index_url()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["sniffio==1.3.1"]
+        # [[tool.uv.index]]
+        # name = "spare"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # sniffio = {{ index = "spare" }}
+        # ///
+    "#, url = second.index_url()})?;
+    uv_snapshot!(context.filters(), context.run().args([
+        "--with-requirements", "first.py", "--with-requirements", "second.py",
+        "python", "-c", "import iniconfig, sniffio",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+    ");
+    Ok(())
+}
+
+/// URL-based clients cannot apply conflicting policies to aliases of the same endpoint.
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_alias_authentication() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "first"
+        # url = "{url}/simple"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "first" }}
+        # ///
+    "#, url = server.uri()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["b"]
+        # [[tool.uv.index]]
+        # name = "second"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # b = {{ index = "second" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.run().args([
+        "--with-requirements", "first.py", "--with-requirements", "second.py", "python", "-c", "pass",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Selected implicit indexes retain declaration priority for unpinned dependencies.
+#[test]
+fn run_pep723_requirements_preserves_index_declaration_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "first-source-index"
+        [root]
+        requires = ["first-only", "shared"]
+        [expected]
+        satisfiable = true
+        [packages.first-only.versions."1.0.0"]
+        sdist = false
+        [packages.shared.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let second = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "second-source-index"
+        [root]
+        requires = ["second-only", "shared"]
+        [expected]
+        satisfiable = true
+        [packages.second-only.versions."1.0.0"]
+        sdist = false
+        [packages.shared.versions."2.0.0"]
+        sdist = false
+    "#})?);
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["second-only", "first-only", "shared"]
+        # [[tool.uv.index]]
+        # name = "first"
+        # url = "{first}"
+        # [[tool.uv.index]]
+        # name = "second"
+        # url = "{second}"
+        # [tool.uv.sources]
+        # first-only = {{ index = "first" }}
+        # second-only = {{ index = "second" }}
+        # ///
+    "#, first = first.index_url(), second = second.index_url()})?;
+    uv_snapshot!(context.filters(), context.run().args([
+        "--with-requirements", "requirements.py", "python", "-c",
+        "from importlib.metadata import version; print(version('shared'))",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + first-only==1.0.0
+     + second-only==1.0.0
+     + shared==1.0.0
+    ");
+    Ok(())
+}
+
+/// Differently named CLI indexes cannot discard a selected source endpoint's policy.
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_cli_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--index").arg(format!("mirror={}/simple", server.uri()))
+        .args(["--with-requirements", "requirements.py", "python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Configuration aliases are checked after same-name definitions have been replaced.
+#[tokio::test]
+async fn run_pep723_requirements_conflicting_configured_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        [[index]]
+        name = "mirror"
+        url = "{url}/simple"
+    "#, url = server.uri()})?;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--with-requirements", "requirements.py", "python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// A CLI name override removes the shadowed configuration before source policies are checked.
+#[test]
+fn run_pep723_requirements_ignore_shadowed_configured_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let selected = PackseServer::new("simple/dependency-groups.toml");
+    let replacement = PackseServer::new("simple/dependency-groups.toml");
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        [[index]]
+        name = "mirror"
+        url = "{url}"
+        authenticate = "always"
+    "#, url = selected.index_url()})?;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # iniconfig = {{ index = "private" }}
+        # ///
+    "#, url = selected.index_url()})?;
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--index").arg(format!("mirror={}", replacement.index_url()))
+        .args(["--with-requirements", "requirements.py", "python", "-c", "import iniconfig"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
     Ok(())
 }

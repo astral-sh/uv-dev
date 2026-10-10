@@ -7,8 +7,8 @@ use tracing::{debug, warn};
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{DryRun, KeyringProviderType};
-use uv_distribution_types::Requirement;
+use uv_configuration::{DryRun, KeyringProviderType, NoSources};
+use uv_distribution_types::{IndexLocations, Requirement};
 use uv_distribution_types::{InstalledMetadata, Name, UnresolvedRequirement};
 use uv_fs::Simplified;
 use uv_pep508::UnnamedRequirement;
@@ -17,7 +17,8 @@ use uv_python_discovery::find_environment;
 use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonPreference, PythonRequest, Target,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
+use uv_workspace::WorkspaceCache;
 
 use crate::reporters::report_target_environment;
 use uv_command_support::Printer;
@@ -41,9 +42,21 @@ pub async fn pip_uninstall(
     let start = std::time::Instant::now();
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
+    let workspace_cache = WorkspaceCache::default();
+    let source_policy = NoSources::All;
+    let index_locations = IndexLocations::default();
+    let lowering_context = LoweringContext::new(
+        &source_policy,
+        &index_locations,
+        &cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Read all requirements from the provided sources.
-    let spec = RequirementsSpecification::from_simple_sources(sources, &client_builder).await?;
+    let spec =
+        RequirementsSpecification::from_simple_sources(sources, &client_builder, lowering_context)
+            .await?;
 
     // Detect the current Python interpreter.
     let environment = find_environment(

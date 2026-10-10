@@ -17631,7 +17631,7 @@ fn lock_find_links_explicit_index() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "tqdm", index = "file://[TEMP_DIR]/links" }]
+        requires-dist = [{ name = "tqdm", index = "file://[TEMP_DIR]/links", index-format = "flat" }]
 
         [[package]]
         name = "tqdm"

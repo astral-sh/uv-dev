@@ -29,7 +29,10 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 use crate::metadata::GitWorkspaceMember;
 
 #[derive(Debug, Clone)]
-pub struct LoweredRequirement(Requirement);
+pub struct LoweredRequirement {
+    requirement: Requirement,
+    selected_index: Option<Index>,
+}
 
 #[derive(Debug, Clone, Copy)]
 enum RequirementOrigin {
@@ -40,6 +43,18 @@ enum RequirementOrigin {
 }
 
 impl LoweredRequirement {
+    fn new(requirement: Requirement) -> Self {
+        Self {
+            requirement,
+            selected_index: None,
+        }
+    }
+
+    /// The actual index definition selected while lowering a named source.
+    pub fn selected_index(&self) -> Option<&Index> {
+        self.selected_index.as_ref()
+    }
+
     /// Combine `project.dependencies` or `project.optional-dependencies` with `tool.uv.sources`.
     pub(crate) async fn from_requirement<'data>(
         requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
@@ -172,7 +187,7 @@ impl LoweredRequirement {
             let mut remaining = total.negate();
             remaining = remaining.and(requirement.marker);
 
-            Self(Requirement {
+            Self::new(Requirement {
                 marker: remaining,
                 ..Requirement::from(requirement.clone())
             })
@@ -303,7 +318,7 @@ impl LoweredRequirement {
 
                     marker = marker.and(requirement.marker);
 
-                    Ok(Self(Requirement {
+                    Ok(Self::new(Requirement {
                         name: requirement.name.clone(),
                         extras: requirement.extras.clone(),
                         groups: Box::new([]),
@@ -318,7 +333,7 @@ impl LoweredRequirement {
             .into_iter()
             .chain(std::iter::once(Ok(remaining)))
             .filter(|requirement| match requirement {
-                Ok(requirement) => !requirement.0.marker.is_false(),
+                Ok(requirement) => !requirement.requirement.marker.is_false(),
                 Err(_) => true,
             }),
         )
@@ -339,7 +354,9 @@ impl LoweredRequirement {
         let source = sources.get(&requirement.name).cloned();
 
         let Some(source) = source else {
-            return Either::Left(std::iter::once(Ok(Self(Requirement::from(requirement)))));
+            return Either::Left(std::iter::once(Ok(Self::new(Requirement::from(
+                requirement,
+            )))));
         };
 
         // If the source only applies to a given extra, filter it out.
@@ -369,7 +386,7 @@ impl LoweredRequirement {
             let mut remaining = total.negate();
             remaining = remaining.and(requirement.marker);
 
-            Self(Requirement {
+            Self::new(Requirement {
                 marker: remaining,
                 ..Requirement::from(requirement.clone())
             })
@@ -379,6 +396,7 @@ impl LoweredRequirement {
             join_all(source.into_iter().map(|source| {
                 let requirement = &requirement;
                 async move {
+                    let mut selected_index = None;
                     let (source, mut marker) = match source {
                         Source::Git {
                             git,
@@ -450,6 +468,7 @@ impl LoweredRequirement {
                             if let Some(credentials) = index.credentials()? {
                                 credentials_cache.store_credentials(index.raw_url(), credentials);
                             }
+                            selected_index = Some(index.clone());
                             let index = IndexMetadata {
                                 url: index.url.clone(),
                                 format: index.format,
@@ -484,22 +503,25 @@ impl LoweredRequirement {
 
                     marker = marker.and(requirement.marker);
 
-                    Ok(Self(Requirement {
-                        name: requirement.name.clone(),
-                        extras: requirement.extras.clone(),
-                        groups: Box::new([]),
-                        marker,
-                        source,
-                        scope: RequirementScope::Global,
-                        origin: requirement.origin.clone(),
-                    }))
+                    Ok(Self {
+                        requirement: Requirement {
+                            name: requirement.name.clone(),
+                            extras: requirement.extras.clone(),
+                            groups: Box::new([]),
+                            marker,
+                            source,
+                            scope: RequirementScope::Global,
+                            origin: requirement.origin.clone(),
+                        },
+                        selected_index,
+                    })
                 }
             }))
             .await
             .into_iter()
             .chain(std::iter::once(Ok(remaining)))
             .filter(|requirement| match requirement {
-                Ok(requirement) => !requirement.0.marker.is_false(),
+                Ok(requirement) => !requirement.requirement.marker.is_false(),
                 Err(_) => true,
             }),
         )
@@ -512,26 +534,26 @@ impl LoweredRequirement {
         git_member: Option<&GitWorkspaceMember>,
     ) -> Result<Self, LoweringError> {
         let Some(git_member) = git_member else {
-            return Ok(Self(Requirement::from(requirement)));
+            return Ok(Self::new(Requirement::from(requirement)));
         };
 
         let Some(VersionOrUrl::Url(url)) = &requirement.version_or_url else {
-            return Ok(Self(Requirement::from(requirement)));
+            return Ok(Self::new(Requirement::from(requirement)));
         };
 
         let (install_path, is_archive) = match &url.parsed_url {
             ParsedUrl::Directory(directory) => (directory.install_path.as_ref(), false),
             ParsedUrl::Path(path) => (path.install_path.as_ref(), true),
-            _ => return Ok(Self(Requirement::from(requirement))),
+            _ => return Ok(Self::new(Requirement::from(requirement))),
         };
 
         let install_path = git_path(install_path)?;
         let fetch_root = git_path(git_member.fetch_root)?;
         if !install_path.starts_with(&fetch_root) {
-            return Ok(Self(Requirement::from(requirement)));
+            return Ok(Self::new(Requirement::from(requirement)));
         }
 
-        Ok(Self(Requirement {
+        Ok(Self::new(Requirement {
             name: requirement.name,
             groups: Box::new([]),
             extras: requirement.extras,
@@ -548,7 +570,7 @@ impl LoweredRequirement {
 
     /// Convert back into a [`Requirement`].
     pub fn into_inner(self) -> Requirement {
-        self.0
+        self.requirement
     }
 }
 

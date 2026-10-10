@@ -31,7 +31,7 @@ use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
@@ -116,9 +116,19 @@ pub async fn install(
                 RequirementsSource::from_package(requirement)?
             };
             Some(
-                RequirementsSpecification::from_source(&source, &client_builder)
-                    .await?
-                    .requirements,
+                RequirementsSpecification::from_source(
+                    &source,
+                    &client_builder,
+                    LoweringContext::new(
+                        &settings.resolver.sources,
+                        &settings.resolver.index_locations,
+                        &cache,
+                        workspace_cache,
+                        client_builder.credentials_cache(),
+                    ),
+                )
+                .await?
+                .requirements,
             )
         }
         _ => None,
@@ -157,8 +167,25 @@ pub async fn install(
     .await?
     .into_interpreter();
 
-    let receipt_build_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+    let build_spec = operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
+    )
+    .await?;
+    let build_indexes = build_spec.indexes;
+    let receipt_build_constraints = build_spec.constraints;
+    let mut settings = settings;
+    settings.resolver.index_locations = settings
+        .resolver
+        .index_locations
+        .with_source_indexes(build_indexes.clone())?;
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
 
@@ -373,15 +400,29 @@ pub async fn install(
     };
 
     // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
+    let mut spec = RequirementsSpecification::from_sources(
         with,
         constraints,
         overrides,
         excludes,
         None,
         &client_builder,
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
     )
     .await?;
+
+    spec.extend_indexes(build_indexes)?;
+    let mut settings = settings;
+    settings.resolver.index_locations = settings
+        .resolver
+        .index_locations
+        .with_source_indexes(spec.indexes.clone())?;
 
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
@@ -464,7 +505,17 @@ pub async fn install(
     // Resolve the excludes.
     let receipt_excludes = spec.excludes.clone();
 
-    // Convert to tool options.
+    // Keep legacy index flags separate so later upgrades can override them.
+    let mut options = options;
+    if !spec.indexes.is_empty() {
+        let indexes = uv_distribution_types::IndexLocations::new(
+            options.indexes.index.take().unwrap_or_default(),
+            Vec::new(),
+            false,
+        )
+        .with_source_indexes(spec.indexes.clone())?;
+        options.indexes.index = Some(indexes.defined_indexes().cloned().collect());
+    }
     let options = ToolOptions::from(options);
     let lock_manifest = ToolLock::manifest(
         &requirements,

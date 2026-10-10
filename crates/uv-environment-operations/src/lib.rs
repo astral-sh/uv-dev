@@ -1391,6 +1391,12 @@ pub async fn resolve_environment(
         amd_gpu_architecture,
     } = settings;
 
+    let source_index_locations = index_locations
+        .clone()
+        .with_source_indexes(spec.requirements.indexes.clone())
+        .map_err(anyhow::Error::from)?;
+    let index_locations = &source_index_locations;
+
     // Respect all requirements from the provided sources.
     let RequirementsSpecification {
         project,
@@ -1792,6 +1798,12 @@ pub async fn update_environment(
     } = settings;
 
     let client_builder = client_builder.clone().keyring(*keyring_provider);
+
+    let source_index_locations = index_locations
+        .clone()
+        .with_source_indexes(spec.indexes.clone())
+        .map_err(anyhow::Error::from)?;
+    let index_locations = &source_index_locations;
 
     // Respect all requirements from the provided sources.
     let RequirementsSpecification {

@@ -41,7 +41,8 @@ use uv_python_types::{
     PythonVersion, VersionRequest,
 };
 use uv_requirements::{
-    GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
+    GroupsSpecification, LoweringContext, RequirementsSource, RequirementsSpecification,
+    is_pylock_toml,
 };
 use uv_resolver::{
     AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
@@ -206,6 +207,13 @@ pub async fn pip_compile(
     }
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
+    let lowering_context = LoweringContext::new(
+        &sources,
+        &index_locations,
+        &cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
@@ -220,6 +228,7 @@ pub async fn pip_compile(
         source_trees,
         groups,
         extras: used_extras,
+        indexes,
         index_url,
         extra_index_urls,
         no_index,
@@ -234,6 +243,7 @@ pub async fn pip_compile(
         excludes,
         Some(&groups),
         &client_builder,
+        lowering_context,
     )
     .await?;
 
@@ -261,10 +271,18 @@ pub async fn pip_compile(
         .chain(excludes_from_workspace)
         .collect();
 
-    // Read build constraints.
+    // Read build constraints and retain index policies selected by inline metadata.
+    let mut build_spec = uv_resolve_operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        lowering_context,
+    )
+    .await?;
+    build_spec.extend_indexes(indexes)?;
+    let indexes = build_spec.indexes;
     let build_constraints = Constraints::from_specifications(
-        uv_resolve_operations::read_constraints(build_constraints, &client_builder)
-            .await?
+        build_spec
+            .constraints
             .into_iter()
             .chain(build_constraints_from_workspace),
     );
@@ -425,7 +443,7 @@ pub async fn pip_compile(
     };
 
     // Incorporate any index locations from the provided sources.
-    let index_locations = index_locations.combine(
+    let index_locations = index_locations.with_source_indexes(indexes)?.combine(
         extra_index_urls
             .into_iter()
             .map(Index::from_extra_index_url)

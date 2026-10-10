@@ -39,7 +39,7 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_shell::WindowsRunnable;
 use uv_static::EnvVars;
@@ -836,9 +836,27 @@ async fn get_or_create_environment(
     .await?
     .into_interpreter();
 
-    let build_constraints = Constraints::from_specifications(
-        operations::read_constraints(build_constraints, client_builder).await?,
-    );
+    let build_spec = operations::read_constraints(
+        build_constraints,
+        client_builder,
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
+    )
+    .await?;
+    let build_indexes = build_spec.indexes;
+    let build_constraints = Constraints::from_specifications(build_spec.constraints);
+    let mut settings_with_build_indexes = settings.clone();
+    settings_with_build_indexes.resolver.index_locations = settings_with_build_indexes
+        .resolver
+        .index_locations
+        .with_source_indexes(build_indexes.clone())
+        .map_err(anyhow::Error::from)?;
+    let settings = &settings_with_build_indexes;
 
     let from = match request {
         ToolRequest::Python {
@@ -1021,17 +1039,25 @@ async fn get_or_create_environment(
     };
 
     // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
+    let mut spec = RequirementsSpecification::from_sources(
         with,
         constraints,
         overrides,
         &[],
         None,
         client_builder,
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
     )
     .await?;
     let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
 
+    spec.extend_indexes(build_indexes)?;
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
         let mut requirements = Vec::with_capacity(1 + with.len());

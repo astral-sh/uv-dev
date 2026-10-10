@@ -15,7 +15,9 @@ use uv_configuration::{
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
+use uv_distribution_types::{
+    ExtraBuildRequires, Index, IndexLocations, Name, Requirement, RequirementSource,
+};
 use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
@@ -347,9 +349,33 @@ async fn upgrade_tool(
         }
     }
 
+    let receipt_indexes = IndexLocations::from(receipt.indexes.clone());
+
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
     let options = args.clone().combine(receipt.combine(filesystem.clone()));
     let settings = ResolverInstallerSettings::from(options.clone());
+    settings.resolver.index_locations.validate_pinned_indexes(
+        &receipt_indexes,
+        existing_tool_receipt
+            .requirements()
+            .iter()
+            .chain(existing_tool_receipt.constraints())
+            .chain(existing_tool_receipt.overrides())
+            .chain(
+                existing_tool_receipt
+                    .build_constraints()
+                    .iter()
+                    .map(|constraint| &constraint.requirement),
+            )
+            .filter_map(|requirement| match &requirement.source {
+                RequirementSource::Registry { index, .. } => index.as_ref(),
+                RequirementSource::Url { .. }
+                | RequirementSource::GitDirectory { .. }
+                | RequirementSource::GitPath { .. }
+                | RequirementSource::Path { .. }
+                | RequirementSource::Directory { .. } => None,
+            }),
+    )?;
 
     let build_constraints = existing_tool_receipt.build_constraints().to_vec();
     let manifest_constraints = existing_tool_receipt

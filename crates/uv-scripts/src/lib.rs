@@ -102,40 +102,12 @@ impl Pep723ItemRef<'_> {
 
     /// Collect any `tool.uv.index` from the script.
     pub fn indexes(&self, source_strategy: &NoSources) -> &[uv_distribution_types::Index] {
-        match source_strategy {
-            NoSources::None | NoSources::Packages(_) => self
-                .metadata()
-                .tool
-                .as_ref()
-                .and_then(|tool| tool.uv.as_ref())
-                .and_then(|uv| uv.top_level.index.as_deref())
-                .unwrap_or(&[]),
-            NoSources::All => &[],
-        }
+        self.metadata().indexes(source_strategy)
     }
 
     /// Collect any `tool.uv.sources` from the script.
     pub fn sources(&self, source_strategy: &NoSources) -> Cow<'_, BTreeMap<PackageName, Sources>> {
-        static EMPTY: BTreeMap<PackageName, Sources> = BTreeMap::new();
-        let sources = self
-            .metadata()
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.sources.as_ref())
-            .unwrap_or(&EMPTY);
-
-        match source_strategy {
-            NoSources::None => Cow::Borrowed(sources),
-            NoSources::All => Cow::Borrowed(&EMPTY),
-            NoSources::Packages(packages) => Cow::Owned(
-                sources
-                    .iter()
-                    .filter(|(name, _)| !packages.contains(name))
-                    .map(|(name, sources)| (name.clone(), sources.clone()))
-                    .collect(),
-            ),
-        }
+        self.metadata().sources(source_strategy)
     }
 }
 
@@ -369,6 +341,42 @@ pub struct Pep723Metadata {
 }
 
 impl Pep723Metadata {
+    /// Collect any `tool.uv.index` from the script.
+    pub fn indexes(&self, source_strategy: &NoSources) -> &[uv_distribution_types::Index] {
+        match source_strategy {
+            NoSources::None | NoSources::Packages(_) => self
+                .tool
+                .as_ref()
+                .and_then(|tool| tool.uv.as_ref())
+                .and_then(|uv| uv.top_level.index.as_deref())
+                .unwrap_or(&[]),
+            NoSources::All => &[],
+        }
+    }
+
+    /// Collect any `tool.uv.sources` from the script.
+    pub fn sources(&self, source_strategy: &NoSources) -> Cow<'_, BTreeMap<PackageName, Sources>> {
+        static EMPTY: BTreeMap<PackageName, Sources> = BTreeMap::new();
+        let sources = self
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.sources.as_ref())
+            .unwrap_or(&EMPTY);
+
+        match source_strategy {
+            NoSources::None => Cow::Borrowed(sources),
+            NoSources::All => Cow::Borrowed(&EMPTY),
+            NoSources::Packages(packages) => Cow::Owned(
+                sources
+                    .iter()
+                    .filter(|(name, _)| !packages.contains(name))
+                    .map(|(name, sources)| (name.clone(), sources.clone()))
+                    .collect(),
+            ),
+        }
+    }
+
     /// Parse the PEP 723 metadata from `stdin`.
     pub fn parse(contents: &[u8]) -> Result<Option<Self>, Pep723Error> {
         // Extract the `script` tag.
