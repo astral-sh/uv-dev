@@ -1,7 +1,9 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
 use std::fmt::Write;
+use std::iter;
 use std::ops::Bound;
 
 use indexmap::IndexSet;
@@ -1257,7 +1259,12 @@ impl PubGrubReportFormatter<'_> {
                             hints.insert(PubGrubHint::InconsistentVersionMetadata {
                                 package: name.clone(),
                                 version: version.clone(),
-                                reason: reason.to_string(),
+                                reason: iter::successors(
+                                    Some(reason.as_ref() as &dyn Error),
+                                    |&error| error.source(),
+                                )
+                                .map(ToString::to_string)
+                                .join(": "),
                             });
                         }
                         MetadataUnavailable::InvalidStructure(reason) => {
