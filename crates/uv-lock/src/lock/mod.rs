@@ -4128,21 +4128,10 @@ impl Lock {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            let simplify_extras = |requirement: Requirement, extras: &[ExtraName]| Requirement {
-                marker: requirement.marker.simplify_extras(extras),
-                ..requirement
-            };
-            let current_requirements = normalizer.requirements(
-                current
-                    .requires_dist
-                    .iter()
-                    .cloned()
-                    .map(|requirement| simplify_extras(requirement, &current.provides_extra)),
-            )?;
+            let current_requirements =
+                normalizer.requirements(current.requires_dist.iter().cloned())?;
             let previous_requirements =
-                normalizer.requirements(package.metadata.requires_dist.iter().cloned().map(
-                    |requirement| simplify_extras(requirement, &package.metadata.provides_extra),
-                ))?;
+                normalizer.requirements(package.metadata.requires_dist.iter().cloned())?;
             if current_requirements != previous_requirements {
                 if !package.is_dynamic() {
                     return Ok(false);
@@ -4153,12 +4142,7 @@ impl Lock {
                     current.requires_dist.clone(),
                     &package.id.name,
                 );
-                if normalizer.requirements(
-                    flattened
-                        .into_iter()
-                        .map(|requirement| simplify_extras(requirement, &current.provides_extra)),
-                )? != previous_requirements
-                {
+                if normalizer.requirements(flattened)? != previous_requirements {
                     return Ok(false);
                 }
             }

@@ -50828,3 +50828,187 @@ fn lock_required_environment_allowed_source_preserves_activation() -> Result<()>
     ");
     Ok(())
 }
+
+/// Moving a parent between conflicting extras can broaden its children's activation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_moved_conflicting_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "required-environment-moved-conflicting-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["helper<2", "child"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["helper>=2", "child; python_version < '3.13'"]
+        [packages.helper.versions."1.0.0"]
+        [packages.helper.versions."2.0.0"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.child.versions."2.0.0"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        a = ["parent"]
+        b = ["helper<2"]
+        [tool.uv]
+        conflicts = [[{ extra = "a" }, { extra = "b" }]]
+        required-environments = ["python_version == '3.13'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "child==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        a = []
+        b = ["parent", "helper<2"]
+        [tool.uv]
+        conflicts = [[{ extra = "a" }, { extra = "b" }]]
+        required-environments = ["python_version == '3.13'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Updated child v1.0.0 -> v2.0.0
+    Updated helper v1.0.0, v2.0.0 -> v1.0.0
+    Updated parent v2.0.0 -> v1.0.0
+    ");
+    Ok(())
+}
+
+/// Flattened dynamic metadata retains extra identities when activation changes.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_moved_dynamic_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "required-environment-moved-dynamic-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["helper<2", "child"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["helper>=2", "child; python_version < '3.13'"]
+        [packages.helper.versions."1.0.0"]
+        [packages.helper.versions."2.0.0"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.child.versions."2.0.0"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        dynamic = ["version"]
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        a = ["parent"]
+        b = ["helper<2"]
+        all = ["project[a]"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv]
+        conflicts = [
+            [{ extra = "a" }, { extra = "b" }],
+            [{ extra = "all" }, { extra = "b" }],
+        ]
+        required-environments = ["python_version == '3.13'"]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = pathlib.Path(metadata_directory, "project-0.1.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(pathlib.Path("metadata.txt").read_text())
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    context.temp_dir.child("metadata.txt").write_str(indoc! {r"
+        Metadata-Version: 2.3
+        Name: project
+        Version: 0.1.0
+        Requires-Python: >=3.12
+        Requires-Dist: parent; extra == 'a'
+        Requires-Dist: parent; extra == 'all'
+        Requires-Dist: helper<2; extra == 'b'
+        Provides-Extra: a
+        Provides-Extra: all
+        Provides-Extra: b
+    "})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "child==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        dynamic = ["version"]
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        a = []
+        b = ["parent", "helper<2"]
+        all = ["project[a]"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv]
+        conflicts = [
+            [{ extra = "a" }, { extra = "b" }],
+            [{ extra = "all" }, { extra = "b" }],
+        ]
+        required-environments = ["python_version == '3.13'"]
+    "#})?;
+    context.temp_dir.child("metadata.txt").write_str(indoc! {r"
+        Metadata-Version: 2.3
+        Name: project
+        Version: 0.1.0
+        Requires-Python: >=3.12
+        Requires-Dist: parent; extra == 'b'
+        Requires-Dist: helper<2; extra == 'b'
+        Provides-Extra: a
+        Provides-Extra: all
+        Provides-Extra: b
+    "})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Updated child v1.0.0 -> v2.0.0
+    Updated helper v1.0.0, v2.0.0 -> v1.0.0
+    Updated parent v2.0.0 -> v1.0.0
+    ");
+    Ok(())
+}
