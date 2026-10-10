@@ -1812,6 +1812,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_duplicate_attributes() -> Result<(), Error> {
+        let cases = [
+            ("", None, false),
+            (r#"data-yanked="""#, Some(""), true),
+            ("data-yanked", None, true),
+            (
+                r#"DATA-YANKED="first" data-yanked="second""#,
+                Some("first"),
+                true,
+            ),
+            (
+                r#"data-yanked="first" DATA-YANKED="second""#,
+                Some("first"),
+                true,
+            ),
+            (r#"DATA-YANKED data-yanked="second""#, None, true),
+            (r#"data-yanked DATA-YANKED="second""#, None, true),
+            (r#"data-yanked="first" DATA-YANKED"#, Some("first"), true),
+            (r#"DATA-YANKED="" data-yanked="second""#, Some(""), true),
+        ];
+        for padding in ["", "data-one=one data-two=two data-three=three"] {
+            for (attributes, expected, present) in cases {
+                let text = format!("<A {padding} {attributes}></A>");
+                let dom = Document::parse(&text)?;
+                let tag = dom.elements().next().expect("Expected an HTML tag");
+                assert!(tag.is("a"));
+                for name in ["data-yanked", "DaTa-YaNkEd"] {
+                    assert_eq!(attribute(&tag, name), expected, "{text}");
+                    assert_eq!(tag.has_attribute(name), present, "{text}");
+                }
+            }
+        }
+        Ok(())
+    }
+
     // Test parsing project status metadata with emojis in the reason.
     #[test]
     fn parse_simple_detail_with_project_status_and_emoji_reason() {
