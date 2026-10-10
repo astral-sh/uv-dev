@@ -5,6 +5,7 @@ Learn how to integrate uv with other software:
 - [Using in Docker images](./docker.md)
 - [Using with Jupyter notebooks](./jupyter.md)
 - [Using with marimo notebooks](./marimo.md)
+- [Using with mypy](./mypy.md)
 - [Using with pre-commit](./pre-commit.md)
 - [Using in GitHub Actions](./github.md)
 - [Using in GitLab CI/CD](./gitlab.md)
