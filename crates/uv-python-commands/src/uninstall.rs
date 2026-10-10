@@ -41,7 +41,7 @@ pub async fn uninstall(
     all: bool,
     printer: Printer,
 ) -> Result<ExitStatus> {
-    let installations = ManagedPythonInstallations::from_settings(install_dir)?.init()?;
+    let installations = ManagedPythonInstallations::from_settings(install_dir).init()?;
 
     let _lock = installations.lock().await?;
 
