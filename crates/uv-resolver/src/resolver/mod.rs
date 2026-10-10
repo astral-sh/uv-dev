@@ -316,6 +316,10 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
             .spawn(move || {
                 let result = solver.solve(&requests);
 
+                // Callers may need exclusive access to the metadata index as soon as resolution
+                // completes, so release the solver's index handle before sending the result.
+                drop(requests);
+
                 // This may fail if the main thread returned early due to an error.
                 let _ = tx.send(result);
             })
@@ -323,8 +327,16 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
 
         let resolve_fut = async move { rx.await.map_err(|_| ResolveError::ChannelClosed) };
 
-        // Wait for both to complete.
-        let ((), resolution) = tokio::try_join!(requests_fut, resolve_fut)?;
+        // Every request needed by the solution has completed before the solver returns. Dropping
+        // the fetcher then cancels speculative requests that the solution does not use.
+        tokio::pin!(requests_fut, resolve_fut);
+        let resolution = tokio::select! {
+            result = &mut requests_fut => {
+                result?;
+                resolve_fut.await?
+            }
+            result = &mut resolve_fut => result?,
+        };
 
         state.on_complete();
         resolution
