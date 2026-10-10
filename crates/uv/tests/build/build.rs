@@ -1864,6 +1864,7 @@ fn build_workspace_transitive_build_dependency() -> Result<()> {
         &context.filters(),
         context
             .build()
+            .env(EnvVars::UV_CONCURRENT_BUILDS, "1")
             .arg("--wheel")
             .arg("--package")
             .arg("my-tool")
