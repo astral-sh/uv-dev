@@ -2,6 +2,7 @@ use std::process::Command;
 
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+use indoc::indoc;
 use url::Url;
 use uv_static::EnvVars;
 
@@ -370,10 +371,7 @@ fn pip_compile_baseline() {
 fn publish_resolved_settings() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(indoc::indoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
         publish-url = "https://test.pypi.org/legacy/"
         trusted-publishing = "never"
         check-url = "https://check-user:check-secret@test.pypi.org/simple/"
@@ -1236,7 +1234,7 @@ fn resolve_uv_toml() -> anyhow::Result<()> {
 
     // Write a `uv.toml` file to the directory.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [pip]
         resolution = "lowest-direct"
         generate-hashes = true
@@ -1383,7 +1381,7 @@ fn resolve_pyproject_toml() -> anyhow::Result<()> {
 
     // Write a `uv.toml` file to the directory.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [pip]
         resolution = "lowest-direct"
         generate-hashes = true
@@ -1392,7 +1390,7 @@ fn resolve_pyproject_toml() -> anyhow::Result<()> {
 
     // Write a `pyproject.toml` file to the directory.
     let pyproject = context.temp_dir.child("pyproject.toml");
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -1485,7 +1483,7 @@ fn resolve_pyproject_toml() -> anyhow::Result<()> {
         .arg("requirements.in"), @"");
 
     // Add configuration to the `pyproject.toml` file.
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -1549,7 +1547,7 @@ fn resolve_index_url() -> anyhow::Result<()> {
 
     // Write a `pyproject.toml` file to the directory.
     let pyproject = context.temp_dir.child("pyproject.toml");
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -1732,7 +1730,7 @@ fn resolve_find_links() -> anyhow::Result<()> {
 
     // Write a `pyproject.toml` file to the directory.
     let pyproject = context.temp_dir.child("pyproject.toml");
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -1822,7 +1820,7 @@ fn resolve_top_level() -> anyhow::Result<()> {
 
     // Write out to the top-level (`tool.uv`, rather than `tool.uv.pip`).
     let pyproject = context.temp_dir.child("pyproject.toml");
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -1852,7 +1850,7 @@ fn resolve_top_level() -> anyhow::Result<()> {
 
     // Write out to both the top-level (`tool.uv`) and the pip section (`tool.uv.pip`). The
     // `tool.uv.pip` section should take precedence when combining.
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -2002,7 +2000,7 @@ fn resolve_user_configuration() -> anyhow::Result<()> {
             .env(EnvVars::XDG_CONFIG_HOME, xdg.path())
     );
 
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [pip]
         resolution = "lowest-direct"
     "#})?;
@@ -2030,7 +2028,7 @@ fn resolve_user_configuration() -> anyhow::Result<()> {
 
     // Add a local configuration to generate hashes.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r"
+    config.write_str(indoc! {r"
         [pip]
         generate-hashes = true
     "})?;
@@ -2056,7 +2054,7 @@ fn resolve_user_configuration() -> anyhow::Result<()> {
 
     // Add a local configuration to override the user configuration.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [pip]
         resolution = "highest"
     "#})?;
@@ -2072,7 +2070,7 @@ fn resolve_user_configuration() -> anyhow::Result<()> {
     // the resulting configuration has both `tool.uv.pip.resolution` (from the user configuration)
     // and `tool.uv.resolution` (from the workspace settings), so we choose the former.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         resolution = "highest"
     "#})?;
 
@@ -2108,7 +2106,7 @@ fn resolve_system_configuration_can_be_disabled() -> anyhow::Result<()> {
             .env(EnvVars::XDG_CONFIG_DIRS, xdg.path())
     );
 
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [pip]
         resolution = "lowest-direct"
     "#})?;
@@ -2169,13 +2167,13 @@ fn resolve_tool() -> anyhow::Result<()> {
             .env(EnvVars::XDG_CONFIG_HOME, xdg.path())
     );
 
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         resolution = "lowest-direct"
     "#})?;
 
     // Add a local configuration to disable build isolation.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r"
+    config.write_str(indoc! {r"
         no-build-isolation = true
     "})?;
 
@@ -2231,7 +2229,7 @@ fn resolve_poetry_toml() -> anyhow::Result<()> {
 
     // Write a `uv.toml` file to the directory.
     let config = context.temp_dir.child("pyproject.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [tool.poetry]
         name = "project"
         version = "0.1.0"
@@ -2291,7 +2289,7 @@ fn resolve_both() -> anyhow::Result<()> {
 
     // Write a `uv.toml` file to the directory.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [pip]
         resolution = "lowest-direct"
         generate-hashes = true
@@ -2300,7 +2298,7 @@ fn resolve_both() -> anyhow::Result<()> {
 
     // Write a `pyproject.toml` file to the directory
     let config = context.temp_dir.child("pyproject.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -2425,7 +2423,7 @@ fn resolve_both_special_fields() -> anyhow::Result<()> {
 
     // Write a `uv.toml` file to the directory.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [pip]
         resolution = "lowest-direct"
         generate-hashes = true
@@ -2434,7 +2432,7 @@ fn resolve_both_special_fields() -> anyhow::Result<()> {
 
     // Write a `pyproject.toml` file to the directory
     let config = context.temp_dir.child("pyproject.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -2554,7 +2552,7 @@ fn resolve_both_preview() -> anyhow::Result<()> {
         add_shared_args(context.version()).arg("--show-settings")
     );
 
-    pyproject.write_str(indoc::indoc! {r"
+    pyproject.write_str(indoc! {r"
         [tool.uv]
         preview = true
     "})?;
@@ -2590,7 +2588,7 @@ fn resolve_both_preview() -> anyhow::Result<()> {
     "
     );
 
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [tool.uv]
         preview-features = ["unknown-preview-feature"]
     "#})?;
@@ -2635,7 +2633,7 @@ fn invalid_conflicts() -> anyhow::Result<()> {
     let pyproject = context.temp_dir.child("pyproject.toml");
 
     // Write in `pyproject.toml` schema and test the singleton case.
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -2661,7 +2659,7 @@ fn invalid_conflicts() -> anyhow::Result<()> {
     );
 
     // Now test the empty case.
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -2685,7 +2683,7 @@ fn invalid_conflicts() -> anyhow::Result<()> {
     );
 
     // Now test the duplicate case.
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -2711,7 +2709,7 @@ fn invalid_conflicts() -> anyhow::Result<()> {
     );
 
     // Now test entries that duplicate after applying the default package.
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -2742,7 +2740,7 @@ fn valid_conflicts() -> anyhow::Result<()> {
     let pyproject = context.temp_dir.child("pyproject.toml");
 
     // Write in `pyproject.toml` schema.
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -2788,7 +2786,7 @@ fn resolve_config_file() -> anyhow::Result<()> {
             .arg("requirements.in")
     );
 
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [pip]
         resolution = "lowest-direct"
         generate-hashes = true
@@ -2873,7 +2871,7 @@ fn resolve_config_file() -> anyhow::Result<()> {
     );
 
     // Write in `pyproject.toml` schema.
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -2903,7 +2901,7 @@ fn resolve_config_file() -> anyhow::Result<()> {
 
     // Write an _actual_ `pyproject.toml`.
     let config = config_dir.child("pyproject.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [project]
         name = "example"
         version = "0.0.0"
@@ -2958,14 +2956,14 @@ fn resolve_skip_empty() -> anyhow::Result<()> {
 
     // Set `lowest-direct` in a `uv.toml`.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [pip]
         resolution = "lowest-direct"
     "#})?;
 
     // Create an empty in a `pyproject.toml`.
     let pyproject = child.child("pyproject.toml");
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "child"
         dependencies = [
@@ -2993,7 +2991,7 @@ fn resolve_skip_empty() -> anyhow::Result<()> {
     );
 
     // Adding a `tool.uv` section should cause us to ignore the `uv.toml`.
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [project]
         name = "child"
         dependencies = [
@@ -3028,7 +3026,7 @@ fn allow_insecure_host() -> anyhow::Result<()> {
     );
 
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         allow-insecure-host = ["google.com", { host = "example.com" }]
     "#})?;
 
@@ -3117,7 +3115,7 @@ fn resolve_relative_indexes_with_directory() -> anyhow::Result<()> {
     let config_directory = context.temp_dir.child("configuration");
     config_directory.create_dir_all()?;
     let config_file = config_directory.child("uv.toml");
-    config_file.write_str(indoc::indoc! {r#"
+    config_file.write_str(indoc! {r#"
         [[index]]
         name = "configured"
         url = "./configured-index"
@@ -3274,7 +3272,7 @@ fn index_priority() -> anyhow::Result<()> {
     );
 
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [[index]]
         url = "https://file.pypi.org/simple"
     "#})?;
@@ -3388,7 +3386,7 @@ fn index_priority() -> anyhow::Result<()> {
     );
 
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         index-url = "https://file.pypi.org/simple"
     "#})?;
 
@@ -3433,7 +3431,7 @@ fn index_priority() -> anyhow::Result<()> {
     );
 
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [[index]]
         url = "https://file.pypi.org/simple"
         default = true
@@ -3480,10 +3478,7 @@ fn index_priority() -> anyhow::Result<()> {
 fn index_by_name() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     // `explicit` and `default` are supported together; use both to test overriding behaviour.
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(indoc::indoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
         [[index]]
         name = "internal"
         url = "https://example.invalid/simple"
@@ -3596,10 +3591,7 @@ fn index_by_name() -> anyhow::Result<()> {
 )]
 fn index_by_name_with_matching_path() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(indoc::indoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
         [[index]]
         name = "internal"
         url = "https://example.invalid/simple"
@@ -3673,9 +3665,7 @@ fn index_by_name_from_user_configuration() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     let user_configuration = context.user_config_dir.child("uv");
     user_configuration.create_dir_all()?;
-    user_configuration
-        .child("uv.toml")
-        .write_str(indoc::indoc! {r#"
+    user_configuration.child("uv.toml").write_str(indoc! {r#"
         [[index]]
         name = "internal"
         url = "https://example.invalid/simple"
@@ -3728,7 +3718,7 @@ fn tool_index_by_name() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     let configuration = context.temp_dir.child("uv.toml");
     // `explicit` and `default` are supported together; use both to test overriding behaviour.
-    configuration.write_str(indoc::indoc! {r#"
+    configuration.write_str(indoc! {r#"
         [[index]]
         name = "internal"
         url = "https://example.invalid/simple"
@@ -3791,7 +3781,7 @@ fn index_by_name_with_directory() -> anyhow::Result<()> {
     let configuration_directory = context.temp_dir.child("configuration");
     configuration_directory.create_dir_all()?;
     let configuration_file = configuration_directory.child("uv.toml");
-    configuration_file.write_str(indoc::indoc! {r#"
+    configuration_file.write_str(indoc! {r#"
         [[index]]
         name = "internal"
         url = "./configured-index"
@@ -4206,7 +4196,7 @@ fn preview_precedence() -> anyhow::Result<()> {
     );
 
     let project_config = context.temp_dir.child("pyproject.toml");
-    project_config.write_str(indoc::indoc! {r"
+    project_config.write_str(indoc! {r"
         [tool.uv]
         preview = false
     "})?;
@@ -4242,7 +4232,7 @@ fn preview_precedence() -> anyhow::Result<()> {
 
     user_config.write_str("preview = false")?;
 
-    project_config.write_str(indoc::indoc! {r"
+    project_config.write_str(indoc! {r"
         [tool.uv]
         preview = true
     "})?;
@@ -4289,7 +4279,7 @@ fn preview_precedence() -> anyhow::Result<()> {
     );
 
     user_config.write_str("preview = true")?;
-    project_config.write_str(indoc::indoc! {r#"
+    project_config.write_str(indoc! {r#"
         [tool.uv]
         preview-features = ["format-command"]
     "#})?;
@@ -4328,7 +4318,7 @@ fn preview_precedence() -> anyhow::Result<()> {
     );
 
     user_config.write_str("preview = true")?;
-    project_config.write_str(indoc::indoc! {r"
+    project_config.write_str(indoc! {r"
         [tool.uv]
         preview-features = false
     "})?;
@@ -4342,7 +4332,7 @@ fn preview_precedence() -> anyhow::Result<()> {
         @""
     );
 
-    project_config.write_str(indoc::indoc! {r#"
+    project_config.write_str(indoc! {r#"
         [tool.uv]
         preview-features = ["format-command"]
     "#})?;
@@ -4367,7 +4357,7 @@ fn preview_precedence() -> anyhow::Result<()> {
     "
     );
 
-    project_config.write_str(indoc::indoc! {r"
+    project_config.write_str(indoc! {r"
         [tool.uv]
         preview-features = false
     "})?;
@@ -4381,7 +4371,7 @@ fn preview_precedence() -> anyhow::Result<()> {
         @""
     );
 
-    project_config.write_str(indoc::indoc! {r#"
+    project_config.write_str(indoc! {r#"
         [tool.uv]
         preview-features = ["unknown-preview-feature"]
     "#})?;
@@ -4422,7 +4412,7 @@ fn preview_precedence() -> anyhow::Result<()> {
         @""
     );
 
-    project_config.write_str(indoc::indoc! {r"
+    project_config.write_str(indoc! {r"
         [tool.uv]
         preview-features = true
     "})?;
@@ -4519,7 +4509,7 @@ fn preview_features_uv_toml() -> anyhow::Result<()> {
         @""
     );
 
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         preview = true
         preview-features = ["format-command"]
     "#})?;
@@ -4599,7 +4589,7 @@ fn preview_features_pyproject_toml() -> anyhow::Result<()> {
         add_shared_args(context.version()).arg("--show-settings")
     );
 
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [tool.uv]
         preview-features = ["format-command"]
     "#})?;
@@ -4626,7 +4616,7 @@ fn preview_features_pyproject_toml() -> anyhow::Result<()> {
     "
     );
 
-    pyproject.write_str(indoc::indoc! {r#"
+    pyproject.write_str(indoc! {r#"
         [tool.uv]
         preview = true
         preview-features = ["format-command"]
@@ -4656,7 +4646,7 @@ fn preview_features_pyproject_toml() -> anyhow::Result<()> {
     "
     );
 
-    pyproject.write_str(indoc::indoc! {r"
+    pyproject.write_str(indoc! {r"
         [tool.uv]
         preview-features = 123
     "})?;
@@ -4704,7 +4694,7 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     };
 
     let test_script = context.temp_dir.child("main.py");
-    test_script.write_str(indoc::indoc! { r#"
+    test_script.write_str(indoc! { r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = []
@@ -4725,7 +4715,7 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
             .arg("main.py")
     );
 
-    test_script.write_str(indoc::indoc! { r#"
+    test_script.write_str(indoc! { r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = []
@@ -4758,7 +4748,7 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     "
     );
 
-    test_script.write_str(indoc::indoc! { r#"
+    test_script.write_str(indoc! { r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = []
@@ -4789,7 +4779,7 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     "
     );
 
-    test_script.write_str(indoc::indoc! { r#"
+    test_script.write_str(indoc! { r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = []
@@ -4811,7 +4801,7 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
         @""
     );
 
-    test_script.write_str(indoc::indoc! { r#"
+    test_script.write_str(indoc! { r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = []
@@ -4838,11 +4828,11 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(indoc::indoc! {r"
+        .write_str(indoc! {r"
             [tool.uv]
             preview = true
         "})?;
-    test_script.write_str(indoc::indoc! { r#"
+    test_script.write_str(indoc! { r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = []
@@ -4861,7 +4851,7 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
         capture_uv_snapshot!(context.filters(), show_settings())
     );
 
-    test_script.write_str(indoc::indoc! { r#"
+    test_script.write_str(indoc! { r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = []
@@ -5041,7 +5031,7 @@ fn system_certs_config_aliases() -> anyhow::Result<()> {
     ...
     ");
 
-    config.write_str(indoc::indoc! {r"
+    config.write_str(indoc! {r"
         system-certs = false
         native-tls = true
     "})?;
@@ -5102,7 +5092,7 @@ fn upgrade_pip_cli_config_interaction() -> anyhow::Result<()> {
 
     // Write a `uv.toml` file to the directory.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r"
+    config.write_str(indoc! {r"
         [pip]
         upgrade = false
     "})?;
@@ -5133,7 +5123,7 @@ fn upgrade_pip_cli_config_interaction() -> anyhow::Result<()> {
 
     // Write a `uv.toml` file to the directory.
     let config = context.temp_dir.child("uv.toml");
-    config.write_str(indoc::indoc! {r"
+    config.write_str(indoc! {r"
         [pip]
         upgrade = true
     "})?;
@@ -5164,7 +5154,7 @@ fn upgrade_pip_cli_config_interaction() -> anyhow::Result<()> {
     );
 
     // Write a `uv.toml` file to the directory.
-    config.write_str(indoc::indoc! {r#"
+    config.write_str(indoc! {r#"
         [pip]
         upgrade-package = ["idna"]
     "#})?;
@@ -5259,7 +5249,7 @@ fn upgrade_project_cli_config_interaction() -> anyhow::Result<()> {
     );
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc::indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "foo"
         version = "0.0.0"
@@ -5293,7 +5283,7 @@ fn upgrade_project_cli_config_interaction() -> anyhow::Result<()> {
     );
 
     // Add `upgrade = false` to the configuration file.
-    pyproject_toml.write_str(indoc::indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "foo"
         version = "0.0.0"
@@ -5327,7 +5317,7 @@ fn upgrade_project_cli_config_interaction() -> anyhow::Result<()> {
     );
 
     // Add `upgrade = true` to the configuration file.
-    pyproject_toml.write_str(indoc::indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "foo"
         version = "0.0.0"
@@ -5361,7 +5351,7 @@ fn upgrade_project_cli_config_interaction() -> anyhow::Result<()> {
     "#
     );
 
-    pyproject_toml.write_str(indoc::indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "foo"
         version = "0.0.0"
@@ -5463,7 +5453,7 @@ fn build_isolation_override() -> anyhow::Result<()> {
 
     // Write a `uv.toml` file to disable build isolation.
     let uv_toml = context.temp_dir.child("uv.toml");
-    uv_toml.write_str(indoc::indoc! {r"
+    uv_toml.write_str(indoc! {r"
         no-build-isolation = true
     "})?;
 
@@ -5493,7 +5483,7 @@ fn build_isolation_override() -> anyhow::Result<()> {
     "#);
 
     // Now enable build isolation for all packages except `numpy`.
-    uv_toml.write_str(indoc::indoc! {r"
+    uv_toml.write_str(indoc! {r"
         no-build-isolation = false
     "})?;
 
@@ -5574,6 +5564,4195 @@ fn no_cache_env_override() -> anyhow::Result<()> {
         .arg("--show-settings")
         .arg("requirements.in")
         .env(EnvVars::UV_NO_CACHE, "true"), @"");
+
+    Ok(())
+}
+
+/// `UV_COMPILE_BYTECODE` overrides `compile-bytecode` configuration while explicit CLI flags win.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_sync_compile_bytecode_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["sync", "--show-settings", "--compile-bytecode"])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "sync",
+            "--show-settings",
+            "--no-compile-bytecode"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        compile-bytecode = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["sync", "--show-settings"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        compile-bytecode = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--compile-bytecode"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        compile-bytecode = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--no-compile-bytecode"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--compile-bytecode"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "invalid"), @"");
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--no-compile-bytecode"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "invalid"), @"");
+
+    Ok(())
+}
+
+/// `UV_NO_BUILD_ISOLATION` overrides `no-build-isolation` configuration while explicit CLI flags win.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_sync_no_build_isolation_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "sync",
+            "--show-settings",
+            "--no-build-isolation"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["sync", "--show-settings", "--build-isolation"])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build-isolation = true
+        no-build-isolation-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["sync", "--show-settings"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-build-isolation = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--no-build-isolation"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build-isolation = true
+        no-build-isolation-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--build-isolation"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "true"), @"");
+
+    Ok(())
+}
+
+/// An explicit `no-build-isolation-package` remains selected when `UV_NO_BUILD_ISOLATION` clears configured restrictions.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_sync_no_build_isolation_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build-isolation = true
+        no-build-isolation-package = ["configured"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["sync", "--show-settings", "--no-build-isolation-package", "explicit"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    SyncSettings {
+        lock_check: Disabled,
+        frozen: None,
+        dry_run: Disabled,
+        script: None,
+        active: Warn,
+        extras: ExtrasSpecification(
+            ExtrasSpecificationInner {
+                include: Some(
+                    [],
+                ),
+                exclude: [],
+                only_extras: false,
+                history: ExtrasSpecificationHistory {
+                    extra: [],
+                    only_extra: [],
+                    no_extra: [],
+                    all_extras: false,
+                    no_default_extras: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        ),
+        groups: DependencyGroups(
+            DependencyGroupsInner {
+                include: Some(
+                    [],
+                ),
+                exclude: [],
+                only_groups: false,
+                history: DependencyGroupsHistory {
+                    dev_mode: None,
+                    group: [],
+                    only_group: [],
+                    no_group: [],
+                    all_groups: false,
+                    no_default_groups: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        ),
+        editable: None,
+        install_options: InstallOptions {
+            no_install_project: false,
+            only_install_project: false,
+            no_install_workspace: false,
+            only_install_workspace: false,
+            no_install_local: false,
+            only_install_local: false,
+            no_install_package: [],
+            only_install_package: [],
+        },
+        modifications: Exact,
+        all_packages: false,
+        package: [],
+        python: None,
+        python_platform: None,
+        install_mirrors: PythonInstallMirrors {
+            python_install_mirror: None,
+            pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
+            python_downloads_json_url: None,
+        },
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: ResolverInstallerSettings {
+            resolver: ResolverSettings {
+                build_options: BuildOptions {
+                    no_binary: None,
+                    no_build: None,
+                },
+                config_setting: ConfigSettings(
+                    {},
+                ),
+                config_settings_package: PackageConfigSettings(
+                    {},
+                ),
+                dependency_metadata: DependencyMetadata(
+                    {},
+                ),
+                exclude_newer: ExcludeNewer {
+                    global: None,
+                    package: ExcludeNewerPackage(
+                        {},
+                    ),
+                },
+                fork_strategy: RequiresPython,
+                index_locations: IndexLocations {
+                    indexes: [],
+                    flat_index: [],
+                    no_index: false,
+                },
+                index_strategy: FirstIndex,
+                keyring_provider: Disabled,
+                link_mode: Clone,
+                build_hash_checking: Verify,
+                build_isolation: SharedPackage(
+                    [
+                        PackageName(
+                            "explicit",
+                        ),
+                    ],
+                ),
+                extra_build_dependencies: ExtraBuildDependencies(
+                    {},
+                ),
+                extra_build_variables: ExtraBuildVariables(
+                    {},
+                ),
+                prerelease: Prerelease {
+                    global: IfNecessary,
+                    package: PrereleasePackage(
+                        {},
+                    ),
+                },
+                resolution: Highest,
+                sources: None,
+                torch_backend: None,
+                cuda_driver_version: None,
+                amd_gpu_architecture: None,
+                upgrade: Upgrade {
+                    strategy: None,
+                    constraints: {},
+                },
+            },
+            compile_bytecode: false,
+            reinstall: None,
+        },
+        output_format: Text,
+        malware_settings: MalwareCheckSettings {
+            enabled: false,
+            malware_check_url: None,
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_SOURCES` overrides `no-sources` configuration while explicit CLI flags win.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_sync_no_sources_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["sync", "--show-settings", "--no-sources"])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["sync", "--show-settings"])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-sources = true
+        no-sources-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["sync", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--no-sources"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @"");
+
+    Ok(())
+}
+
+/// An explicit `no-sources-package` remains selected when `UV_NO_SOURCES` clears configured restrictions.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_sync_no_sources_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-sources = true
+        no-sources-package = ["configured"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["sync", "--show-settings", "--no-sources-package", "explicit"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .env(EnvVars::UV_NO_SOURCES_PACKAGE, "environment"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    SyncSettings {
+        lock_check: Disabled,
+        frozen: None,
+        dry_run: Disabled,
+        script: None,
+        active: Warn,
+        extras: ExtrasSpecification(
+            ExtrasSpecificationInner {
+                include: Some(
+                    [],
+                ),
+                exclude: [],
+                only_extras: false,
+                history: ExtrasSpecificationHistory {
+                    extra: [],
+                    only_extra: [],
+                    no_extra: [],
+                    all_extras: false,
+                    no_default_extras: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        ),
+        groups: DependencyGroups(
+            DependencyGroupsInner {
+                include: Some(
+                    [],
+                ),
+                exclude: [],
+                only_groups: false,
+                history: DependencyGroupsHistory {
+                    dev_mode: None,
+                    group: [],
+                    only_group: [],
+                    no_group: [],
+                    all_groups: false,
+                    no_default_groups: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        ),
+        editable: None,
+        install_options: InstallOptions {
+            no_install_project: false,
+            only_install_project: false,
+            no_install_workspace: false,
+            only_install_workspace: false,
+            no_install_local: false,
+            only_install_local: false,
+            no_install_package: [],
+            only_install_package: [],
+        },
+        modifications: Exact,
+        all_packages: false,
+        package: [],
+        python: None,
+        python_platform: None,
+        install_mirrors: PythonInstallMirrors {
+            python_install_mirror: None,
+            pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
+            python_downloads_json_url: None,
+        },
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: ResolverInstallerSettings {
+            resolver: ResolverSettings {
+                build_options: BuildOptions {
+                    no_binary: None,
+                    no_build: None,
+                },
+                config_setting: ConfigSettings(
+                    {},
+                ),
+                config_settings_package: PackageConfigSettings(
+                    {},
+                ),
+                dependency_metadata: DependencyMetadata(
+                    {},
+                ),
+                exclude_newer: ExcludeNewer {
+                    global: None,
+                    package: ExcludeNewerPackage(
+                        {},
+                    ),
+                },
+                fork_strategy: RequiresPython,
+                index_locations: IndexLocations {
+                    indexes: [],
+                    flat_index: [],
+                    no_index: false,
+                },
+                index_strategy: FirstIndex,
+                keyring_provider: Disabled,
+                link_mode: Clone,
+                build_hash_checking: Verify,
+                build_isolation: Isolate,
+                extra_build_dependencies: ExtraBuildDependencies(
+                    {},
+                ),
+                extra_build_variables: ExtraBuildVariables(
+                    {},
+                ),
+                prerelease: Prerelease {
+                    global: IfNecessary,
+                    package: PrereleasePackage(
+                        {},
+                    ),
+                },
+                resolution: Highest,
+                sources: Packages(
+                    [
+                        PackageName(
+                            "explicit",
+                        ),
+                    ],
+                ),
+                torch_backend: None,
+                cuda_driver_version: None,
+                amd_gpu_architecture: None,
+                upgrade: Upgrade {
+                    strategy: None,
+                    constraints: {},
+                },
+            },
+            compile_bytecode: false,
+            reinstall: None,
+        },
+        output_format: Text,
+        malware_settings: MalwareCheckSettings {
+            enabled: false,
+            malware_check_url: None,
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_BUILD` overrides `no-build` configuration while explicit CLI flags win.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_sync_no_build_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["sync", "--show-settings", "--no-build"])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["sync", "--show-settings", "--build"])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build = true
+        no-build-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["sync", "--show-settings"])
+        .env(EnvVars::UV_NO_BUILD, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-build = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings"])
+        .env(EnvVars::UV_NO_BUILD, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--no-build"])
+        .env(EnvVars::UV_NO_BUILD, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build = true
+        no-build-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--build"])
+        .env(EnvVars::UV_NO_BUILD, "true"), @"");
+
+    Ok(())
+}
+
+/// An explicit `no-build-package` remains selected when `UV_NO_BUILD` clears configured restrictions.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_sync_no_build_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build = true
+        no-build-package = ["configured"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["sync", "--show-settings", "--no-build-package", "explicit"])
+        .env(EnvVars::UV_NO_BUILD, "false")
+        .env(EnvVars::UV_NO_BUILD_PACKAGE, "environment"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    SyncSettings {
+        lock_check: Disabled,
+        frozen: None,
+        dry_run: Disabled,
+        script: None,
+        active: Warn,
+        extras: ExtrasSpecification(
+            ExtrasSpecificationInner {
+                include: Some(
+                    [],
+                ),
+                exclude: [],
+                only_extras: false,
+                history: ExtrasSpecificationHistory {
+                    extra: [],
+                    only_extra: [],
+                    no_extra: [],
+                    all_extras: false,
+                    no_default_extras: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        ),
+        groups: DependencyGroups(
+            DependencyGroupsInner {
+                include: Some(
+                    [],
+                ),
+                exclude: [],
+                only_groups: false,
+                history: DependencyGroupsHistory {
+                    dev_mode: None,
+                    group: [],
+                    only_group: [],
+                    no_group: [],
+                    all_groups: false,
+                    no_default_groups: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        ),
+        editable: None,
+        install_options: InstallOptions {
+            no_install_project: false,
+            only_install_project: false,
+            no_install_workspace: false,
+            only_install_workspace: false,
+            no_install_local: false,
+            only_install_local: false,
+            no_install_package: [],
+            only_install_package: [],
+        },
+        modifications: Exact,
+        all_packages: false,
+        package: [],
+        python: None,
+        python_platform: None,
+        install_mirrors: PythonInstallMirrors {
+            python_install_mirror: None,
+            pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
+            python_downloads_json_url: None,
+        },
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: ResolverInstallerSettings {
+            resolver: ResolverSettings {
+                build_options: BuildOptions {
+                    no_binary: None,
+                    no_build: Packages(
+                        [
+                            PackageName(
+                                "explicit",
+                            ),
+                        ],
+                    ),
+                },
+                config_setting: ConfigSettings(
+                    {},
+                ),
+                config_settings_package: PackageConfigSettings(
+                    {},
+                ),
+                dependency_metadata: DependencyMetadata(
+                    {},
+                ),
+                exclude_newer: ExcludeNewer {
+                    global: None,
+                    package: ExcludeNewerPackage(
+                        {},
+                    ),
+                },
+                fork_strategy: RequiresPython,
+                index_locations: IndexLocations {
+                    indexes: [],
+                    flat_index: [],
+                    no_index: false,
+                },
+                index_strategy: FirstIndex,
+                keyring_provider: Disabled,
+                link_mode: Clone,
+                build_hash_checking: Verify,
+                build_isolation: Isolate,
+                extra_build_dependencies: ExtraBuildDependencies(
+                    {},
+                ),
+                extra_build_variables: ExtraBuildVariables(
+                    {},
+                ),
+                prerelease: Prerelease {
+                    global: IfNecessary,
+                    package: PrereleasePackage(
+                        {},
+                    ),
+                },
+                resolution: Highest,
+                sources: None,
+                torch_backend: None,
+                cuda_driver_version: None,
+                amd_gpu_architecture: None,
+                upgrade: Upgrade {
+                    strategy: None,
+                    constraints: {},
+                },
+            },
+            compile_bytecode: false,
+            reinstall: None,
+        },
+        output_format: Text,
+        malware_settings: MalwareCheckSettings {
+            enabled: false,
+            malware_check_url: None,
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_BINARY` overrides `no-binary` configuration while explicit CLI flags win.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_sync_no_binary_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["sync", "--show-settings", "--no-binary"])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["sync", "--show-settings", "--binary"])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-binary = true
+        no-binary-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["sync", "--show-settings"])
+        .env(EnvVars::UV_NO_BINARY, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-binary = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings"])
+        .env(EnvVars::UV_NO_BINARY, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--no-binary"])
+        .env(EnvVars::UV_NO_BINARY, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-binary = true
+        no-binary-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["sync", "--show-settings", "--binary"])
+        .env(EnvVars::UV_NO_BINARY, "true"), @"");
+
+    Ok(())
+}
+
+/// An explicit `no-binary-package` remains selected when `UV_NO_BINARY` clears configured restrictions.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_sync_no_binary_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-binary = true
+        no-binary-package = ["configured"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["sync", "--show-settings", "--no-binary-package", "explicit"])
+        .env(EnvVars::UV_NO_BINARY, "false")
+        .env(EnvVars::UV_NO_BINARY_PACKAGE, "environment"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    SyncSettings {
+        lock_check: Disabled,
+        frozen: None,
+        dry_run: Disabled,
+        script: None,
+        active: Warn,
+        extras: ExtrasSpecification(
+            ExtrasSpecificationInner {
+                include: Some(
+                    [],
+                ),
+                exclude: [],
+                only_extras: false,
+                history: ExtrasSpecificationHistory {
+                    extra: [],
+                    only_extra: [],
+                    no_extra: [],
+                    all_extras: false,
+                    no_default_extras: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        ),
+        groups: DependencyGroups(
+            DependencyGroupsInner {
+                include: Some(
+                    [],
+                ),
+                exclude: [],
+                only_groups: false,
+                history: DependencyGroupsHistory {
+                    dev_mode: None,
+                    group: [],
+                    only_group: [],
+                    no_group: [],
+                    all_groups: false,
+                    no_default_groups: false,
+                    defaults: List(
+                        [],
+                    ),
+                },
+            },
+        ),
+        editable: None,
+        install_options: InstallOptions {
+            no_install_project: false,
+            only_install_project: false,
+            no_install_workspace: false,
+            only_install_workspace: false,
+            no_install_local: false,
+            only_install_local: false,
+            no_install_package: [],
+            only_install_package: [],
+        },
+        modifications: Exact,
+        all_packages: false,
+        package: [],
+        python: None,
+        python_platform: None,
+        install_mirrors: PythonInstallMirrors {
+            python_install_mirror: None,
+            pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
+            python_downloads_json_url: None,
+        },
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: ResolverInstallerSettings {
+            resolver: ResolverSettings {
+                build_options: BuildOptions {
+                    no_binary: Packages(
+                        [
+                            PackageName(
+                                "explicit",
+                            ),
+                        ],
+                    ),
+                    no_build: None,
+                },
+                config_setting: ConfigSettings(
+                    {},
+                ),
+                config_settings_package: PackageConfigSettings(
+                    {},
+                ),
+                dependency_metadata: DependencyMetadata(
+                    {},
+                ),
+                exclude_newer: ExcludeNewer {
+                    global: None,
+                    package: ExcludeNewerPackage(
+                        {},
+                    ),
+                },
+                fork_strategy: RequiresPython,
+                index_locations: IndexLocations {
+                    indexes: [],
+                    flat_index: [],
+                    no_index: false,
+                },
+                index_strategy: FirstIndex,
+                keyring_provider: Disabled,
+                link_mode: Clone,
+                build_hash_checking: Verify,
+                build_isolation: Isolate,
+                extra_build_dependencies: ExtraBuildDependencies(
+                    {},
+                ),
+                extra_build_variables: ExtraBuildVariables(
+                    {},
+                ),
+                prerelease: Prerelease {
+                    global: IfNecessary,
+                    package: PrereleasePackage(
+                        {},
+                    ),
+                },
+                resolution: Highest,
+                sources: None,
+                torch_backend: None,
+                cuda_driver_version: None,
+                amd_gpu_architecture: None,
+                upgrade: Upgrade {
+                    strategy: None,
+                    constraints: {},
+                },
+            },
+            compile_bytecode: false,
+            reinstall: None,
+        },
+        output_format: Text,
+        malware_settings: MalwareCheckSettings {
+            enabled: false,
+            malware_check_url: None,
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_BUILD_ISOLATION` overrides `no-build-isolation` configuration while explicit CLI flags win.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_lock_no_build_isolation_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "lock",
+            "--show-settings",
+            "--no-build-isolation"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["lock", "--show-settings", "--build-isolation"])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build-isolation = true
+        no-build-isolation-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["lock", "--show-settings"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-build-isolation = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["lock", "--show-settings"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["lock", "--show-settings", "--no-build-isolation"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build-isolation = true
+        no-build-isolation-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["lock", "--show-settings", "--build-isolation"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "true"), @"");
+
+    Ok(())
+}
+
+/// An explicit `no-build-isolation-package` remains selected when `UV_NO_BUILD_ISOLATION` clears configured restrictions.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_lock_no_build_isolation_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build-isolation = true
+        no-build-isolation-package = ["configured"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["lock", "--show-settings", "--no-build-isolation-package", "explicit"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    LockSettings {
+        lock_check: Disabled,
+        frozen: None,
+        dry_run: Disabled,
+        script: None,
+        python: None,
+        install_mirrors: PythonInstallMirrors {
+            python_install_mirror: None,
+            pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
+            python_downloads_json_url: None,
+        },
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: ResolverSettings {
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+            },
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            link_mode: Clone,
+            build_hash_checking: Verify,
+            build_isolation: SharedPackage(
+                [
+                    PackageName(
+                        "explicit",
+                    ),
+                ],
+            ),
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            resolution: Highest,
+            sources: None,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_SOURCES` overrides `no-sources` configuration while explicit CLI flags win.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_lock_no_sources_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["lock", "--show-settings", "--no-sources"])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["lock", "--show-settings"])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-sources = true
+        no-sources-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["lock", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["lock", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["lock", "--show-settings", "--no-sources"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @"");
+
+    Ok(())
+}
+
+/// An explicit `no-sources-package` remains selected when `UV_NO_SOURCES` clears configured restrictions.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_lock_no_sources_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-sources = true
+        no-sources-package = ["configured"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["lock", "--show-settings", "--no-sources-package", "explicit"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .env(EnvVars::UV_NO_SOURCES_PACKAGE, "environment"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    LockSettings {
+        lock_check: Disabled,
+        frozen: None,
+        dry_run: Disabled,
+        script: None,
+        python: None,
+        install_mirrors: PythonInstallMirrors {
+            python_install_mirror: None,
+            pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
+            python_downloads_json_url: None,
+        },
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: ResolverSettings {
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+            },
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            link_mode: Clone,
+            build_hash_checking: Verify,
+            build_isolation: Isolate,
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            resolution: Highest,
+            sources: Packages(
+                [
+                    PackageName(
+                        "explicit",
+                    ),
+                ],
+            ),
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_BUILD` overrides `no-build` configuration while explicit CLI flags win.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_lock_no_build_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["lock", "--show-settings", "--no-build"])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["lock", "--show-settings", "--build"])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build = true
+        no-build-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["lock", "--show-settings"])
+        .env(EnvVars::UV_NO_BUILD, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-build = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["lock", "--show-settings"])
+        .env(EnvVars::UV_NO_BUILD, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["lock", "--show-settings", "--no-build"])
+        .env(EnvVars::UV_NO_BUILD, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build = true
+        no-build-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["lock", "--show-settings", "--build"])
+        .env(EnvVars::UV_NO_BUILD, "true"), @"");
+
+    Ok(())
+}
+
+/// An explicit `no-build-package` remains selected when `UV_NO_BUILD` clears configured restrictions.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_lock_no_build_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build = true
+        no-build-package = ["configured"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["lock", "--show-settings", "--no-build-package", "explicit"])
+        .env(EnvVars::UV_NO_BUILD, "false")
+        .env(EnvVars::UV_NO_BUILD_PACKAGE, "environment"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    LockSettings {
+        lock_check: Disabled,
+        frozen: None,
+        dry_run: Disabled,
+        script: None,
+        python: None,
+        install_mirrors: PythonInstallMirrors {
+            python_install_mirror: None,
+            pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
+            python_downloads_json_url: None,
+        },
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: ResolverSettings {
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: Packages(
+                    [
+                        PackageName(
+                            "explicit",
+                        ),
+                    ],
+                ),
+            },
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            link_mode: Clone,
+            build_hash_checking: Verify,
+            build_isolation: Isolate,
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            resolution: Highest,
+            sources: None,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_BINARY` overrides `no-binary` configuration while explicit CLI flags win.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_lock_no_binary_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["lock", "--show-settings", "--no-binary"])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["lock", "--show-settings", "--binary"])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-binary = true
+        no-binary-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["lock", "--show-settings"])
+        .env(EnvVars::UV_NO_BINARY, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-binary = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["lock", "--show-settings"])
+        .env(EnvVars::UV_NO_BINARY, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["lock", "--show-settings", "--no-binary"])
+        .env(EnvVars::UV_NO_BINARY, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-binary = true
+        no-binary-package = ["configured"]
+    "#})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["lock", "--show-settings", "--binary"])
+        .env(EnvVars::UV_NO_BINARY, "true"), @"");
+
+    Ok(())
+}
+
+/// An explicit `no-binary-package` remains selected when `UV_NO_BINARY` clears configured restrictions.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_lock_no_binary_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-binary = true
+        no-binary-package = ["configured"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["lock", "--show-settings", "--no-binary-package", "explicit"])
+        .env(EnvVars::UV_NO_BINARY, "false")
+        .env(EnvVars::UV_NO_BINARY_PACKAGE, "environment"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    LockSettings {
+        lock_check: Disabled,
+        frozen: None,
+        dry_run: Disabled,
+        script: None,
+        python: None,
+        install_mirrors: PythonInstallMirrors {
+            python_install_mirror: None,
+            pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
+            python_downloads_json_url: None,
+        },
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: ResolverSettings {
+            build_options: BuildOptions {
+                no_binary: Packages(
+                    [
+                        PackageName(
+                            "explicit",
+                        ),
+                    ],
+                ),
+                no_build: None,
+            },
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            link_mode: Clone,
+            build_hash_checking: Verify,
+            build_isolation: Isolate,
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            resolution: Highest,
+            sources: None,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `uv pip install` resolves `UV_COMPILE_BYTECODE` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_install_compile_bytecode_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--compile-bytecode"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--no-compile-bytecode"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        compile-bytecode = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        compile-bytecode = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--compile-bytecode"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        compile-bytecode = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--no-compile-bytecode"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+
+    Ok(())
+}
+
+/// `uv pip install` resolves `UV_NO_BUILD_ISOLATION` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_install_no_build_isolation_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--no-build-isolation"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--build-isolation"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-build-isolation = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-build-isolation = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--no-build-isolation"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-build-isolation = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--build-isolation"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "true"), @"");
+
+    Ok(())
+}
+
+/// `uv pip install` resolves `UV_NO_SOURCES` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_install_no_sources_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--no-sources"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-sources = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-sources = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--no-sources"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @"");
+
+    Ok(())
+}
+
+/// `uv pip install` resolves `UV_BREAK_SYSTEM_PACKAGES` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_install_break_system_packages_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--break-system-packages"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--no-break-system-packages"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        break-system-packages = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        break-system-packages = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--break-system-packages"])
+        .env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        break-system-packages = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--no-break-system-packages"])
+        .env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "true"), @"");
+
+    Ok(())
+}
+
+/// `uv pip install` resolves `UV_REQUIRE_HASHES` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_install_require_hashes_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--require-hashes"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--no-require-hashes"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        require-hashes = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_REQUIRE_HASHES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        require-hashes = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_REQUIRE_HASHES, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--require-hashes"])
+        .env(EnvVars::UV_REQUIRE_HASHES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        require-hashes = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--no-require-hashes"])
+        .env(EnvVars::UV_REQUIRE_HASHES, "true"), @"");
+
+    Ok(())
+}
+
+/// `uv pip install` resolves `UV_NO_VERIFY_HASHES` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_install_verify_hashes_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--no-verify-hashes"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "install",
+            "--show-settings",
+            "anyio",
+            "--verify-hashes"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        verify-hashes = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_VERIFY_HASHES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        verify-hashes = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_VERIFY_HASHES, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--no-verify-hashes"])
+        .env(EnvVars::UV_NO_VERIFY_HASHES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        verify-hashes = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--verify-hashes"])
+        .env(EnvVars::UV_NO_VERIFY_HASHES, "true"), @"");
+
+    Ok(())
+}
+
+/// `uv pip sync` resolves `UV_COMPILE_BYTECODE` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_sync_compile_bytecode_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--compile-bytecode"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--no-compile-bytecode"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        compile-bytecode = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        compile-bytecode = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--compile-bytecode"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        compile-bytecode = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--no-compile-bytecode"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+
+    Ok(())
+}
+
+/// `uv pip sync` resolves `UV_NO_BUILD_ISOLATION` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_sync_no_build_isolation_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--no-build-isolation"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--build-isolation"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-build-isolation = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-build-isolation = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--no-build-isolation"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-build-isolation = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--build-isolation"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "true"), @"");
+
+    Ok(())
+}
+
+/// `uv pip sync` resolves `UV_NO_SOURCES` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_sync_no_sources_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--no-sources"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-sources = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-sources = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--no-sources"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @"");
+
+    Ok(())
+}
+
+/// `uv pip sync` resolves `UV_BREAK_SYSTEM_PACKAGES` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_sync_break_system_packages_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--break-system-packages"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--no-break-system-packages"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        break-system-packages = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        break-system-packages = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--break-system-packages"])
+        .env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        break-system-packages = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--no-break-system-packages"])
+        .env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "true"), @"");
+
+    Ok(())
+}
+
+/// `uv pip sync` resolves `UV_REQUIRE_HASHES` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_sync_require_hashes_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--require-hashes"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--no-require-hashes"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        require-hashes = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_REQUIRE_HASHES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        require-hashes = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_REQUIRE_HASHES, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--require-hashes"])
+        .env(EnvVars::UV_REQUIRE_HASHES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        require-hashes = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--no-require-hashes"])
+        .env(EnvVars::UV_REQUIRE_HASHES, "true"), @"");
+
+    Ok(())
+}
+
+/// `uv pip sync` resolves `UV_NO_VERIFY_HASHES` between CLI flags and pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_sync_verify_hashes_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--no-verify-hashes"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "sync",
+            "--show-settings",
+            "anyio",
+            "--verify-hashes"
+        ])
+    );
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        verify-hashes = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_VERIFY_HASHES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        verify-hashes = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio"])
+        .env(EnvVars::UV_NO_VERIFY_HASHES, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--no-verify-hashes"])
+        .env(EnvVars::UV_NO_VERIFY_HASHES, "false"), @"");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        verify-hashes = false
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--verify-hashes"])
+        .env(EnvVars::UV_NO_VERIFY_HASHES, "true"), @"");
+
+    Ok(())
+}
+
+/// `UV_NO_SOURCES` clears both configuration layers while retaining the explicit package selection.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_install_no_sources_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-sources = true
+        no-sources-package = ["top-level"]
+        [pip]
+        no-sources = true
+        no-sources-package = ["pip"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--no-sources-package", "explicit"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    PipInstallSettings {
+        package: [
+            "anyio",
+        ],
+        requirements: [],
+        editables: [],
+        editable: None,
+        constraints: [],
+        overrides: [],
+        excludes: [],
+        build_constraints: [],
+        build_hash_checking: Verify,
+        dry_run: Disabled,
+        output_format: Text,
+        constraints_from_workspace: [],
+        overrides_from_workspace: [],
+        excludes_from_workspace: [],
+        build_constraints_from_workspace: [],
+        modifications: Sufficient,
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: PipSettings {
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            python: None,
+            install_mirrors: PythonInstallMirrors {
+                python_install_mirror: None,
+                pypy_install_mirror: None,
+                graalpy_install_mirror: None,
+                pyodide_install_mirror: None,
+                python_downloads_json_url: None,
+            },
+            system: false,
+            extras: ExtrasSpecification(
+                ExtrasSpecificationInner {
+                    include: Some(
+                        [],
+                    ),
+                    exclude: [],
+                    only_extras: false,
+                    history: ExtrasSpecificationHistory {
+                        extra: [],
+                        only_extra: [],
+                        no_extra: [],
+                        all_extras: false,
+                        no_default_extras: false,
+                        defaults: List(
+                            [],
+                        ),
+                    },
+                },
+            ),
+            groups: [],
+            break_system_packages: false,
+            target: None,
+            prefix: None,
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            build_isolation: Isolate,
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+            },
+            allow_empty_requirements: false,
+            strict: false,
+            dependency_mode: Transitive,
+            resolution: Highest,
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            output_file: None,
+            no_strip_extras: false,
+            no_strip_markers: false,
+            no_annotate: false,
+            no_header: false,
+            custom_compile_command: None,
+            generate_hashes: false,
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            python_version: None,
+            python_platform: None,
+            universal: false,
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            no_emit_package: [],
+            emit_index_url: false,
+            emit_find_links: false,
+            emit_build_options: false,
+            emit_marker_expression: false,
+            emit_index_annotation: false,
+            annotation_style: Split,
+            link_mode: Clone,
+            compile_bytecode: false,
+            sources: Packages(
+                [
+                    PackageName(
+                        "explicit",
+                    ),
+                ],
+            ),
+            hash_checking: Some(
+                Verify,
+            ),
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+            reinstall: None,
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_BUILD_ISOLATION` clears both configuration layers while retaining the explicit package selection.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_install_no_build_isolation_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build-isolation = true
+        no-build-isolation-package = ["top-level"]
+        [pip]
+        no-build-isolation = true
+        no-build-isolation-package = ["pip"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["pip", "install", "--show-settings", "anyio", "--no-build-isolation-package", "explicit"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    PipInstallSettings {
+        package: [
+            "anyio",
+        ],
+        requirements: [],
+        editables: [],
+        editable: None,
+        constraints: [],
+        overrides: [],
+        excludes: [],
+        build_constraints: [],
+        build_hash_checking: Verify,
+        dry_run: Disabled,
+        output_format: Text,
+        constraints_from_workspace: [],
+        overrides_from_workspace: [],
+        excludes_from_workspace: [],
+        build_constraints_from_workspace: [],
+        modifications: Sufficient,
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: PipSettings {
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            python: None,
+            install_mirrors: PythonInstallMirrors {
+                python_install_mirror: None,
+                pypy_install_mirror: None,
+                graalpy_install_mirror: None,
+                pyodide_install_mirror: None,
+                python_downloads_json_url: None,
+            },
+            system: false,
+            extras: ExtrasSpecification(
+                ExtrasSpecificationInner {
+                    include: Some(
+                        [],
+                    ),
+                    exclude: [],
+                    only_extras: false,
+                    history: ExtrasSpecificationHistory {
+                        extra: [],
+                        only_extra: [],
+                        no_extra: [],
+                        all_extras: false,
+                        no_default_extras: false,
+                        defaults: List(
+                            [],
+                        ),
+                    },
+                },
+            ),
+            groups: [],
+            break_system_packages: false,
+            target: None,
+            prefix: None,
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            build_isolation: SharedPackage(
+                [
+                    PackageName(
+                        "explicit",
+                    ),
+                ],
+            ),
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+            },
+            allow_empty_requirements: false,
+            strict: false,
+            dependency_mode: Transitive,
+            resolution: Highest,
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            output_file: None,
+            no_strip_extras: false,
+            no_strip_markers: false,
+            no_annotate: false,
+            no_header: false,
+            custom_compile_command: None,
+            generate_hashes: false,
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            python_version: None,
+            python_platform: None,
+            universal: false,
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            no_emit_package: [],
+            emit_index_url: false,
+            emit_find_links: false,
+            emit_build_options: false,
+            emit_marker_expression: false,
+            emit_index_annotation: false,
+            annotation_style: Split,
+            link_mode: Clone,
+            compile_bytecode: false,
+            sources: None,
+            hash_checking: Some(
+                Verify,
+            ),
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+            reinstall: None,
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_SOURCES` clears both configuration layers while retaining the explicit package selection.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_sync_no_sources_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-sources = true
+        no-sources-package = ["top-level"]
+        [pip]
+        no-sources = true
+        no-sources-package = ["pip"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["pip", "sync", "--show-settings", "anyio", "--no-sources-package", "explicit"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    PipSyncSettings {
+        src_file: [
+            Local(
+                "anyio",
+            ),
+        ],
+        constraints: [],
+        build_constraints: [],
+        build_hash_checking: Verify,
+        dry_run: Disabled,
+        output_format: Text,
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: PipSettings {
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            python: None,
+            install_mirrors: PythonInstallMirrors {
+                python_install_mirror: None,
+                pypy_install_mirror: None,
+                graalpy_install_mirror: None,
+                pyodide_install_mirror: None,
+                python_downloads_json_url: None,
+            },
+            system: false,
+            extras: ExtrasSpecification(
+                ExtrasSpecificationInner {
+                    include: Some(
+                        [],
+                    ),
+                    exclude: [],
+                    only_extras: false,
+                    history: ExtrasSpecificationHistory {
+                        extra: [],
+                        only_extra: [],
+                        no_extra: [],
+                        all_extras: false,
+                        no_default_extras: false,
+                        defaults: List(
+                            [],
+                        ),
+                    },
+                },
+            ),
+            groups: [],
+            break_system_packages: false,
+            target: None,
+            prefix: None,
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            build_isolation: Isolate,
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+            },
+            allow_empty_requirements: false,
+            strict: false,
+            dependency_mode: Transitive,
+            resolution: Highest,
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            output_file: None,
+            no_strip_extras: false,
+            no_strip_markers: false,
+            no_annotate: false,
+            no_header: false,
+            custom_compile_command: None,
+            generate_hashes: false,
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            python_version: None,
+            python_platform: None,
+            universal: false,
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            no_emit_package: [],
+            emit_index_url: false,
+            emit_find_links: false,
+            emit_build_options: false,
+            emit_marker_expression: false,
+            emit_index_annotation: false,
+            annotation_style: Split,
+            link_mode: Clone,
+            compile_bytecode: false,
+            sources: Packages(
+                [
+                    PackageName(
+                        "explicit",
+                    ),
+                ],
+            ),
+            hash_checking: Some(
+                Verify,
+            ),
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+            reinstall: None,
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_SOURCES` clears both configuration layers while retaining the explicit package selection.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_compile_no_sources_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-sources = true
+        no-sources-package = ["top-level"]
+        [pip]
+        no-sources = true
+        no-sources-package = ["pip"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["pip", "compile", "--show-settings", "anyio", "--no-sources-package", "explicit"])
+        .env(EnvVars::UV_NO_SOURCES, "false"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    PipCompileSettings {
+        format: None,
+        src_file: [
+            Local(
+                "anyio",
+            ),
+        ],
+        constraints: [],
+        overrides: [],
+        excludes: [],
+        build_constraints: [],
+        build_hash_checking: Verify,
+        constraints_from_workspace: [],
+        overrides_from_workspace: [],
+        excludes_from_workspace: [],
+        build_constraints_from_workspace: [],
+        environments: SupportedEnvironments(
+            [],
+        ),
+        required_environments: SupportedEnvironments(
+            [],
+        ),
+        minimum_libc_version: None,
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: PipSettings {
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            python: None,
+            install_mirrors: PythonInstallMirrors {
+                python_install_mirror: None,
+                pypy_install_mirror: None,
+                graalpy_install_mirror: None,
+                pyodide_install_mirror: None,
+                python_downloads_json_url: None,
+            },
+            system: false,
+            extras: ExtrasSpecification(
+                ExtrasSpecificationInner {
+                    include: Some(
+                        [],
+                    ),
+                    exclude: [],
+                    only_extras: false,
+                    history: ExtrasSpecificationHistory {
+                        extra: [],
+                        only_extra: [],
+                        no_extra: [],
+                        all_extras: false,
+                        no_default_extras: false,
+                        defaults: List(
+                            [],
+                        ),
+                    },
+                },
+            ),
+            groups: [],
+            break_system_packages: false,
+            target: None,
+            prefix: None,
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            build_isolation: Isolate,
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+            },
+            allow_empty_requirements: false,
+            strict: false,
+            dependency_mode: Transitive,
+            resolution: Highest,
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            output_file: None,
+            no_strip_extras: false,
+            no_strip_markers: false,
+            no_annotate: false,
+            no_header: false,
+            custom_compile_command: None,
+            generate_hashes: false,
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            python_version: None,
+            python_platform: None,
+            universal: false,
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            no_emit_package: [],
+            emit_index_url: false,
+            emit_find_links: false,
+            emit_build_options: false,
+            emit_marker_expression: false,
+            emit_index_annotation: false,
+            annotation_style: Split,
+            link_mode: Clone,
+            compile_bytecode: false,
+            sources: Packages(
+                [
+                    PackageName(
+                        "explicit",
+                    ),
+                ],
+            ),
+            hash_checking: Some(
+                Verify,
+            ),
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+            reinstall: None,
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `UV_NO_BUILD_ISOLATION` clears both configuration layers while retaining the explicit package selection.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_compile_no_build_isolation_package_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build-isolation = true
+        no-build-isolation-package = ["top-level"]
+        [pip]
+        no-build-isolation = true
+        no-build-isolation-package = ["pip"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), add_shared_args(context.command()).args(["pip", "compile", "--show-settings", "anyio", "--no-build-isolation-package", "explicit"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "false"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    PipCompileSettings {
+        format: None,
+        src_file: [
+            Local(
+                "anyio",
+            ),
+        ],
+        constraints: [],
+        overrides: [],
+        excludes: [],
+        build_constraints: [],
+        build_hash_checking: Verify,
+        constraints_from_workspace: [],
+        overrides_from_workspace: [],
+        excludes_from_workspace: [],
+        build_constraints_from_workspace: [],
+        environments: SupportedEnvironments(
+            [],
+        ),
+        required_environments: SupportedEnvironments(
+            [],
+        ),
+        minimum_libc_version: None,
+        refresh: None(
+            Timestamp(
+                SystemTime {
+                    tv_sec: [TIME],
+                    tv_nsec: [TIME],
+                },
+            ),
+        ),
+        settings: PipSettings {
+            index_locations: IndexLocations {
+                indexes: [],
+                flat_index: [],
+                no_index: false,
+            },
+            python: None,
+            install_mirrors: PythonInstallMirrors {
+                python_install_mirror: None,
+                pypy_install_mirror: None,
+                graalpy_install_mirror: None,
+                pyodide_install_mirror: None,
+                python_downloads_json_url: None,
+            },
+            system: false,
+            extras: ExtrasSpecification(
+                ExtrasSpecificationInner {
+                    include: Some(
+                        [],
+                    ),
+                    exclude: [],
+                    only_extras: false,
+                    history: ExtrasSpecificationHistory {
+                        extra: [],
+                        only_extra: [],
+                        no_extra: [],
+                        all_extras: false,
+                        no_default_extras: false,
+                        defaults: List(
+                            [],
+                        ),
+                    },
+                },
+            ),
+            groups: [],
+            break_system_packages: false,
+            target: None,
+            prefix: None,
+            index_strategy: FirstIndex,
+            keyring_provider: Disabled,
+            torch_backend: None,
+            cuda_driver_version: None,
+            amd_gpu_architecture: None,
+            build_isolation: SharedPackage(
+                [
+                    PackageName(
+                        "explicit",
+                    ),
+                ],
+            ),
+            extra_build_dependencies: ExtraBuildDependencies(
+                {},
+            ),
+            extra_build_variables: ExtraBuildVariables(
+                {},
+            ),
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+            },
+            allow_empty_requirements: false,
+            strict: false,
+            dependency_mode: Transitive,
+            resolution: Highest,
+            prerelease: Prerelease {
+                global: IfNecessary,
+                package: PrereleasePackage(
+                    {},
+                ),
+            },
+            fork_strategy: RequiresPython,
+            dependency_metadata: DependencyMetadata(
+                {},
+            ),
+            output_file: None,
+            no_strip_extras: false,
+            no_strip_markers: false,
+            no_annotate: false,
+            no_header: false,
+            custom_compile_command: None,
+            generate_hashes: false,
+            config_setting: ConfigSettings(
+                {},
+            ),
+            config_settings_package: PackageConfigSettings(
+                {},
+            ),
+            python_version: None,
+            python_platform: None,
+            universal: false,
+            exclude_newer: ExcludeNewer {
+                global: None,
+                package: ExcludeNewerPackage(
+                    {},
+                ),
+            },
+            no_emit_package: [],
+            emit_index_url: false,
+            emit_find_links: false,
+            emit_build_options: false,
+            emit_marker_expression: false,
+            emit_index_annotation: false,
+            annotation_style: Split,
+            link_mode: Clone,
+            compile_bytecode: false,
+            sources: None,
+            hash_checking: Some(
+                Verify,
+            ),
+            upgrade: Upgrade {
+                strategy: None,
+                constraints: {},
+            },
+            reinstall: None,
+        },
+    }
+    "#);
+
+    Ok(())
+}
+
+/// `uv python install` honors explicit false bytecode settings and CLI precedence.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_python_install_bytecode_precedence() {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "python",
+            "install",
+            "--show-settings",
+            "--compile-bytecode"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "python",
+            "install",
+            "--show-settings",
+            "--no-compile-bytecode"
+        ])
+    );
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["python", "install", "--show-settings"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["python", "install", "--show-settings"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "false"), @"");
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["python", "install", "--show-settings", "--no-compile-bytecode"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+}
+
+/// `uv python upgrade` honors explicit false bytecode settings and CLI precedence.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_python_upgrade_bytecode_precedence() {
+    let context = uv_test::test_context!("3.12");
+
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "python",
+            "upgrade",
+            "--show-settings",
+            "--compile-bytecode"
+        ])
+    );
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "python",
+            "upgrade",
+            "--show-settings",
+            "--no-compile-bytecode"
+        ])
+    );
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.command()).args(["python", "upgrade", "--show-settings"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["python", "upgrade", "--show-settings"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "false"), @"");
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["python", "upgrade", "--show-settings", "--no-compile-bytecode"])
+        .env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+}
+
+#[test]
+fn boolean_environment_rejects_selected_invalid_value() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_COMPILE_BYTECODE, "invalid"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse environment variable `UV_COMPILE_BYTECODE` with invalid value `invalid`: expected a boolish value
+    ");
+}
+
+/// Pip uninstall uses false environment values before configuration and after CLI flags.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_uninstall_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.command()).args([
+            "pip",
+            "uninstall",
+            "--show-settings",
+            "anyio",
+            "--no-break-system-packages"
+        ])
+    );
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        break-system-packages = true
+    "})?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "uninstall", "--show-settings", "anyio"])
+        .env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "false"), @"");
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.command()).args(["pip", "uninstall", "--show-settings", "anyio", "--no-break-system-packages"])
+        .env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "true"), @"");
+
+    Ok(())
+}
+
+/// `uv run` rejects an active environment source override with explicit `--frozen`.
+#[test]
+fn boolean_environment_run_no_sources_frozen_conflict() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["run", "--frozen"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--frozen` cannot be used with `UV_NO_SOURCES` (environment variable)
+    ");
+
+    context
+        .command()
+        .args(["run", "--frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "run",
+            "--frozen",
+            "--no-sources-package",
+            "iniconfig",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["run", "--frozen", "--show-settings"])
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["run", "--show-settings"])
+        .env(EnvVars::UV_FROZEN, "true")
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["run", "--frozen", "--no-frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// `uv sync` rejects an active environment source override with explicit `--frozen`.
+#[test]
+fn boolean_environment_sync_no_sources_frozen_conflict() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["sync", "--frozen"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--frozen` cannot be used with `UV_NO_SOURCES` (environment variable)
+    ");
+
+    context
+        .command()
+        .args(["sync", "--frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "sync",
+            "--frozen",
+            "--no-sources-package",
+            "iniconfig",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["sync", "--frozen", "--show-settings"])
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["sync", "--show-settings"])
+        .env(EnvVars::UV_FROZEN, "true")
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["sync", "--frozen", "--no-frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// `uv add` rejects an active environment source override with explicit `--frozen`.
+#[test]
+fn boolean_environment_add_no_sources_frozen_conflict() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["add", "iniconfig", "--frozen"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--frozen` cannot be used with `UV_NO_SOURCES` (environment variable)
+    ");
+
+    context
+        .command()
+        .args(["add", "iniconfig", "--frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "add",
+            "iniconfig",
+            "--frozen",
+            "--no-sources-package",
+            "iniconfig",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["add", "iniconfig", "--frozen", "--show-settings"])
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["add", "iniconfig", "--show-settings"])
+        .env(EnvVars::UV_FROZEN, "true")
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "add",
+            "iniconfig",
+            "--frozen",
+            "--no-frozen",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// `uv remove` rejects an active environment source override with explicit `--frozen`.
+#[test]
+fn boolean_environment_remove_no_sources_frozen_conflict() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["remove", "iniconfig", "--frozen"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--frozen` cannot be used with `UV_NO_SOURCES` (environment variable)
+    ");
+
+    context
+        .command()
+        .args(["remove", "iniconfig", "--frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "remove",
+            "iniconfig",
+            "--frozen",
+            "--no-sources-package",
+            "iniconfig",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["remove", "iniconfig", "--frozen", "--show-settings"])
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["remove", "iniconfig", "--show-settings"])
+        .env(EnvVars::UV_FROZEN, "true")
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "remove",
+            "iniconfig",
+            "--frozen",
+            "--no-frozen",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// `uv version` rejects an active environment source override with explicit `--frozen`.
+#[test]
+fn boolean_environment_version_no_sources_frozen_conflict() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["version", "--frozen"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--frozen` cannot be used with `UV_NO_SOURCES` (environment variable)
+    ");
+
+    context
+        .command()
+        .args(["version", "--frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "version",
+            "--frozen",
+            "--no-sources-package",
+            "iniconfig",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["version", "--frozen", "--show-settings"])
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["version", "--show-settings"])
+        .env(EnvVars::UV_FROZEN, "true")
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["version", "--frozen", "--no-frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// `uv tree` rejects an active environment source override with explicit `--frozen`.
+#[test]
+fn boolean_environment_tree_no_sources_frozen_conflict() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["tree", "--frozen"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--frozen` cannot be used with `UV_NO_SOURCES` (environment variable)
+    ");
+
+    context
+        .command()
+        .args(["tree", "--frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "tree",
+            "--frozen",
+            "--no-sources-package",
+            "iniconfig",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["tree", "--frozen", "--show-settings"])
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["tree", "--show-settings"])
+        .env(EnvVars::UV_FROZEN, "true")
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["tree", "--frozen", "--no-frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// `uv export` rejects an active environment source override with explicit `--frozen`.
+#[test]
+fn boolean_environment_export_no_sources_frozen_conflict() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["export", "--frozen"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--frozen` cannot be used with `UV_NO_SOURCES` (environment variable)
+    ");
+
+    context
+        .command()
+        .args(["export", "--frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "export",
+            "--frozen",
+            "--no-sources-package",
+            "iniconfig",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["export", "--frozen", "--show-settings"])
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["export", "--show-settings"])
+        .env(EnvVars::UV_FROZEN, "true")
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["export", "--frozen", "--no-frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// `uv check` rejects an active environment source override with explicit `--frozen`.
+#[test]
+fn boolean_environment_check_no_sources_frozen_conflict() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["check", "--frozen"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--frozen` cannot be used with `UV_NO_SOURCES` (environment variable)
+    ");
+
+    context
+        .command()
+        .args(["check", "--frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "check",
+            "--frozen",
+            "--no-sources-package",
+            "iniconfig",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["check", "--frozen", "--show-settings"])
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["check", "--show-settings"])
+        .env(EnvVars::UV_FROZEN, "true")
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["check", "--frozen", "--no-frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// `uv audit` rejects an active environment source override with explicit `--frozen`.
+#[test]
+fn boolean_environment_audit_no_sources_frozen_conflict() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        no-sources = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["audit", "--frozen"])
+        .env(EnvVars::UV_NO_SOURCES, "true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--frozen` cannot be used with `UV_NO_SOURCES` (environment variable)
+    ");
+
+    context
+        .command()
+        .args(["audit", "--frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args([
+            "audit",
+            "--frozen",
+            "--no-sources-package",
+            "iniconfig",
+            "--show-settings",
+        ])
+        .env(EnvVars::UV_NO_SOURCES, "false")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["audit", "--frozen", "--show-settings"])
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["audit", "--show-settings"])
+        .env(EnvVars::UV_FROZEN, "true")
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
+    context
+        .command()
+        .args(["audit", "--frozen", "--no-frozen", "--show-settings"])
+        .env(EnvVars::UV_NO_SOURCES, "true")
+        .output()?
+        .assert()
+        .success();
 
     Ok(())
 }
