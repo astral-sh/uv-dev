@@ -24,6 +24,7 @@ use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::ScriptInterpreter;
+use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -72,6 +73,15 @@ pub async fn metadata(
         );
     }
 
+    let script_environment_mode = if sync.is_none() {
+        script
+            .as_ref()
+            .map_or(ScriptEnvironmentMode::Isolated, |script| {
+                ScriptEnvironmentMode::from_script(script.into(), active, preview)
+            })
+    } else {
+        ScriptEnvironmentMode::Isolated
+    };
     let project;
     let source = if let Some(script) = script.as_ref() {
         MetadataSource::Manifest(LockTarget::Script(script))
@@ -109,7 +119,7 @@ pub async fn metadata(
             } else {
                 interpreter = match target {
                     LockTarget::Script(script) => ScriptInterpreter::discover(
-                        ScriptEnvironmentMode::Isolated,
+                        script_environment_mode,
                         script.into(),
                         python.as_deref().map(PythonRequest::parse),
                         &client_builder,
@@ -283,7 +293,7 @@ pub async fn metadata(
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => {
                 ScriptInterpreter::discover_existing(
-                    ScriptEnvironmentMode::Isolated,
+                    script_environment_mode,
                     (*script).into(),
                     active,
                     cache,
@@ -303,9 +313,19 @@ pub async fn metadata(
                 tracing::warn!("Failed to acquire environment lock: {err}");
             })
             .ok();
+        let parent = if script_environment_mode == ScriptEnvironmentMode::Shared {
+            environment
+                .cfg()?
+                .extends_environment()
+                .map(|parent| PythonEnvironment::from_root(environment.root().join(parent), cache))
+                .transpose()?
+        } else {
+            None
+        };
         let module_owners = collect_module_owners(
             install_target,
             &environment,
+            parent.as_ref(),
             &settings,
             &client_builder,
             &state,

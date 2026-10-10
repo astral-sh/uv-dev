@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
+use assert_fs::prelude::PathAssert;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
@@ -689,6 +690,188 @@ fn workspace_metadata_script_includes_existing_environment() -> Result<()> {
         "#);
     });
 
+    Ok(())
+}
+
+/// Read-only metadata discovers the shared overlay even when an older isolated environment exists.
+#[test]
+fn workspace_metadata_shared_script_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    context
+        .run()
+        .args(["--no-preview", "--no-index", "script.py"])
+        .assert()
+        .success();
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    let output = context
+        .workspace_metadata()
+        .args([
+            "--preview-features",
+            "workspace-metadata,shared-script-environments",
+            "--no-index",
+            "--script",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"], @r#"
+        {
+          "python": {
+            "implementation": "cpython",
+            "path": "[CACHE_DIR]/environments-v2/shared-script-[HASH]/[BIN]/[PYTHON]",
+            "version": "3.12.[X]"
+          },
+          "root": "[CACHE_DIR]/environments-v2/shared-script-[HASH]"
+        }
+        "#);
+    });
+    context
+        .temp_dir
+        .child("script.py.lock")
+        .assert(predicates::path::missing());
+    Ok(())
+}
+
+/// Module ownership includes files exposed by both the writable overlay and its shared parent.
+#[test]
+fn workspace_metadata_shared_script_module_owners() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let shared = wheels.child("shared_dep-0.1.0-py3-none-any.whl");
+    write_wheel(
+        shared.path(),
+        "shared-dep",
+        "shared_dep-0.1.0",
+        &[("shared_dep.py", "")],
+    )?;
+    let base_overlay = wheels.child("overlay_dep-0.1.0-py3-none-any.whl");
+    write_wheel(
+        base_overlay.path(),
+        "overlay-dep",
+        "overlay_dep-0.1.0",
+        &[("overlay_dep.py", "")],
+    )?;
+    let shared_url = Url::from_file_path(shared.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert shared wheel path to file URL"))?;
+    let overlay_url = Url::from_file_path(base_overlay.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert overlay wheel path to file URL"))?;
+    let overlay_wheels = context.temp_dir.child("overlay-wheels");
+    overlay_wheels.create_dir_all()?;
+    let overlay = overlay_wheels.child("overlay_dep-0.1.0-py3-none-any.whl");
+    write_wheel(
+        overlay.path(),
+        "overlay-dep",
+        "overlay_dep-0.1.0",
+        &[("overlay_marker.py", "")],
+    )?;
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-dep @ {shared_url}", "overlay-dep @ {overlay_url}"]
+        # ///
+        import sys
+        print(sys.executable)
+    "#})?;
+    let run = context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    let python = std::str::from_utf8(&run.get_output().stdout)?.trim();
+    context
+        .pip_install()
+        .args(["--python", python, "--no-index"])
+        .arg(overlay.path())
+        .assert()
+        .success();
+    std::process::Command::new(python)
+        .args(["-c", "import shared_dep, overlay_dep, overlay_marker"])
+        .assert()
+        .success();
+    let overlay_root = Path::new(python).parent().unwrap().parent().unwrap();
+    let configuration = context.read(overlay_root.join("pyvenv.cfg"));
+    let output = context
+        .workspace_metadata()
+        .args([
+            "--preview-features",
+            "workspace-metadata,shared-script-environments",
+            "--no-index",
+            "--script",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "environment": metadata["environment"],
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "environment": {
+            "python": {
+              "implementation": "cpython",
+              "path": "[CACHE_DIR]/environments-v2/shared-script-[HASH]/[BIN]/[PYTHON]",
+              "version": "3.12.[X]"
+            },
+            "root": "[CACHE_DIR]/environments-v2/shared-script-[HASH]"
+          },
+          "module_owners": {
+            "overlay_dep": [
+              {
+                "package_id": "overlay-dep==0.1.0@path+[TEMP_DIR]/wheels/overlay_dep-0.1.0-py3-none-any.whl"
+              }
+            ],
+            "overlay_marker": [
+              {
+                "package_id": "overlay-dep==0.1.0@path+[TEMP_DIR]/wheels/overlay_dep-0.1.0-py3-none-any.whl"
+              }
+            ],
+            "shared_dep": [
+              {
+                "package_id": "shared-dep==0.1.0@path+[TEMP_DIR]/wheels/shared_dep-0.1.0-py3-none-any.whl"
+              }
+            ]
+          }
+        }
+        "#);
+    });
+    assert_eq!(context.read(overlay_root.join("pyvenv.cfg")), configuration);
+    context
+        .temp_dir
+        .child("script.py.lock")
+        .assert(predicates::path::missing());
     Ok(())
 }
 

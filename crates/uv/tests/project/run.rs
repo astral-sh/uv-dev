@@ -8290,6 +8290,272 @@ fn run_pep723_shared_mode_replaces_normal_installations() -> Result<()> {
     Ok(())
 }
 
+/// Reinstallation replaces a shared base without mutating another script's environment.
+#[test]
+fn run_pep723_shared_reinstall_replaces_base() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"shared-repair".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("shared_repair/payload.txt", "pristine\n")],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    let script = indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-repair==1.0.0"]
+        # ///
+        import json
+        from pathlib import Path
+        import shared_repair
+        import sys
+        module = Path(shared_repair.__file__)
+        base = next(parent for parent in module.parents if parent.joinpath("pyvenv.cfg").is_file())
+        payload = module.with_name("payload.txt")
+        print(json.dumps({"overlay": sys.prefix, "base": str(base), "payload": str(payload), "value": payload.read_text().strip() if payload.is_file() else "missing"}))
+    "#};
+    context.temp_dir.child("first.py").write_str(script)?;
+    context.temp_dir.child("second.py").write_str(script)?;
+    let first = context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "first.py",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout)?;
+    assert_eq!(first["value"], "pristine");
+    let second = context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "second.py",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let second: serde_json::Value = serde_json::from_slice(&second.stdout)?;
+    assert_eq!(first["base"], second["base"]);
+    assert_ne!(first["overlay"], second["overlay"]);
+    let old_base = Path::new(first["base"].as_str().context("missing shared base")?);
+    let old_payload = Path::new(first["payload"].as_str().context("missing payload path")?);
+    let second_config = Path::new(
+        second["overlay"]
+            .as_str()
+            .context("missing second overlay")?,
+    )
+    .join("pyvenv.cfg");
+    let second_config_before = context.read(&second_config);
+    fs_err::remove_file(old_payload)?;
+
+    // A targeted request for an unrelated package does not replace this dependency environment.
+    let unrelated = context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "--reinstall-package",
+            "unrelated-package",
+            "first.py",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let unrelated: serde_json::Value = serde_json::from_slice(&unrelated.stdout)?;
+    assert_eq!(unrelated["base"], first["base"]);
+    assert_eq!(unrelated["value"], "missing");
+
+    let reinstalled = context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "--reinstall",
+            "first.py",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let reinstalled: serde_json::Value = serde_json::from_slice(&reinstalled.stdout)?;
+    assert_eq!(reinstalled["value"], "pristine");
+    assert_eq!(reinstalled["overlay"], first["overlay"]);
+    assert_ne!(reinstalled["base"], first["base"]);
+    assert_eq!(context.read(&second_config), second_config_before);
+    context
+        .temp_dir
+        .child(old_base)
+        .assert(predicate::path::is_dir());
+    context
+        .temp_dir
+        .child(old_payload)
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// A targeted reinstall repairs declared dependencies hidden by an overlay installation.
+#[test]
+fn run_pep723_shared_reinstall_package_removes_overlay_collision() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (shared_name, shared) = generate_wheel_with_files(
+        &"shared-repair".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("shared_repair/payload.txt", "pristine\n")],
+    );
+    wheels.child(shared_name).write_binary(&shared)?;
+    let (overlay_name, overlay) = generate_wheel_with_files(
+        &"overlay-only".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(overlay_name).write_binary(&overlay)?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-repair==1.0.0"]
+        # ///
+        import json
+        from importlib.util import find_spec
+        from pathlib import Path
+        import shared_repair
+        import sys
+        module = Path(shared_repair.__file__)
+        base = next(parent for parent in module.parents if parent.joinpath("pyvenv.cfg").is_file())
+        payload = module.with_name("payload.txt")
+        print(json.dumps({"overlay": sys.prefix, "base": str(base), "payload": str(payload), "value": payload.read_text().strip() if payload.is_file() else "missing", "overlay_only": find_spec("overlay_only") is not None}))
+    "#})?;
+    let first = context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "script.py",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout)?;
+    assert_eq!(first["value"], "pristine");
+    let overlay_root = first["overlay"].as_str().context("missing overlay")?;
+    let python =
+        venv_bin_path(overlay_root).join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    context
+        .pip_install()
+        .arg("--python")
+        .arg(&python)
+        .args([
+            "--reinstall",
+            "--link-mode",
+            "copy",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "shared-repair==1.0.0",
+            "overlay-only==1.0.0",
+        ])
+        .assert()
+        .success();
+    let installed = context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "script.py",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let installed: serde_json::Value = serde_json::from_slice(&installed.stdout)?;
+    assert_eq!(installed["base"], first["overlay"]);
+    let overlay_payload = Path::new(
+        installed["payload"]
+            .as_str()
+            .context("missing overlay payload")?,
+    );
+    fs_err::write(overlay_payload, "overlay\n")?;
+    let old_payload = Path::new(
+        first["payload"]
+            .as_str()
+            .context("missing shared payload")?,
+    );
+    fs_err::remove_file(old_payload)?;
+
+    let reinstalled = context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "--reinstall-package",
+            "shared-repair",
+            "script.py",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let reinstalled: serde_json::Value = serde_json::from_slice(&reinstalled.stdout)?;
+    assert_eq!(reinstalled["value"], "pristine");
+    assert_eq!(reinstalled["overlay"], first["overlay"]);
+    assert_ne!(reinstalled["base"], first["base"]);
+    assert_ne!(reinstalled["base"], first["overlay"]);
+    assert_eq!(reinstalled["overlay_only"], true);
+    context
+        .temp_dir
+        .child(overlay_payload)
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child(old_payload)
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
 /// Exact synchronization removes undeclared packages from a shared script's writable overlay.
 #[test]
 fn run_pep723_shared_exact_removes_overlay_packages() -> Result<()> {

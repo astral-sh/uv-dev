@@ -35,17 +35,19 @@ pub struct PyVenvConfiguration {
     /// The `PYTHONHOME` directory containing the base Python executable.
     pub(super) home: Option<PathBuf>,
     /// Was the virtual environment created with the `virtualenv` package?
-    pub(super) virtualenv: bool,
+    virtualenv: bool,
     /// Was the virtual environment created with the `uv` package?
-    pub(super) uv: bool,
+    uv: bool,
     /// Is the virtual environment relocatable?
-    pub(super) relocatable: bool,
+    relocatable: bool,
     /// Was the virtual environment populated with seed packages?
-    pub(super) seed: bool,
+    seed: bool,
     /// Should the virtual environment include system site packages?
-    pub(super) include_system_site_packages: bool,
+    include_system_site_packages: bool,
     /// The Python version the virtual environment was created with
     pub(super) version: Option<PythonVersion>,
+    /// The environment whose site-packages are exposed by this environment's overlay.
+    extends_environment: Option<PathBuf>,
 }
 
 #[derive(Debug, Error)]
@@ -111,6 +113,7 @@ impl PyVenvConfiguration {
         let mut seed = false;
         let mut include_system_site_packages = true;
         let mut version = None;
+        let mut extends_environment = None;
 
         // Per https://snarky.ca/how-virtual-environments-work/, the `pyvenv.cfg` file is not a
         // valid INI file, and is instead expected to be parsed by partitioning each line on the
@@ -124,6 +127,10 @@ impl PyVenvConfiguration {
             match key.trim() {
                 "home" => {
                     home = Some(PathBuf::from(value.trim()));
+                }
+                "extends-environment" => {
+                    extends_environment =
+                        (!value.trim().is_empty()).then(|| PathBuf::from(value.trim()));
                 }
                 "virtualenv" => {
                     virtualenv = true;
@@ -158,6 +165,7 @@ impl PyVenvConfiguration {
             seed,
             include_system_site_packages,
             version,
+            extends_environment,
         })
     }
 
@@ -184,6 +192,11 @@ impl PyVenvConfiguration {
     /// Returns true if the virtual environment should include system site packages.
     pub fn include_system_site_packages(&self) -> bool {
         self.include_system_site_packages
+    }
+
+    /// Return the parent environment exposed by this environment's overlay.
+    pub fn extends_environment(&self) -> Option<&Path> {
+        self.extends_environment.as_deref()
     }
 
     /// Set the key-value pair in the `pyvenv.cfg` file.

@@ -30,7 +30,7 @@ use uv_configuration::{
 };
 use uv_dispatch::UniversalState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{InstalledDistKind, NameRequirementSpecification, Resolution};
+use uv_distribution_types::{InstalledDistKind, Name, NameRequirementSpecification, Resolution};
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
@@ -467,6 +467,7 @@ pub async fn run(
 
                     match result {
                         Ok(shared_environment) => {
+                            let shared_environment = PythonEnvironment::from(shared_environment);
                             // Shared dependencies live in the base; exact synchronization removes
                             // distributions installed directly into the writable overlay.
                             let environment = if matches!(modifications, Modifications::Exact) {
@@ -491,10 +492,35 @@ pub async fn run(
                                     preview,
                                 )
                                 .await?
+                            } else if !settings.reinstall.is_none() {
+                                // Overlay installations must not shadow dependencies replaced by
+                                // a reinstall, but unrelated overlay packages remain available.
+                                let shared_packages =
+                                    SitePackages::from_environment(&shared_environment)?;
+                                let reinstalls = SitePackages::from_environment_for_packages(
+                                    &environment,
+                                    shared_packages
+                                        .iter()
+                                        .filter(|dist| {
+                                            settings.reinstall.contains_package(dist.name())
+                                        })
+                                        .map(Name::name),
+                                )?;
+                                uv_install_operations::uninstall(
+                                    reinstalls.into_iter().collect(),
+                                    &environment,
+                                    if show_resolution {
+                                        Box::new(DefaultInstallLogger)
+                                    } else {
+                                        Box::new(SummaryInstallLogger)
+                                    },
+                                    printer,
+                                )
+                                .await?;
+                                environment
                             } else {
                                 environment
                             };
-                            let shared_environment = PythonEnvironment::from(shared_environment);
                             let parent_site_packages =
                                 shared_environment.site_packages().next().context(
                                     "Failed to find `site-packages` directory for environment",
