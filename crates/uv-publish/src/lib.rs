@@ -13,7 +13,7 @@ use futures::TryStreamExt;
 use glob::{GlobError, PatternError, glob};
 use itertools::Itertools;
 use reqwest::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_TYPE, InvalidHeaderValue, LOCATION, ToStrError,
+    ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, InvalidHeaderValue, LOCATION, ToStrError,
 };
 use reqwest::multipart::{Form, Part};
 use reqwest::{Body, Response, StatusCode};
@@ -1363,7 +1363,11 @@ impl PublishSession<'_> {
     ) -> Result<(), PublishSendError> {
         let status_code = response.status();
         debug!("Response code for {registry}: {status_code}");
-        trace!("Response headers for {registry}: {response:?}");
+        trace!(
+            response_url = %DisplaySafeUrl::ref_cast(response.url()),
+            "Response headers for {registry}: {:?}",
+            DisplaySafeHeaders(response.headers())
+        );
 
         if status_code.is_success() {
             if enabled!(Level::TRACE) {
@@ -1429,6 +1433,41 @@ impl PublishSession<'_> {
     }
 }
 
+/// A header view for diagnostics that omits unknown values and redacts URL credentials.
+struct DisplaySafeHeaders<'a>(&'a HeaderMap);
+
+impl fmt::Debug for DisplaySafeHeaders<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut headers = formatter.debug_map();
+        for (name, value) in self.0 {
+            if value.is_sensitive() {
+                headers.entry(name, &"[redacted]");
+                continue;
+            }
+            match name.as_str() {
+                "content-type" | "content-length" | "retry-after" => {
+                    headers.entry(name, value);
+                }
+                "location" | "content-location" => {
+                    if let Some(url) = value
+                        .to_str()
+                        .ok()
+                        .and_then(|value| DisplaySafeUrl::parse(value).ok())
+                    {
+                        headers.entry(name, &url.to_string());
+                    } else {
+                        headers.entry(name, &"[redacted]");
+                    }
+                }
+                _ => {
+                    headers.entry(name, &"[redacted]");
+                }
+            }
+        }
+        headers.finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
@@ -1438,6 +1477,7 @@ mod tests {
     use async_compression::tokio::write::GzipEncoder;
     use insta::{allow_duplicates, assert_debug_snapshot, assert_snapshot};
     use itertools::Itertools;
+    use reqwest::header::{HeaderMap, HeaderValue};
     use tar_codec::{ArchiveBuilder as _, EntryMetadata, TarEncoder};
     use tempfile::NamedTempFile;
     use tokio::io::AsyncWriteExt as _;
@@ -1449,8 +1489,9 @@ mod tests {
     use uv_static::TarBackend;
 
     use crate::{
-        FormMetadata, PublishError, PublishOutcome, PublishPrepareError, PublishSession,
-        PublishingCredentials, Reporter, UploadOutcome, group_files, source_dist_pkg_info,
+        DisplaySafeHeaders, FormMetadata, PublishError, PublishOutcome, PublishPrepareError,
+        PublishSession, PublishingCredentials, Reporter, UploadOutcome, group_files,
+        source_dist_pkg_info,
     };
     use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
     use wiremock::matchers::{method, path};
@@ -1586,6 +1627,47 @@ mod tests {
             .await
             .expect("Finalization failed");
         result
+    }
+
+    #[test]
+    fn redact_response_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+        headers.insert(
+            "set-cookie",
+            HeaderValue::from_static("session=synthetic-cookie"),
+        );
+        headers.insert(
+            "x-registry-token",
+            HeaderValue::from_static("synthetic-token"),
+        );
+        headers.insert(
+            "location",
+            HeaderValue::from_static("https://user:password@example.com/file?sig=signature"),
+        );
+        headers.insert(
+            "content-location",
+            HeaderValue::from_static("/file?sig=signature"),
+        );
+        let mut retry_after = HeaderValue::from_static("123");
+        retry_after.set_sensitive(true);
+        headers.insert("retry-after", retry_after);
+
+        assert_debug_snapshot!(DisplaySafeHeaders(&headers), @r#"
+        {
+            "content-type": "application/json",
+            "set-cookie": "[redacted]",
+            "x-registry-token": "[redacted]",
+            "location": "https://user:****@example.com/file?sig=****",
+            "content-location": "[redacted]",
+            "retry-after": "[redacted]",
+        }
+        "#);
+        assert_eq!(headers["set-cookie"], "session=synthetic-cookie");
+        assert_eq!(
+            headers["location"],
+            "https://user:password@example.com/file?sig=signature"
+        );
     }
 
     #[test]
