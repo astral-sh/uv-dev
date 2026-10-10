@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use futures::{StreamExt, TryStreamExt, stream};
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, PackedArchiveEntry, RegistryClientBuilder};
@@ -34,6 +34,10 @@ pub async fn download(
             "`uv download` is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
             PreviewFeature::DownloadCommand
         );
+    }
+
+    if cache.is_temporary() {
+        bail!("`uv download` requires caching to be enabled");
     }
 
     let project = VirtualProject::discover(

@@ -2091,3 +2091,26 @@ async fn download_retains_archive_on_cached_wheel_metadata() -> Result<()> {
     server.verify().await;
     Ok(())
 }
+
+/// Prefetch needs persistent storage and rejects a temporary cache before requesting artifacts.
+#[tokio::test]
+async fn download_requires_persistent_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original")?;
+    let hash = digest(&bytes);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_locked_wheel(&context, &format!("url = \"{url}\""), &url, &hash)?;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
+        .expect(0)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context).arg("--no-cache"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `uv download` requires caching to be enabled
+    ");
+    server.verify().await;
+    Ok(())
+}
