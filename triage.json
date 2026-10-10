@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21056,
+        "title": "Use linux-raw-sys for FIEMAP constants",
+        "url": "https://github.com/astral-sh/uv/pull/21056",
+        "state": "merged",
+        "reason": "Introduced the failing FIEMAP imports on 2026-08-11. An October 9 comment reports the same missing extent constants on LoongArch64. SPARC64 additionally lacks FS_IOC_FIEMAP and ioctl_ficlone; this PR introduced the dependency rather than fixing SPARC builds."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18187,
+        "title": "Preserve file permissions when using reflinks on Linux",
+        "url": "https://github.com/astral-sh/uv/pull/18187",
+        "state": "merged",
+        "reason": "Introduced the Linux-wide rustix::fs::ioctl_ficlone call that now fails to compile on SPARC. Merged on 2026-02-24 to fix executable permissions, a different problem; any fallback must retain correct permissions."
+      },
+      {
+        "kind": "issue",
+        "number": 1700,
+        "title": "`ioctl_ficlone` and related symbols seem to be missing on SPARC64",
+        "url": "https://github.com/bytecodealliance/rustix/issues/1700",
+        "state": "open",
+        "reason": "The reporter's upstream issue contains both identical SPARC64 compiler errors and identifies rustix 1.1.5. It has no maintainer response or fix; it tracks dependency support while this issue requests a uv-side fallback."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21133,
+        "title": "Fall back to logical cache accounting on unsupported filesystems",
+        "url": "https://github.com/astral-sh/uv/pull/21133",
+        "state": "merged",
+        "reason": "Added cache-accounting fallback on 2026-08-14. This provides relevant fallback behavior, but handles runtime filesystem errors after compilation and cannot resolve missing architecture-specific symbols."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using FIEMAP, FIEMAP_EXTENT_SHARED, FS_IOC_FIEMAP, ioctl_ficlone, FICLONE, SPARC/SPARC64, rustix, linux-raw-sys, unresolved imports, cannot find function, and space.rs. Conceptual searches covered reflinks, disk usage, physical space, unsupported architectures, Linux builds, and LoongArch; fix-oriented searches covered closed SPARC reports and merged accounting changes. PR searches returned no matches despite relevant PRs found through file history and issue timelines; one final search was rate-limited. Inspected candidate bodies, comments, reviews, and diffs, following the accounting and permissions histories and upstream links. Ruled out astral-sh/uv#18181 and astral-sh/uv#18779 as duplicates: they concern runtime permissions and misleading reclaimed-size output. sunfishcode/linux-raw-sys#192, sunfishcode/linux-raw-sys#193, sunfishcode/linux-raw-sys#195, and bytecodealliance/rustix#1664 concern LoongArch FIEMAP bindings, not both SPARC failures."
+  },
+  "type": "bug",
+  "type_reason": "Source confirms that uv enables both APIs for every Linux architecture, while rustix explicitly excludes SPARC/SPARC64 from ioctl_ficlone and linux-raw-sys 0.12.1 has empty SPARC64 ioctl bindings. This is a compile-time portability bug, even though SPARC64 is outside uv's listed supported platforms. No existing uv issue or fix was found that tracks both failures or a previous SPARC fix that regressed. The upstream report concerns dependency support; the related merged uv PRs introduced the affected code or runtime fallback behavior.",
+  "summary": "astral-sh/uv#21056 and astral-sh/uv#18187 introduced the two failing code paths. bytecodealliance/rustix#1700 reports the same upstream failures; astral-sh/uv#21133 supplies related runtime accounting fallback. No existing uv duplicate or SPARC fix was found.",
+  "draft_response": "Your errors match two compile-time platform gaps: linux-raw-sys 0.12.1 has no SPARC64 ioctl constants, and rustix explicitly excludes SPARC/SPARC64 from ioctl_ficlone. uv currently enables both paths for all Linux targets. The LoongArch report on astral-sh/uv#21056 covers the FIEMAP portion, but its upstream fixes would not address both SPARC failures.\n\nDisabling these paths on SPARC needs compile-time guards, with coarse cache accounting and the existing hardlink/copy fallback. Changing runtime options cannot avoid these compiler errors. Please share your exact Rust target triple and build command so a change can be validated against your setup."
+}
