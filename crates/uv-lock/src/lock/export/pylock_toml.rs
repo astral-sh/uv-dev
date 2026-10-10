@@ -340,6 +340,19 @@ pub struct PylockTomlPackage {
     wheels: Option<Vec<PylockTomlWheel>>,
 }
 
+/// A package source whose mutually exclusive wire fields have been checked.
+#[derive(Clone, Copy)]
+enum PylockSource<'a> {
+    Wheels {
+        wheels: &'a [PylockTomlWheel],
+        sdist: Option<&'a PylockTomlSdist>,
+    },
+    Sdist(&'a PylockTomlSdist),
+    Directory(&'a PylockTomlDirectory),
+    Vcs(&'a PylockTomlVcs),
+    Archive(&'a PylockTomlArchive),
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[expect(clippy::empty_structs_with_brackets)]
@@ -1261,158 +1274,111 @@ impl<'lock> PylockToml {
                 .into());
             }
 
-            match (
-                package.wheels.is_some(),
-                package.sdist.is_some(),
-                package.directory.is_some(),
-                package.vcs.is_some(),
-                package.archive.is_some(),
-            ) {
-                // `packages.wheels` is mutually exclusive with `packages.directory`, `packages.vcs`, and `packages.archive`.
-                (true, _, true, _, _) => {
-                    return Err(
-                        PylockTomlErrorKind::WheelWithDirectory(package.name.clone()).into(),
-                    );
-                }
-                (true, _, _, true, _) => {
-                    return Err(PylockTomlErrorKind::WheelWithVcs(package.name.clone()).into());
-                }
-                (true, _, _, _, true) => {
-                    return Err(PylockTomlErrorKind::WheelWithArchive(package.name.clone()).into());
-                }
-                // `packages.sdist` is mutually exclusive with `packages.directory`, `packages.vcs`, and `packages.archive`.
-                (_, true, true, _, _) => {
-                    return Err(
-                        PylockTomlErrorKind::SdistWithDirectory(package.name.clone()).into(),
-                    );
-                }
-                (_, true, _, true, _) => {
-                    return Err(PylockTomlErrorKind::SdistWithVcs(package.name.clone()).into());
-                }
-                (_, true, _, _, true) => {
-                    return Err(PylockTomlErrorKind::SdistWithArchive(package.name.clone()).into());
-                }
-                // `packages.directory` is mutually exclusive with `packages.vcs`, and `packages.archive`.
-                (_, _, true, true, _) => {
-                    return Err(PylockTomlErrorKind::DirectoryWithVcs(package.name.clone()).into());
-                }
-                (_, _, true, _, true) => {
-                    return Err(
-                        PylockTomlErrorKind::DirectoryWithArchive(package.name.clone()).into(),
-                    );
-                }
-                // `packages.vcs` is mutually exclusive with `packages.archive`.
-                (_, _, _, true, true) => {
-                    return Err(PylockTomlErrorKind::VcsWithArchive(package.name.clone()).into());
-                }
-                (false, false, false, false, false) => {
-                    return Err(PylockTomlErrorKind::MissingSource(package.name.clone()).into());
-                }
-                _ => {}
-            }
-
-            // Validate every active wheel before selecting the compatible candidate. Otherwise an
-            // incompatible or malformed wheel can be silently ignored when an sdist is present.
-            for wheel in package.wheels.iter().flatten() {
-                let filename = wheel.filename(&package.name)?;
-                validate_wheel_filename(&filename, &package.name, package.version.as_ref())?;
-            }
-
+            let source = package.source()?;
             let no_binary = build_options.no_binary_package(&package.name);
             let no_build = build_options.no_build_package(&package.name);
-            let is_wheel = package
-                .archive
-                .as_ref()
-                .map(|archive| archive.is_wheel(&package.name))
-                .transpose()?
-                .unwrap_or_default();
-
-            // Search for a matching wheel.
-            let dist = if let Some(best_wheel) =
-                package.find_best_wheel(tags).filter(|_| !no_binary)
-            {
-                let hashes = HashDigests::from(best_wheel.hashes.clone());
-                let built_dist = Dist::Built(BuiltDist::Registry(RegistryBuiltDist {
-                    wheels: vec![best_wheel.to_registry_wheel(
+            let is_wheel = match source {
+                PylockSource::Archive(archive) => archive.is_wheel(&package.name)?,
+                PylockSource::Wheels { .. }
+                | PylockSource::Sdist(_)
+                | PylockSource::Directory(_)
+                | PylockSource::Vcs(_) => false,
+            };
+            let registry_sdist = |sdist: &PylockTomlSdist| -> Result<_, PylockTomlErrorKind> {
+                Ok((
+                    Dist::Source(SourceDist::Registry(sdist.to_sdist(
                         install_path,
                         &package.name,
                         package.version.as_ref(),
                         package.index.as_ref(),
-                    )?],
-                    best_wheel_index: 0,
-                    sdist: None,
-                }));
-                let dist = ResolvedDist::Installable {
-                    dist: Arc::new(built_dist),
-                    version: package.version,
-                };
-                Node::Dist {
-                    dist,
-                    hashes,
-                    install: true,
+                    )?)),
+                    HashDigests::from(sdist.hashes.clone()),
+                ))
+            };
+            let selected = match source {
+                PylockSource::Wheels { wheels, sdist } => {
+                    // Validate every active wheel before selection, including incompatible wheels
+                    // that could otherwise be ignored when a source distribution is available.
+                    for wheel in wheels {
+                        let filename = wheel.filename(&package.name)?;
+                        validate_wheel_filename(
+                            &filename,
+                            &package.name,
+                            package.version.as_ref(),
+                        )?;
+                    }
+                    if let Some(best_wheel) =
+                        PylockTomlPackage::find_best_wheel(wheels, &package.name, tags)
+                            .filter(|_| !no_binary)
+                    {
+                        Some((
+                            Dist::Built(BuiltDist::Registry(RegistryBuiltDist {
+                                wheels: vec![best_wheel.to_registry_wheel(
+                                    install_path,
+                                    &package.name,
+                                    package.version.as_ref(),
+                                    package.index.as_ref(),
+                                )?],
+                                best_wheel_index: 0,
+                                sdist: None,
+                            })),
+                            HashDigests::from(best_wheel.hashes.clone()),
+                        ))
+                    } else {
+                        sdist
+                            .filter(|_| !no_build)
+                            .map(registry_sdist)
+                            .transpose()?
+                    }
                 }
-            } else if let Some(sdist) = package.sdist.as_ref().filter(|_| !no_build) {
-                let hashes = HashDigests::from(sdist.hashes.clone());
-                let sdist = Dist::Source(SourceDist::Registry(sdist.to_sdist(
-                    install_path,
-                    &package.name,
-                    package.version.as_ref(),
-                    package.index.as_ref(),
-                )?));
-                let dist = ResolvedDist::Installable {
-                    dist: Arc::new(sdist),
-                    version: package.version,
-                };
-                Node::Dist {
-                    dist,
-                    hashes,
-                    install: true,
+                PylockSource::Sdist(sdist) => {
+                    if no_build {
+                        None
+                    } else {
+                        Some(registry_sdist(sdist)?)
+                    }
                 }
-            } else if let Some(sdist) = package.directory.as_ref().filter(|_| !no_build) {
-                let hashes = HashDigests::empty();
-                let sdist = Dist::Source(SourceDist::Directory(
-                    sdist.to_sdist(install_path, &package.name)?,
-                ));
-                let dist = ResolvedDist::Installable {
-                    dist: Arc::new(sdist),
-                    version: package.version,
-                };
-                Node::Dist {
-                    dist,
-                    hashes,
-                    install: true,
+                PylockSource::Directory(directory) => {
+                    if no_build {
+                        None
+                    } else {
+                        Some((
+                            Dist::Source(SourceDist::Directory(
+                                directory.to_sdist(install_path, &package.name)?,
+                            )),
+                            HashDigests::empty(),
+                        ))
+                    }
                 }
-            } else if let Some(sdist) = package.vcs.as_ref().filter(|_| !no_build) {
-                let hashes = HashDigests::empty();
-                let sdist = Dist::Source(SourceDist::GitDirectory(
-                    sdist.to_sdist(install_path, &package.name)?,
-                ));
-                let dist = ResolvedDist::Installable {
-                    dist: Arc::new(sdist),
-                    version: package.version,
-                };
-                Node::Dist {
-                    dist,
-                    hashes,
-                    install: true,
+                PylockSource::Vcs(vcs) => {
+                    if no_build {
+                        None
+                    } else {
+                        Some((
+                            Dist::Source(SourceDist::GitDirectory(
+                                vcs.to_sdist(install_path, &package.name)?,
+                            )),
+                            HashDigests::empty(),
+                        ))
+                    }
                 }
-            } else if let Some(dist) = package
-                .archive
-                .as_ref()
-                .filter(|_| if is_wheel { !no_binary } else { !no_build })
-            {
-                let hashes = HashDigests::from(dist.hashes.clone());
-                let dist = dist.to_dist(install_path, &package.name, package.version.as_ref())?;
-                let dist = ResolvedDist::Installable {
-                    dist: Arc::new(dist),
-                    version: package.version,
-                };
-                Node::Dist {
-                    dist,
-                    hashes,
-                    install: true,
+                PylockSource::Archive(archive) => {
+                    let blocked = if is_wheel { no_binary } else { no_build };
+                    if blocked {
+                        None
+                    } else {
+                        Some((
+                            archive.to_dist(
+                                install_path,
+                                &package.name,
+                                package.version.as_ref(),
+                            )?,
+                            HashDigests::from(archive.hashes.clone()),
+                        ))
+                    }
                 }
-            } else {
+            };
+            let Some((dist, hashes)) = selected else {
                 return match (no_binary, no_build) {
                     (true, true) => {
                         Err(PylockTomlErrorKind::NoBinaryNoBuild(package.name.clone()).into())
@@ -1438,6 +1404,14 @@ impl<'lock> PylockToml {
                     }),
                 };
             };
+            let dist = Node::Dist {
+                dist: ResolvedDist::Installable {
+                    dist: Arc::new(dist),
+                    version: package.version,
+                },
+                hashes,
+                install: true,
+            };
 
             let index = graph.add_node(dist);
             graph.add_edge(root, index, Edge::Prod);
@@ -1448,6 +1422,56 @@ impl<'lock> PylockToml {
 }
 
 impl PylockTomlPackage {
+    /// Check source presence and conflicts before exposing a source to artifact selection.
+    fn source(&self) -> Result<PylockSource<'_>, PylockTomlErrorKind> {
+        match (
+            &self.wheels,
+            &self.sdist,
+            &self.directory,
+            &self.vcs,
+            &self.archive,
+        ) {
+            (Some(_), _, Some(_), _, _) => {
+                Err(PylockTomlErrorKind::WheelWithDirectory(self.name.clone()))
+            }
+            (Some(_), _, _, Some(_), _) => {
+                Err(PylockTomlErrorKind::WheelWithVcs(self.name.clone()))
+            }
+            (Some(_), _, _, _, Some(_)) => {
+                Err(PylockTomlErrorKind::WheelWithArchive(self.name.clone()))
+            }
+            (_, Some(_), Some(_), _, _) => {
+                Err(PylockTomlErrorKind::SdistWithDirectory(self.name.clone()))
+            }
+            (_, Some(_), _, Some(_), _) => {
+                Err(PylockTomlErrorKind::SdistWithVcs(self.name.clone()))
+            }
+            (_, Some(_), _, _, Some(_)) => {
+                Err(PylockTomlErrorKind::SdistWithArchive(self.name.clone()))
+            }
+            (_, _, Some(_), Some(_), _) => {
+                Err(PylockTomlErrorKind::DirectoryWithVcs(self.name.clone()))
+            }
+            (_, _, Some(_), _, Some(_)) => {
+                Err(PylockTomlErrorKind::DirectoryWithArchive(self.name.clone()))
+            }
+            (_, _, _, Some(_), Some(_)) => {
+                Err(PylockTomlErrorKind::VcsWithArchive(self.name.clone()))
+            }
+            (Some(wheels), sdist, None, None, None) => Ok(PylockSource::Wheels {
+                wheels,
+                sdist: sdist.as_ref(),
+            }),
+            (None, Some(sdist), None, None, None) => Ok(PylockSource::Sdist(sdist)),
+            (None, None, Some(directory), None, None) => Ok(PylockSource::Directory(directory)),
+            (None, None, None, Some(vcs), None) => Ok(PylockSource::Vcs(vcs)),
+            (None, None, None, None, Some(archive)) => Ok(PylockSource::Archive(archive)),
+            (None, None, None, None, None) => {
+                Err(PylockTomlErrorKind::MissingSource(self.name.clone()))
+            }
+        }
+    }
+
     /// Convert the [`PylockTomlPackage`] to a TOML [`Table`].
     fn to_toml(&self) -> Result<Table, toml_edit::ser::Error> {
         let mut table = Table::new();
@@ -1533,13 +1557,17 @@ impl PylockTomlPackage {
         Ok(table)
     }
 
-    /// Return the index of the best wheel for the given tags.
-    fn find_best_wheel(&self, tags: &Tags) -> Option<&PylockTomlWheel> {
+    /// Return the best wheel for the given tags.
+    fn find_best_wheel<'a>(
+        wheels: &'a [PylockTomlWheel],
+        name: &PackageName,
+        tags: &Tags,
+    ) -> Option<&'a PylockTomlWheel> {
         type WheelPriority = (TagPriority, Option<BuildTag>);
 
         let mut best: Option<(WheelPriority, &PylockTomlWheel)> = None;
-        for wheel in self.wheels.iter().flatten() {
-            let Ok(filename) = wheel.filename(&self.name) else {
+        for wheel in wheels {
+            let Ok(filename) = wheel.filename(name) else {
                 continue;
             };
             let TagCompatibility::Compatible(tag_priority) = filename.compatibility(tags) else {
@@ -2061,4 +2089,81 @@ where
         .to_timestamp(DateTime::from_parts(date, time))
         .map_err(serde::de::Error::custom)?;
     Ok(Some(timestamp))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PylockSource, PylockTomlPackage};
+
+    #[test]
+    fn package_source_presence() -> Result<(), toml::de::Error> {
+        // Bits are ordered as wheels, sdist, directory, vcs, archive.
+        let fields = [
+            "wheels = []",
+            r#"sdist = { hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }"#,
+            r#"directory = { path = "." }"#,
+            r#"vcs = { type = "git", commit-id = "0000000000000000000000000000000000000000" }"#,
+            r#"archive = { hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }"#,
+        ];
+        let mut outcomes = Vec::new();
+        for presence in 0_u8..32 {
+            let mut document = String::from("name = \"example\"\n");
+            for (index, field) in fields.iter().enumerate() {
+                if presence & (1 << (4 - index)) != 0 {
+                    document.push_str(field);
+                    document.push('\n');
+                }
+            }
+            let package: PylockTomlPackage = toml::from_str(&document)?;
+            let outcome = match package.source() {
+                Ok(source) => match source {
+                    PylockSource::Wheels { wheels, sdist } => {
+                        format!("wheels={}, sdist={}", wheels.len(), sdist.is_some())
+                    }
+                    PylockSource::Sdist(_) => "sdist".to_string(),
+                    PylockSource::Directory(_) => "directory".to_string(),
+                    PylockSource::Vcs(_) => "vcs".to_string(),
+                    PylockSource::Archive(_) => "archive".to_string(),
+                },
+                Err(err) => err.to_string(),
+            };
+            outcomes.push(format!("{presence:05b}: {outcome}"));
+        }
+
+        insta::assert_snapshot!(outcomes.join("\n"), @"
+        00000: Package `example` must include one of: `wheels`, `directory`, `archive`, `sdist`, or `vcs`
+        00001: archive
+        00010: vcs
+        00011: Package `example` includes both a VCS (`packages.vcs`) and an archive source (`packages.archive`)
+        00100: directory
+        00101: Package `example` includes both a directory (`packages.directory`) and an archive source (`packages.archive`)
+        00110: Package `example` includes both a directory (`packages.directory`) and a VCS source (`packages.vcs`)
+        00111: Package `example` includes both a directory (`packages.directory`) and a VCS source (`packages.vcs`)
+        01000: sdist
+        01001: Package `example` includes both a registry (`packages.sdist`) and an archive source (`packages.archive`)
+        01010: Package `example` includes both a registry (`packages.sdist`) and a VCS source (`packages.vcs`)
+        01011: Package `example` includes both a registry (`packages.sdist`) and a VCS source (`packages.vcs`)
+        01100: Package `example` includes both a registry (`packages.sdist`) and a directory source (`packages.directory`)
+        01101: Package `example` includes both a registry (`packages.sdist`) and a directory source (`packages.directory`)
+        01110: Package `example` includes both a registry (`packages.sdist`) and a directory source (`packages.directory`)
+        01111: Package `example` includes both a registry (`packages.sdist`) and a directory source (`packages.directory`)
+        10000: wheels=0, sdist=false
+        10001: Package `example` includes both a registry (`packages.wheels`) and an archive source (`packages.archive`)
+        10010: Package `example` includes both a registry (`packages.wheels`) and a VCS source (`packages.vcs`)
+        10011: Package `example` includes both a registry (`packages.wheels`) and a VCS source (`packages.vcs`)
+        10100: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        10101: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        10110: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        10111: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        11000: wheels=0, sdist=true
+        11001: Package `example` includes both a registry (`packages.wheels`) and an archive source (`packages.archive`)
+        11010: Package `example` includes both a registry (`packages.wheels`) and a VCS source (`packages.vcs`)
+        11011: Package `example` includes both a registry (`packages.wheels`) and a VCS source (`packages.vcs`)
+        11100: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        11101: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        11110: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        11111: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        ");
+        Ok(())
+    }
 }
