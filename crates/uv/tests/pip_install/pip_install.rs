@@ -7878,8 +7878,16 @@ fn install_site_packages_mtime_updated() -> Result<()> {
 
     let site_packages = context.site_packages();
 
+    // Separate the initial state from installation even on coarse-resolution filesystems.
+    let initial_mtime = filetime::FileTime::from_unix_time(946_684_800, 0);
+    filetime::set_file_mtime(&site_packages, initial_mtime)?;
+
     // `mtime` is only second-resolution so we include the nanoseconds as well
     let metadata = site_packages.metadata()?;
+    assert_eq!(
+        filetime::FileTime::from_last_modification_time(&metadata),
+        initial_mtime,
+    );
     let pre_mtime = metadata.mtime();
     let pre_mtime_ns = metadata.mtime_nsec();
 
