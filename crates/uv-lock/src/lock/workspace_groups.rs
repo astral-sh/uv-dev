@@ -5,6 +5,7 @@ use itertools::Itertools;
 use uv_distribution_types::{RequiresPython, SimplifiedMarkerTree};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
+use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_resolver_types::{ConflictMarker, UniversalMarker};
 use uv_workspace::{ResolvedWorkspaceGroup, WorkspaceGroup};
 
@@ -386,6 +387,22 @@ impl Lock {
         }
         let mut selected = self.clone();
         retain_reachable(self, &mut selected.packages, members, &selected.manifest);
+        let ambiguous = specialize_member_dependencies(
+            &mut selected.packages,
+            members,
+            &self.requires_python,
+            &self.conflicts,
+        );
+        if !ambiguous.is_false() {
+            let environment = super::implicit_constraints_marker(
+                self.requires_python.to_exact_marker_tree(),
+                &self.supported_environments,
+            )
+            .and(ambiguous.negate());
+            // Keep an empty domain explicit so another context can still cover these members.
+            selected.supported_environments = vec![environment];
+        }
+        retain_reachable(self, &mut selected.packages, members, &selected.manifest);
         selected.manifest.members.clone_from(members);
         selected
             .manifest
@@ -421,21 +438,47 @@ impl Lock {
         resolutions: Vec<Self>,
         require_all_roots: bool,
     ) -> Result<Option<Self>, LockError> {
-        let mut member_environments = BTreeMap::<PackageName, MarkerTree>::new();
+        let mut member_markers = BTreeMap::<PackageName, MarkerTree>::new();
+        let mut context_conflicts = MarkerTree::TRUE;
         for lock in &resolutions {
+            let conflicts = UniversalMarker::new(
+                MarkerTree::TRUE,
+                ConflictMarker::from_conflicts(&lock.conflicts),
+            )
+            .combined();
+            context_conflicts = context_conflicts.and(conflicts);
             let environment = super::implicit_constraints_marker(
                 lock.requires_python.to_exact_marker_tree(),
                 &lock.supported_environments,
             );
             for member in &lock.manifest.members {
-                let active = lock
-                    .workspace_members
-                    .get(member)
-                    .map_or(MarkerTree::FALSE, |&index| {
-                        package_environment(lock.package(index), &lock.requires_python)
-                    })
-                    .and(environment);
-                let supported = member_environments
+                let mut active = UniversalMarker::from_combined(
+                    lock.workspace_members
+                        .get(member)
+                        .map_or(MarkerTree::FALSE, |&index| {
+                            package_environment(lock.package(index), &lock.requires_python)
+                        })
+                        .and(conflicts),
+                );
+                // Selecting a member does not infer extras or groups on another selected root.
+                // Keep such contexts outside the ordinary member view instead of dropping its
+                // required dependencies when those selections are absent.
+                if require_all_roots {
+                    for item in lock.conflicts.iter().flat_map(ConflictSet::iter) {
+                        if item.package() != member
+                            && lock.manifest.members.contains(item.package())
+                        {
+                            match item.kind() {
+                                ConflictKind::Extra(_) | ConflictKind::Group(_) => {
+                                    active.assume_not_conflict_item(item);
+                                }
+                                ConflictKind::Project => {}
+                            }
+                        }
+                    }
+                }
+                let active = active.combined().and(environment);
+                let supported = member_markers
                     .entry(member.clone())
                     .or_insert(MarkerTree::FALSE);
                 *supported = supported.or(active);
@@ -443,18 +486,20 @@ impl Lock {
         }
         // Every ordinary target is required, even when its compatible contexts differ.
         let environment = if require_all_roots {
-            member_environments
+            member_markers
                 .values()
                 .fold(MarkerTree::TRUE, |environment, member| {
                     environment.and(*member)
                 })
         } else {
-            member_environments
+            member_markers
                 .values()
                 .fold(MarkerTree::FALSE, |environment, member| {
                     environment.or(*member)
                 })
-        };
+        }
+        .and(context_conflicts)
+        .without_extras();
         let Some(requires_python) = RequiresPython::from_marker_tree(environment) else {
             return Ok(None);
         };
@@ -464,7 +509,7 @@ impl Lock {
         };
         let revision = first.revision;
         let mut manifest = first.manifest.clone();
-        manifest.members = member_environments.into_keys().collect();
+        manifest.members = member_markers.into_keys().collect();
         let mut options = first.options.clone();
         let conflicts = first.conflicts.clone();
         let required_environments = first.required_environments.clone();
@@ -526,13 +571,21 @@ impl Lock {
                 if package.fork_markers.is_empty() {
                     continue;
                 }
-                scope_dependencies(&mut package.dependencies, scope, &requires_python);
-                for dependencies in package
-                    .optional_dependencies
-                    .values_mut()
+                for dependencies in std::iter::once(&mut package.dependencies)
+                    .chain(package.optional_dependencies.values_mut())
                     .chain(package.dependency_groups.values_mut())
                 {
                     scope_dependencies(dependencies, scope, &requires_python);
+                    // A scoped edge can retain impossible conflict assignments after its target
+                    // has left the environment domain. Remove those edges without adding new
+                    // conflict guards to the remaining dependencies.
+                    dependencies.retain(|dependency| {
+                        !dependency
+                            .complexified_marker
+                            .combined()
+                            .and(context_conflicts)
+                            .is_false()
+                    });
                 }
                 merge_package(&mut packages, package, &requires_python);
             }
@@ -552,6 +605,118 @@ impl Lock {
         )
         .map(Some)
     }
+}
+
+/// Discharge inherited activation while retaining a package's own and explicit-root selections.
+/// Return the environment domain where omitted owners still control a dependency choice.
+fn specialize_member_dependencies(
+    packages: &mut [Package],
+    members: &BTreeSet<PackageName>,
+    requires_python: &RequiresPython,
+    conflicts: &Conflicts,
+) -> MarkerTree {
+    let valid_conflicts =
+        UniversalMarker::new(MarkerTree::TRUE, ConflictMarker::from_conflicts(conflicts));
+    let mut ambiguous = MarkerTree::FALSE;
+    for package in packages {
+        let mut world =
+            UniversalMarker::from_combined(package_environment(package, requires_python));
+        let requested_extras = package
+            .all_dependencies()
+            .flat_map(|dependency| {
+                dependency
+                    .extra
+                    .iter()
+                    .map(|extra| (&dependency.package_id.name, extra))
+            })
+            .collect::<BTreeSet<_>>();
+        let omitted = conflicts
+            .iter()
+            .flat_map(ConflictSet::iter)
+            .filter(|item| item.package() != &package.id.name && !members.contains(item.package()))
+            .filter(|item| match item.kind() {
+                ConflictKind::Extra(extra) => !requested_extras.contains(&(item.package(), extra)),
+                ConflictKind::Group(_) | ConflictKind::Project => true,
+            })
+            .collect::<BTreeSet<_>>();
+        let references_omitted = std::iter::once(world)
+            .chain(
+                package
+                    .all_dependencies()
+                    .map(|dependency| dependency.complexified_marker),
+            )
+            .any(|marker| {
+                let (present, absent) = selection_outcomes(marker, valid_conflicts, &omitted);
+                !present.combined().is_disjoint(absent.combined())
+            });
+        if !references_omitted {
+            continue;
+        }
+        world.and(valid_conflicts);
+        let mut default = world;
+        let mut inactive = UniversalMarker::TRUE;
+        for item in &omitted {
+            default.assume_not_conflict_item(item);
+            inactive.and(UniversalMarker::new(
+                MarkerTree::TRUE,
+                ConflictMarker::from_conflict_item(item).negate(),
+            ));
+        }
+        // Use one inactive upstream context for every edge whenever it admits the parent.
+        // Infer upstream activation only in the remaining part of the parent's domain.
+        world.and(UniversalMarker::from_combined(default.combined().negate()));
+        default.and(inactive);
+        world.or(default);
+        let mut specialized = BTreeMap::new();
+        for dependencies in std::iter::once(&mut package.dependencies)
+            .chain(package.optional_dependencies.values_mut())
+            .chain(package.dependency_groups.values_mut())
+        {
+            for dependency in dependencies.iter_mut() {
+                let original = dependency.complexified_marker;
+                let marker = *specialized.entry(original).or_insert_with(|| {
+                    let (present, absent) = selection_outcomes(original, world, &omitted);
+                    // Choices are ambiguous only when both outcomes are possible under valid
+                    // assignments with the same retained selections and environment.
+                    ambiguous =
+                        ambiguous.or(present.combined().and(absent.combined()).without_extras());
+                    present
+                });
+                dependency.complexified_marker = marker;
+                dependency.simplified_marker =
+                    SimplifiedMarkerTree::new(requires_python, marker.combined());
+            }
+            dependencies.retain(|dependency| !dependency.complexified_marker.is_false());
+            merge_dependencies(dependencies, requires_python);
+        }
+    }
+    ambiguous
+}
+
+/// Project both outcomes into the same retained selections and environment.
+fn selection_outcomes(
+    marker: UniversalMarker,
+    world: UniversalMarker,
+    omitted: &BTreeSet<&ConflictItem>,
+) -> (UniversalMarker, UniversalMarker) {
+    let mut present = marker;
+    present.and(world);
+    let mut absent = UniversalMarker::from_combined(marker.combined().negate());
+    absent.and(world);
+    for item in omitted {
+        present = without_conflict_item(present, item);
+        absent = without_conflict_item(absent, item);
+    }
+    (present, absent)
+}
+
+/// Existentially remove one conflict selection while retaining the other marker variables.
+fn without_conflict_item(mut marker: UniversalMarker, item: &ConflictItem) -> UniversalMarker {
+    let mut included = marker;
+    included.assume_conflict_item(item);
+    marker.assume_not_conflict_item(item);
+    marker.or(included);
+    marker
 }
 
 /// Canonicalize each selector independently so projecting and recombining contexts is stable.

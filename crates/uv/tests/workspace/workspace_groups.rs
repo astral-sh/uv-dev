@@ -485,6 +485,7 @@ fn workspace_groups_explicit_project_conflicts() -> Result<()> {
         conflicts = [
             [{ package = "root-a", extra = "legacy" }, { package = "root-a", extra = "modern" }],
             [{ package = "root-a", group = "legacy" }, { package = "root-a", group = "modern" }],
+            [{ package = "root-c", extra = "one" }, { package = "root-c", extra = "two" }],
             [{ package = "root-a" }, { package = "root-b" }],
         ]
         [tool.uv.workspace]
@@ -492,6 +493,9 @@ fn workspace_groups_explicit_project_conflicts() -> Result<()> {
         [[tool.uv.workspace.groups]]
         name = "apps"
         members = ["root-a", "root-b"]
+        [[tool.uv.workspace.groups]]
+        name = "other"
+        members = ["root-c"]
     "#})?;
     context
         .temp_dir
@@ -523,18 +527,32 @@ fn workspace_groups_explicit_project_conflicts() -> Result<()> {
         [tool.uv]
         package = false
     "#})?;
+    context
+        .temp_dir
+        .child("members/root-c/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-c"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        one = []
+        two = []
+        [tool.uv]
+        package = false
+    "#})?;
     uv_snapshot!(context.filters(), context.lock()
         .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 9 packages in [TIME]
     ");
     let lock = context.read("uv.lock");
     uv_snapshot!(context.filters(), context.lock()
         .args(["--preview-features", "package-conflicts", "--locked", "--index-url"]).arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 9 packages in [TIME]
     ");
     assert_eq!(lock, context.read("uv.lock"));
     uv_snapshot!(context.filters(), context.export()
@@ -572,20 +590,134 @@ fn workspace_groups_explicit_project_conflicts() -> Result<()> {
             [{ package = "root-a" }, { package = "root-b" }],
             [{ package = "root-a", extra = "legacy" }, { package = "root-a", extra = "modern" }],
             [{ package = "root-a", group = "legacy" }, { package = "root-a", group = "modern" }],
+            [{ package = "root-c", extra = "one" }, { package = "root-c", extra = "two" }],
         ]
         [tool.uv.workspace]
         members = ["members/*"]
         [[tool.uv.workspace.groups]]
         name = "apps"
         members = ["root-a", "root-b"]
+        [[tool.uv.workspace.groups]]
+        name = "other"
+        members = ["root-c"]
     "#})?;
     fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
     uv_snapshot!(context.filters(), context.lock()
         .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 9 packages in [TIME]
     ");
+    Ok(())
+}
+
+/// Dependency-requested extras remain active when their owner is not a selected root.
+#[test]
+fn workspace_groups_dependency_requested_conflicting_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "workspace-group-requested-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.group-leaf.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        conflicts = [
+            [{ package = "root-a" }, { package = "root-b" }],
+            [{ package = "root-c", extra = "one" }, { package = "root-c", extra = "two" }],
+        ]
+        [tool.uv.workspace]
+        members = ["members/*"]
+        [[tool.uv.workspace.groups]]
+        name = "apps"
+        members = ["root-a", "root-b"]
+        [[tool.uv.workspace.groups]]
+        name = "other"
+        members = ["root-c"]
+    "#})?;
+    context
+        .temp_dir
+        .child("members/root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf<2"]
+        [dependency-groups]
+        modern = ["root-c[one]"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        root-c = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("members/root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf>=2"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("members/root-c/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-c"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        one = ["leaf"]
+        two = []
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("members/leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["group-leaf==2.0.0"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--preview-features", "package-conflicts", "--index-url"])
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--workspace-group", "apps", "--only-group", "modern",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    group-leaf==2.0.0
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
     Ok(())
 }
 
@@ -1685,6 +1817,155 @@ fn workspace_groups_higher_order_conflict() -> Result<()> {
     leaf==1.0.0
         # via three
     ");
+    Ok(())
+}
+
+/// Selecting a member in a conflicting extra fork retains its dependencies and platform support.
+#[cfg(target_os = "linux")]
+#[test]
+fn workspace_groups_member_conflicting_extra_domain() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context.temp_dir.child("wheels/leaf-1.0.0-py3-none-any.whl"),
+        "leaf",
+        "1.0.0",
+        "leaf-1.0.0",
+        "Requires-Dist: registry-dep\nRequires-Dist: leaf-dep==2.0.0\n",
+        &[],
+    )?;
+    write_wheel_with_metadata(
+        &context.temp_dir.child("wheels/leaf-2.0.0-py3-none-any.whl"),
+        "leaf",
+        "2.0.0",
+        "leaf-2.0.0",
+        "Requires-Dist: registry-dep\nRequires-Dist: leaf-dep==2.0.0\n",
+        &[],
+    )?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'local member'\n")],
+    )?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-2.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "2.0.0",
+        "leaf_dep-2.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'registry member'\n")],
+    )?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/registry_dep-1.0.0-py3-none-any.whl"),
+        "registry-dep",
+        "1.0.0",
+        "registry_dep-1.0.0",
+        "",
+        &[],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        conflicts = [[{ package = "app", extra = "local" }, { package = "app", extra = "registry" }]]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        local = ["leaf==1.0.0"]
+        registry = ["leaf==2.0.0"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        leaf = { workspace = true, extra = "local", marker = "sys_platform == 'linux' and python_version < '3.13'" }
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["app", "leaf-dep==1.0.0"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        app = { workspace = true }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 7 packages in [TIME]
+    "#);
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--workspace-group", "main", "--package", "leaf",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 7 packages in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf-dep==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--workspace-group", "main", "--package", "leaf",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import leaf_dep; print(leaf_dep.VALUE)"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    local member
+    "#);
+    let environment = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--workspace-group", "main", "--package", "leaf", "--python", "3.13",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The requested interpreter resolved to Python 3.13.[X], which is incompatible with the project's Python requirement: `==3.12.*` (from `requires-python` in `uv.lock`).
+    "#);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--workspace-group", "main", "--package", "leaf", "--python-platform", "x86_64-pc-windows-msvc",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The selected Python environment is not compatible with the project's supported environments: `python_full_version == '3.12.*' and sys_platform == 'linux'`
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(context.read("uv.lock"), locked);
     Ok(())
 }
 
