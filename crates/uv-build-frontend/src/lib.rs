@@ -257,7 +257,7 @@ pub struct SourceBuild {
     project: Option<Project>,
     /// The virtual environment in which to build the source distribution.
     venv: PythonEnvironment,
-    /// Populated if `prepare_metadata_for_build_wheel` was called.
+    /// The completed metadata-preparation outcome, including unsupported hooks.
     ///
     /// > If the build frontend has previously called `prepare_metadata_for_build_wheel` and depends
     /// > on the wheel resulting from this call to have metadata matching this earlier call, then
@@ -266,7 +266,7 @@ pub struct SourceBuild {
     /// > identical metadata. The directory passed in by the build frontend MUST be identical to the
     /// > directory created by `prepare_metadata_for_build_wheel`, including any unrecognized files
     /// > it created.
-    metadata_directory: Option<PathBuf>,
+    metadata: MetadataState,
     /// The name of the package, if known.
     package_name: Option<PackageName>,
     /// The version of the package, if known.
@@ -284,6 +284,24 @@ pub struct SourceBuild {
     environment_variables: FxHashMap<OsString, OsString>,
     /// Runner for Python scripts.
     runner: PythonRunner,
+}
+
+/// The result of metadata preparation, distinct from an unattempted hook.
+#[derive(Default)]
+enum MetadataState {
+    #[default]
+    Pending,
+    Unavailable,
+    Prepared(PathBuf),
+}
+
+impl MetadataState {
+    fn directory(&self) -> Option<&Path> {
+        match self {
+            Self::Pending | Self::Unavailable => None,
+            Self::Prepared(directory) => Some(directory),
+        }
+    }
 }
 
 impl SourceBuild {
@@ -531,7 +549,7 @@ impl SourceBuild {
             build_kind,
             level,
             config_settings,
-            metadata_directory: None,
+            metadata: MetadataState::default(),
             package_name,
             package_version,
             version_id: version_id.map(ToString::to_string),
@@ -858,11 +876,20 @@ impl SourceBuild {
     /// Try calling `prepare_metadata_for_build_wheel` to get the metadata without executing the
     /// actual build.
     async fn get_metadata_without_build(&mut self) -> Result<Option<PathBuf>, Error> {
-        // We've already called this method; return the existing result.
-        if let Some(metadata_dir) = &self.metadata_directory {
-            return Ok(Some(metadata_dir.clone()));
+        match &self.metadata {
+            MetadataState::Pending => {}
+            MetadataState::Unavailable => return Ok(None),
+            MetadataState::Prepared(directory) => return Ok(Some(directory.clone())),
         }
+        let directory = self.prepare_metadata().await?;
+        self.metadata = match &directory {
+            Some(directory) => MetadataState::Prepared(directory.clone()),
+            None => MetadataState::Unavailable,
+        };
+        Ok(directory)
+    }
 
+    async fn prepare_metadata(&self) -> Result<Option<PathBuf>, Error> {
         // Lock the source tree, if necessary.
         let _lock = self.acquire_lock().await?;
 
@@ -963,8 +990,7 @@ impl SourceBuild {
         if dirname.is_empty() {
             return Ok(None);
         }
-        self.metadata_directory = Some(metadata_directory.join(dirname));
-        Ok(self.metadata_directory.clone())
+        Ok(Some(metadata_directory.join(dirname)))
     }
 
     /// Build a distribution from an archive (`.zip` or `.tar.gz`) or source tree, and return the
@@ -1020,8 +1046,8 @@ impl SourceBuild {
             }
             BuildKind::Wheel | BuildKind::Editable => {
                 let metadata_directory = self
-                    .metadata_directory
-                    .as_deref()
+                    .metadata
+                    .directory()
                     .map_or("None".to_string(), |path| path.escape_for_python());
                 debug!(
                     r"Calling `{}.build_{}({}, {}, {})`",
