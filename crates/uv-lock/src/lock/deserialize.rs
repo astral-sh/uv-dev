@@ -898,6 +898,7 @@ mod tests {
     use std::fmt::Write as _;
 
     use serde::Deserialize;
+    use uv_distribution_types::DependencyMetadata;
 
     use super::super::{LockParseError, VERSION};
     use super::{Cursor, Error, Lock, ValueDeserializer, from_str};
@@ -926,6 +927,92 @@ dependencies = [
         let actual = from_str(CANONICAL_LOCK).expect("valid canonical lock");
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn static_metadata_readers_retain_precedence_and_cardinality() {
+        let input = r#"version = 1
+revision = 5
+requires-python = ">=3.12"
+
+[manifest]
+dependency-metadata-ordered = true
+
+[[manifest.dependency-metadata]]
+name = "parent"
+version = "1.0"
+requires-dist = ["b"]
+
+[[manifest.dependency-metadata]]
+name = "parent"
+requires-dist = ["a"]
+
+[[manifest.dependency-metadata]]
+name = "parent"
+version = "1.0"
+requires-dist = ["a"]
+
+[[manifest.dependency-metadata]]
+name = "parent"
+version = "1.0"
+requires-dist = ["a"]
+"#;
+        let canonical = from_str(input).expect("canonical lock");
+        let fallback: Lock = toml::from_str(input).expect("TOML lock");
+        assert_eq!(canonical, fallback);
+        assert!(canonical.manifest.dependency_metadata_ordered);
+        let entries = &canonical.manifest.dependency_metadata;
+        assert_eq!(entries.len(), 4);
+        let dependencies = entries
+            .iter()
+            .map(|entry| entry.requires_dist[0].name.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(dependencies, ["a", "b", "a", "a"]);
+
+        let metadata = DependencyMetadata::from_entries(entries.clone());
+        let name = "parent".parse().expect("package name");
+        let version = "1.0".parse().expect("version");
+        assert_eq!(
+            metadata
+                .get(&name, Some(&version))
+                .expect("exact match")
+                .requires_dist[0]
+                .name
+                .as_ref(),
+            "b"
+        );
+        let version = "2.0".parse().expect("version");
+        assert_eq!(
+            metadata
+                .get(&name, Some(&version))
+                .expect("fallback match")
+                .requires_dist[0]
+                .name
+                .as_ref(),
+            "a"
+        );
+        assert!(metadata.get(&name, None).is_none());
+        let identical = DependencyMetadata::from_entries(entries[2..].iter().cloned());
+        assert!(identical.get(&name, None).is_none());
+        let single = DependencyMetadata::from_entries([entries[2].clone()]);
+        assert!(single.get(&name, None).is_some());
+
+        let serialized = canonical.to_toml().expect("serialize lock");
+        assert_eq!(
+            from_str(&serialized).expect("canonical round trip"),
+            canonical
+        );
+        assert_eq!(
+            toml::from_str::<Lock>(&serialized).expect("TOML round trip"),
+            canonical
+        );
+        let legacy = serialized.replace("dependency-metadata-ordered = true\n", "");
+        assert!(
+            !Lock::from_toml(&legacy)
+                .expect("legacy lock")
+                .manifest
+                .dependency_metadata_ordered
+        );
     }
 
     #[test]
