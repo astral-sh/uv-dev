@@ -43,7 +43,7 @@ use crate::base_client::{BaseClientBuilder, ClientBuildError, ExtraMiddleware, R
 use crate::cached_client::CacheControl;
 use crate::flat_index::FlatIndexEntry;
 use crate::html::SimpleDetailHTML;
-use crate::remote_metadata::wheel_metadata_from_remote_zip;
+use crate::remote_metadata::{CENTRAL_DIRECTORY_SIZE, wheel_metadata_from_remote_zip};
 use crate::rkyvutil::OwnedArchive;
 use crate::{
     BaseClient, CachedClient, Error, ErrorKind, FlatIndexClient, RedirectClientWithMiddleware,
@@ -973,6 +973,7 @@ impl RegistryClient {
                 self.wheel_metadata_no_pep658(
                     &wheel.filename,
                     &wheel.url,
+                    wheel.size,
                     None,
                     WheelCache::Url(&wheel.url),
                     capabilities,
@@ -1154,6 +1155,7 @@ impl RegistryClient {
             self.wheel_metadata_no_pep658(
                 filename,
                 url,
+                file.size,
                 Some(index),
                 WheelCache::Index(index),
                 capabilities,
@@ -1167,6 +1169,7 @@ impl RegistryClient {
         &self,
         filename: &'data WheelFilename,
         url: &'data DisplaySafeUrl,
+        size: Option<u64>,
         index: Option<&'data IndexUrl>,
         cache_shard: WheelCache<'data>,
         capabilities: &'data IndexCapabilities,
@@ -1198,8 +1201,16 @@ impl RegistryClient {
             lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
         };
 
+        // The initial ZIP prefetch already reads a small wheel in full. Streaming it directly
+        // avoids an extra HEAD request without increasing the number of bytes required.
+        // The size is only a hint for choosing the request strategy.
+        let prefer_streaming = self.metadata_range_request == MetadataRangeRequest::Fallback
+            && size.is_some_and(|size| size <= CENTRAL_DIRECTORY_SIZE);
+
         // Attempt to fetch via a range request.
-        if index.is_none_or(|index| capabilities.supports_range_requests(index)) {
+        if !prefer_streaming
+            && index.is_none_or(|index| capabilities.supports_range_requests(index))
+        {
             let req = self
                 .uncached_client(url)
                 .head(Url::from(url.clone()))

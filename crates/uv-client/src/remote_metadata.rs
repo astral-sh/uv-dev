@@ -6,6 +6,9 @@ use url::Url;
 use uv_distribution_filename::WheelFilename;
 use uv_metadata::find_archive_dist_info;
 
+/// The initial remote ZIP prefetch, sized for a typical central directory.
+pub(crate) const CENTRAL_DIRECTORY_SIZE: u64 = 16_384;
+
 /// Read the `.dist-info/METADATA` file from a async remote zip reader, so we avoid downloading the
 /// entire wheel just for the one file.
 ///
@@ -53,8 +56,6 @@ pub(crate) async fn wheel_metadata_from_remote_zip(
     reader: &mut AsyncHttpRangeReader,
 ) -> Result<String, Error> {
     // Make sure we have the back part of the stream.
-    // Best guess for the central directory size inside the zip
-    const CENTRAL_DIRECTORY_SIZE: u64 = 16384;
     // Because the zip index is at the back
     reader
         .prefetch(reader.len().saturating_sub(CENTRAL_DIRECTORY_SIZE)..reader.len())
