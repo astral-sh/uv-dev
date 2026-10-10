@@ -80,7 +80,7 @@ details and alternative installation methods.
 
 uv's documentation is available at [docs.astral.sh/uv](https://docs.astral.sh/uv).
 
-Additionally, the command line reference documentation can be viewed with `uv help`.
+Additionally, the command-line reference documentation can be viewed with `uv help`.
 
 ## Features
 
