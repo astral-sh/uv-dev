@@ -323,7 +323,7 @@ impl uv_distribution::Reporter for Facade {
         self.reporter.on_checkout_complete(url, rev, index);
     }
 
-    fn on_checkout_failed(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+    fn on_checkout_failed(&self, url: &SafeUrl, rev: &str, id: usize) {
         self.reporter.on_checkout_failed(url, rev, id);
     }
 

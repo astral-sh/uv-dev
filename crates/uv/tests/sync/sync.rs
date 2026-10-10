@@ -2157,7 +2157,7 @@ fn sync_jsonl_resolver_reporter_late_progress() -> Result<()> {
         (r"finished in [0-9.]+s", "finished in [TIME]"),
         (r"[0-9]+ filtered out", "[N] filtered out"),
     ], Command::new(env::current_exe()?)
-        .args(["--exact", "sync::sync_jsonl_resolver_reporter_late_progress", "--nocapture", "--color", "never"])
+        .args(["--exact", "sync::sync_jsonl_resolver_reporter_late_progress", "--nocapture", "--color", "never", "--test-threads", "2"])
         .env(WORKER, "1"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2702,7 +2702,7 @@ fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
         .to_owned();
     let context = context.with_filter((commit, "[COMMIT]"));
 
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     context
         .temp_dir
@@ -2795,7 +2795,7 @@ fn sync_jsonl_failed_git_checkout() -> Result<()> {
         ])
         .assert()
         .success();
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     context
         .temp_dir

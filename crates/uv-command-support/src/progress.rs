@@ -629,7 +629,7 @@ impl ProgressReporter {
     }
 
     /// Close a failed or abandoned checkout without reporting a successful update.
-    pub fn on_checkout_failed(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+    pub fn on_checkout_failed(&self, url: &SafeUrl, rev: &str, id: usize) {
         let ProgressMode::Multi { state, .. } = &self.mode else {
             return;
         };
