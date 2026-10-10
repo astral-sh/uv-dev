@@ -18,9 +18,9 @@ use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
-use url::Url;
 #[cfg(windows)]
 use uv_fs::Simplified;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 
 use uv_test::packse::{PackseServer, WheelBuilder, scenario::Scenario};
@@ -6376,7 +6376,7 @@ fn tool_install_locked_git_editable_workspace_dependency() -> Result<()> {
         .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
         .assert()
         .success();
-    let repository_url = Url::from_directory_path(project.path())
+    let repository_url = SafeUrl::from_directory_path(project.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     let path = tool_install_git_path(&bin_dir);
     let mut filters = context.filters();
@@ -6638,8 +6638,8 @@ fn tool_install_locked_preserves_dependency_policies() -> Result<()> {
         requirements = [{ name = "foo", directory = "[TEMP_DIR]/foo" }]
         constraints = [{ name = "iniconfig", specifier = "<2" }]
         overrides = [
-            { package = { name = "anyio", version = "3.7.0" }, dependencies = [{ name = "idna", specifier = "==3.2" }] },
             { name = "typing-extensions", specifier = "==4.9.0" },
+            { package = { name = "anyio", version = "3.7.0" }, dependencies = [{ name = "idna", specifier = "==3.2" }] },
         ]
         excludes = ["exceptiongroup"]
         entrypoints = [
@@ -7064,7 +7064,7 @@ fn tool_install_locked_git_workspace_member() -> Result<()> {
         .assert()
         .success();
 
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     let mut filters = context.filters();
     filters.push((
@@ -8166,7 +8166,7 @@ fn tool_install_locked_rejects_source_name_mismatch() -> Result<()> {
         .arg("--offline")
         .assert()
         .success();
-    let url = Url::from_directory_path(project.path())
+    let url = SafeUrl::from_directory_path(project.path())
         .map_err(|()| anyhow::anyhow!("invalid source directory URL"))?;
     uv_snapshot!(context.filters(), context.tool_install()
         .arg(format!("foo @ {url}"))
@@ -8207,7 +8207,7 @@ fn tool_install_locked_rejects_projectless_source() -> Result<()> {
         .arg("--offline")
         .assert()
         .success();
-    let url = Url::from_directory_path(workspace.path())
+    let url = SafeUrl::from_directory_path(workspace.path())
         .map_err(|()| anyhow::anyhow!("invalid source directory URL"))?;
     uv_snapshot!(context.filters(), context.tool_install()
         .arg(format!("foo @ {url}"))
@@ -8228,25 +8228,13 @@ fn tool_install_locked_extra_build_dependency_source() -> Result<()> {
         .with_filtered_exe_suffix();
     let project = context.temp_dir.child("foo");
     let bin = context.temp_dir.child("bin");
-    let (helper_name, helper) = generate_wheel_with_files(
-        &"build-helper".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("build_helper/payload.py", "VALUE = 'local wheel'\n")],
-    );
+    let (helper_name, helper) = WheelBuilder::new(&"build-helper".parse()?, &"1.0.0".parse()?)
+        .files(&[("build_helper/payload.py", "VALUE = 'local wheel'\n")])
+        .build();
     project.child(&helper_name).write_binary(&helper)?;
-    let (filename, wheel) = generate_wheel(
-        &"foo".parse()?,
-        &"0.1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &["foo".to_owned()],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .entry_points(&["foo".to_owned()])
+        .build();
     project.child("pyproject.toml").write_str(&formatdoc! {r#"
         [project]
         name = "foo"
@@ -8374,15 +8362,10 @@ fn tool_install_locked_extra_build_dependency_matches_runtime() -> Result<()> {
     "#})?;
     let index = PackseServer::from_scenario(&scenario);
     let index_url = index.index_url();
-    let (filename, wheel) = generate_wheel(
-        &"foo".parse()?,
-        &"0.1.0".parse()?,
-        &["build-helper==1.0.0".parse()?],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &["foo".to_owned()],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .requires(&["build-helper==1.0.0".parse()?])
+        .entry_points(&["foo".to_owned()])
+        .build();
     project.child("pyproject.toml").write_str(&formatdoc! {r#"
         [project]
         name = "foo"
@@ -8463,30 +8446,18 @@ fn tool_install_preserves_build_only_extra_requirements() -> Result<()> {
     let project = context.temp_dir.child("foo");
     let backend = context.temp_dir.child("backend");
     let bin = context.temp_dir.child("bin");
-    let (helper_filename, helper) = generate_wheel_with_files(
-        &"build-helper".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("build_helper/payload.py", "VALUE = 'build-only helper'\n")],
-    );
+    let (helper_filename, helper) = WheelBuilder::new(&"build-helper".parse()?, &"1.0.0".parse()?)
+        .files(&[("build_helper/payload.py", "VALUE = 'build-only helper'\n")])
+        .build();
     context
         .temp_dir
         .child(&helper_filename)
         .write_binary(&helper)?;
-    let helper_url = Url::from_file_path(context.temp_dir.child(&helper_filename).path())
+    let helper_url = SafeUrl::from_file_path(context.temp_dir.child(&helper_filename).path())
         .map_err(|()| anyhow::anyhow!("invalid helper wheel URL"))?;
-    let (filename, wheel) = generate_wheel(
-        &"foo".parse()?,
-        &"0.1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &["foo".to_owned()],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .entry_points(&["foo".to_owned()])
+        .build();
     let backend_module = formatdoc! {r#"
         from pathlib import Path
 
@@ -8494,15 +8465,10 @@ fn tool_install_preserves_build_only_extra_requirements() -> Result<()> {
             Path(wheel_directory, "{filename}").write_bytes(bytes.fromhex("{}"))
             return "{filename}"
     "#, hex::encode(&wheel)};
-    let (backend_filename, backend_wheel) = generate_wheel_with_files(
-        &"build-backend".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("build_backend/api.py", backend_module.as_str())],
-    );
+    let (backend_filename, backend_wheel) =
+        WheelBuilder::new(&"build-backend".parse()?, &"1.0.0".parse()?)
+            .files(&[("build_backend/api.py", backend_module.as_str())])
+            .build();
     backend.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "build-backend"
@@ -8524,7 +8490,7 @@ fn tool_install_preserves_build_only_extra_requirements() -> Result<()> {
             Path(wheel_directory, "{backend_filename}").write_bytes(bytes.fromhex("{}"))
             return "{backend_filename}"
     "#, hex::encode(&backend_wheel)})?;
-    let backend_url = Url::from_directory_path(backend.path())
+    let backend_url = SafeUrl::from_directory_path(backend.path())
         .map_err(|()| anyhow::anyhow!("invalid backend directory URL"))?;
     project.child("pyproject.toml").write_str(&formatdoc! {r#"
         [project]
@@ -8605,7 +8571,7 @@ fn tool_install_locked_rejects_matching_ancestor_project() -> Result<()> {
     "#})?;
     context.temp_dir.child("src").create_dir_all()?;
     context.lock().arg("--offline").assert().success();
-    let url = Url::from_directory_path(context.temp_dir.child("src").path())
+    let url = SafeUrl::from_directory_path(context.temp_dir.child("src").path())
         .map_err(|()| anyhow::anyhow!("invalid source directory"))?;
     uv_snapshot!(context.filters(), context.tool_install()
         .arg(format!("foo @ {url}")).args(["--locked", "--offline"]), @r#"
@@ -8631,27 +8597,17 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
     let bin = context.temp_dir.child("bin");
     let path = tool_install_git_path(&bin);
     let marker = context.temp_dir.child("builds");
-    let (wheel_helper_name, wheel_helper) = generate_wheel_with_files(
-        &"wheel-helper".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("wheel_helper/payload.py", "VALUE = 'wheel'\n")],
-    );
+    let (wheel_helper_name, wheel_helper) =
+        WheelBuilder::new(&"wheel-helper".parse()?, &"1.0.0".parse()?)
+            .files(&[("wheel_helper/payload.py", "VALUE = 'wheel'\n")])
+            .build();
     repository
         .child(&wheel_helper_name)
         .write_binary(&wheel_helper)?;
-    let (directory_helper_name, directory_helper) = generate_wheel_with_files(
-        &"directory-helper".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("directory_helper/payload.py", "VALUE = 'directory'\n")],
-    );
+    let (directory_helper_name, directory_helper) =
+        WheelBuilder::new(&"directory-helper".parse()?, &"1.0.0".parse()?)
+            .files(&[("directory_helper/payload.py", "VALUE = 'directory'\n")])
+            .build();
     helper.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "directory-helper"
@@ -8696,15 +8652,10 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
         build-backend = "backend"
         backend-path = ["."]
     "#})?;
-    let (filename, wheel) = generate_wheel(
-        &"foo".parse()?,
-        &"0.1.0".parse()?,
-        &["wheel-helper==1.0.0".parse()?],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &["foo".to_owned()],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .requires(&["wheel-helper==1.0.0".parse()?])
+        .entry_points(&["foo".to_owned()])
+        .build();
     project.child("backend.py").write_str(&formatdoc! {r#"
         from pathlib import Path
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
@@ -8761,7 +8712,7 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
         .stdout
         .clone();
     let commit = String::from_utf8(commit)?;
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository directory URL"))?;
     let mut filters = context.filters();
     filters.push((
@@ -8791,10 +8742,10 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
         assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
     [tool]
     requirements = [{ name = "foo", git = "file://[TEMP_DIR]/repository/?subdirectory=foo&rev=[COMMIT]" }]
-    constraints = [{ name = "wheel-helper", git = "file://[TEMP_DIR]/repository/?path=wheel_helper-1.0.0-py3-none-any.whl&rev=[COMMIT]#[COMMIT]" }]
-    overrides = [{ name = "wheel-helper", git = "file://[TEMP_DIR]/repository/?path=wheel_helper-1.0.0-py3-none-any.whl&rev=[COMMIT]#[COMMIT]" }]
-    build-constraint-dependencies = [{ name = "directory-helper", git = "file://[TEMP_DIR]/repository/?subdirectory=directory-helper&rev=[COMMIT]#[COMMIT]" }]
-    extra-build-requires = { foo = [{ requirement = { name = "wheel-helper", git = "file://[TEMP_DIR]/repository/?path=wheel_helper-1.0.0-py3-none-any.whl&rev=[COMMIT]#[COMMIT]" }, match_runtime = false }, { requirement = { name = "directory-helper", git = "file://[TEMP_DIR]/repository/?subdirectory=directory-helper&rev=[COMMIT]#[COMMIT]" }, match_runtime = false }] }
+    constraints = [{ name = "wheel-helper", git = "file://[TEMP_DIR]/repository/?path=wheel_helper-1.0.0-py3-none-any.whl&rev=[COMMIT]" }]
+    overrides = [{ name = "wheel-helper", git = "file://[TEMP_DIR]/repository/?path=wheel_helper-1.0.0-py3-none-any.whl&rev=[COMMIT]" }]
+    build-constraint-dependencies = [{ name = "directory-helper", git = "file://[TEMP_DIR]/repository/?subdirectory=directory-helper&rev=[COMMIT]" }]
+    extra-build-requires = { foo = [{ requirement = { name = "wheel-helper", git = "file://[TEMP_DIR]/repository/?path=wheel_helper-1.0.0-py3-none-any.whl&rev=[COMMIT]" }, match_runtime = false }, { requirement = { name = "directory-helper", git = "file://[TEMP_DIR]/repository/?subdirectory=directory-helper&rev=[COMMIT]" }, match_runtime = false }] }
     entrypoints = [
         { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
     ]
@@ -8837,30 +8788,18 @@ fn tool_install_locked_project_named_index() -> Result<()> {
         .with_filtered_exe_suffix();
     let project = context.temp_dir.child("foo");
     let bin = context.temp_dir.child("bin");
-    let (child_filename, child_wheel) = generate_wheel(
-        &"index-child".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (child_filename, child_wheel) =
+        WheelBuilder::new(&"index-child".parse()?, &"1.0.0".parse()?).build();
     project
         .child(format!("simple/index-child/{child_filename}"))
         .write_binary(&child_wheel)?;
     project
         .child("simple/index-child/index.html")
         .write_str(&format!("<a href='{child_filename}'>{child_filename}</a>"))?;
-    let (filename, wheel) = generate_wheel(
-        &"foo".parse()?,
-        &"0.1.0".parse()?,
-        &["index-child==1.0.0".parse()?],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &["foo".to_owned()],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .requires(&["index-child==1.0.0".parse()?])
+        .entry_points(&["foo".to_owned()])
+        .build();
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "foo"
@@ -8941,15 +8880,9 @@ fn tool_install_locked_unnamed_git_project_build_settings() -> Result<()> {
     let repository = context.temp_dir.child("repository");
     let bin = context.temp_dir.child("bin");
     let path = tool_install_git_path(&bin);
-    let (filename, wheel) = generate_wheel(
-        &"foo".parse()?,
-        &"0.1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &["foo".to_owned()],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .entry_points(&["foo".to_owned()])
+        .build();
     repository.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "foo"
@@ -9002,7 +8935,7 @@ fn tool_install_locked_unnamed_git_project_build_settings() -> Result<()> {
         ])
         .assert()
         .success();
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository directory URL"))?;
     let mut filters = context.filters();
     filters.push((
@@ -9094,8 +9027,8 @@ fn tool_install_locked_git_configuration_boundary() -> Result<()> {
         ])
         .assert()
         .success();
-    let url =
-        Url::from_directory_path(repository.path()).map_err(|()| anyhow!("invalid Git source"))?;
+    let url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid Git source"))?;
     let mut filters = context.filters();
     filters.push((
         r"git-v1/checkouts/[0-9a-f]+/[0-9a-f]+",
@@ -9129,41 +9062,21 @@ fn tool_install_locked_git_index_sources_survive_cache_removal() -> Result<()> {
     let path = tool_install_git_path(&bin);
     let global_wheels = context.temp_dir.child("global-wheels");
     global_wheels.create_dir_all()?;
-    let (simple_name, simple) = generate_wheel_with_files(
-        &"simple-child".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (simple_name, simple) =
+        WheelBuilder::new(&"simple-child".parse()?, &"1.0.0".parse()?).build();
     repository
         .child(format!("simple/simple-child/{simple_name}"))
         .write_binary(&simple)?;
     repository
         .child("simple/simple-child/index.html")
         .write_str(&format!("<a href='{simple_name}'>{simple_name}</a>"))?;
-    let (flat_name, flat) = generate_wheel_with_files(
-        &"flat-child".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (flat_name, flat) = WheelBuilder::new(&"flat-child".parse()?, &"1.0.0".parse()?).build();
     repository
         .child(format!("wheels/{flat_name}"))
         .write_binary(&flat)?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"foo".parse()?,
-        &"0.1.0".parse()?,
-        &["simple-child>=1".parse()?, "flat-child>=1".parse()?],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .requires(&["simple-child>=1".parse()?, "flat-child>=1".parse()?])
+        .files(&[
             (
                 "foo/cli.py",
                 "def main():\n    import simple_child, flat_child\n    print(simple_child.__version__, flat_child.__version__)\n",
@@ -9172,8 +9085,8 @@ fn tool_install_locked_git_index_sources_survive_cache_removal() -> Result<()> {
                 "foo-0.1.0.dist-info/entry_points.txt",
                 "[console_scripts]\nfoo = foo.cli:main\n",
             ),
-        ],
-    );
+        ])
+        .build();
     repository.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "foo"
@@ -9230,8 +9143,8 @@ fn tool_install_locked_git_index_sources_survive_cache_removal() -> Result<()> {
         ])
         .assert()
         .success();
-    let url =
-        Url::from_directory_path(repository.path()).map_err(|()| anyhow!("invalid Git source"))?;
+    let url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid Git source"))?;
     let mut filters = context.filters();
     filters.push((
         r"file://[^\s]+/git-v1/checkouts/",
@@ -9280,27 +9193,20 @@ fn tool_install_locked_git_index_sources_survive_cache_removal() -> Result<()> {
         .expect("index sources");
     assert_eq!(sources.len(), 2);
     ChildPath::new(
-        Url::parse(sources[0]["index"].as_str().expect("index URL"))?
+        SafeUrl::parse(sources[0]["index"].as_str().expect("index URL"))?
             .to_file_path()
             .map_err(|()| anyhow!("invalid index URL"))?,
     )
     .assert(predicate::path::missing());
     ChildPath::new(
-        Url::parse(sources[1]["index"].as_str().expect("index URL"))?
+        SafeUrl::parse(sources[1]["index"].as_str().expect("index URL"))?
             .to_file_path()
             .map_err(|()| anyhow!("invalid index URL"))?,
     )
     .assert(predicate::path::missing());
 
-    let (simple_name, simple) = generate_wheel_with_files(
-        &"simple-child".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (simple_name, simple) =
+        WheelBuilder::new(&"simple-child".parse()?, &"2.0.0".parse()?).build();
     repository
         .child(format!("simple/simple-child/{simple_name}"))
         .write_binary(&simple)?;
@@ -9308,15 +9214,7 @@ fn tool_install_locked_git_index_sources_survive_cache_removal() -> Result<()> {
         .child("simple/simple-child/index.html")
         .write_str(&format!("<a href='{simple_name}'>{simple_name}</a>"))?;
     fs_err::remove_file(repository.child(format!("wheels/{flat_name}")))?;
-    let (flat_name, flat) = generate_wheel_with_files(
-        &"flat-child".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (flat_name, flat) = WheelBuilder::new(&"flat-child".parse()?, &"2.0.0".parse()?).build();
     repository
         .child(format!("wheels/{flat_name}"))
         .write_binary(&flat)?;
@@ -9391,36 +9289,22 @@ fn tool_install_locked_git_build_index_survives_cache_removal() -> Result<()> {
     let repository = context.temp_dir.child("repository");
     let bin = context.temp_dir.child("bin");
     let path = tool_install_git_path(&bin);
-    let (build_name, build) = generate_wheel_with_files(
-        &"build-child".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (build_name, build) = WheelBuilder::new(&"build-child".parse()?, &"1.0.0".parse()?).build();
     repository
         .child(format!("simple/build-child/{build_name}"))
         .write_binary(&build)?;
     repository
         .child("simple/build-child/index.html")
         .write_str(&format!("<a href='{build_name}'>{build_name}</a>"))?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"foo".parse()?,
-        &"0.1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .files(&[
             ("foo/cli.py", "def main(): pass\n"),
             (
                 "foo-0.1.0.dist-info/entry_points.txt",
                 "[console_scripts]\nfoo = foo.cli:main\n",
             ),
-        ],
-    );
+        ])
+        .build();
     repository.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "foo"
@@ -9480,8 +9364,8 @@ fn tool_install_locked_git_build_index_survives_cache_removal() -> Result<()> {
         ])
         .assert()
         .success();
-    let url =
-        Url::from_directory_path(repository.path()).map_err(|()| anyhow!("invalid Git source"))?;
+    let url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid Git source"))?;
     let mut filters = context.filters();
     filters.push((
         r"file://[^\s]+/git-v1/checkouts/",
@@ -9523,7 +9407,7 @@ fn tool_install_locked_git_build_index_survives_cache_removal() -> Result<()> {
         .as_str()
         .expect("build requirement index");
     ChildPath::new(
-        Url::parse(index)?
+        SafeUrl::parse(index)?
             .to_file_path()
             .map_err(|()| anyhow!("invalid index URL"))?,
     )
@@ -9547,5 +9431,148 @@ fn tool_install_locked_git_build_index_survives_cache_removal() -> Result<()> {
      ~ foo==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT])
     Installed 1 executable: foo
     "#);
+    Ok(())
+}
+
+/// Upgrade policy retains declarations omitted by resolution-input pruning.
+#[test]
+fn tool_install_locked_preserves_pruned_project_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let project = context.temp_dir.child("project");
+    let bin = context.temp_dir.child("bin");
+    let (filename, wheel) = WheelBuilder::new(&"dep".parse()?, &"1.0.0".parse()?).build();
+    context
+        .temp_dir
+        .child(format!("wheels/{filename}"))
+        .write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"dep".parse()?, &"2.0.0".parse()?).build();
+    context
+        .temp_dir
+        .child(format!("wheels/{filename}"))
+        .write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .requires(&["dep>=1".parse()?])
+        .files(&[
+            (
+                "foo/cli.py",
+                "def main():\n    import dep\n    print(dep.__version__)\n",
+            ),
+            (
+                "foo-0.1.0.dist-info/entry_points.txt",
+                "[console_scripts]\nfoo = foo.cli:main\n",
+            ),
+        ])
+        .build();
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep>=1"]
+        [project.scripts]
+        foo = "foo.cli:main"
+        [tool.uv]
+        no-index = true
+        find-links = ["../wheels"]
+        preview-features = ["resolution-inputs"]
+        constraint-dependencies = ["dep<2", "unused-constrained<2"]
+        override-dependencies = ["unused-overridden==1"]
+        exclude-dependencies = ["unused-excluded"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+    ", bytes=hex::encode(wheel)})?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let lock = toml::from_str::<toml::Value>(&context.read("project/uv.lock"))?;
+    assert!(
+        lock.get("manifest")
+            .and_then(|manifest| manifest.get("constraints"))
+            .is_none()
+    );
+    uv_snapshot!(context.filters(), context.tool_install().arg("./project")
+        .args(["--locked", "--preview-features", "tool-install-locks", "--preview-features", "resolution-inputs"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + dep==1.0.0
+     + foo==0.1.0 (from file://[TEMP_DIR]/project)
+    Installed 1 executable: foo
+    "#);
+    project
+        .child("pyproject.toml")
+        .write_str(&context.read("project/pyproject.toml").replace(
+            "dependencies = [\"dep>=1\"]",
+            "dependencies = [\"dep>=2.0\"]",
+        ))?;
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .requires(&["dep>=2.0".parse()?])
+        .files(&[
+            (
+                "foo/cli.py",
+                "def main():\n    import dep\n    print(dep.__version__)\n",
+            ),
+            (
+                "foo-0.1.0.dist-info/entry_points.txt",
+                "[console_scripts]\nfoo = foo.cli:main\n",
+            ),
+        ])
+        .build();
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+    ", bytes=hex::encode(wheel)})?;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["foo", "--reinstall", "--preview-features", "tool-install-locks", "--preview-features", "resolution-inputs"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER).env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade foo
+      cause: Because foo==0.1.0 depends on dep>=2.0 and dep<2, we can conclude that foo==0.1.0 cannot be used.
+             And because only foo==0.1.0 is available and you require foo, we can conclude that your requirements are unsatisfiable.
+    "#);
+    uv_snapshot!(context.filters(), context.external_command("foo").env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    "#);
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
+    [tool]
+    requirements = [{ name = "foo", directory = "[TEMP_DIR]/project" }]
+    constraints = [
+        { name = "dep", specifier = "<2" },
+        { name = "unused-constrained", specifier = "<2" },
+    ]
+    overrides = [{ name = "unused-overridden", specifier = "==1" }]
+    excludes = ["unused-excluded"]
+    entrypoints = [
+        { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
+    ]
+
+    [tool.options]
+    no-index = true
+    find-links = ["file://[TEMP_DIR]/wheels"]
+    "#);
+    });
     Ok(())
 }
