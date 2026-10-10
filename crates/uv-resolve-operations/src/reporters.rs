@@ -143,6 +143,10 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
         self.reporter.on_checkout_complete(url, rev, id);
     }
 
+    fn on_checkout_failed(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+        self.reporter.on_checkout_failed(url, rev, id);
+    }
+
     fn on_download_start(&self, name: &PackageName, size: Option<u64>) -> usize {
         self.reporter.on_download_start(name.to_string(), size)
     }
@@ -197,6 +201,10 @@ impl uv_distribution::Reporter for ResolverReporter {
 
     fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
         self.reporter.on_checkout_complete(url, rev, id);
+    }
+
+    fn on_checkout_failed(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+        self.reporter.on_checkout_failed(url, rev, id);
     }
 }
 

@@ -2706,6 +2706,82 @@ fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
     Ok(())
 }
 
+/// An unavailable Git revision closes the checkout operation with its original identity.
+#[test]
+#[cfg(feature = "test-git")]
+fn sync_jsonl_failed_git_checkout() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filter((r"/git-v1/db/[0-9a-f]+", "/git-v1/db/[HASH]"))
+        .with_filter((
+            r"(?m)^  cause: process didn't exit successfully:.*$",
+            "  cause: process didn't exit successfully: [GIT FETCH]",
+        ));
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+    "#})?;
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+
+        [tool.uv.sources]
+        example = {{ git = "{repository_url}", rev = "missing-revision" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--output-format", "jsonl", "--preview-features", "jsonl"]), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {"type":"progress","phase":"checkout","status":"started","id":1,"url":"file://[TEMP_DIR]/repository/","revision":"missing-revision"}
+    {"type":"progress","phase":"checkout","status":"failed","id":1,"url":"file://[TEMP_DIR]/repository/","revision":"missing-revision"}
+
+    ----- stderr -----
+    error: Failed to download and build `example @ git+file://[TEMP_DIR]/repository/@missing-revision`
+      cause: Git operation failed
+      cause: failed to clone into: [CACHE_DIR]/git-v1/db/[HASH]
+      cause: failed to fetch branch or tag `missing-revision`
+      cause: process didn't exit successfully: [GIT FETCH]
+             --- stderr
+             fatal: couldn't find remote ref refs/tags/missing-revision
+    "#);
+    Ok(())
+}
+
 #[test]
 fn sync_json_check_outdated_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")

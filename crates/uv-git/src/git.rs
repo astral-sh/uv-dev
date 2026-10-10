@@ -280,7 +280,7 @@ impl GitRemote {
     }
 
     /// Gets the remote repository URL.
-    pub(crate) fn url(&self) -> &DisplaySafeUrl {
+    fn url(&self) -> &DisplaySafeUrl {
         &self.url
     }
 

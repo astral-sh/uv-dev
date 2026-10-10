@@ -283,6 +283,9 @@ pub trait Reporter: Send + Sync {
 
     /// Callback to invoke when a repository checkout completes.
     fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, index: usize);
+
+    /// Callback to invoke when a repository checkout fails or is abandoned.
+    fn on_checkout_failed(&self, _url: &DisplaySafeUrl, _rev: &str, _id: usize) {}
 }
 
 impl dyn Reporter {
@@ -318,6 +321,10 @@ impl uv_distribution::Reporter for Facade {
 
     fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, index: usize) {
         self.reporter.on_checkout_complete(url, rev, index);
+    }
+
+    fn on_checkout_failed(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+        self.reporter.on_checkout_failed(url, rev, id);
     }
 
     fn on_download_start(&self, name: &PackageName, size: Option<u64>) -> usize {
