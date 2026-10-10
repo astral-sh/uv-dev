@@ -17,6 +17,175 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
 
 #[test]
+fn run_profile_rejects_before_environment_preparation() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.15"
+        dependencies = ["missing-profile-dependency"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.run().args([
+        "--offline", "--profile", "python", "-c", "pass",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--profile` only supports Python scripts and modules; use `uv run --profile script.py` or `uv run --profile -m module`
+    ");
+    assert!(!context.venv.exists());
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
+#[test]
+fn run_profile_preview_warning() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("main.py").write_str("pass\n")?;
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-project", "--profile", "main.py",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: `uv run --profile` is experimental and may change without warning. Pass `--preview-features run-profile` to disable this warning.
+    error: `--profile` requires CPython 3.15 or later; use `--python` to select a compatible interpreter
+    "#);
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-project", "--profile", "--preview-features", "run-profile", "main.py",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--profile` requires CPython 3.15 or later; use `--python` to select a compatible interpreter
+    "#);
+    Ok(())
+}
+
+#[cfg(feature = "test-python-managed")]
+#[test]
+fn run_profile_rejects_unsupported_targets() -> Result<()> {
+    let context = uv_test::test_context!("3.14");
+    context
+        .temp_dir
+        .child("main.py")
+        .write_str("print('hello')\n")?;
+
+    uv_snapshot!(context.filters(), context.run().arg("--quiet")
+        .arg("--profile").arg("main.py"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--profile` requires CPython 3.15 or later; use `--python` to select a compatible interpreter
+    ");
+    uv_snapshot!(context.filters(), context.run().arg("--quiet")
+        .arg("--profile"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--profile` requires a Python script or module
+    ");
+
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+#[test]
+fn run_profile_script() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "run-profile"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.profile-dependency.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.15").assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = "<3.15"
+        dependencies = ["missing-project-dependency"]
+    "#})?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.15.0rc2"
+        # dependencies = ["profile-dependency"]
+        # ///
+        import json
+        import sys
+        import time
+        from pathlib import Path
+        import profile_dependency
+
+        time.sleep(0.1)
+        Path('target.json').write_text(json.dumps([sys.argv[1:], profile_dependency.__version__]))
+    "#})?;
+    context
+        .run()
+        .arg("--profile")
+        .arg("--profile-output")
+        .arg("script-profile.html")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("script.py")
+        .args(["--flag", "value"])
+        .assert()
+        .success();
+    assert_snapshot!(context.read("target.json"), @r#"[["--flag", "value"], "1.0.0"]"#);
+    assert!(fs_err::metadata(context.temp_dir.join("script-profile.html"))?.len() > 0);
+
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+#[test]
+fn run_profile_module() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.15").assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = "<3.15"
+        dependencies = ["missing-project-dependency"]
+    "#})?;
+    context
+        .temp_dir
+        .child("profile_module.py")
+        .write_str(indoc! {r"
+        import json
+        import sys
+        import time
+        from pathlib import Path
+
+        time.sleep(0.1)
+        Path('module.json').write_text(json.dumps(sys.argv[1:]))
+    "})?;
+    context
+        .run()
+        .arg("--no-project")
+        .arg("--python")
+        .arg("3.15")
+        .arg("--profile")
+        .arg("-m")
+        .arg("profile_module")
+        .arg("--flag")
+        .assert()
+        .success();
+    assert_snapshot!(context.read("module.json"), @r#"["--flag"]"#);
+    assert!(fs_err::metadata(context.temp_dir.join("profile.html"))?.len() > 0);
+    Ok(())
+}
+
+#[test]
 fn run_with_python_version() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11", "3.9"]);
 

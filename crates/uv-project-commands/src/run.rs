@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::env::VarError;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write;
 use std::io;
 use std::io::Read;
@@ -44,7 +44,7 @@ use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -92,6 +92,7 @@ pub async fn run(
     project_dir: &Path,
     script: Option<Pep723Item>,
     command: Option<RunCommand>,
+    profile: Option<PathBuf>,
     requirements: Vec<RequirementsSource>,
     show_resolution: bool,
     lock_check: LockCheck,
@@ -126,6 +127,18 @@ pub async fn run(
     malware_settings: MalwareCheckSettings,
     #[cfg(unix)] run_rlimit_nofile: Option<u32>,
 ) -> anyhow::Result<ExitStatus> {
+    if profile.is_some() {
+        let command = command
+            .as_ref()
+            .context("`--profile` requires a Python script or module")?;
+        command.profile_target()?;
+        if !preview.is_enabled(PreviewFeature::RunProfile) {
+            warn_user!(
+                "`uv run --profile` is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+                PreviewFeature::RunProfile
+            );
+        }
+    }
     // Check if max recursion depth was exceeded. This most commonly happens
     // for scripts with a shebang line like `#!/usr/bin/env -S uv run`, so try
     // to provide guidance for that case.
@@ -1227,7 +1240,11 @@ pub async fn run(
     };
 
     debug!("Running `{command}`");
-    let mut process = command.as_command(interpreter);
+    let mut process = if let Some(output) = profile {
+        command.as_profiled_command(interpreter, &output)?
+    } else {
+        command.as_command(interpreter)
+    };
     process.envs(env_file_environment);
 
     // Construct the `PATH` environment variable.
@@ -1428,6 +1445,11 @@ pub enum RunCommand {
     External(OsString, Vec<OsString>),
     /// Execute an empty command (in practice, `python` with no arguments).
     Empty,
+}
+
+enum ProfileTarget<'command> {
+    Script(&'command Path, &'command [OsString]),
+    Module(&'command OsStr, &'command [OsString]),
 }
 
 /// A parsed `uv run` target before any remote script has been downloaded.
@@ -1650,6 +1672,52 @@ impl ParsedRunCommand {
 }
 
 impl RunCommand {
+    /// Validate target eligibility without preparing an environment or selecting Python.
+    fn profile_target(&self) -> anyhow::Result<ProfileTarget<'_>> {
+        match self {
+            Self::PythonScript(target, args) => Ok(ProfileTarget::Script(target, args)),
+            Self::PythonRemote(script, args) => Ok(ProfileTarget::Script(script.path(), args)),
+            Self::PythonModule(module, args) => Ok(ProfileTarget::Module(module, args)),
+            Self::Python(_)
+            | Self::PythonGuiScript(..)
+            | Self::PythonPackage(..)
+            | Self::PythonZipapp(..)
+            | Self::PythonStdin(..)
+            | Self::PythonGuiStdin(..)
+            | Self::External(..)
+            | Self::Empty => bail!(
+                "`--profile` only supports Python scripts and modules; use `uv run --profile script.py` or `uv run --profile -m module`"
+            ),
+        }
+    }
+
+    /// Run a Python target under the selected interpreter's sampling profiler.
+    fn as_profiled_command(
+        &self,
+        interpreter: &Interpreter,
+        output: &Path,
+    ) -> anyhow::Result<Command> {
+        let target = self.profile_target()?;
+        if interpreter.implementation_name() != "cpython" || interpreter.python_tuple() < (3, 15) {
+            bail!(
+                "`--profile` requires CPython 3.15 or later; use `--python` to select a compatible interpreter"
+            );
+        }
+
+        let mut process = Command::new(interpreter.sys_executable());
+        process.args(["-m", "profiling.sampling", "run", "--flamegraph", "-o"]);
+        process.arg(output);
+        match target {
+            ProfileTarget::Script(target, args) => {
+                process.arg("--").arg(target).args(args);
+            }
+            ProfileTarget::Module(module, args) => {
+                process.args(["-m", "--"]).arg(module).args(args);
+            }
+        }
+        Ok(process)
+    }
+
     /// Read any inline PEP 723 metadata associated with this command target.
     async fn read_pep723_item(&self) -> Result<Option<Pep723Item>, Pep723Error> {
         match self {

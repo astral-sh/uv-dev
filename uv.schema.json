@@ -1886,6 +1886,7 @@
             "malware-check",
             "venv-safe-clear",
             "check-command",
+            "run-profile",
             "packaged-init",
             "centralized-project-envs",
             "tool-install-locks",
