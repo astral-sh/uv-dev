@@ -709,87 +709,90 @@ pub async fn pip_compile(
                     Some(source)
                 })
                 .collect::<Vec<_>>();
-            let mut declared_requirements = Vec::new();
-            let mut declared_seen = FxHashSet::default();
-            for &source in &sources {
-                let id = source.distribution_id();
-                if !declarations_by_source.contains_key(&id) {
-                    let declared = build_dispatch
-                        .discover_declared_build_requirements(
-                            source,
-                            hasher.metadata_policy(source),
-                        )
-                        .await
-                        .map_err(|err| {
-                            if err.is_user_failure() {
-                                UvError::User(err.into())
-                            } else {
-                                UvError::Unexpected(err.into())
-                            }
-                        })?;
-                    declarations_by_source.insert(id.clone(), declared);
-                }
-                if let Some(declared) = declarations_by_source.get(&id) {
-                    declared_requirements.extend(
-                        declared
-                            .iter()
-                            .filter(|requirement| declared_seen.insert((*requirement).clone()))
-                            .cloned(),
-                    );
-                }
-            }
-            // Reconcile every source's declarations before running hooks. Hook results from
-            // independently selected backend versions need not form a compatible environment.
-            let (backend_constraints, backend_preferences) = discovery_inputs(&resolution);
-            let backend_resolution = resolve(
-                requirements.clone(),
-                declared_requirements,
-                backend_constraints,
-                backend_preferences,
-                Box::new(SummaryResolveLogger),
-            )
-            .await?;
-            let selection = Arc::new(
-                backend_resolution
-                    .distributions()
-                    .map(Identifier::distribution_id)
-                    .collect::<FxHashSet<_>>(),
-            );
-            let (discovery_constraints, discovery_preferences) =
-                discovery_inputs(&backend_resolution);
-            let discovery_constraints = Constraints::from_specifications(discovery_constraints);
             let mut active_requirements = Vec::new();
             let mut active_seen = FxHashSet::default();
-            for source in sources {
-                let id = source.distribution_id();
-                if requirements_by_source
-                    .get(&id)
-                    .is_none_or(|(previous, _)| previous != &selection)
-                {
-                    let discovered = build_dispatch
-                        .discover_build_requirements(
-                            source,
-                            hasher.metadata_policy(source),
-                            &discovery_constraints,
-                            discovery_preferences.clone(),
-                        )
-                        .await
-                        .map_err(|err| {
-                            if err.is_user_failure() {
-                                UvError::User(err.into())
-                            } else {
-                                UvError::Unexpected(err.into())
-                            }
-                        })?;
-                    requirements_by_source.insert(id.clone(), (Arc::clone(&selection), discovered));
+            if !sources.is_empty() {
+                let mut declared_requirements = Vec::new();
+                let mut declared_seen = FxHashSet::default();
+                for &source in &sources {
+                    let id = source.distribution_id();
+                    if !declarations_by_source.contains_key(&id) {
+                        let declared = build_dispatch
+                            .discover_declared_build_requirements(
+                                source,
+                                hasher.metadata_policy(source),
+                            )
+                            .await
+                            .map_err(|err| {
+                                if err.is_user_failure() {
+                                    UvError::User(err.into())
+                                } else {
+                                    UvError::Unexpected(err.into())
+                                }
+                            })?;
+                        declarations_by_source.insert(id.clone(), declared);
+                    }
+                    if let Some(declared) = declarations_by_source.get(&id) {
+                        declared_requirements.extend(
+                            declared
+                                .iter()
+                                .filter(|requirement| declared_seen.insert((*requirement).clone()))
+                                .cloned(),
+                        );
+                    }
                 }
-                if let Some((_, build_requirements)) = requirements_by_source.get(&id) {
-                    active_requirements.extend(
-                        build_requirements
-                            .iter()
-                            .filter(|requirement| active_seen.insert((*requirement).clone()))
-                            .cloned(),
-                    );
+                // Reconcile every source's declarations before running hooks. Hook results from
+                // independently selected backend versions need not form a compatible environment.
+                let (backend_constraints, backend_preferences) = discovery_inputs(&resolution);
+                let backend_resolution = resolve(
+                    requirements.clone(),
+                    declared_requirements,
+                    backend_constraints,
+                    backend_preferences,
+                    Box::new(SummaryResolveLogger),
+                )
+                .await?;
+                let selection = Arc::new(
+                    backend_resolution
+                        .distributions()
+                        .map(Identifier::distribution_id)
+                        .collect::<FxHashSet<_>>(),
+                );
+                let (discovery_constraints, discovery_preferences) =
+                    discovery_inputs(&backend_resolution);
+                let discovery_constraints = Constraints::from_specifications(discovery_constraints);
+                for source in sources {
+                    let id = source.distribution_id();
+                    if requirements_by_source
+                        .get(&id)
+                        .is_none_or(|(previous, _)| previous != &selection)
+                    {
+                        let discovered = build_dispatch
+                            .discover_build_requirements(
+                                source,
+                                hasher.metadata_policy(source),
+                                &discovery_constraints,
+                                discovery_preferences.clone(),
+                            )
+                            .await
+                            .map_err(|err| {
+                                if err.is_user_failure() {
+                                    UvError::User(err.into())
+                                } else {
+                                    UvError::Unexpected(err.into())
+                                }
+                            })?;
+                        requirements_by_source
+                            .insert(id.clone(), (Arc::clone(&selection), discovered));
+                    }
+                    if let Some((_, build_requirements)) = requirements_by_source.get(&id) {
+                        active_requirements.extend(
+                            build_requirements
+                                .iter()
+                                .filter(|requirement| active_seen.insert((*requirement).clone()))
+                                .cloned(),
+                        );
+                    }
                 }
             }
             let active_state = active_seen;
