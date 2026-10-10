@@ -2062,3 +2062,43 @@ where
         .map_err(serde::de::Error::custom)?;
     Ok(Some(timestamp))
 }
+
+#[cfg(test)]
+mod hash_tests {
+    use uv_cache::Cache;
+    use uv_client::{BaseClientBuilder, FileHashError, RegistryClientBuilder};
+
+    use super::{PylockToml, PylockTomlErrorKind};
+
+    #[tokio::test]
+    async fn missing_hash_failure_keeps_all_destinations_unchanged()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let cache = Cache::temp()?;
+        let client =
+            RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone()).build()?;
+        fs_err::write(cache.root().join("first.whl"), b"abc")?;
+        let mut lock: PylockToml = toml::from_str(
+            r#"
+            lock-version = "1.0"
+            created-by = "uv"
+            [[packages]]
+            name = "first"
+            archive = { path = "first.whl", hashes = {} }
+            [[packages]]
+            name = "missing"
+            archive = { path = "missing.whl", hashes = {} }
+        "#,
+        )?;
+        let before = lock.to_toml()?;
+        let error = lock
+            .generate_missing_hashes(&client, 1, cache.root())
+            .await
+            .expect_err("the second artifact is missing");
+        let PylockTomlErrorKind::FileHash(FileHashError::ReadFile(path, _)) = error else {
+            return Err("expected a local artifact read error".into());
+        };
+        assert_eq!(path.as_ref(), cache.root().join("missing.whl"));
+        assert_eq!(lock.to_toml()?, before);
+        Ok(())
+    }
+}
