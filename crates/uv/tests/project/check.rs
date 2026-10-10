@@ -34,6 +34,44 @@ fn write_workspace_member(context: &uv_test::TestContext, name: &str, source: &s
 }
 
 #[test]
+#[cfg(unix)]
+fn check_relative_ty_path_uses_target_directory() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let context = uv_test::test_context_with_versions!(&[]);
+    let target = context.temp_dir.child("project");
+    target.child("bin").create_dir_all()?;
+    let ty = target.child("bin/ty");
+    ty.write_str(indoc! {r#"
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+            printf 'ty 0.0.64\n'
+            exit 0
+        fi
+        [ "$1" = "check" ] || exit 91
+        printf 'checked from target\n'
+    "#})?;
+    fs_err::set_permissions(ty.path(), std::fs::Permissions::from_mode(0o755))?;
+
+    context
+        .check()
+        .arg("--no-project")
+        .arg("--project")
+        .arg(target.path())
+        .arg("--preview-features")
+        .arg("check-command")
+        .arg("--no-config")
+        .arg("--offline")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::TY, "./bin/ty")
+        .assert()
+        .success()
+        .stdout("checked from target\n");
+
+    Ok(())
+}
+
+#[test]
 fn check_project() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
