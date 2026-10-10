@@ -4,8 +4,8 @@ use anyhow::Result;
 use itertools::Either;
 use tracing::info_span;
 
-use uv_configuration::Upgrade;
-use uv_distribution_types::{IndexUrl, MinimumLibcVersion};
+use uv_configuration::{BuildOptions, Upgrade};
+use uv_distribution_types::{IndexUrl, MinimumLibcVersion, RequiresPython};
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, Package, PylockToml, PylockTomlErrorKind};
@@ -74,6 +74,8 @@ pub fn read_lock_requirements(
     lock: &Lock,
     install_path: &Path,
     upgrade: &Upgrade,
+    requires_python: &RequiresPython,
+    build_options: &BuildOptions,
     required_environments: &[MarkerTree],
     activation: Option<Vec<(&Package, MarkerTree)>>,
     minimum_libc_version: Option<MinimumLibcVersion>,
@@ -125,9 +127,12 @@ pub fn read_lock_requirements(
             git.push(git_ref);
         }
 
-        // If a required environment is active for this package and the existing lock entry has no
-        // matching wheel, drop the lock preference so the resolver can eagerly upgrade it.
-        if missing_wheels(package, activation) {
+        // Disallowed artifacts can force a replacement release even when its old wheels cover
+        // the required environments. Wheel readiness independently discards source-only preferences.
+        if (!required_environments.is_empty()
+            && !package.satisfies_build_options(requires_python, build_options))
+            || missing_wheels(package, activation)
+        {
             // Registry selection can move to another release. Fixed URLs, Git pins, and
             // workspace sources retain their dependency metadata when only wheel preference changes.
             if package.index(install_path)?.is_some() {
