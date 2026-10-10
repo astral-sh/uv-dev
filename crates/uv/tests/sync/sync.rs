@@ -2752,6 +2752,199 @@ fn sync_non_project_dev_dependencies() -> Result<()> {
     Ok(())
 }
 
+/// Explain an ambiguous non-member selected from a frozen lockfile without rediscovering members.
+#[test]
+fn sync_frozen_non_workspace_package() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv.workspace]
+        members = ["member"]
+    "#})?;
+
+    let lockfile = indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [manifest]
+        members = ["root-project", "member"]
+
+        [[package]]
+        name = "root-project"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [[package]]
+        name = "member"
+        version = "0.1.0"
+        source = { virtual = "member" }
+
+        [[package]]
+        name = "split-dependency"
+        version = "1.0.0"
+        source = { registry = "https://example.invalid/simple" }
+
+        [[package]]
+        name = "split-dependency"
+        version = "2.0.0"
+        source = { registry = "https://example.invalid/simple" }
+
+        [[package]]
+        name = "unique-dependency"
+        version = "1.0.0"
+        source = { virtual = "unique-dependency" }
+    "#};
+    context.temp_dir.child("uv.lock").write_str(lockfile)?;
+
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--no-python-downloads", "--frozen", "--dry-run"]).args(["--package", "split-dependency"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Package `split-dependency` not found in workspace
+      cause: Found multiple packages matching `split-dependency`
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--no-python-downloads", "--frozen", "--dry-run"]).args([
+        "--package", "root-project", "--package", "split-dependency"
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Package `split-dependency` not found in workspace
+      cause: Found multiple packages matching `split-dependency`
+    ");
+
+    // A missing member file is intentional in frozen mode. Virtual packages avoid any builds.
+    assert!(!context.temp_dir.child("member").exists());
+    context
+        .sync()
+        .args([
+            "--offline",
+            "--no-python-downloads",
+            "--frozen",
+            "--dry-run",
+        ])
+        .args(["--package", "member"])
+        .assert()
+        .success();
+    context
+        .sync()
+        .args([
+            "--offline",
+            "--no-python-downloads",
+            "--frozen",
+            "--dry-run",
+        ])
+        .args(["--package", "root-project"])
+        .assert()
+        .success();
+    // This diagnostic does not introduce a new membership check for an unambiguous package.
+    context
+        .sync()
+        .args([
+            "--offline",
+            "--no-python-downloads",
+            "--frozen",
+            "--dry-run",
+        ])
+        .args(["--package", "unique-dependency"])
+        .assert()
+        .success();
+    assert_eq!(context.read("uv.lock"), lockfile);
+
+    // When members are omitted, the virtual package at `.` identifies the implicit root.
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lockfile.replace(
+            "[manifest]\nmembers = [\"root-project\", \"member\"]\n\n",
+            "",
+        ))?;
+    context
+        .sync()
+        .args([
+            "--offline",
+            "--no-python-downloads",
+            "--frozen",
+            "--dry-run",
+        ])
+        .args(["--package", "root-project"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--no-python-downloads", "--frozen", "--dry-run"]).args(["--package", "split-dependency"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Package `split-dependency` not found in workspace
+      cause: Found multiple packages matching `split-dependency`
+    ");
+
+    // If the lockfile itself identifies the ambiguous package as a member, retain its error.
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lockfile.replace(
+            "members = [\"root-project\", \"member\"]",
+            "members = [\"root-project\", \"member\", \"split-dependency\"]",
+        ))?;
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--no-python-downloads", "--frozen", "--dry-run"]).args(["--package", "split-dependency"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Found multiple packages matching `split-dependency`
+    ");
+
+    Ok(())
+}
+
+/// An implicit locked root retains its ambiguity error in a frozen workspace selection.
+#[test]
+fn sync_frozen_ambiguous_implicit_root() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    // Frozen mode can retain a root from the lock even when the live workspace has no project.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r"
+        [tool.uv.workspace]
+        members = []
+    "})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "root-project"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [[package]]
+        name = "root-project"
+        version = "1.0.0"
+        source = { registry = "https://example.invalid/simple" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--no-python-downloads", "--frozen", "--dry-run",
+        "--package", "root-project"
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Found multiple packages matching `root-project`
+    ");
+    Ok(())
+}
+
 /// Frozen sync uses the selected member's recorded default groups.
 #[test]
 fn sync_frozen_member_default_groups() -> Result<()> {
