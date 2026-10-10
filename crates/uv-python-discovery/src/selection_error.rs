@@ -15,7 +15,7 @@ pub enum PythonSelectionError {
     RequestedPythonProjectIncompatibility(Version, RequiresPython, Box<PythonRequirementConflicts>),
 
     #[error(
-        "The Python request from `{python_request}` resolved to Python {version}, which is incompatible with the project's Python requirement: `{requires_python}`{requires_python_sources}\nUse `uv python pin` to update the `.python-version` file to a compatible version"
+        "The Python request from `{python_request}` resolved to Python {version}, which is incompatible with the project's Python requirement: `{requires_python}`{requires_python_sources}\nUse `uv python pin <VERSION>` to update the `.python-version` file to a compatible version"
     )]
     DotPythonVersionProjectIncompatibility {
         python_request: String,
