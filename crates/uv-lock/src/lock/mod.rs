@@ -4111,25 +4111,39 @@ impl Lock {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            let current_requirements =
-                current.requires_dist.iter().map(|requirement| Requirement {
-                    marker: requirement.marker.simplify_extras(&current.provides_extra),
-                    ..requirement.clone()
-                });
-            let all_extras = &package.metadata.provides_extra;
-            let previous_requirements =
-                package
-                    .metadata
+            let simplify_extras = |requirement: Requirement, extras: &[ExtraName]| Requirement {
+                marker: requirement.marker.simplify_extras(extras),
+                ..requirement
+            };
+            let current_requirements = normalizer.requirements(
+                current
                     .requires_dist
                     .iter()
-                    .map(|requirement| Requirement {
-                        marker: requirement.marker.simplify_extras(all_extras),
-                        ..requirement.clone()
-                    });
-            if normalizer.requirements(current_requirements)?
-                != normalizer.requirements(previous_requirements)?
-            {
-                return Ok(false);
+                    .cloned()
+                    .map(|requirement| simplify_extras(requirement, &current.provides_extra)),
+            )?;
+            let previous_requirements =
+                normalizer.requirements(package.metadata.requires_dist.iter().cloned().map(
+                    |requirement| simplify_extras(requirement, &package.metadata.provides_extra),
+                ))?;
+            if current_requirements != previous_requirements {
+                if !package.is_dynamic() {
+                    return Ok(false);
+                }
+                // Backends can expand recursive extras while static declarations retain self
+                // references. Compare the same flattened form accepted by lock validation.
+                let flattened = FlatRequiresDist::from_requirements(
+                    current.requires_dist.clone(),
+                    &package.id.name,
+                );
+                if normalizer.requirements(
+                    flattened
+                        .into_iter()
+                        .map(|requirement| simplify_extras(requirement, &current.provides_extra)),
+                )? != previous_requirements
+                {
+                    return Ok(false);
+                }
             }
             // Scoped overrides apply to regular dependencies but not dependency groups.
             let current_groups = current
