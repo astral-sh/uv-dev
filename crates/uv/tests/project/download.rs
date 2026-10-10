@@ -1,8 +1,9 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use sha2::{Digest, Sha256};
+use walkdir::WalkDir;
 use wiremock::matchers::{basic_auth, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1199,9 +1200,23 @@ async fn download_ci_prune() -> Result<()> {
     Installed 1 package in [TIME]
      + basic-package==0.1.0
     ");
-    context.prune().arg("--ci").assert().success();
-    let index = IndexUrl::from(uv_pep508::VerbatimUrl::parse_url(format!("{url}/simple"))?);
     let cache = Cache::from_path(context.cache_dir.path());
+    let built_wheel = WalkDir::new(cache.bucket(CacheBucket::SourceDistributions))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|entry| {
+            entry.file_type().is_file()
+                && entry.file_name() == "basic_package-0.1.0-py3-none-any.whl"
+        })
+        .ok_or_else(|| anyhow!("missing wheel built from the downloaded source archive"))?
+        .into_path();
+    context.prune().arg("--ci").assert().success();
+    context
+        .cache_dir
+        .child(&built_wheel)
+        .assert(predicates::path::is_file());
+    let index = IndexUrl::from(uv_pep508::VerbatimUrl::parse_url(format!("{url}/simple"))?);
     let shard = cache
         .bucket(CacheBucket::Packed)
         .join(WheelCache::Index(&index).wheel_dir("basic-package"));
@@ -1219,7 +1234,7 @@ async fn download_ci_prune() -> Result<()> {
         .child(shard.join("0.1.0.tar.gz.http"))
         .assert(predicates::path::is_file());
     uv_snapshot!(context.filters(), context.sync()
-        .args(["--frozen", "--offline", "--reinstall", "--no-build", "--no-binary-package", "basic-package"]), @"
+        .args(["--frozen", "--offline", "--reinstall", "--no-binary-package", "basic-package"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
