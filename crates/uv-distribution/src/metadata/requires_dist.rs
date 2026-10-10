@@ -86,7 +86,7 @@ impl RequiresDist {
         let requires_dist = Box::into_iter(metadata.requires_dist)
             .map(|requirement| {
                 let requirement_name = requirement.name.clone();
-                LoweredRequirement::preserve_git_source(requirement, git_member)
+                LoweredRequirement::preserve_git_source(requirement.into(), git_member)
                     .map(LoweredRequirement::into_inner)
                     .map_err(|err| MetadataError::LoweringError(requirement_name, Box::new(err)))
             })

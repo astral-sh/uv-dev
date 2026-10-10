@@ -13,9 +13,12 @@ use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, DryRun, Excludes, GitLfsSetting,
-    HashCheckingMode, Modifications, Override, Overrides, Reinstall, TargetTriple, Upgrade,
+    HashCheckingMode, Modifications, Override, Overrides, PackageOverride, Reinstall, TargetTriple,
+    Upgrade,
 };
-use uv_distribution::{GitWorkspaceMember, LoweredExtraBuildDependencies};
+use uv_distribution::{
+    GitWorkspaceMember, LoweredExtraBuildDependencies, LoweredRequirement, LoweringError,
+};
 use uv_distribution_types::{
     ExtraBuildRequires, GitDirectorySourceUrl, IndexCapabilities, NameRequirementSpecification,
     Requirement, RequirementSource, UnresolvedRequirementSpecification,
@@ -159,27 +162,50 @@ pub async fn install(
         state.git(),
         &client_builder,
         &cache,
+        locked.then_some(workspace_cache),
     )
     .await?;
     let explicit_python_request = tool_python.is_explicit();
-    let python_request = tool_python.python_request;
+    let mut python_request = tool_python.python_request;
+    let requires_python = tool_python.requires_python;
 
     // Pre-emptively identify a Python interpreter. We need an interpreter to resolve any unnamed
     // requirements, even if we end up using a different interpreter for the tool install itself.
-    let interpreter = PythonInstallation::find_or_download(
-        python_request.as_ref(),
-        EnvironmentPreference::OnlySystem,
-        python_preference,
-        python_arch,
-        python_downloads,
-        &client_builder,
-        &cache,
-        Some(&reporter),
-        install_mirrors.mirrors(),
-        install_mirrors.python_downloads_json_url.as_deref(),
-    )
-    .await?
-    .into_interpreter();
+    let interpreter = {
+        let find_interpreter = async |request: Option<&PythonRequest>| {
+            PythonInstallation::find_or_download(
+                request,
+                EnvironmentPreference::OnlySystem,
+                python_preference,
+                python_arch,
+                python_downloads,
+                &client_builder,
+                &cache,
+                Some(&reporter),
+                install_mirrors.mirrors(),
+                install_mirrors.python_downloads_json_url.as_deref(),
+            )
+            .await
+            .map(PythonInstallation::into_interpreter)
+        };
+        let interpreter = find_interpreter(python_request.as_ref()).await?;
+        if locked
+            && let Some(requires_python) = requires_python.as_ref()
+            && !requires_python
+                .specifiers()
+                .contains(interpreter.python_version())
+        {
+            debug!(
+                "Ignoring implicit Python request {python_request:?}: Python {} does not satisfy {}",
+                interpreter.python_version(),
+                requires_python.specifiers(),
+            );
+            python_request = PythonRequest::from_specifiers(requires_python.specifiers());
+            find_interpreter(python_request.as_ref()).await?
+        } else {
+            interpreter
+        }
+    };
 
     let mut receipt_build_constraints =
         operations::read_constraints(build_constraints, &client_builder).await?;
@@ -515,16 +541,83 @@ pub async fn install(
     // Resolve the excludes.
     let mut receipt_excludes = spec.excludes.clone();
 
+    let git_source = match (
+        &requirement.source,
+        source_project_lock
+            .as_ref()
+            .and_then(|(_, lock)| lock.git()),
+    ) {
+        (
+            RequirementSource::GitDirectory {
+                url, subdirectory, ..
+            },
+            Some(fetch),
+        ) => Some(GitDirectorySourceUrl {
+            url,
+            git: fetch.git(),
+            subdirectory: subdirectory.as_deref(),
+        }),
+        _ => None,
+    };
+    let git_member = git_source
+        .as_ref()
+        .zip(
+            source_project_lock
+                .as_ref()
+                .and_then(|(_, lock)| lock.git()),
+        )
+        .map(|(git_source, fetch)| GitWorkspaceMember {
+            fetch_root: fetch.path(),
+            git_source,
+        });
+    let preserve_git = |requirement| {
+        LoweredRequirement::preserve_git_source(requirement, git_member.as_ref())
+            .map(LoweredRequirement::into_inner)
+    };
+
     if let Some((project, lock)) = source_project_lock.as_ref() {
         let lock = lock.lock();
         let project_root = project.workspace().install_path();
-        receipt_constraints.extend(lock.constraints(project_root).requirements().cloned());
-        receipt_overrides.extend(lock.overrides(project_root));
+        receipt_constraints.extend(
+            lock.constraints(project_root)
+                .requirements()
+                .cloned()
+                .map(preserve_git)
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        receipt_overrides.extend(
+            lock.overrides(project_root)
+                .map(|entry| {
+                    Ok::<_, LoweringError>(match entry {
+                        Override::Requirement(requirement) => {
+                            Override::Requirement(preserve_git(requirement)?)
+                        }
+                        Override::Package(package) => Override::Package(PackageOverride {
+                            package: package.package,
+                            dependencies: package
+                                .dependencies
+                                .into_vec()
+                                .into_iter()
+                                .map(preserve_git)
+                                .collect::<Result<Vec<_>, _>>()?
+                                .into_boxed_slice(),
+                        }),
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        );
         receipt_excludes.extend(lock.excludes().cloned());
         receipt_build_constraints.extend(
             lock.build_constraints(project_root)
                 .specifications()
-                .cloned(),
+                .cloned()
+                .map(|specification| {
+                    Ok::<_, LoweringError>(NameRequirementSpecification {
+                        requirement: preserve_git(specification.requirement)?,
+                        hashes: specification.hashes,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         );
     }
     let build_constraints =
@@ -540,27 +633,7 @@ pub async fn install(
         &settings.resolver.dependency_metadata,
     );
 
-    let extra_build_requires = if let Some((project, lock)) = source_project_lock.as_ref() {
-        let git_source = match (&requirement.source, lock.git()) {
-            (
-                RequirementSource::GitDirectory {
-                    url, subdirectory, ..
-                },
-                Some(fetch),
-            ) => Some(GitDirectorySourceUrl {
-                url,
-                git: fetch.git(),
-                subdirectory: subdirectory.as_deref(),
-            }),
-            _ => None,
-        };
-        let git_member = git_source
-            .as_ref()
-            .zip(lock.git())
-            .map(|(git_source, fetch)| GitWorkspaceMember {
-                fetch_root: fetch.path(),
-                git_source,
-            });
+    let extra_build_requires = if let Some((project, _)) = source_project_lock.as_ref() {
         LoweredExtraBuildDependencies::from_workspace(
             settings.resolver.extra_build_dependencies.clone(),
             project.workspace(),
