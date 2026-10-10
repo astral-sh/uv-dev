@@ -19136,6 +19136,42 @@ fn lock_mismatched_versions() -> Result<()> {
     Ok(())
 }
 
+/// A disabled global environment flag leaves explicit package source exclusions effective.
+#[test]
+fn lock_no_sources_false_preserves_package_exclusion() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+        [tool.uv.sources]
+        iniconfig = { path = "missing-source" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--no-sources-package").arg("iniconfig")
+        .env(EnvVars::UV_NO_SOURCES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--locked")
+        .arg("--no-sources-package").arg("iniconfig")
+        .env(EnvVars::UV_NO_SOURCES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    Ok(())
+}
+
 /// Test that `--no-sources-package` allows selectively disabling sources for specific packages.
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
