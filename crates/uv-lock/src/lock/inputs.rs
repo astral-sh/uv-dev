@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::mem;
 
 use uv_configuration::{
-    ExcludeDependency, NormalizedConstraints, Override, PrereleaseMode,
+    ExcludeDependency, NormalizedConstraints, Override, Prerelease, PrereleaseMode,
     specifier_opts_into_prereleases,
 };
 use uv_distribution_types::{Requirement, RequirementSource, ResolutionLookups, StaticMetadata};
@@ -38,7 +38,33 @@ impl Lock {
                 .map(Package::name)
                 .chain(&filter.lookups.exclude_newer),
         );
+        self.options.prerelease.package.retain(|name, mode| {
+            if filter.packages.contains(name) {
+                // The locked package already records this name for future comparisons.
+                *mode != self.options.prerelease.global
+            } else {
+                // Even a redundant policy records that a backtracked name was consulted.
+                filter.lookups.candidate_policy.contains(name)
+            }
+        });
         self
+    }
+
+    /// Compare pre-release policies for names that participate in lockfile validation.
+    ///
+    /// With resolution input retention, newly configured policies outside the locked and
+    /// previously retained names take effect when another change triggers resolution.
+    pub fn matches_prerelease(&self, prerelease: &Prerelease) -> bool {
+        if !uv_preview::is_enabled(PreviewFeature::ResolutionInputs) {
+            return &self.options.prerelease == prerelease;
+        }
+        self.options.prerelease.global == prerelease.global
+            && self
+                .packages
+                .iter()
+                .map(Package::name)
+                .chain(self.options.prerelease.package.keys())
+                .all(|name| self.options.prerelease.mode(name) == prerelease.mode(name))
     }
 
     /// Omit redundant constraints before normalizing the remaining declarations.
