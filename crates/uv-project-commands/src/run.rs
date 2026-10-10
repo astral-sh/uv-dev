@@ -45,7 +45,7 @@ use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger}
 #[cfg(unix)]
 use uv_install_wheel::format_shebang;
 use uv_install_wheel::read_record;
-use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
+use uv_installer::{InstallationStrategy, LayeredSitePackages, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
@@ -1050,7 +1050,7 @@ pub async fn run(
     let base_site_packages = if let Some(shared_interpreter) = &shared_interpreter {
         base_site_packages.with_fallback(SitePackages::from_interpreter(shared_interpreter)?)
     } else {
-        base_site_packages
+        base_site_packages.into()
     };
     let requirements_env = match spec {
         None => None,
@@ -1425,7 +1425,7 @@ fn set_parent_environment(
 fn can_skip_ephemeral(
     spec: &RequirementsSpecification,
     interpreter: &Interpreter,
-    site_packages: &SitePackages,
+    site_packages: &LayeredSitePackages,
     settings: &ResolverInstallerSettings,
 ) -> bool {
     // Extract the build settings.

@@ -8318,7 +8318,7 @@ fn run_pep723_shared_reinstall_replaces_base() -> Result<()> {
         module = Path(shared_repair.__file__)
         base = next(parent for parent in module.parents if parent.joinpath("pyvenv.cfg").is_file())
         payload = module.with_name("payload.txt")
-        print(json.dumps({"overlay": sys.prefix, "base": str(base), "payload": str(payload), "value": payload.read_text().strip() if payload.is_file() else "missing"}))
+        print(json.dumps({"overlay": Path(sys.prefix).as_posix(), "base": base.as_posix(), "payload": payload.as_posix(), "value": payload.read_text().strip() if payload.is_file() else "missing"}))
     "#};
     context.temp_dir.child("first.py").write_str(script)?;
     context.temp_dir.child("second.py").write_str(script)?;
@@ -8367,41 +8367,31 @@ fn run_pep723_shared_reinstall_replaces_base() -> Result<()> {
     fs_err::remove_file(old_payload)?;
 
     // A targeted request for an unrelated package does not replace this dependency environment.
-    let unrelated = context
-        .run()
-        .args([
-            "--preview-features",
-            "shared-script-environments",
-            "--no-index",
-            "--find-links",
-            "wheels",
-            "--reinstall-package",
-            "unrelated-package",
-            "first.py",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
+    let unrelated = uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "--reinstall-package", "unrelated-package", "first.py"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"overlay": "[CACHE_DIR]/environments-v2/shared-first-[HASH]", "base": "[CACHE_DIR]/archive-v0/[HASH]", "payload": "[CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/shared_repair/payload.txt", "value": "missing"}
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
     let unrelated: serde_json::Value = serde_json::from_slice(&unrelated.stdout)?;
     assert_eq!(unrelated["base"], first["base"]);
     assert_eq!(unrelated["value"], "missing");
 
-    let reinstalled = context
-        .run()
-        .args([
-            "--preview-features",
-            "shared-script-environments",
-            "--no-index",
-            "--find-links",
-            "wheels",
-            "--reinstall",
-            "first.py",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
+    let reinstalled = uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "--reinstall", "first.py"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"overlay": "[CACHE_DIR]/environments-v2/shared-first-[HASH]", "base": "[CACHE_DIR]/archive-v0/[HASH]", "payload": "[CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/shared_repair/payload.txt", "value": "pristine"}
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-repair==1.0.0
+    "#);
     let reinstalled: serde_json::Value = serde_json::from_slice(&reinstalled.stdout)?;
     assert_eq!(reinstalled["value"], "pristine");
     assert_eq!(reinstalled["overlay"], first["overlay"]);
@@ -8457,7 +8447,7 @@ fn run_pep723_shared_reinstall_package_removes_overlay_collision() -> Result<()>
         module = Path(shared_repair.__file__)
         base = next(parent for parent in module.parents if parent.joinpath("pyvenv.cfg").is_file())
         payload = module.with_name("payload.txt")
-        print(json.dumps({"overlay": sys.prefix, "base": str(base), "payload": str(payload), "value": payload.read_text().strip() if payload.is_file() else "missing", "overlay_only": find_spec("overlay_only") is not None}))
+        print(json.dumps({"overlay": Path(sys.prefix).as_posix(), "base": base.as_posix(), "payload": payload.as_posix(), "value": payload.read_text().strip() if payload.is_file() else "missing", "overlay_only": find_spec("overlay_only") is not None}))
     "#})?;
     let first = context
         .run()
@@ -8523,22 +8513,20 @@ fn run_pep723_shared_reinstall_package_removes_overlay_collision() -> Result<()>
     );
     fs_err::remove_file(old_payload)?;
 
-    let reinstalled = context
-        .run()
-        .args([
-            "--preview-features",
-            "shared-script-environments",
-            "--no-index",
-            "--find-links",
-            "wheels",
-            "--reinstall-package",
-            "shared-repair",
-            "script.py",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
+    let reinstalled = uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--no-index", "--find-links", "wheels", "--reinstall-package", "shared-repair", "script.py"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"overlay": "[CACHE_DIR]/environments-v2/shared-script-[HASH]", "base": "[CACHE_DIR]/archive-v0/[HASH]", "payload": "[CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/shared_repair/payload.txt", "value": "pristine", "overlay_only": true}
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-repair==1.0.0
+    Uninstalled 1 package in [TIME]
+     - shared-repair==1.0.0
+    "#);
     let reinstalled: serde_json::Value = serde_json::from_slice(&reinstalled.stdout)?;
     assert_eq!(reinstalled["value"], "pristine");
     assert_eq!(reinstalled["overlay"], first["overlay"]);
