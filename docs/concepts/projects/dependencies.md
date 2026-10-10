@@ -73,9 +73,8 @@ If a dependency cannot be used, uv will display an error.:
 
 ```console
 $ uv add "httpx>9999"
-  × No solution found when resolving dependencies:
-  ╰─▶ Because only httpx<=1.0.0b0 is available and your project depends on httpx>9999,
-      we can conclude that your project's requirements are unsatisfiable.
+error: No solution found when resolving dependencies
+  cause: only httpx<=1.0.0b0 is available and your project depends on httpx>9999.
 ```
 
 ### Importing dependencies from requirements files
