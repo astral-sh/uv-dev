@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "At reported commit 4bf8e7be2777dc545cd554ba91a4d9cd4bb9e594, using Rust 1.99.0 on Linux x86_64, `cargo check --locked -p uv-fs --target sparc64-unknown-linux-gnu` exits 101 with both reported errors: E0432 for missing FIEMAP imports at space.rs:13–14 and E0425 for missing rustix::fs::ioctl_ficlone at link.rs:443. Locked dependencies are linux-raw-sys 0.12.1 and rustix 1.1.4. The equivalent x86_64 check succeeds. This reproduces the compilation failures without a full native Gentoo build. Updated $RUNNER_TEMP/issue-context/README.md with commands, evidence, limitations, and related test coverage. No checkout files or GitHub state were changed."
+}
