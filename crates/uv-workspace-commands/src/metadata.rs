@@ -80,7 +80,7 @@ pub async fn metadata(
                 ScriptEnvironmentMode::from_script(
                     script.into(),
                     active,
-                    Some(&settings.build_isolation),
+                    &settings.build_isolation,
                     preview,
                 )
             })

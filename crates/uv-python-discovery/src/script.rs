@@ -125,14 +125,11 @@ pub enum ScriptEnvironmentMode {
 }
 
 impl ScriptEnvironmentMode {
-    /// Select the environment layout used when running a script.
-    ///
-    /// Resolved build isolation takes precedence over the script configuration. Discovery commands
-    /// without resolver settings use the script configuration directly.
+    /// Select the environment layout using the resolved build isolation policy.
     pub fn from_script(
         script: Pep723ItemRef<'_>,
         active: ActiveEnvironment,
-        build_isolation: Option<&BuildIsolation>,
+        build_isolation: &BuildIsolation,
         preview: Preview,
     ) -> Self {
         let options = script
@@ -140,23 +137,6 @@ impl ScriptEnvironmentMode {
             .tool
             .as_ref()
             .and_then(|tool| tool.uv.as_ref());
-        let script_build_isolation;
-        let build_isolation = if let Some(build_isolation) = build_isolation {
-            build_isolation
-        } else {
-            script_build_isolation = options
-                .and_then(|uv| {
-                    BuildIsolation::from_args(
-                        uv.top_level.no_build_isolation,
-                        uv.top_level
-                            .no_build_isolation_package
-                            .clone()
-                            .unwrap_or_default(),
-                    )
-                })
-                .unwrap_or_default();
-            &script_build_isolation
-        };
         let builds_are_isolated = match build_isolation {
             BuildIsolation::Isolate => true,
             BuildIsolation::Shared => false,
