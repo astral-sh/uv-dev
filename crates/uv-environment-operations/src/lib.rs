@@ -23,10 +23,12 @@ use uv_distribution_types::{
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
-use uv_lock::{Installable, Lock};
+use uv_lock::{Installable, Lock, activated_conflicts};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
+use uv_pypi_types::{
+    ConflictItem, ConflictKind, ConflictSet, Conflicts, ResolverMarkerEnvironment,
+};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
 use uv_python_interpreter::{BrokenLink, Interpreter, InvalidEnvironmentKind, PythonEnvironment};
@@ -2026,6 +2028,7 @@ pub fn detect_conflicts(
     target: &InstallTarget,
     extras: &ExtrasSpecification,
     groups: &DependencyGroupsWithDefaults,
+    marker_env: Option<&ResolverMarkerEnvironment>,
 ) -> Result<(), EnvironmentError> {
     // Validate that we aren't trying to install extras or groups that
     // are declared as conflicting. Note that we need to collect all
@@ -2034,24 +2037,28 @@ pub fn detect_conflicts(
     // group `g` are declared as conflicting, then enabling both of
     // those should result in an error.
     let lock = target.lock();
-    let packages = target.packages(extras, groups);
     let conflicts = lock.conflicts();
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    let activations = activated_conflicts(target, extras, groups, marker_env)?;
     for set in conflicts.iter() {
-        let mut conflicts: Vec<ConflictItem> = vec![];
+        let mut active = vec![];
         for item in set.iter() {
-            if !packages.contains(item.package()) {
-                // Ignore items that are not in the install targets
-                continue;
-            }
-            let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
-                ConflictKind::Extra(extra) => extras.contains(extra),
-                ConflictKind::Group(group1) => groups.contains(group1),
-            };
-            if is_conflicting {
-                conflicts.push(item.clone());
+            if let Some(marker) = activations.get(item).filter(|marker| !marker.is_false()) {
+                active.push((item, *marker));
             }
         }
+        let conflicts = active
+            .iter()
+            .enumerate()
+            .filter(|(index, (_, marker))| {
+                active.iter().enumerate().any(|(other, (_, other_marker))| {
+                    *index != other && !marker.is_disjoint(*other_marker)
+                })
+            })
+            .map(|(_, (item, _))| (*item).clone())
+            .collect::<Vec<ConflictItem>>();
         if conflicts.len() >= 2 {
             return Err(EnvironmentError::Conflict(ConflictError {
                 set: set.clone(),

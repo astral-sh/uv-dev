@@ -289,6 +289,9 @@ fn write_package(
     if let Some(groups) = &package.default_groups {
         writer.key_value("default-groups", serialize_value(groups)?)?;
     }
+    if let Some(extras) = &package.declared_extras {
+        writer.key_value("declared-extras", serialize_value(extras)?)?;
+    }
 
     if !package.fork_markers.is_empty() {
         let markers = simplified_universal_markers(&package.fork_markers, requires_python);

@@ -9600,6 +9600,9 @@ fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["sortedcontainers==2.3.0"]
 
+        [project.optional-dependencies]
+        foo = ["child"]
+
         [tool.uv.workspace]
         members = ["child"]
 
@@ -9607,9 +9610,13 @@ fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
         conflicts = [
           [
             { package = "project" },
+            { package = "project", extra = "foo" },
             { package = "child" },
           ],
         ]
+
+        [tool.uv.sources]
+        child = { workspace = true }
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -9634,8 +9641,8 @@ fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
 
     context.lock().assert().success();
 
-    // Export with --all-packages to CycloneDX format should succeed as conflict detection is skipped
-    uv_snapshot!(context.filters(), context.export().arg("--format").arg("cyclonedx1.5").arg("--all-packages").arg("--no-hashes"), @r#"
+    // An SBOM includes both sides of these package and extra conflicts.
+    uv_snapshot!(context.filters(), context.export().arg("--format").arg("cyclonedx1.5").arg("--all-packages").arg("--all-extras").arg("--frozen").arg("--no-hashes"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -9733,27 +9740,26 @@ fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
       ]
     }
     ----- stderr -----
-    warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
-    Resolved 4 packages in [TIME]
     warning: `uv export --format=cyclonedx1.5` is experimental and may change without warning. Pass `--preview-features sbom-export` to disable this warning.
     "#);
 
-    // Should fail when exporting to `requirements.txt` or `pylock.toml`as conflict detection is enabled for these formats
-    uv_snapshot!(context.filters(), context.export().arg("--format").arg("requirements-txt").arg("--all-packages"), @"
+    // Installable export formats reject the same conflicting selections.
+    uv_snapshot!(context.filters(), context.export().args([
+        "--format", "requirements-txt", "--all-packages", "--all-extras", "--frozen",
+    ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
-    Resolved 4 packages in [TIME]
-    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    error: Package `child`, extra `foo`, and package `project` are incompatible with the declared conflicts: {child, `project[foo]`, project}
     ");
 
-    uv_snapshot!(context.filters(), context.export().arg("--format").arg("pylock.toml").arg("--all-packages"), @"
+    uv_snapshot!(context.filters(), context.export().args([
+        "--format", "pylock.toml", "--all-packages", "--all-extras", "--frozen",
+    ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
-    Resolved 4 packages in [TIME]
-    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    error: Package `child`, extra `foo`, and package `project` are incompatible with the declared conflicts: {child, `project[foo]`, project}
     ");
+
     Ok(())
 }
 
@@ -10059,6 +10065,673 @@ fn requirements_txt_conflicting_workspace_member_package() -> Result<()> {
     error: Package `child-a` and package `child-b` are incompatible with the declared conflicts: {child-a, child-b}
     ");
 
+    Ok(())
+}
+
+/// A dependency-activated extra must participate in cross-kind conflict validation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_transitive_extra_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[feature]"]
+
+        [dependency-groups]
+        dev = ["child"]
+
+        [tool.uv]
+        conflicts = [[
+            { group = "dev" },
+            { package = "child", extra = "feature" },
+        ]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+        "#,
+    )?;
+    context.temp_dir.child("child/pyproject.toml").write_str(
+        r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+
+            [project.optional-dependencies]
+            feature = []
+            "#,
+    )?;
+
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.export().arg("--group").arg("dev"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--all-packages")
+        .arg("--group")
+        .arg("dev"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&context.read("pyproject.toml").replace(
+            "[tool.uv]",
+            "[tool.uv]\noverride-dependencies = [\"child\"]",
+        ))?;
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--group").arg("dev").arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--group").arg("dev").arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ");
+
+    Ok(())
+}
+
+/// Mutually exclusive platform paths cannot activate conflicting extras together.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_transitive_extra_conflict_disjoint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "child[a]; sys_platform == 'linux'",
+            "child[b]; sys_platform == 'win32'",
+        ]
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "a" }, { package = "child", extra = "b" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = []
+        b = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let original = context.read("pyproject.toml");
+    context.temp_dir.child("pyproject.toml").write_str(
+        &original
+            .replace("child[a]; sys_platform == 'linux'", "child[a]")
+            .replace(
+                "[tool.uv]",
+                "[tool.uv]\nenvironments = [\"sys_platform == 'linux'\"]",
+            ),
+    )?;
+    uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // Overlapping activations still conflict.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&original.replace("sys_platform == 'win32'", "sys_platform == 'linux'"))?;
+    uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Extras `a` and `b` are incompatible with the declared conflicts: {`child[a]`, `child[b]`}
+    ");
+    Ok(())
+}
+
+/// Conditions on parent packages also constrain the extras they activate.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_transitive_extra_conflict_disjoint_paths() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "left; sys_platform == 'linux'",
+            "right; sys_platform == 'win32'",
+        ]
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "a" }, { package = "child", extra = "b" }]]
+
+        [tool.uv.workspace]
+        members = ["child", "left", "right"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+        left = { workspace = true }
+        right = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("left/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "left"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[a]"]
+    "#})?;
+    context
+        .temp_dir
+        .child("right/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "right"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[b]"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = []
+        b = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Registry dependency version guards select only one transitive extra activation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_transitive_extra_conflict_registry_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "export-extra-conflict-registry-forks"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.gateway.versions."1"]
+        requires = ["bridge"]
+        sdist = false
+
+        [packages.bridge.versions."1"]
+        requires = ["child[a]"]
+        sdist = false
+
+        [packages.bridge.versions."2"]
+        requires = ["child[b]"]
+        sdist = false
+
+        [packages.left.versions."1"]
+        sdist = false
+
+        [packages.right.versions."1"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway", "child"]
+
+        [project.optional-dependencies]
+        first = ["bridge==1"]
+        second = ["bridge==2"]
+
+        [tool.uv]
+        conflicts = [
+            [{ extra = "first" }, { extra = "second" }],
+            [{ package = "child", extra = "a" }, { package = "child", extra = "b" }],
+        ]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["left"]
+        b = ["right"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--extra", "first", "--no-emit-workspace", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==1
+    gateway==1
+    left==1
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--extra", "second", "--no-emit-workspace", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==2
+    gateway==1
+    right==1
+    ");
+    Ok(())
+}
+
+/// Retained Git declarations distinguish missing extras from declared empty extras in frozen locks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_legacy_git_conflict_declarations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[missing]"]
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "child", extra = "missing" }, { group = "dev" }]]
+
+        [tool.uv.sources]
+        child = { git = "https://example.com/child.git" }
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "child", extra = "missing" },
+            { package = "project", group = "dev" },
+        ]]
+
+        [[package]]
+        name = "child"
+        version = "1.0.0"
+        source = { git = "https://example.com/child.git#0000000000000000000000000000000000000000" }
+        [package.metadata]
+        provides-extras = ["available"]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "child" }]
+        [package.dev-dependencies]
+        dev = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    child @ git+https://example.com/child.git@0000000000000000000000000000000000000000
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "child"
+    version = "1.0.0"
+    vcs = { type = "git", url = "https://example.com/child.git", commit-id = "0000000000000000000000000000000000000000" }
+    "#);
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("missing", "available"),
+    )?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&context.read("uv.lock").replace("missing", "available"))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record whether the declared extras of `child` were requested
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+
+    // A retained optional section keeps incoming labels intact during legacy deserialization.
+    context.temp_dir.child("uv.lock").write_str(
+        &context.read("uv.lock").replace(
+            "[package.metadata]\nprovides-extras = [\"available\"]",
+            "[package.optional-dependencies]\navailable = []\n\n[package.metadata]\nprovides-extras = [\"available\"]",
+        ),
+    )?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    child @ git+https://example.com/child.git@0000000000000000000000000000000000000000
+    ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&context.read("uv.lock").replace(
+            "dependencies = [{ name = \"child\" }]",
+            "dependencies = [{ name = \"child\", extra = [\"available\"] }]",
+        ))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `available` and group `dev` are incompatible with the declared conflicts: {`child[available]`, `project:dev`}
+    ");
+
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&context.read("uv.lock").replace(
+            "[package.metadata]\nprovides-extras = [\"available\"]\n",
+            "",
+        ))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `child`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+    Ok(())
+}
+
+/// Group dependencies activate workspace projects under the requesting group's marker.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_only_group_tracks_workspace_project_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["child; python_full_version < '3.13'"]
+        unused = []
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "child" }, { group = "unused" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "child" },
+            { package = "project", group = "unused" },
+        ]]
+
+        [manifest]
+        members = ["child", "project"]
+
+        [[package]]
+        name = "child"
+        version = "0.1.0"
+        source = { virtual = "child" }
+        dependencies = [{ name = "leaf", marker = "extra == 'project-5-child'" }]
+        [package.metadata]
+        requires-dist = [{ name = "leaf" }]
+
+        [[package]]
+        name = "leaf"
+        version = "1.0.0"
+        source = { registry = "https://example.com/simple" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        [package.dev-dependencies]
+        dev = [{ name = "child", marker = "python_full_version < '3.13'" }]
+        unused = []
+        [package.metadata.requires-dev]
+        dev = [{ name = "child", virtual = "child", marker = "python_full_version < '3.13'" }]
+        unused = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--only-group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==1.0.0 ; python_full_version < '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--all-packages", "--only-group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf==1.0.0 ; python_full_version < '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--all-packages", "--only-group", "dev", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "leaf"
+    version = "1.0.0"
+    marker = "python_full_version < '3.13'"
+    index = "https://example.com/simple"
+    "#);
+    Ok(())
+}
+
+/// Group-only exports retain conditional dependencies from legacy project-conflict markers.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_only_group_preserves_legacy_conflict_markers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway"]
+
+        [dependency-groups]
+        dev = ["gateway"]
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "project" }, { group = "dev" }]]
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "project" },
+            { package = "project", group = "dev" },
+        ]]
+
+        [[package]]
+        name = "gateway"
+        version = "1.0.0"
+        source = { registry = "https://example.com/simple" }
+        dependencies = [
+            { name = "leaf", marker = "python_full_version < '3.13' or (extra == 'project-7-project' and extra == 'group-7-project-dev')" },
+        ]
+
+        [[package]]
+        name = "leaf"
+        version = "1.0.0"
+        source = { registry = "https://example.com/simple" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "gateway" }]
+        [package.dev-dependencies]
+        dev = [{ name = "gateway" }]
+        [package.metadata]
+        requires-dist = [{ name = "gateway" }]
+        [package.metadata.requires-dev]
+        dev = [{ name = "gateway" }]
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--only-group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    gateway==1.0.0
+    leaf==1.0.0 ; python_full_version < '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--only-group", "dev", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "gateway"
+    version = "1.0.0"
+    index = "https://example.com/simple"
+
+    [[packages]]
+    name = "leaf"
+    version = "1.0.0"
+    marker = "python_full_version < '3.13'"
+    index = "https://example.com/simple"
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--no-dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    gateway==1.0.0
+    leaf==1.0.0 ; python_full_version < '3.13'
+    ");
     Ok(())
 }
 

@@ -71,23 +71,26 @@ use uv_warnings::warn_user_once;
 use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
 use uv_workspace::{Editability, WorkspaceMember};
 
+pub use crate::lock::conflicts::activated_conflicts;
 pub use crate::lock::deserialize::Error as CanonicalLockError;
 pub use crate::lock::export::RequirementsTxtExport;
 pub use crate::lock::export::{
     Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, PythonReport, cyclonedx_json,
 };
 use crate::lock::inputs::ManifestFilter;
-pub use crate::lock::installable::{Installable, InstallableRootKind};
+pub use crate::lock::installable::Installable;
 pub use crate::lock::map::PackageMap;
 pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
 
+mod conflicts;
 mod deserialize;
 pub(crate) mod export;
 mod inputs;
 mod installable;
 mod map;
+mod reachability;
 mod requirements;
 mod serialize;
 mod tree;
@@ -892,7 +895,9 @@ impl<'a> LockedDependencyBuilder<'a> {
                     // removing conflict predicates from the generated dependency edge.
                     let mut source_context = UniversalMarker::from_combined(source_marker);
                     source_context.assume_conflict_item(selected);
-                    expected.exclude_conflicting_items(&mut source_context, selected);
+                    expected
+                        .lock
+                        .exclude_conflicting_items(&mut source_context, selected);
                     if source_context.is_false() {
                         continue;
                     }
@@ -2043,19 +2048,6 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
         })
     }
 
-    /// Exclude conflict selections that cannot coexist with the selected item.
-    fn exclude_conflicting_items(&self, marker: &mut UniversalMarker, selected: &ConflictItem) {
-        for conflict_set in self.lock.conflicts.iter() {
-            if conflict_set.iter().any(|conflict| conflict == selected) {
-                for conflict in conflict_set.iter() {
-                    if conflict != selected {
-                        marker.assume_not_conflict_item(conflict);
-                    }
-                }
-            }
-        }
-    }
-
     /// Return selections that cannot coexist with a required conflict item.
     fn conflicting_alternatives(&self, required: &ConflictItem) -> UniversalMarker {
         let mut alternatives = UniversalMarker::FALSE;
@@ -2475,6 +2467,7 @@ impl Lock {
     pub fn from_resolution(
         resolution: &ResolverOutput,
         manifest: ResolverManifest,
+        conflicts: Conflicts,
         root: &Path,
         supported_environments: Vec<MarkerTree>,
         index_locations: &IndexLocations,
@@ -2530,6 +2523,17 @@ impl Lock {
 
             let mut package =
                 Package::from_annotated_dist(dist, fork_markers, root, index_locations)?;
+            if package.id.source.is_immutable()
+                && conflicts
+                    .iter()
+                    .flat_map(ConflictSet::iter)
+                    .any(|item| item.package() == package.name() && item.extra().is_some())
+            {
+                package.declared_extras = dist
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| metadata.provides_extra.clone());
+            }
             // Git declarations can introduce direct sources needed by offline freshness checks.
             if metadata_free
                 && matches!(package.id.source, Source::Git(..))
@@ -2583,10 +2587,16 @@ impl Lock {
                     }
                     .into());
                 };
-                if metadata_free && matches!(package.id.source, Source::Registry(_)) {
-                    // A metadata-free lock must distinguish an extra that resolved to no
-                    // dependencies (including nonexistent extras) from one never requested.
-                    // Keeping the section also preserves its incoming, marker-bearing edge.
+                if (metadata_free && matches!(package.id.source, Source::Registry(_)))
+                    || (conflicts.contains(package.name(), extra)
+                        && package
+                            .declared_extras
+                            .as_deref()
+                            .unwrap_or(&package.metadata.provides_extra)
+                            .contains(extra))
+                {
+                    // Resolved empty conflict extras need their incoming request labels.
+                    // Metadata-free registry placeholders also record resolved missing extras.
                     package
                         .optional_dependencies
                         .entry(extra.clone())
@@ -2643,7 +2653,7 @@ impl Lock {
             requires_python,
             options,
             manifest,
-            Conflicts::empty(),
+            conflicts,
             supported_environments,
             vec![],
             fork_markers,
@@ -2819,11 +2829,13 @@ impl Lock {
         Ok(lock)
     }
 
-    /// Record the conflicting groups that were used to generate this lock.
-    #[must_use]
-    pub fn with_conflicts(mut self, conflicts: Conflicts) -> Self {
-        self.conflicts = conflicts;
-        self
+    /// Whether immutable conflict participants retain enough extra metadata for validation.
+    pub fn has_conflict_extra_metadata(&self) -> bool {
+        self.packages.iter().all(|package| {
+            package
+                .validate_conflict_extra_metadata(&self.conflicts)
+                .is_ok()
+        })
     }
 
     /// Record the required platforms that were used to generate this lock.
@@ -3143,6 +3155,40 @@ impl Lock {
     /// Returns the conflicting groups that were used to generate this lock.
     pub fn conflicts(&self) -> &Conflicts {
         &self.conflicts
+    }
+
+    /// Exclude impossible conflict assignments before using resolved edges to infer activation.
+    fn constrain_conflicts(&self, mut marker: UniversalMarker) -> UniversalMarker {
+        if self.conflicts().is_empty() || !marker.has_conflict_marker() {
+            return marker;
+        }
+        marker.and(UniversalMarker::new(
+            MarkerTree::TRUE,
+            ConflictMarker::from_relevant_conflicts(self.conflicts(), [marker]),
+        ));
+        marker
+    }
+
+    /// Exclude conflict selections that cannot coexist with the selected item.
+    fn exclude_conflicting_items(&self, marker: &mut UniversalMarker, selected: &ConflictItem) {
+        for conflict_set in self.conflicts.iter() {
+            if conflict_set.iter().any(|conflict| conflict == selected) {
+                for conflict in conflict_set.iter() {
+                    if conflict != selected {
+                        marker.assume_not_conflict_item(conflict);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Return the dependency overrides and exclusions recorded in the lockfile.
+    fn dependency_modifiers(&self) -> Result<DependencyModifiers, LockError> {
+        Ok(DependencyModifiers::new(
+            Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(self.manifest.excludes.iter().cloned()),
+        ))
     }
 
     /// Returns the supported environments that were used to generate this lock.
@@ -3889,6 +3935,17 @@ impl Lock {
         &self.packages[index.0]
     }
 
+    /// Filter resolved request placeholders using recorded immutable declaration evidence.
+    fn dependency_extras<'lock>(
+        &'lock self,
+        dependency: &'lock Dependency,
+    ) -> impl Iterator<Item = &'lock ExtraName> {
+        dependency
+            .extra
+            .iter()
+            .filter(|extra| !self.package(dependency.index).is_known_missing_extra(extra))
+    }
+
     /// Return a [`SatisfiesResult`] if the given extras do not match the [`Package`] metadata.
     fn satisfies_provides_extra<'lock>(
         &self,
@@ -4601,7 +4658,7 @@ impl Lock {
                         continue;
                     }
                     if allow_missing_package_metadata {
-                        if !Self::package_satisfies_requirement(package, &requirement, root)? {
+                        if !package.id.satisfies_requirement(&requirement, root)? {
                             continue;
                         }
                         let is_bare_registry_requirement = matches!(
@@ -5052,27 +5109,6 @@ impl Lock {
         Ok(false)
     }
 
-    /// Match a requirement's version and any explicitly declared source.
-    fn package_satisfies_requirement(
-        package: &Package,
-        requirement: &Requirement,
-        root: &Path,
-    ) -> Result<bool, LockError> {
-        let source_matches = matches!(
-            requirement.source,
-            RequirementSource::Registry { index: None, .. }
-        ) || package
-            .id
-            .source
-            .satisfies_requirement_source(&requirement.source, root)?;
-        let version_matches = requirement
-            .source
-            .version_specifiers()
-            .zip(package.id.version.as_ref())
-            .is_none_or(|(specifiers, version)| specifiers.contains(version));
-        Ok(source_matches && version_matches)
-    }
-
     /// Apply dependency policies before flattening recursive self-requirements.
     ///
     /// Groups use only global overrides and are not flattened, but exclusions still use the
@@ -5336,8 +5372,7 @@ impl Lock {
                         let requirement_marker =
                             requirement_context.requirement_marker(requirement.marker);
                         for dependency in self.packages_for_name(&requirement.name) {
-                            if !Self::package_satisfies_requirement(dependency, &requirement, root)?
-                            {
+                            if !dependency.id.satisfies_requirement(&requirement, root)? {
                                 continue;
                             }
                             // A bare registry declaration cannot authorize a stale external tree
@@ -5563,7 +5598,7 @@ impl Lock {
         }
         for requirement in root_requirements {
             for package in self.packages_for_name(&requirement.name) {
-                if !Self::package_satisfies_requirement(package, requirement, root)? {
+                if !package.id.satisfies_requirement(requirement, root)? {
                     continue;
                 }
                 let Some(marker) = self.root_requirement_marker(requirement, package) else {
@@ -6627,6 +6662,8 @@ pub struct Package {
     dependencies: Vec<Dependency>,
     /// The resolved optional dependencies of the package.
     optional_dependencies: BTreeMap<ExtraName, Vec<Dependency>>,
+    /// Declared extras for immutable conflict participants; `None` means legacy evidence is absent.
+    declared_extras: Option<Box<[ExtraName]>>,
     /// The resolved PEP 735 dependency groups of the package.
     dependency_groups: BTreeMap<GroupName, Vec<Dependency>>,
     /// Nonstandard default dependency groups configured by the package.
@@ -6669,6 +6706,7 @@ impl Package {
             fork_markers,
             dependencies: vec![],
             optional_dependencies: BTreeMap::default(),
+            declared_extras: None,
             dependency_groups: BTreeMap::default(),
             default_groups: None,
             group_requires_python: BTreeMap::new(),
@@ -7346,6 +7384,63 @@ impl Package {
         self.metadata != PackageMetadata::default()
     }
 
+    /// Return explicit declarations or the full Git metadata retained by older preview locks.
+    fn recorded_extras(&self) -> Option<&[ExtraName]> {
+        if let Some(declared) = self.declared_extras.as_deref() {
+            return Some(declared);
+        }
+        match &self.id.source {
+            Source::Git(..) => self
+                .has_metadata()
+                .then_some(self.metadata.provides_extra.as_ref()),
+            Source::Registry(..)
+            | Source::Direct(..)
+            | Source::Path(..)
+            | Source::Directory(..)
+            | Source::Editable(..)
+            | Source::Virtual(..) => None,
+        }
+    }
+
+    /// Require declarations and evidence that legacy serialization retained extra requests.
+    fn validate_conflict_extra_metadata(&self, conflicts: &Conflicts) -> Result<(), LockError> {
+        if !self.id.source.is_immutable() {
+            return Ok(());
+        }
+        let declared = self.recorded_extras();
+        for extra in conflicts
+            .iter()
+            .flat_map(ConflictSet::iter)
+            .filter(|item| item.package() == self.name())
+            .filter_map(ConflictItem::extra)
+        {
+            let Some(declared) = declared else {
+                return Err(LockErrorKind::MissingExtraMetadata {
+                    package: self.name().clone(),
+                }
+                .into());
+            };
+            // Legacy Git locks can retain declarations while erasing empty optional sections and
+            // their incoming extra labels. A missing extra cannot have lost a valid request.
+            if self.declared_extras.is_none()
+                && declared.contains(extra)
+                && !self.optional_dependencies.contains_key(extra)
+            {
+                return Err(LockErrorKind::MissingExtraRequests {
+                    package: self.name().clone(),
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether recorded declarations establish that an extra does not exist.
+    fn is_known_missing_extra(&self, extra: &ExtraName) -> bool {
+        self.recorded_extras()
+            .is_some_and(|declared| !declared.contains(extra))
+    }
+
     /// Returns the extras the package provides, if any.
     pub fn provides_extras(&self) -> &[ExtraName] {
         &self.metadata.provides_extra
@@ -7364,7 +7459,7 @@ impl Package {
     }
 
     /// Returns the dependencies of the package.
-    pub fn dependencies(&self) -> &[Dependency] {
+    fn dependencies(&self) -> &[Dependency] {
         &self.dependencies
     }
 
@@ -7384,6 +7479,49 @@ impl Package {
     /// Returns the resolved PEP 735 dependency groups of the package.
     pub fn resolved_dependency_groups(&self) -> &BTreeMap<GroupName, Vec<Dependency>> {
         &self.dependency_groups
+    }
+
+    /// Prepare effective declarations once for a dependency section, when metadata is available.
+    fn dependency_requirements(
+        &self,
+        context: DependencyContext<'_>,
+        modifiers: &DependencyModifiers,
+        root: &Path,
+        requires_python: &RequiresPython,
+    ) -> Result<Option<Vec<Requirement>>, LockError> {
+        // Scoped overrides need the resolved version; dynamic sources omit it from the lock.
+        // Their resolved edges retain the policy applied during resolution.
+        if self.id.version.is_none() && modifiers.has_scoped_package(&self.id.name) {
+            return Ok(None);
+        }
+        let requirements = match context {
+            DependencyContext::Group(group) => self.metadata.dependency_groups.get(group),
+            DependencyContext::Production | DependencyContext::Extra(_) => {
+                Some(&self.metadata.requires_dist)
+            }
+        };
+        let Some(requirements) = requirements else {
+            return Ok(None);
+        };
+        let had_requirements = !requirements.is_empty();
+        let requirements = Lock::preprocess_requirements(
+            &self.id.name,
+            self.id.version.as_ref(),
+            &requirements.iter().cloned().collect::<Vec<_>>(),
+            context,
+            modifiers,
+        );
+        if !had_requirements && requirements.is_empty() {
+            return Ok(None);
+        }
+        requirements
+            .into_iter()
+            .map(|mut requirement| {
+                requirement.marker = context.requirement_marker(requirement.marker);
+                normalize_requirement(requirement, root, requires_python)
+            })
+            .collect::<Result<Vec<_>, LockError>>()
+            .map(Some)
     }
 
     /// Returns an [`InstallTarget`] view for filtering decisions.
@@ -7429,6 +7567,8 @@ struct PackageWire {
     dependencies: Vec<DependencyWire>,
     #[serde(default)]
     optional_dependencies: BTreeMap<ExtraName, Vec<DependencyWire>>,
+    #[serde(default)]
+    declared_extras: Option<Box<[ExtraName]>>,
     #[serde(default)]
     default_groups: Option<DefaultGroups>,
     #[serde(default, rename = "dev-dependencies", alias = "dependency-groups")]
@@ -7549,6 +7689,7 @@ impl PackageWire {
         Ok(Package {
             id: self.id,
             metadata: self.metadata,
+            declared_extras: self.declared_extras,
             default_groups: self.default_groups,
             group_requires_python: self.group_requires_python,
             sdist: self.sdist,
@@ -7585,6 +7726,26 @@ pub(crate) struct PackageId {
 }
 
 impl PackageId {
+    /// Match a requirement's version and any explicitly declared source.
+    fn satisfies_requirement(
+        &self,
+        requirement: &Requirement,
+        root: &Path,
+    ) -> Result<bool, LockError> {
+        let source_matches = matches!(
+            requirement.source,
+            RequirementSource::Registry { index: None, .. }
+        ) || self
+            .source
+            .satisfies_requirement_source(&requirement.source, root)?;
+        let version_matches = requirement
+            .source
+            .version_specifiers()
+            .zip(self.version.as_ref())
+            .is_none_or(|(specifiers, version)| specifiers.contains(version));
+        Ok(source_matches && version_matches)
+    }
+
     fn from_annotated_dist(annotated_dist: &AnnotatedDist, root: &Path) -> Result<Self, LockError> {
         // Identify the source of the package.
         let source = Source::from_resolved_dist(&annotated_dist.dist, root)?;
@@ -9247,6 +9408,91 @@ impl Dependency {
         &self.package_id.name
     }
 
+    /// Return the conditions under which the effective declarations request this dependency.
+    fn activation(
+        &self,
+        lock: &Lock,
+        requirements: Option<&[Requirement]>,
+        root: &Path,
+    ) -> Result<(MarkerTree, BTreeMap<ExtraName, MarkerTree>), LockError> {
+        let has_forks = lock
+            .packages_for_name(self.package_name())
+            .iter()
+            .any(|package| package.id != self.package_id);
+        // Declarations can match several locked versions or sources. Retain the selected
+        // destination's guard while allowing each requested item to reveal its own conflicts.
+        let selection_marker = |extra: Option<&ExtraName>| {
+            let mut marker = lock.constrain_conflicts(self.complexified_marker);
+            let requested = extra.map_or_else(
+                || ConflictItem::from(self.package_name().clone()),
+                |extra| ConflictItem::from((self.package_name().clone(), extra.clone())),
+            );
+            marker.assume_conflict_item(&requested);
+            lock.exclude_conflicting_items(&mut marker, &requested);
+            marker.combined()
+        };
+        let fallback = || {
+            let marker = if has_forks {
+                selection_marker(None)
+            } else {
+                self.complexified_marker.combined()
+            };
+            Ok((
+                marker,
+                self.extra
+                    .iter()
+                    .cloned()
+                    .map(|extra| {
+                        let marker = if has_forks {
+                            selection_marker(Some(&extra))
+                        } else {
+                            marker
+                        };
+                        (extra, marker)
+                    })
+                    .collect(),
+            ))
+        };
+        let Some(requirements) = requirements else {
+            return fallback();
+        };
+        let mut matched = false;
+        let mut marker = MarkerTree::FALSE;
+        let mut extras = BTreeMap::<ExtraName, MarkerTree>::new();
+        for requirement in requirements {
+            if requirement.name != *self.package_name()
+                || !self.package_id.satisfies_requirement(requirement, root)?
+            {
+                continue;
+            }
+            matched = true;
+            marker = marker.or(requirement.marker);
+            for extra in &requirement.extras {
+                extras
+                    .entry(extra.clone())
+                    .and_modify(|marker| *marker = marker.or(requirement.marker))
+                    .or_insert(requirement.marker);
+            }
+        }
+        if !matched {
+            return fallback();
+        }
+        // A merged edge may receive its extras from separate declarations.
+        for extra in &self.extra {
+            marker = marker.and(extras.get(extra).copied().unwrap_or(MarkerTree::FALSE));
+        }
+        for (extra, extra_marker) in &mut extras {
+            *extra_marker = extra_marker.and(marker);
+            if has_forks {
+                *extra_marker = extra_marker.and(selection_marker(Some(extra)));
+            }
+        }
+        if has_forks {
+            marker = marker.and(selection_marker(None));
+        }
+        Ok((marker, extras))
+    }
+
     /// Returns the extras specified on this dependency.
     pub fn extra(&self) -> &BTreeSet<ExtraName> {
         &self.extra
@@ -9427,6 +9673,13 @@ impl uv_errors::Hinted for LockError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if let Some(hint) = &self.hint {
             uv_errors::Hints::from(hint.to_string())
+        } else if matches!(
+            &*self.kind,
+            LockErrorKind::MissingExtraMetadata { .. } | LockErrorKind::MissingExtraRequests { .. }
+        ) {
+            uv_errors::Hints::from(
+                "Run `uv lock` to refresh the lockfile before using `--frozen`.".to_string(),
+            )
         } else {
             uv_errors::Hints::none()
         }
@@ -10129,6 +10382,12 @@ enum LockErrorKind {
         /// The ID of the package.
         name: PackageName,
     },
+    /// An older lock cannot distinguish missing immutable extras from declared empty extras.
+    #[error("The lockfile does not record the extras declared by `{package}`", package = package.cyan())]
+    MissingExtraMetadata { package: PackageName },
+    /// An older lock can erase requests for declared empty Git extras.
+    #[error("The lockfile does not record whether the declared extras of `{package}` were requested", package = package.cyan())]
+    MissingExtraRequests { package: PackageName },
     /// An error that occurs when a concrete root package does not belong to the lock.
     #[error("Could not find root package `{id}` in lock", id = id.cyan())]
     RootPackageMissingFromLock {

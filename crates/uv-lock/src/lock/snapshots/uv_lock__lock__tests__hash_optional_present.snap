@@ -102,6 +102,7 @@ Ok(
                 fork_markers: [],
                 dependencies: [],
                 optional_dependencies: {},
+                declared_extras: None,
                 dependency_groups: {},
                 default_groups: None,
                 group_requires_python: {},

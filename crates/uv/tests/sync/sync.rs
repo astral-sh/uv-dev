@@ -18,6 +18,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
+use uv_test::packse::scenario::Scenario;
 use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 
 use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
@@ -9895,6 +9896,746 @@ fn no_binary_error() -> Result<()> {
 
     assert!(context.temp_dir.child("uv.lock").exists());
 
+    Ok(())
+}
+
+/// Separate declarations can contribute the extras on one merged locked edge.
+#[test]
+fn sync_detects_conflict_through_merged_extra_declarations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[a]", "child[b]", "child[a,b]; sys_platform == '{inactive_platform}'"]
+
+        [tool.uv]
+        conflicts = [[{{ package = "project" }}, {{ package = "child" }}]]
+
+        [tool.uv.workspace]
+        members = ["child", "payload"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+        payload = {{ workspace = true }}
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["payload"]
+        b = ["payload"]
+    "#})?;
+    context
+        .temp_dir
+        .child("payload/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "payload"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    Ok(())
+}
+
+/// Distinct versions and sources of a name retain their own extra requests.
+#[test]
+fn sync_transitive_extra_conflict_distinct_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let active_platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context.temp_dir.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child", "bridge==1; sys_platform == '{active_platform}'", "bridge==2; sys_platform == '{inactive_platform}'"]
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        conflicts = [[{{ group = "dev" }}, {{ package = "child", extra = "b" }}]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+        exclude = ["bridge1", "bridge2"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+        bridge = [
+            {{ path = "bridge1", marker = "sys_platform == '{active_platform}'" }},
+            {{ path = "bridge2", marker = "sys_platform == '{inactive_platform}'" }},
+        ]
+    "#})?;
+    context
+        .temp_dir
+        .child("bridge1/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "bridge"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["child[a]"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        child = { path = "../child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("bridge2/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "bridge"
+        version = "2"
+        requires-python = ">=3.12"
+        dependencies = ["child[b]"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        child = { path = "../child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = []
+        b = []
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    let inactive_target = if cfg!(windows) {
+        "x86_64-apple-darwin"
+    } else {
+        "x86_64-pc-windows-msvc"
+    };
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("dev")
+        .arg("--python-platform").arg(inactive_target), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `b` and group `dev` are incompatible with the declared conflicts: {`child[b]`, `project:dev`}
+    ");
+
+    // Sources remain distinct even when their versions agree.
+    context.temp_dir.child("bridge2/pyproject.toml").write_str(
+        &context
+            .read("bridge2/pyproject.toml")
+            .replace("version = \"2\"", "version = \"1\""),
+    )?;
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("bridge==2", "bridge==1"),
+    )?;
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("dev")
+        .arg("--python-platform").arg(inactive_target), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `b` and group `dev` are incompatible with the declared conflicts: {`child[b]`, `project:dev`}
+    ");
+    Ok(())
+}
+
+/// Registry dependency version guards select only one transitive extra activation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_transitive_extra_conflict_registry_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "export-extra-conflict-registry-forks"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.gateway.versions."1"]
+        requires = ["bridge"]
+        sdist = false
+
+        [packages.bridge.versions."1"]
+        requires = ["child[a]"]
+        sdist = false
+
+        [packages.bridge.versions."2"]
+        requires = ["child[b]"]
+        sdist = false
+
+        [packages.left.versions."1"]
+        sdist = false
+
+        [packages.right.versions."1"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway", "child"]
+
+        [project.optional-dependencies]
+        first = ["bridge==1"]
+        second = ["bridge==2"]
+
+        [tool.uv]
+        conflicts = [
+            [{ extra = "first" }, { extra = "second" }],
+            [{ package = "child", extra = "a" }, { package = "child", extra = "b" }],
+        ]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["left"]
+        b = ["right"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--frozen", "--extra", "first", "--no-install-workspace", "--dry-run"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + bridge==1
+     + gateway==1
+     + left==1
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--frozen", "--extra", "second", "--no-install-workspace", "--dry-run"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + bridge==2
+     + gateway==1
+     + right==1
+    ");
+    Ok(())
+}
+
+/// Registry edges still activate workspace projects before package-conflict validation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_registry_dependency_activates_workspace_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "registry-workspace-conflict"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.gateway.versions."1"]
+        requires = ["child"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway"]
+
+        [tool.uv]
+        conflicts = [[{ package = "project" }, { package = "child" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "package-conflicts", "--no-install-workspace"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    Ok(())
+}
+
+#[test]
+fn sync_detects_dynamic_scoped_override_conflict() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "dynamic-scoped-conflict"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.bridge.versions."1.0.0"]
+        requires = ["child"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        dynamic = ["version"]
+        requires-python = ">=3.12"
+        dependencies = ["bridge; sys_platform == '{inactive_platform}'"]
+
+        [build-system]
+        requires = []
+        backend-path = ["."]
+        build-backend = "build_backend"
+
+        [tool.uv]
+        conflicts = [[{{ package = "project" }}, {{ package = "child" }}]]
+        override-dependencies = [
+            "child",
+            {{ package = {{ name = "project", version = "0.1.0" }}, dependencies = ["bridge"] }},
+        ]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+    "#})?;
+    context
+        .temp_dir
+        .child("build_backend.py")
+        .write_str(&formatdoc! {r#"
+        from pathlib import Path
+
+        def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
+            metadata = Path(metadata_directory) / "project-0.1.0.dist-info"
+            metadata.mkdir()
+            metadata.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.2\nName: project\nVersion: 0.1.0\n"
+                "Requires-Dist: bridge; sys_platform == '{inactive_platform}'\n"
+            )
+            return metadata.name
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "project", "--no-install-project", "--preview-features", "package-conflicts", "--index",
+    ]).arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "project", "--no-install-project", "--preview-features", "package-conflicts", "--offline",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    Ok(())
+}
+
+/// Scoped overrides can add an empty conflicting extra to an otherwise dependency-free root.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_scoped_override_adds_conflicting_empty_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "scoped-empty-conflicting-extra"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.child.versions."1"]
+        extras = { feature = [] }
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [dependency-groups]
+        dev = ["child"]
+
+        [tool.uv]
+        override-dependencies = [
+            { package = { name = "project", version = "0.1.0" }, dependencies = ["child[feature]"] },
+        ]
+        conflicts = [[{ group = "dev" }, { package = "child", extra = "feature" }]]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args(["--group", "dev", "--no-install-workspace"]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--group", "dev", "--no-install-workspace"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+    Ok(())
+}
+
+/// Dependency-activated extras must only participate in conflicts on an applicable platform.
+#[test]
+fn sync_transitive_extra_conflict_platform() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let active_platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+
+    let write_pyproject = |platform| {
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["child[feature]; sys_platform == '{platform}'"]
+
+            [dependency-groups]
+            dev = ["child"]
+
+            [tool.uv]
+            conflicts = [[
+                {{ group = "dev" }},
+                {{ package = "child", extra = "feature" }},
+            ]]
+
+            [tool.uv.workspace]
+            members = ["child"]
+
+            [tool.uv.sources]
+            child = {{ workspace = true }}
+            "#})
+    };
+    write_pyproject(inactive_platform)?;
+    context.temp_dir.child("child/pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [project.optional-dependencies]
+        feature = []
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--no-install-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--group").arg("dev").arg("--no-install-workspace")
+        .arg("--preview-features").arg("frozen-lockfile"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+
+    write_pyproject(active_platform)?;
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--no-install-workspace"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+
+    Ok(())
+}
+
+/// Manifest-owned groups apply global overrides before activating conflicting extras.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_manifest_group_override_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["child[feature]"]
+
+        [tool.uv]
+        override-dependencies = ["child"]
+        conflicts = [[
+            { package = "child", extra = "feature" },
+            { package = "child", group = "dev" },
+        ]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = []
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--group", "dev", "--no-install-workspace", "--offline", "--no-index",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--group", "dev", "--no-install-workspace", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--offline", "--no-header", "--no-hashes",
+    ]), @"exit_code: 0 (success)");
+    context
+        .lock()
+        .args([
+            "--upgrade",
+            "--offline",
+            "--no-index",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--group", "dev", "--no-install-workspace", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--offline", "--no-header", "--no-hashes",
+    ]), @"exit_code: 0 (success)");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(r#"dev = ["child[feature]"]"#, r#"dev = ["child"]"#)
+            .replace(
+                r#"override-dependencies = ["child"]"#,
+                r#"override-dependencies = ["child[feature]"]"#,
+            ),
+    )?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--group", "dev", "--no-install-workspace", "--offline", "--no-index",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `child:dev`}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--group", "dev", "--no-install-workspace", "--offline",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `child:dev`}
+    ");
+    Ok(())
+}
+
+/// Overrides can remove a conflicting extra from an unconditional dependency.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_override_removes_conflicting_dependency_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[feature]"]
+
+        [dependency-groups]
+        dev = ["child"]
+
+        [tool.uv]
+        override-dependencies = ["child"]
+        conflicts = [[{ group = "dev" }, { package = "child", extra = "feature" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [project.optional-dependencies]
+        feature = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--group", "dev", "--no-install-workspace"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--frozen", "--group", "dev", "--no-install-workspace"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
     Ok(())
 }
 
@@ -19895,5 +20636,429 @@ fn project_build_hashes_locked_script_run_with_no_sync() -> Result<()> {
     package
         .child("backend-executed")
         .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Undefined dependency extras warn without activating a conflict, while empty declared extras do.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_undefined_dependency_extra_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[missing]"]
+
+        [project.optional-dependencies]
+        feature = []
+
+        [tool.uv]
+        conflicts = [[{ extra = "feature" }, { package = "child", extra = "missing" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--extra", "feature",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    warning: The package `child @ file://[TEMP_DIR]/child` does not have an extra named `missing`
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(&format!(
+            "{}\n[project.optional-dependencies]\nmissing = []\n",
+            context.read("child/pyproject.toml"),
+        ))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--extra", "feature",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Extras `missing` and `feature` are incompatible with the declared conflicts: {`child[missing]`, `project[feature]`}
+    ");
+    Ok(())
+}
+
+/// Registry declaration evidence distinguishes missing extras from declared empty extras.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_undefined_registry_extra_conflict() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "undefined-registry-conflict-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.child.versions."1"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[missing]"]
+
+        [project.optional-dependencies]
+        feature = []
+
+        [tool.uv]
+        conflicts = [[{ extra = "feature" }, { package = "child", extra = "missing" }]]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--extra", "feature", "--no-install-workspace",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    warning: The package `child==1` does not have an extra named `missing`
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + child==1
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    context
+        .lock()
+        .args(["--upgrade", "--preview-features", "lock-without-metadata"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    context
+        .lock()
+        .args([
+            "--check",
+            "--offline",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let lock = context.read("uv.lock");
+    assert!(lock.contains("declared-extras = []"));
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.replace("declared-extras = []\n", ""))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `child`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+    context
+        .lock()
+        .args(["--preview-features", "lock-without-metadata"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// A registry parent retains requests for a declared empty conflicting extra.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_registry_parent_requests_empty_conflicting_extra() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "registry-parent-empty-conflict-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.gateway.versions."1"]
+        requires = ["child[feature]"]
+        sdist = false
+        [packages.child.versions."1"]
+        extras = { feature = [], unselected = ["missing-leaf"] }
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway"]
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        conflicts = [[{ group = "dev" }, { package = "child", extra = "feature" }]]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--group", "dev", "--no-install-workspace",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--group", "dev", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "child", extra = "feature" },
+            { package = "project", group = "dev" },
+        ]]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "child"
+        version = "1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        declared-extras = ["feature", "unselected"]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/child-1-py3-none-any.whl", hash = "sha256:3ae0b8b07b903ace372c9cac1ad06961d75153c632eeccafb9786c12853622e3", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [package.optional-dependencies]
+        feature = []
+
+        [[package]]
+        name = "gateway"
+        version = "1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "child" },
+            { name = "child", extra = ["feature"], marker = "extra == 'extra-5-child-feature'" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/gateway-1-py3-none-any.whl", hash = "sha256:35184d5e797bdafcd77630a15efed44e4da647e4e845d5c52aa87a9df820724b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "gateway" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "gateway" }]
+
+        [package.metadata.requires-dev]
+        dev = []
+        "#);
+    });
+    // Legacy lockfiles omit empty optional dependency tables and their incoming extra labels.
+    let mut legacy = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
+    let Some(packages) = legacy["package"].as_array_of_tables_mut() else {
+        anyhow::bail!("lockfile did not contain a package array");
+    };
+    for package in packages.iter_mut() {
+        package.remove("declared-extras");
+        package.remove("optional-dependencies");
+        if let Some(dependencies) = package
+            .get_mut("dependencies")
+            .and_then(toml_edit::Item::as_array_mut)
+        {
+            for dependency in dependencies.iter_mut() {
+                if let Some(dependency) = dependency.as_inline_table_mut() {
+                    dependency.remove("extra");
+                }
+            }
+        }
+    }
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&legacy.to_string())?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--group", "dev", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `child`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `child`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+    context
+        .lock()
+        .args(["--upgrade", "--preview-features", "lock-without-metadata"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--group", "dev", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+    Ok(())
+}
+
+/// Registry extra requests follow the selected version when declarations are unpinned.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_extra_conflict_respects_selected_registry_version() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "registry-version-conflict-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.bridge.versions."1"]
+        extras = { a = [] }
+        sdist = false
+        [packages.bridge.versions."2"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["bridge[a]"]
+
+        [project.optional-dependencies]
+        first = ["bridge==1"]
+        second = ["bridge==2"]
+        feature = []
+
+        [tool.uv]
+        conflicts = [
+            [{ extra = "first" }, { extra = "second" }],
+            [{ extra = "feature" }, { package = "bridge", extra = "a" }],
+        ]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--extra", "second", "--extra", "feature", "--no-install-workspace",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    warning: The package `bridge==2` does not have an extra named `a`
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + bridge==2
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "second", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "first", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extras `a` and `feature` are incompatible with the declared conflicts: {`bridge[a]`, `project[feature]`}
+    ");
+    context
+        .lock()
+        .args(["--upgrade", "--preview-features", "lock-without-metadata"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "second", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "first", "--extra", "feature", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extras `a` and `feature` are incompatible with the declared conflicts: {`bridge[a]`, `project[feature]`}
+    ");
     Ok(())
 }
