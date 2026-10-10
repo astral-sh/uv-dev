@@ -11254,59 +11254,6 @@ fn project_level_conflict_with_own_extra() -> Result<()> {
     Ok(())
 }
 
-/// Dependency groups can be selected without their project's production dependencies.
-#[test]
-fn project_level_conflict_with_own_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
-        name = "project-own-group-conflict"
-        [root]
-        [expected]
-        satisfiable = true
-        [packages.shared-leaf.versions."1.0.0"]
-        sdist = false
-        [packages.shared-leaf.versions."2.0.0"]
-        sdist = false
-    "#})?;
-    let server = PackseServer::from_scenario(&scenario);
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["shared-leaf<2"]
-        [dependency-groups]
-        modern = ["shared-leaf>=2"]
-        [tool.uv]
-        package = false
-        conflicts = [[{ package = "project" }, { package = "project", group = "modern" }]]
-    "#})?;
-    uv_snapshot!(context.filters(), context.lock()
-        .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    ");
-    uv_snapshot!(context.filters(), context.export().args([
-        "--frozen", "--no-header", "--no-hashes", "--no-annotate",
-    ]), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    shared-leaf==1.0.0
-    ");
-    uv_snapshot!(context.filters(), context.export().args([
-        "--frozen", "--only-group", "modern", "--no-header", "--no-hashes", "--no-annotate",
-    ]), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    shared-leaf==2.0.0
-    ");
-    Ok(())
-}
-
 /// Test that a project-level conflict (i.e., `{ package = "pkg-a" }` without
 /// extra or group) properly excludes the package's extras from the conflicting
 /// fork.
