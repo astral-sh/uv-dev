@@ -8,6 +8,7 @@ use uv_command_support::{ExitStatus, Printer};
 use uv_distribution_types::IndexUrl;
 use uv_pep508::VerbatimUrl;
 use uv_preview::Preview;
+use uv_redacted::DisplaySafeUrl;
 
 /// Logout from a service.
 ///
@@ -45,10 +46,12 @@ pub(crate) async fn logout(
         bail!("Username cannot be empty");
     }
 
+    let display_url = url.without_credentials();
+    let display_url = DisplaySafeUrl::ref_cast(display_url.as_ref());
     let display_url = if username == "__token__" {
-        url.without_credentials().to_string()
+        display_url.to_string()
     } else {
-        format!("{username}@{}", url.without_credentials())
+        format!("{username}@{display_url}")
     };
 
     // TODO(zanieb): Consider exhaustively logging out from all backends

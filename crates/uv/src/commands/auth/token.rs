@@ -4,6 +4,7 @@ use anyhow::{Result, bail};
 use uv_auth::{AuthBackend, Credentials, Service};
 use uv_command_support::{ExitStatus, Printer};
 use uv_preview::Preview;
+use uv_redacted::DisplaySafeUrl;
 
 /// Show the token that will be used for a service.
 pub(crate) async fn token(
@@ -33,10 +34,12 @@ pub(crate) async fn token(
         bail!("Username cannot be empty");
     }
 
+    let display_url = url.without_credentials();
+    let display_url = DisplaySafeUrl::ref_cast(display_url.as_ref());
     let display_url = if username == "__token__" {
-        url.without_credentials().to_string()
+        display_url.to_string()
     } else {
-        format!("{username}@{}", url.without_credentials())
+        format!("{username}@{display_url}")
     };
 
     let credentials = match &backend {
