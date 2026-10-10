@@ -6,8 +6,8 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::Printer;
 use uv_configuration::{
-    Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun, ExtrasSpecification,
-    ExtrasSpecificationWithDefaults, InstallOptions, Modifications, Reinstall,
+    BuildOptions, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun,
+    ExtrasSpecification, ExtrasSpecificationWithDefaults, InstallOptions, Modifications, Reinstall,
 };
 use uv_dispatch::UniversalState;
 use uv_distribution_types::{Dist, Name, ResolvedDist};
@@ -21,7 +21,7 @@ use uv_lock::{Installable, Metadata};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_pypi_types::ModuleName;
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::{InstallerSettingsRef, MalwareCheckSettings, ResolverSettings};
 use uv_workspace::WorkspaceCache;
@@ -46,7 +46,13 @@ pub(super) async fn collect_module_owners(
     sync: Option<Modifications>,
 ) -> Result<BTreeMap<ModuleName, Vec<String>>> {
     let (extras, groups) = target_selection(target);
-    let package_ids = selected_package_ids(target, venv, &extras, &groups, settings)?;
+    let package_ids = selected_package_ids(
+        target,
+        venv.interpreter(),
+        &extras,
+        &groups,
+        &settings.build_options,
+    )?;
     if package_ids.is_none() && !matches!(sync, Some(Modifications::Exact)) {
         return Ok(BTreeMap::new());
     }
@@ -107,20 +113,20 @@ pub(super) async fn collect_module_owners(
 /// Select the package IDs that can own modules in the target resolution.
 fn selected_package_ids(
     target: InstallTarget<'_>,
-    venv: &PythonEnvironment,
+    interpreter: &Interpreter,
     extras: &ExtrasSpecificationWithDefaults,
     groups: &DependencyGroupsWithDefaults,
-    settings: &ResolverSettings,
+    build_options: &BuildOptions,
 ) -> Result<Option<BTreeMap<PackageName, String>>> {
-    let marker_env = resolution_markers(None, None, venv.interpreter());
-    let tags = resolution_tags(None, None, venv.interpreter())?;
+    let marker_env = resolution_markers(None, None, interpreter);
+    let tags = resolution_tags(None, None, interpreter)?;
 
     let resolution = target.to_resolution(
         &marker_env,
         &tags,
         extras,
         groups,
-        &settings.build_options,
+        build_options,
         &InstallOptions::default(),
     )?;
     if resolution.is_empty() {
