@@ -45,18 +45,15 @@ fn add_record_module(
     extension_suffixes: &[Box<str>],
     modules: &mut BTreeSet<ModuleName>,
 ) {
-    let Some(components) = record_path_components(path) else {
+    let path = normalize_path(Path::new(path));
+    let Some(mut components) = record_path_components(path.as_ref()) else {
         return;
     };
-    let Some((file_name, parents)) = components.split_last() else {
-        return;
-    };
-    let file_name = file_name.as_ref();
 
     // Metadata and other entries under `.dist-info` directories are not modules.
     if components
         .iter()
-        .any(|component| has_extension(component.as_ref(), "dist-info"))
+        .any(|component| has_extension(*component, "dist-info"))
     {
         return;
     }
@@ -64,24 +61,23 @@ fn add_record_module(
     // Relocated files are recorded at their installed paths instead.
     if components
         .first()
-        .is_some_and(|component| has_extension(component.as_ref(), "data"))
+        .is_some_and(|component| has_extension(*component, "data"))
     {
         return;
     }
 
-    let mut module_components = parents
-        .iter()
-        .map(std::convert::AsRef::as_ref)
-        .collect::<Vec<_>>();
+    let Some(file_name) = components.pop() else {
+        return;
+    };
     // We intentionally skip `.pyi` files here because we're looking for runtime module ownership.
     // Type stubs will require separate ownership modeling.
     if file_name == "__init__.py" {
         // The parent path is the package.
     } else if let Some(stem) = file_name.strip_suffix(".py") {
-        module_components.push(stem);
-    } else if let Some(stem) = bytecode_module_stem(file_name, parents) {
+        components.push(stem);
+    } else if let Some(stem) = bytecode_module_stem(file_name, &components) {
         if stem != "__init__" {
-            module_components.push(stem);
+            components.push(stem);
         }
     } else if let Some(stem) = {
         // Python reports the recognized suffixes in import lookup order through
@@ -93,19 +89,16 @@ fn add_record_module(
         })
     } {
         if stem != "__init__" {
-            module_components.push(stem);
+            components.push(stem);
         }
     } else {
         return;
     }
 
-    add_module_components(&module_components, modules);
+    add_module_components(&components, modules);
 }
 
-fn record_path_components(path: &str) -> Option<Vec<Box<str>>> {
-    let normalized = normalize_path(Path::new(path));
-    let path = normalized.as_ref();
-
+fn record_path_components(path: &Path) -> Option<Vec<&str>> {
     // `RECORD` can include absolute paths and relative paths that leave the directory containing
     // `.dist-info`, for example installed scripts. Those entries cannot describe modules here.
     if path.is_absolute() {
@@ -116,7 +109,7 @@ fn record_path_components(path: &str) -> Option<Vec<Box<str>>> {
     for component in path.components() {
         match component {
             Component::Normal(component) => {
-                components.push(Box::from(component.to_str()?));
+                components.push(component.to_str()?);
             }
             Component::CurDir => {}
             Component::ParentDir | Component::Prefix(_) | Component::RootDir => return None,
@@ -131,11 +124,11 @@ fn record_path_components(path: &str) -> Option<Vec<Box<str>>> {
 /// CPython can import `package/module.pyc` directly when only bytecode is installed. In
 /// contrast, `package/__pycache__/module.cpython-312.pyc` is not an import source without
 /// `package/module.py`.
-fn bytecode_module_stem<'a>(file_name: &'a str, parents: &[Box<str>]) -> Option<&'a str> {
+fn bytecode_module_stem<'a>(file_name: &'a str, parents: &[&str]) -> Option<&'a str> {
     let stem = file_name.strip_suffix(".pyc")?;
     if parents
         .last()
-        .is_some_and(|parent| parent.as_ref() == "__pycache__")
+        .is_some_and(|parent| *parent == "__pycache__")
     {
         // A `.pyc` file in `__pycache__` does not make the module importable
         // without the corresponding source file. Sourceless imports use the
