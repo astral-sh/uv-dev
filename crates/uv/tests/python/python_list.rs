@@ -5,10 +5,9 @@ use uv_platform::{Arch, Os};
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use assert_fs::prelude::*;
 use indoc::indoc;
-use serde_json::json;
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -170,40 +169,37 @@ fn python_list_unknown_managed_implementation() -> Result<()> {
 /// Array-valued Python listings retain their complete results inside the JSONL envelope.
 #[test]
 fn python_list_jsonl() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let platform = uv_platform::Platform::from_env()?;
+    // Unix fixtures use symlinks; Windows discovers the installed executables directly.
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filtered_python_keys()
+        .with_filter((r#"("patch":)\d+"#, "${1}\"[X]\""))
+        .with_filter((format!(r#""os":"{}""#, platform.os), r#""os":"[OS]""#))
+        .with_filter((
+            format!(r#""arch":"{}""#, platform.arch),
+            r#""arch":"[ARCH]""#,
+        ))
+        .with_filter((
+            format!(r#""libc":"{}""#, platform.libc),
+            r#""libc":"[LIBC]""#,
+        ))
+        .with_filter((
+            r#""path":"\[PYTHON-3\.12\]","symlink":"\[PYTHON-3\.12\]""#,
+            r#""path":"[PYTHON-3.12]","symlink":null"#,
+        ))
+        .with_filter((
+            r#""path":"\[PYTHON-3\.11\]","symlink":"\[PYTHON-3\.11\]""#,
+            r#""path":"[PYTHON-3.11]","symlink":null"#,
+        ));
 
-    let output = context
-        .python_list()
+    uv_snapshot!(context.filters(), context.python_list()
         .arg("cpython")
         .arg("--only-installed")
-        .arg("--output-format")
-        .arg("jsonl")
-        .arg("--preview-features")
-        .arg("jsonl")
-        .output()?;
-    assert!(output.status.success());
-
-    let result = serde_json::from_slice::<serde_json::Value>(&output.stdout)?;
-    let installation = result["data"]
-        .as_array()
-        .and_then(|installations| installations.first())
-        .ok_or_else(|| anyhow!("expected an installed Python in the JSONL result"))?;
-    insta::assert_json_snapshot!(json!({
-        "type": result["type"],
-        "implementation": installation["implementation"],
-        "major": installation["version_parts"]["major"],
-        "minor": installation["version_parts"]["minor"],
-        "installed": installation["path"].is_string(),
-        "download_url": installation["url"],
-    }), @r#"
-    {
-      "download_url": null,
-      "implementation": "cpython",
-      "installed": true,
-      "major": 3,
-      "minor": 12,
-      "type": "result"
-    }
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","data":[{"key":"cpython-3.12.[X]-[PLATFORM]","version":"3.12.[X]","version_parts":{"major":3,"minor":12,"patch":"[X]"},"path":"[PYTHON-3.12]","symlink":null,"url":null,"os":"[OS]","variant":"default","implementation":"cpython","arch":"[ARCH]","libc":"[LIBC]"},{"key":"cpython-3.11.[X]-[PLATFORM]","version":"3.11.[X]","version_parts":{"major":3,"minor":11,"patch":"[X]"},"path":"[PYTHON-3.11]","symlink":null,"url":null,"os":"[OS]","variant":"default","implementation":"cpython","arch":"[ARCH]","libc":"[LIBC]"}]}
     "#);
 
     uv_snapshot!(context.filters(), context.python_list()
@@ -214,9 +210,7 @@ fn python_list_jsonl() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     {"type":"result","data":[]}
-    "#
-    );
-
+    "#);
     Ok(())
 }
 
