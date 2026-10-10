@@ -1,14 +1,18 @@
+use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use toml_edit::{Array, Item, Table, Value, value};
 
 use uv_configuration::{ExcludeDependency, Override};
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexUrl, NameRequirementSpecification, Requirement, RequirementSource,
+    ExtraBuildRequires, GitDirectorySourceUrl, IndexUrl, NameRequirementSpecification, Requirement,
+    RequirementSource,
 };
 use uv_fs::{PortablePath, Simplified};
+use uv_git_types::GitUrl;
+use uv_pep508::VerbatimUrl;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_types::PythonRequest;
 use uv_settings::{ToolOptions, ToolOptionsWire};
@@ -158,22 +162,79 @@ impl Display for ToolEntrypoint {
 
 /// The durable source of an index whose on-disk location belongs to a Git checkout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "ToolIndexSourceWire", into = "ToolIndexSourceWire")]
 pub struct ToolIndexSource {
+    index: IndexUrl,
+    git: GitUrl,
+    subdirectory: Option<Box<Path>>,
+    url: VerbatimUrl,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ToolIndexSourceWire {
     index: IndexUrl,
     source: RequirementSource,
 }
 
 impl ToolIndexSource {
-    pub fn new(index: IndexUrl, source: RequirementSource) -> Self {
-        Self { index, source }
+    pub fn new(
+        index: IndexUrl,
+        source: RequirementSource,
+    ) -> Result<Self, serde::de::value::Error> {
+        let RequirementSource::GitDirectory {
+            git,
+            subdirectory,
+            url,
+        } = source
+        else {
+            return Err(serde::de::Error::custom(
+                "tool index provenance must be a Git directory",
+            ));
+        };
+        Ok(Self {
+            index,
+            git,
+            subdirectory,
+            url,
+        })
     }
 
     pub fn index(&self) -> &IndexUrl {
         &self.index
     }
 
-    pub fn source(&self) -> &RequirementSource {
-        &self.source
+    pub fn source(&self) -> GitDirectorySourceUrl<'_> {
+        GitDirectorySourceUrl {
+            git: &self.git,
+            subdirectory: self.subdirectory.as_deref(),
+            url: &self.url,
+        }
+    }
+
+    #[must_use]
+    pub fn with_index(self, index: IndexUrl) -> Self {
+        Self { index, ..self }
+    }
+}
+
+impl TryFrom<ToolIndexSourceWire> for ToolIndexSource {
+    type Error = serde::de::value::Error;
+
+    fn try_from(source: ToolIndexSourceWire) -> Result<Self, Self::Error> {
+        Self::new(source.index, source.source)
+    }
+}
+
+impl From<ToolIndexSource> for ToolIndexSourceWire {
+    fn from(source: ToolIndexSource) -> Self {
+        Self {
+            index: source.index,
+            source: RequirementSource::GitDirectory {
+                git: source.git,
+                subdirectory: source.subdirectory,
+                url: source.url,
+            },
+        }
     }
 }
 
@@ -263,6 +324,38 @@ impl Tool {
 
     pub fn index_sources(&self) -> &[ToolIndexSource] {
         &self.index_sources
+    }
+
+    /// Update repository-local index bindings in every persisted requirement.
+    pub fn replace_requirement_indexes(&mut self, replacements: &BTreeMap<IndexUrl, IndexUrl>) {
+        let requirements = self
+            .requirements
+            .iter_mut()
+            .chain(self.constraints.iter_mut())
+            .chain(self.overrides.iter_mut().flat_map(|entry| match entry {
+                Override::Requirement(requirement) => std::slice::from_mut(requirement),
+                Override::Package(package) => package.dependencies.as_mut(),
+            }))
+            .chain(
+                self.build_constraints
+                    .iter_mut()
+                    .map(|entry| &mut entry.requirement),
+            )
+            .chain(
+                self.extra_build_requires
+                    .values_mut()
+                    .flatten()
+                    .map(|entry| &mut entry.requirement),
+            );
+        for requirement in requirements {
+            if let RequirementSource::Registry {
+                index: Some(index), ..
+            } = &mut requirement.source
+                && let Some(url) = replacements.get(&index.url)
+            {
+                index.url = url.clone();
+            }
+        }
     }
 
     /// Returns the TOML table for this tool.
