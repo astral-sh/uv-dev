@@ -6,7 +6,7 @@ use tracing::debug;
 
 use uv_distribution_filename::{BuildTag, WheelFilename};
 use uv_distribution_types::{
-    File, InstalledDist, MinimumLibcVersion, Name, RegistryBuiltDist, RegistryBuiltWheel,
+    File, IndexUrl, InstalledDist, MinimumLibcVersion, Name, RegistryBuiltDist, RegistryBuiltWheel,
     RegistrySourceDist, RequiresPython,
 };
 use uv_normalize::PackageName;
@@ -533,6 +533,24 @@ impl PrioritizedDist {
             })
     }
 
+    /// Return current wheel coverage for one selected registry, excluding filtered artifacts.
+    pub(crate) fn wheel_markers(
+        &self,
+        index: &IndexUrl,
+        minimum_libc_version: Option<MinimumLibcVersion>,
+    ) -> MarkerTree {
+        implied_markers_for_wheels(
+            self.0
+                .wheels
+                .iter()
+                .filter(|(wheel, compatibility)| {
+                    wheel.index == *index && !compatibility.is_excluded()
+                })
+                .map(|(wheel, _)| &wheel.filename),
+            minimum_libc_version,
+        )
+    }
+
     /// Return the hashes for each distribution.
     pub(crate) fn hashes(&self) -> &[HashDigest] {
         &self.0.hashes
@@ -855,8 +873,25 @@ pub(crate) fn implied_markers(
     filename: &WheelFilename,
     minimum_libc_version: Option<MinimumLibcVersion>,
 ) -> MarkerTree {
-    let python = implied_python_markers(filename);
-    let [glibc, musl] = implied_libc_markers(filename, python, minimum_libc_version);
+    implied_markers_for_wheels(std::iter::once(filename), minimum_libc_version)
+}
+
+/// Union a release's wheel coverage for each libc before requiring every configured baseline.
+pub fn implied_markers_for_wheels<'a>(
+    filenames: impl IntoIterator<Item = &'a WheelFilename>,
+    minimum_libc_version: Option<MinimumLibcVersion>,
+) -> MarkerTree {
+    let mut coverage = [MarkerTree::FALSE; 2];
+    for filename in filenames {
+        for (coverage, marker) in coverage.iter_mut().zip(implied_libc_markers(
+            filename,
+            implied_python_markers(filename),
+            minimum_libc_version,
+        )) {
+            *coverage = coverage.or(marker);
+        }
+    }
+    let [glibc, musl] = coverage;
     glibc.and(musl)
 }
 

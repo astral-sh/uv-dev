@@ -9,6 +9,7 @@ use uv_pep440::{Operator, Version};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_pypi_types::{HashDigest, HashDigests, HashError};
 use uv_requirements_txt::{RequirementEntry, RequirementsTxtRequirement};
+use uv_resolver_types::PreferenceId;
 
 use crate::ResolverEnvironment;
 use crate::universal_marker::UniversalMarker;
@@ -22,6 +23,7 @@ pub enum PreferenceError {
 /// A pinned requirement, as extracted from a `requirements.txt` file.
 #[derive(Clone, Debug)]
 pub struct Preference {
+    id: PreferenceId,
     name: PackageName,
     version: Version,
     /// The markers on the requirement itself (those after the semicolon).
@@ -60,6 +62,7 @@ impl Preference {
         }
 
         Ok(Some(Self {
+            id: PreferenceId::new(),
             name: requirement.name,
             version: specifier.version().clone(),
             marker: requirement.marker,
@@ -85,6 +88,7 @@ impl Preference {
         fork_markers: Vec<UniversalMarker>,
     ) -> Self {
         Self {
+            id: PreferenceId::new(),
             name,
             version,
             marker: MarkerTree::TRUE,
@@ -101,6 +105,7 @@ impl Preference {
             return None;
         };
         Some(Self {
+            id: PreferenceId::new(),
             name: dist.name.clone(),
             version: dist.version.clone(),
             marker: MarkerTree::TRUE,
@@ -109,6 +114,11 @@ impl Preference {
             hashes: HashDigests::empty(),
             source: PreferenceSource::Environment,
         })
+    }
+
+    /// Return the stable identity of this input preference.
+    pub fn id(&self) -> PreferenceId {
+        self.id
     }
 
     /// Return the [`PackageName`] of the package for this [`Preference`].
@@ -165,6 +175,8 @@ pub(crate) enum PreferenceSource {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Entry {
+    /// The identity of the input preference, shared by its flattened fork entries.
+    preference_id: Option<PreferenceId>,
     marker: UniversalMarker,
     index: PreferenceIndex,
     pin: Pin,
@@ -172,6 +184,10 @@ pub(crate) struct Entry {
 }
 
 impl Entry {
+    pub(crate) fn preference_id(&self) -> Option<PreferenceId> {
+        self.preference_id
+    }
+
     /// Return the [`UniversalMarker`] associated with the entry.
     pub(crate) fn marker(&self) -> &UniversalMarker {
         &self.marker
@@ -237,6 +253,7 @@ impl Preferences {
             // Flatten the list of markers into individual entries.
             if preference.fork_markers.is_empty() {
                 map.entry(preference.name).or_default().push(Entry {
+                    preference_id: Some(preference.id),
                     marker: UniversalMarker::TRUE,
                     index: preference.index,
                     pin: Pin {
@@ -248,6 +265,7 @@ impl Preferences {
             } else {
                 for fork_marker in preference.fork_markers {
                     map.entry(preference.name.clone()).or_default().push(Entry {
+                        preference_id: Some(preference.id),
                         marker: fork_marker,
                         index: preference.index.clone(),
                         pin: Pin {
@@ -263,7 +281,7 @@ impl Preferences {
         Self(map)
     }
 
-    /// Insert a preference at the back.
+    /// Insert a preference at the back, retaining the input identities that selected it.
     pub(crate) fn insert(
         &mut self,
         package_name: PackageName,
@@ -271,13 +289,24 @@ impl Preferences {
         markers: UniversalMarker,
         pin: impl Into<Pin>,
         source: PreferenceSource,
+        preference_ids: &[PreferenceId],
     ) {
-        self.0.entry(package_name).or_default().push(Entry {
+        let entry = Entry {
+            preference_id: None,
             marker: markers,
             index: PreferenceIndex::from(index),
             pin: pin.into(),
             source,
-        });
+        };
+        let entries = self.0.entry(package_name).or_default();
+        if preference_ids.is_empty() {
+            entries.push(entry);
+        } else {
+            entries.extend(preference_ids.iter().map(|preference_id| Entry {
+                preference_id: Some(*preference_id),
+                ..entry.clone()
+            }));
+        }
     }
 
     /// Returns an iterator over the preferences.
