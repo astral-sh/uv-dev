@@ -53,7 +53,7 @@ jobs:
           cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
 
       - name: "Build benchmarks"
-        run: uv run --only-dev cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery
+        run: uv run --only-dev cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery --bench resolve_conflicting_extras
 
       - name: "Create artifact archive"
         run: |
@@ -112,7 +112,8 @@ jobs:
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea # v5.2.1
         with:
-          run: uv run --only-dev cargo codspeed run
+          # Measure solver work without tracing inherited from the runner.
+          run: env RUST_LOG=off uv run --only-dev cargo codspeed run
           mode: walltime
           upload-url: ${{ steps.profiles.outputs.upload-url }}
 
@@ -182,7 +183,8 @@ jobs:
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea # v5.2.1
         with:
-          run: uv run --only-dev cargo codspeed run
+          # Measure solver work without tracing inherited from the runner.
+          run: env RUST_LOG=off uv run --only-dev cargo codspeed run
           mode: simulation
           upload-url: ${{ steps.profiles.outputs.upload-url }}
 
