@@ -6034,6 +6034,7 @@ dependencies = [
  "uv-performance-memory-allocator",
  "uv-platform-tags",
  "uv-preview",
+ "uv-project-edit",
  "uv-pypi-types",
  "uv-python-interpreter",
  "uv-python-managed",
@@ -7440,8 +7441,11 @@ name = "uv-project-edit"
 version = "0.0.92"
 dependencies = [
  "anyhow",
+ "fs-err",
  "insta",
  "itertools 0.14.0",
+ "rustc-hash",
+ "tempfile",
  "thiserror",
  "toml",
  "toml_edit",
