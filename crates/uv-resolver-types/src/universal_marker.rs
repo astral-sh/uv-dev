@@ -184,7 +184,10 @@ impl UniversalMarker {
     }
 
     /// If all inference sets reduce to the same marker, simplify the marker using that knowledge.
-    pub(crate) fn unify_inference_sets(&mut self, conflict_sets: &[BTreeSet<Inference>]) {
+    pub(crate) fn unify_inference_sets<'a>(
+        &mut self,
+        conflict_sets: impl IntoIterator<Item = &'a BTreeSet<Inference>>,
+    ) {
         let mut previous_marker = None;
 
         for conflict_set in conflict_sets {

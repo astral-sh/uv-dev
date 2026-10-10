@@ -1,10 +1,11 @@
 use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
 
+use indexmap::IndexSet;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::{Direction, Graph};
-use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use uv_pep508::MarkerTree;
 use uv_pypi_types::{ConflictItem, ConflictItemRef, Conflicts, Inference};
@@ -104,76 +105,26 @@ pub fn simplify_conflict_markers(
         return;
     }
 
-    // Unrelated extras and groups cannot simplify a conflict marker. Tracking
-    // them enumerates distinct paths through large workspaces unnecessarily.
-    let relevant: FxHashSet<ConflictItemRef<'_>> = conflicts
+    // Unrelated extras and groups cannot simplify a conflict marker. Keep the pool local to
+    // this traversal so identical activation paths and their inferences can be shared by nodes.
+    let mut worlds = ConflictWorlds::new(
+        conflicts
+            .iter()
+            .flat_map(|set| set.iter().map(ConflictItem::as_ref)),
+    );
+    let activated = propagate_conflict_activations(graph, &mut worlds, |node| {
+        [
+            node.package_extra_names().map(ConflictItemRef::from),
+            node.package_group_names().map(ConflictItemRef::from),
+        ]
+    });
+
+    let inferences: Vec<BTreeSet<Inference>> = worlds
+        .worlds
         .iter()
-        .flat_map(|set| set.iter().map(ConflictItem::as_ref))
-        .collect();
-
-    // The set of activated extras and groups for each node. The ROOT nodes
-    // don't have any extras/groups activated.
-    let mut activated: FxHashMap<NodeIndex, Vec<FxHashSet<ConflictItemRef<'_>>>> =
-        FxHashMap::default();
-
-    // Collect the root nodes.
-    //
-    // Besides the actual virtual root node, virtual dev dependencies packages are also root
-    // nodes since the edges don't cover dev dependencies.
-    let mut queue: Vec<_> = graph
-        .node_indices()
-        .filter(|node_index| {
-            graph
-                .edges_directed(*node_index, Direction::Incoming)
-                .next()
-                .is_none()
-        })
-        .collect();
-
-    while let Some(parent_index) = queue.pop() {
-        let extra = graph[parent_index]
-            .package_extra_names()
-            .map(ConflictItemRef::from);
-        let group = graph[parent_index]
-            .package_group_names()
-            .map(ConflictItemRef::from);
-        for item in extra
-            .into_iter()
-            .chain(group)
-            .filter(|item| relevant.contains(item))
-        {
-            for set in activated
-                .entry(parent_index)
-                .or_insert_with(|| vec![FxHashSet::default()])
-            {
-                set.insert(item);
-            }
-        }
-        let sets = activated
-            .get(&parent_index)
-            .cloned()
-            .unwrap_or_else(|| vec![FxHashSet::default()]);
-        for child_edge in graph.edges_directed(parent_index, Direction::Outgoing) {
-            let mut change = false;
-            let existing = activated.entry(child_edge.target()).or_default();
-            for set in &sets {
-                if !existing.contains(set) {
-                    existing.push(set.clone());
-                    change = true;
-                }
-            }
-            if change {
-                queue.push(child_edge.target());
-            }
-        }
-    }
-
-    let mut inferences: FxHashMap<NodeIndex, Vec<BTreeSet<Inference>>> = FxHashMap::default();
-    for (node_id, sets) in activated {
-        let mut new_sets = Vec::with_capacity(sets.len());
-        for set in sets {
-            let mut new_set = BTreeSet::default();
-            for item in set {
+        .map(|world| {
+            let mut inferences = BTreeSet::new();
+            for item in world.iter().map(|item| worlds.items[item.0]) {
                 for conflict_set in conflicts.iter() {
                     if !conflict_set.contains(item.package(), item.kind()) {
                         continue;
@@ -182,21 +133,20 @@ pub fn simplify_conflict_markers(
                         if conflict_item.as_ref() == item {
                             continue;
                         }
-                        new_set.insert(Inference {
+                        inferences.insert(Inference {
                             item: conflict_item.clone(),
                             included: false,
                         });
                     }
                 }
-                new_set.insert(Inference {
+                inferences.insert(Inference {
                     item: item.to_owned(),
                     included: true,
                 });
             }
-            new_sets.push(new_set);
-        }
-        inferences.insert(node_id, new_sets);
-    }
+            inferences
+        })
+        .collect();
 
     for edge_index in (0..graph.edge_count()).map(EdgeIndex::new) {
         let (from_index, to_index) = graph.edge_endpoints(edge_index).unwrap();
@@ -214,14 +164,15 @@ pub fn simplify_conflict_markers(
         if ambiguous_edges > 1 {
             continue;
         }
-        let Some(inference_sets) = inferences.get(&from_index) else {
+        let Some(node_worlds) = activated.get(&from_index) else {
             continue;
         };
         // If not all possible paths (represented by our inferences)
         // satisfy the conflict marker on this edge, then we can't make any
         // simplifications. Namely, because it follows that out inferences
         // aren't always true. Some of them may sometimes be false.
-        let all_paths_satisfied = inference_sets.iter().all(|set| {
+        let all_paths_satisfied = node_worlds.iter().all(|world| {
+            let set = &inferences[world.0];
             let extras = set
                 .iter()
                 .filter_map(|inf| {
@@ -248,8 +199,8 @@ pub fn simplify_conflict_markers(
             graph[edge_index].evaluate_only_extras(&extras, &groups)
         });
         if all_paths_satisfied {
-            for set in inference_sets {
-                for inf in set {
+            for world in node_worlds {
+                for inf in &inferences[world.0] {
                     // TODO(konsti): Now that `Inference` is public, move more `included` handling
                     // to `UniversalMarker`.
                     if inf.included {
@@ -260,9 +211,107 @@ pub fn simplify_conflict_markers(
                 }
             }
         } else {
-            graph[edge_index].unify_inference_sets(inference_sets);
+            graph[edge_index]
+                .unify_inference_sets(node_worlds.iter().map(|world| &inferences[world.0]));
         }
     }
+}
+
+/// An item and a world are scoped to one conflict propagation, never to the resolver as a whole.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+struct ConflictItemId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorldId(usize);
+
+struct ConflictWorlds<'a> {
+    items: IndexSet<ConflictItemRef<'a>, FxBuildHasher>,
+    worlds: IndexSet<Box<[ConflictItemId]>, FxBuildHasher>,
+}
+
+impl<'a> ConflictWorlds<'a> {
+    const EMPTY: WorldId = WorldId(0);
+
+    fn new(items: impl IntoIterator<Item = ConflictItemRef<'a>>) -> Self {
+        Self {
+            items: items.into_iter().collect(),
+            worlds: IndexSet::from_iter([Box::default()]),
+        }
+    }
+
+    /// Return the canonical world containing the item without mutating an interned key.
+    fn activate(&mut self, world: WorldId, item: ConflictItemId) -> WorldId {
+        match self.worlds[world.0].binary_search(&item) {
+            Ok(_) => world,
+            Err(index) => {
+                let current = &self.worlds[world.0];
+                let mut items = Vec::with_capacity(current.len() + 1);
+                items.extend_from_slice(&current[..index]);
+                items.push(item);
+                items.extend_from_slice(&current[index..]);
+                WorldId(self.worlds.insert_full(items.into_boxed_slice()).0)
+            }
+        }
+    }
+}
+
+/// Propagate every distinct activation path. A union of paths would lose the all-paths condition
+/// required to simplify a conflict marker.
+fn propagate_conflict_activations<'a, Node, Edge>(
+    graph: &'a Graph<Node, Edge>,
+    worlds: &mut ConflictWorlds<'a>,
+    conflict_items: impl Fn(&'a Node) -> [Option<ConflictItemRef<'a>>; 2],
+) -> FxHashMap<NodeIndex, Vec<WorldId>> {
+    let mut activated: FxHashMap<NodeIndex, Vec<WorldId>> = FxHashMap::default();
+
+    // Besides the virtual root, virtual dev-dependency packages can also be roots.
+    let mut queue: Vec<_> = graph
+        .node_indices()
+        .filter(|node_index| {
+            graph
+                .edges_directed(*node_index, Direction::Incoming)
+                .next()
+                .is_none()
+        })
+        .collect();
+
+    while let Some(parent_index) = queue.pop() {
+        for item in conflict_items(&graph[parent_index]).into_iter().flatten() {
+            let Some(item) = worlds.items.get_index_of(&item).map(ConflictItemId) else {
+                continue;
+            };
+            let existing = activated
+                .entry(parent_index)
+                .or_insert_with(|| vec![ConflictWorlds::EMPTY]);
+            // Activation can make distinct paths equivalent. Retain their first-seen order.
+            let mut next = Vec::with_capacity(existing.len());
+            for world in existing.iter() {
+                let world = worlds.activate(*world, item);
+                if !next.contains(&world) {
+                    next.push(world);
+                }
+            }
+            *existing = next;
+        }
+        let node_worlds = activated
+            .get(&parent_index)
+            .cloned()
+            .unwrap_or_else(|| vec![ConflictWorlds::EMPTY]);
+        for child_edge in graph.edges_directed(parent_index, Direction::Outgoing) {
+            let mut change = false;
+            let existing = activated.entry(child_edge.target()).or_default();
+            for world in &node_worlds {
+                if !existing.contains(world) {
+                    existing.push(*world);
+                    change = true;
+                }
+            }
+            if change {
+                queue.push(child_edge.target());
+            }
+        }
+    }
+    activated
 }
 
 pub trait Reachable<T> {
@@ -330,5 +379,158 @@ impl Boolean for MarkerTree {
 
     fn or(&mut self, other: Self) {
         *self = Self::or(*self, other);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use petgraph::graph::NodeIndex;
+    use petgraph::visit::EdgeRef;
+    use petgraph::{Direction, Graph};
+    use rustc_hash::{FxHashMap, FxHashSet};
+    use uv_normalize::{ExtraName, GroupName, PackageName};
+    use uv_pypi_types::{ConflictItem, ConflictItemRef};
+
+    use super::{ConflictItemId, ConflictWorlds, propagate_conflict_activations};
+
+    #[test]
+    fn conflict_world_ids_are_canonical_and_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+        let package: PackageName = "package".parse()?;
+        let first = ConflictItem::from((package.clone(), "first".parse::<ExtraName>()?));
+        let second = ConflictItem::from((package, "second".parse::<GroupName>()?));
+        let mut worlds = ConflictWorlds::new([first.as_ref(), second.as_ref()]);
+        let first = ConflictItemId(0);
+        let second = ConflictItemId(1);
+        let first_only = worlds.activate(ConflictWorlds::EMPTY, first);
+        let second_only = worlds.activate(ConflictWorlds::EMPTY, second);
+        assert_ne!(first_only, second_only);
+        let forward = worlds.activate(first_only, second);
+        let reverse = worlds.activate(second_only, first);
+        assert_eq!(forward, reverse);
+        assert_eq!(worlds.activate(forward, first), forward);
+        assert_eq!(worlds.activate(reverse, second), forward);
+        assert_eq!(&*worlds.worlds[forward.0], &[first, second]);
+        assert_eq!(worlds.worlds.len(), 4);
+        Ok(())
+    }
+
+    // A direct set representation provides an independent oracle for the interned traversal.
+    fn propagate_sets<'a>(
+        graph: &Graph<[Option<ConflictItemRef<'a>>; 2], ()>,
+        relevant: &FxHashSet<ConflictItemRef<'a>>,
+    ) -> FxHashMap<NodeIndex, Vec<FxHashSet<ConflictItemRef<'a>>>> {
+        let mut activated: FxHashMap<NodeIndex, Vec<FxHashSet<ConflictItemRef<'a>>>> =
+            FxHashMap::default();
+        let mut queue: Vec<_> = graph
+            .node_indices()
+            .filter(|index| {
+                graph
+                    .edges_directed(*index, Direction::Incoming)
+                    .next()
+                    .is_none()
+            })
+            .collect();
+        while let Some(parent) = queue.pop() {
+            for item in graph[parent]
+                .into_iter()
+                .flatten()
+                .filter(|item| relevant.contains(item))
+            {
+                for set in activated
+                    .entry(parent)
+                    .or_insert_with(|| vec![FxHashSet::default()])
+                {
+                    set.insert(item);
+                }
+            }
+            let sets = activated
+                .get(&parent)
+                .cloned()
+                .unwrap_or_else(|| vec![FxHashSet::default()]);
+            for edge in graph.edges_directed(parent, Direction::Outgoing) {
+                let existing = activated.entry(edge.target()).or_default();
+                let mut change = false;
+                for set in &sets {
+                    if !existing.contains(set) {
+                        existing.push(set.clone());
+                        change = true;
+                    }
+                }
+                if change {
+                    queue.push(edge.target());
+                }
+            }
+        }
+        activated
+    }
+
+    #[test]
+    fn interned_activation_matches_set_propagation() -> Result<(), Box<dyn std::error::Error>> {
+        let package: PackageName = "package".parse()?;
+        let other_package: PackageName = "other-package".parse()?;
+        let extra: ExtraName = "shared".parse()?;
+        let other_extra: ExtraName = "other".parse()?;
+        let group: GroupName = "shared".parse()?;
+        let items = [
+            ConflictItem::from((package.clone(), extra.clone())),
+            ConflictItem::from((other_package, extra)),
+            ConflictItem::from((package.clone(), group)),
+            ConflictItem::from((package.clone(), other_extra)),
+            ConflictItem::from((package, "irrelevant".parse::<ExtraName>()?)),
+        ];
+        let relevant: FxHashSet<_> = items[..4].iter().map(ConflictItem::as_ref).collect();
+        // Include cycles, fan-in, repeated activation, namespaced extras, groups, irrelevant
+        // extras and nodes that cannot be reached from a root.
+        for seed in 0..64u64 {
+            let mut graph = Graph::new();
+            let nodes: Vec<_> = (0..7)
+                .map(|index| {
+                    graph.add_node(if index == 0 || index >= 5 {
+                        [None, None]
+                    } else {
+                        [
+                            Some(items[index % 5].as_ref()),
+                            (index % 2 == 0).then(|| items[0].as_ref()),
+                        ]
+                    })
+                })
+                .collect();
+            let mut state = seed + 1;
+            for (index, source) in nodes.iter().enumerate() {
+                for target in &nodes[index + 1..] {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1);
+                    if state >> 61 == 0 {
+                        graph.add_edge(*source, *target, ());
+                    }
+                }
+            }
+            graph.add_edge(nodes[5], nodes[6], ());
+            graph.add_edge(nodes[6], nodes[5], ());
+            let expected = propagate_sets(&graph, &relevant);
+            let mut worlds = ConflictWorlds::new(relevant.iter().copied());
+            let actual = propagate_conflict_activations(&graph, &mut worlds, |node| *node);
+            assert_eq!(actual.len(), expected.len(), "seed {seed}");
+            for (node, expected) in expected {
+                let expected: BTreeSet<BTreeSet<_>> = expected
+                    .into_iter()
+                    .map(|set| set.into_iter().collect())
+                    .collect();
+                let actual: BTreeSet<BTreeSet<_>> = actual[&node]
+                    .iter()
+                    .map(|world| {
+                        worlds.worlds[world.0]
+                            .iter()
+                            .map(|item| worlds.items[item.0])
+                            .collect()
+                    })
+                    .collect();
+                assert_eq!(actual, expected, "seed {seed}, node {node:?}");
+            }
+        }
+        Ok(())
     }
 }
