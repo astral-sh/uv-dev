@@ -506,13 +506,15 @@ impl ManagedPythonDownloadList {
         Err(Error::NoDownloadFound(request.clone()))
     }
 
-    /// Load available Python distributions from a provided source or the compiled-in list.
+    /// Load available Python distributions from the configured or default catalog.
     ///
-    /// `python_downloads_json_url` can be either `None`, to use the compiled-in list, or `Some`
-    /// local path or file://, http://, or https:// URL.
+    /// When `python_downloads_json_url` is `None`, use the remote catalog if
+    /// `remote-python-download-metadata` is explicitly enabled, or the compiled-in list otherwise.
+    /// An explicit source can be a local path or a `file://`, `http://`, or `https://` URL containing
+    /// a JSON or NDJSON catalog.
     ///
-    /// Returns an error if the provided list could not be opened, if the JSON is invalid, or if it
-    /// does not parse into the expected data structure.
+    /// Remote sources require network access unless usable metadata is cached. Returns an error
+    /// if the catalog cannot be loaded or parsed into the expected data structure.
     pub async fn new(
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
