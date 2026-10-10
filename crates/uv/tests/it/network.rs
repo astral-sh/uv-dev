@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 use std::future::ready;
 use std::io;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -11,7 +12,7 @@ use bytes::Bytes;
 use http::StatusCode;
 use http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, StreamBody};
+use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::Frame;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
@@ -19,10 +20,19 @@ use indoc::formatdoc;
 use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tokio::net::TcpListener;
+use tokio::sync::{Notify, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
-use wiremock::matchers::{any, method};
+use wiremock::matchers::{any, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+use uv_cache::Cache;
+use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_distribution_filename::DistFilename;
+use uv_distribution_types::{Index, IndexCapabilities, IndexLocations, IndexUrl};
+use uv_normalize::PackageName;
+use uv_resolve_operations::latest::LatestClient;
+use uv_resolver::{ExcludeNewer, Prerelease};
 use uv_static::EnvVars;
 use uv_test::{TestContext, uv_snapshot};
 
@@ -1561,4 +1571,140 @@ fn direct_url_range_resume_retry_limit() {
 #[test]
 fn direct_url_range_resume_success_does_not_reset_retries() {
     assert_wheel_download_timeout(RangeResponse::LimitedThenInterrupted, 1, 3, 2);
+}
+
+async fn find_latest(simple: &str, flat: &str) -> Result<Option<DistFilename>> {
+    let locations = IndexLocations::new(
+        vec![Index::from_index_url(IndexUrl::from_str(simple)?)],
+        vec![Index::from_find_links(IndexUrl::from_str(flat)?)],
+        false,
+    );
+    let registry = RegistryClientBuilder::new(
+        BaseClientBuilder::default().retries(0),
+        Cache::temp()?.init().await?,
+    )
+    .index_locations(locations.clone())
+    .build()?;
+    let latest = LatestClient {
+        client: &registry,
+        capabilities: &IndexCapabilities::default(),
+        prerelease: &Prerelease::default(),
+        exclude_newer: &ExcludeNewer::default(),
+        index_locations: &locations,
+        tags: None,
+        requires_python: None,
+    }
+    .find_latest(&PackageName::from_str("example")?, None, &Semaphore::new(2))
+    .await?;
+    Ok(latest)
+}
+
+#[tokio::test]
+async fn latest_lookup_fetches_both_sources_concurrently() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let flat_started = Arc::new(Notify::new());
+    let server = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let flat_started = Arc::clone(&flat_started);
+            tokio::spawn(async move {
+                let service = service_fn(move |request: hyper::Request<hyper::body::Incoming>| {
+                    let flat_started = Arc::clone(&flat_started);
+                    async move {
+                        let (body, content_type) = if request.uri().path() == "/flat" {
+                            flat_started.notify_one();
+                            (
+                                b"<a href='example-2.0-py3-none-any.whl'>example</a>".as_slice(),
+                                "text/html",
+                            )
+                        } else {
+                            flat_started.notified().await;
+                            (
+                                br#"{"meta":{"api-version":"1.0"},"name":"example","files":[]}"#
+                                    .as_slice(),
+                                "application/vnd.pypi.simple.v1+json",
+                            )
+                        };
+                        let mut response =
+                            hyper::Response::new(Full::new(Bytes::from_static(body)));
+                        response.headers_mut().insert(
+                            http::header::CONTENT_TYPE,
+                            http::HeaderValue::from_static(content_type),
+                        );
+                        Ok::<_, Infallible>(response)
+                    }
+                });
+                hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await
+            });
+        }
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        find_latest(
+            &format!("http://{address}/simple"),
+            &format!("http://{address}/flat"),
+        ),
+    )
+    .await;
+    server.abort();
+    let Some(filename) = result?? else {
+        anyhow::bail!("expected a latest version");
+    };
+    assert_eq!(filename.version().to_string(), "2.0");
+    Ok(())
+}
+
+#[tokio::test]
+async fn latest_lookup_keeps_index_failure_priority() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/example/"))
+        .respond_with(ResponseTemplate::new(500).set_delay(Duration::from_millis(50)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/flat"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let result = find_latest(
+        &format!("{}/simple", server.uri()),
+        &format!("{}/flat", server.uri()),
+    )
+    .await;
+    let Err(error) = result else {
+        anyhow::bail!("expected the latest version lookup to fail");
+    };
+    assert!(error.to_string().contains("/simple/example/"), "{error}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn latest_lookup_cancels_find_links_after_index_failure() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/example/"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/flat"))
+        .respond_with(ResponseTemplate::new(500).set_delay(Duration::from_secs(30)))
+        .mount(&server)
+        .await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        find_latest(
+            &format!("{}/simple", server.uri()),
+            &format!("{}/flat", server.uri()),
+        ),
+    )
+    .await?;
+    let Err(error) = result else {
+        anyhow::bail!("expected the latest version lookup to fail");
+    };
+    assert!(error.to_string().contains("/simple/example/"), "{error}");
+    Ok(())
 }
