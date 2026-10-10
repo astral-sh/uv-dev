@@ -43143,11 +43143,84 @@ fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
+    // Validating the existing lock must preserve the dependency's Python activation marker.
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
     // Re-lock with `--refresh` should also succeed.
     uv_snapshot!(context.filters(), context.lock().arg("--refresh"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Changing a local dependency's Python compatibility invalidates an existing lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_invalidates_changed_path_dependency_requires_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["local"]
+
+        [tool.uv.sources]
+        local = { path = "local" }
+        "#})?;
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==0.1.0 depends on Python>=3.13, we can conclude that local==0.1.0 cannot be used.
+             And because only local==0.1.0 is available and your project depends on local, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==0.1.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .arg("--locked")
+        .arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==0.1.0 depends on Python>=3.13, we can conclude that local==0.1.0 cannot be used.
+             And because only local==0.1.0 is available and your project depends on local, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==0.1.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
     ");
 
     Ok(())
@@ -48244,6 +48317,35 @@ fn lock_resolution_inputs_metadata_unknown_version() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
+    // The current local version is unknown when selecting configured metadata, so the previous
+    // lock version must not select a stale version-specific declaration.
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "2.0"
+        requires-python = ">=3.13"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and child==2.0 depends on Python>=3.13, we can conclude that child==2.0 cannot be used.
+             And because only child==2.0 is available and your project depends on child, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., child==2.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    "#);
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "1.0"
+    "#})?;
+
     // Complete declarations participate in validation, even for an unmatched version.
     pyproject.write_str(indoc! {r#"
         [project]
@@ -48680,5 +48782,695 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
+    Ok(())
+}
+
+/// Dependency upper bounds do not force re-resolution when the resolver accepts the lower bound.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_upper_bound_reuses_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "local-python-upper-bound"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["local"]
+        [tool.uv.sources]
+        local = { path = "local" }
+    "#})?;
+    context
+        .temp_dir
+        .child("local/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.12,<4"
+        dependencies = ["example==1.0.0"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Optional dependencies inherit the Python marker that activates their requested extra.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_extra_activation_reuses_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "local-python-extra-activation"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["middle", "middle[new]; python_version >= '3.13'"]
+        [tool.uv.sources]
+        middle = { path = "middle" }
+    "#})?;
+    context
+        .temp_dir
+        .child("middle/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "middle"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        new = ["leaf"]
+        [tool.uv.sources]
+        leaf = { path = "../leaf" }
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["example==1.0.0"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Local script dependencies are validated even when inactive for the current interpreter.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_script_dependency_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["local; python_version >= '3.13'"]
+        # [tool.uv.sources]
+        # local = { path = "local" }
+        # ///
+    "#})?;
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+    "#})?;
+    context
+        .lock()
+        .args(["--script", "script.py", "--offline"])
+        .assert()
+        .success();
+    local.write_str(
+        &context
+            .read("local/pyproject.toml")
+            .replace(">=3.13", ">=3.14"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--script", "script.py", "--locked", "--offline"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.13')
+      cause: Because only local{python_full_version >= '3.13'}==0.1.0 is available and the requested Python version (>=3.12) does not satisfy Python>=3.14, we can conclude that all versions of local{python_full_version >= '3.13'} cannot be used.
+             And because you require local{python_full_version >= '3.13'}, we can conclude that your requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    "#);
+    Ok(())
+}
+
+/// Projectless workspace groups seed local-package compatibility checks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_projectless_group_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["local"]
+        [tool.uv.workspace]
+        members = []
+        [tool.uv.sources]
+        local = { path = "local" }
+    "#})?;
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.12", ">=3.13"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--locked", "--offline"]), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==0.1.0 depends on Python>=3.13, we can conclude that local==0.1.0 cannot be used.
+             And because only local==0.1.0 is available and you require local, we can conclude that your requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==0.1.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    ");
+    Ok(())
+}
+
+/// Global script overrides determine which locked local package is reachable.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_script_override_dependency_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    let url = Url::from_directory_path(context.temp_dir.child("local").path())
+        .map_err(|()| anyhow::anyhow!("invalid local directory"))?;
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["local==1.0.0"]
+        # [tool.uv]
+        # override-dependencies = ["local @ {url}"]
+        # ///
+    "#})?;
+    context
+        .lock()
+        .args(["--script", "script.py", "--offline"])
+        .assert()
+        .success();
+    local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.12", ">=3.13"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--script", "script.py", "--locked", "--offline"]), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==2.0.0 depends on Python>=3.13, we can conclude that local==2.0.0 cannot be used.
+             And because only local==2.0.0 is available and you require local, we can conclude that your requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==2.0.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    ");
+
+    local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.13", ">=3.12"))?;
+    context
+        .lock()
+        .args([
+            "--script",
+            "script.py",
+            "--offline",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.12", ">=3.13"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--script", "script.py", "--locked", "--offline", "--preview-features", "lock-without-metadata"]), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==2.0.0 depends on Python>=3.13, we can conclude that local==2.0.0 cannot be used.
+             And because only local==2.0.0 is available and you require local, we can conclude that your requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==2.0.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    ");
+    Ok(())
+}
+/// Script dependencies at the script directory are not unconditional workspace roots.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_script_editable_root_requires_python_reachability() -> Result<()> {
+    let scenario = toml::from_str(indoc! {r#"
+        name = "script-editable-root-reachability"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.13");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["child; python_version >= '3.13'", "example"]
+        # [tool.uv.sources]
+        # child = { path = ".", editable = true }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--script").arg("script.py")
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--script").arg("script.py")
+        .arg("--index-url").arg(server.index_url())
+        .args(["--check", "--offline", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Impossible conflict combinations cannot widen a local package's Python reachability.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_path_requires_python_excludes_conflict_combinations() -> Result<()> {
+    let scenario = toml::from_str(indoc! {r#"
+        name = "local-python-conflict-reachability"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.13").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child; python_version >= '3.13'", "example"]
+        [project.optional-dependencies]
+        a = []
+        b = []
+        [tool.uv]
+        conflicts = [[{ extra = "a" }, { extra = "b" }]]
+        [tool.uv.sources]
+        child = { path = "child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+    resolution-markers = [
+        "python_full_version >= '3.13'",
+        "python_full_version < '3.13'",
+    ]
+    conflicts = [[
+        { package = "project", extra = "a" },
+        { package = "project", extra = "b" },
+    ]]
+
+    [[package]]
+    name = "child"
+    version = "0.1.0"
+    source = { directory = "child" }
+
+    [[package]]
+    name = "example"
+    version = "1.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:example-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "child", marker = "python_full_version >= '3.13' or (extra == 'extra-7-project-a' and extra == 'extra-7-project-b')" },
+        { name = "example" },
+    ]
+
+    [package.metadata]
+    requires-dist = [
+        { name = "child", marker = "python_full_version >= '3.13'", directory = "child" },
+        { name = "example" },
+    ]
+    provides-extras = ["a", "b"]
+    "#);
+    });
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--check", "--offline", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Configured metadata controls local Python compatibility during offline lock validation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_configured_python_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "local-python-configured-python-requirement"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv.sources]
+        child = { path = "child" }
+        [[tool.uv.dependency-metadata]]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        requires-dist = ["example"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["example"]
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .lock()
+        .arg("--no-build")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--locked", "--no-build", "--offline", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Configured metadata controls local Python compatibility during offline lock validation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_configured_absent_python_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "local-python-configured-absent-python-requirement"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv.sources]
+        child = { path = "child" }
+        [[tool.uv.dependency-metadata]]
+        name = "child"
+        version = "0.1.0"
+        requires-dist = ["example"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["example"]
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .lock()
+        .arg("--no-build")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--locked", "--no-build", "--offline", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Dynamic Python metadata is refreshed even when the local version and dependencies are static.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_dynamic_requirement_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv.sources]
+        child = { path = "child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        dependencies = []
+        dynamic = ["requires-python"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("child/backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = Path(metadata_directory, "child-0.1.0.dist-info")
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text("Metadata-Version: 2.2\nName: child\nVersion: 0.1.0\nRequires-Python: >=3.12\n")
+            return dist_info.name
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    context.temp_dir.child("child/backend.py").write_str(
+        &context
+            .read("child/backend.py")
+            .replace(">=3.12", ">=3.13.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13.0 and child==0.1.0 depends on Python>=3.13.0, we can conclude that child==0.1.0 cannot be used.
+             And because only child==0.1.0 is available and your project depends on child, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., child==0.1.0 only supports >=3.13.0). Consider using a more restrictive `requires-python` value (like >=3.13.0).
+    "#);
+    Ok(())
+}
+
+/// Immutable registry metadata can lead to local overrides whose Python requirement changes.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_transitive_override_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "local-python-transitive-override"
+        [root]
+        requires = ["parent"]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["local"]
+        sdist = false
+        [packages.local.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    let url = Url::from_directory_path(context.temp_dir.child("local").path())
+        .map_err(|()| anyhow::anyhow!("invalid local directory"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv]
+        override-dependencies = ["local @ {url}"]
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+    local.write_str(
+        &context
+            .read("local/pyproject.toml")
+            .replace(">=3.12", ">=3.13"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==1.0.0 depends on Python>=3.13, we can conclude that local==1.0.0 cannot be used.
+             And because only local==1.0.0 is available, we can conclude that all versions of local cannot be used.
+             And because all versions of parent depend on local and your project depends on parent, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==1.0.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    "#);
     Ok(())
 }

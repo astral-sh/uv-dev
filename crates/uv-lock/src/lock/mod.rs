@@ -50,7 +50,8 @@ use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{
-    MarkerEnvironment, MarkerTree, Scheme, VerbatimUrl, VerbatimUrlError, split_scheme,
+    MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueVersion, Scheme, VerbatimUrl,
+    VerbatimUrlError, split_scheme,
 };
 use uv_platform_tags::{
     AbiTag, IncompatibleTag, LanguageTag, PlatformTag, TagCompatibility, TagPriority, Tags,
@@ -3918,14 +3919,96 @@ impl Lock {
         SatisfiesResult::Satisfied
     }
 
+    /// Recover package reachability while retaining the activation markers of requested extras.
+    fn package_reachability_markers(
+        &self,
+        root: &Path,
+        root_requirements: &[Cow<'_, Requirement>],
+        workspace_packages: &BTreeMap<PackageName, WorkspaceMember>,
+    ) -> Result<PackageMarkers<'_>, LockError> {
+        let mut package_markers = PackageMarkers::default();
+        let mut pending = VecDeque::new();
+        let root_marker = self.fork_markers_union();
+
+        for package in self
+            .workspace_packages()
+            .filter(|package| workspace_packages.contains_key(&package.id.name))
+        {
+            pending.push_back((package, None, root_marker));
+            for extra in package.optional_dependencies.keys() {
+                pending.push_back((package, Some(extra), root_marker));
+            }
+        }
+
+        // Scripts and projectless roots keep their direct requirements in the manifest.
+        for requirement in root_requirements {
+            let requirement = requirement.as_ref().clone().into_absolute(root);
+            for package in self.packages_for_name(&requirement.name) {
+                if !Self::package_satisfies_requirement(package, &requirement, root)? {
+                    continue;
+                }
+                let Some(marker) = self.root_requirement_marker(&requirement, package) else {
+                    continue;
+                };
+                let marker = root_marker.and(marker);
+                pending.push_back((package, None, marker));
+                for extra in &requirement.extras {
+                    if let Some((extra, _)) = package.optional_dependencies.get_key_value(extra) {
+                        pending.push_back((package, Some(extra), marker));
+                    }
+                }
+            }
+        }
+
+        while let Some((package, extra, marker)) = pending.pop_front() {
+            let Some(marker) = package_markers.merge(&package.id, extra, marker) else {
+                continue;
+            };
+            if extra.is_some() {
+                pending.push_back((package, None, marker));
+            }
+            let context = extra
+                .map(DependencyContext::Extra)
+                .unwrap_or(DependencyContext::Production);
+            for context in iter::once(context).chain(
+                package
+                    .dependency_groups
+                    .keys()
+                    .filter(|_| extra.is_none())
+                    .map(DependencyContext::Group),
+            ) {
+                for dependency in context.dependencies(package) {
+                    let marker = marker
+                        .and(context.conflict_marker(&package.id.name, &self.conflicts))
+                        .and(dependency.complexified_marker.combined());
+                    if marker.is_false() {
+                        continue;
+                    }
+                    let child = self.package(dependency.index);
+                    pending.push_back((child, None, marker));
+                    for extra in &dependency.extra {
+                        if let Some((extra, _)) = child.optional_dependencies.get_key_value(extra) {
+                            pending.push_back((child, Some(extra), marker));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(package_markers)
+    }
+
     /// Return a [`SatisfiesResult`] if the given requirements do not match the [`Package`] metadata.
     fn satisfies_requires_dist<'lock>(
-        &self,
+        &'lock self,
         requires_dist: Box<[Requirement]>,
         provides_extra: &[ExtraName],
         dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
         source_requirements: &DependencySources<'_>,
         modifiers: &DependencyModifiers,
+        root_requirements: &[Cow<'_, Requirement>],
+        workspace_packages: &BTreeMap<PackageName, WorkspaceMember>,
+        package_reachability: &mut Option<PackageMarkers<'lock>>,
         package_requires_python: Option<&VersionSpecifiers>,
         package_version: Option<&Version>,
         package: &'lock Package,
@@ -3935,6 +4018,54 @@ impl Lock {
         root: &Path,
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
+        if let Some(requires_python) = package_requires_python {
+            // Dependency compatibility follows the resolver's lower-bound policy.
+            let requires_python_range = RequiresPython::from_specifiers(requires_python.clone());
+            let package_python_marker = requires_python_range
+                .range()
+                .lower()
+                .specifier()
+                .map(|specifier| {
+                    MarkerTree::expression(MarkerExpression::Version {
+                        key: MarkerValueVersion::PythonFullVersion,
+                        specifier,
+                    })
+                })
+                .unwrap_or(MarkerTree::TRUE);
+            let unsupported_marker = self
+                .fork_markers_union()
+                .and(package_python_marker.negate());
+            if !unsupported_marker.is_false() {
+                let package_markers = match package_reachability {
+                    Some(package_markers) => package_markers,
+                    None => package_reachability.insert(self.package_reachability_markers(
+                        root,
+                        root_requirements,
+                        workspace_packages,
+                    )?),
+                };
+                let mut unsupported = UniversalMarker::from_combined(
+                    package_markers
+                        .get(&package.id)
+                        .unwrap_or(MarkerTree::FALSE)
+                        .and(unsupported_marker),
+                );
+                if !self.conflicts.is_empty() {
+                    unsupported.and(UniversalMarker::new(
+                        MarkerTree::TRUE,
+                        ConflictMarker::from_relevant_conflicts(&self.conflicts, [unsupported]),
+                    ));
+                }
+                if !marker_is_unreachable(&self.requires_python, unsupported.combined()) {
+                    return Ok(SatisfiesResult::MismatchedPackageRequiresPython(
+                        &package.id.name,
+                        package.id.version.as_ref(),
+                        requires_python.clone(),
+                    ));
+                }
+            }
+        }
+
         let missing_metadata = allow_missing_package_metadata && !package.has_metadata();
         let indexes = requires_dist
             .iter()
@@ -4224,6 +4355,7 @@ impl Lock {
     ) -> Result<SatisfiesResult<'_>, LockError> {
         let mut queue: VecDeque<PackageIndex> = VecDeque::new();
         let mut seen = FxHashSet::default();
+        let mut package_reachability = None;
         let mut activated_extras: FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>> =
             FxHashMap::default();
         let mut validated_extras: FxHashMap<PackageIndex, BTreeMap<ExtraName, UniversalMarker>> =
@@ -4496,18 +4628,19 @@ impl Lock {
             }
         }
 
+        let root_modifiers = DependencyModifiers::new(
+            Overrides::from_entries(normalized_overrides)
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(excludes.iter().cloned()),
+        );
         let dependency_modifiers = if allow_missing_package_metadata {
-            DependencyModifiers::new(
-                Overrides::from_entries(normalized_overrides)
-                    .map_err(LockErrorKind::InvalidScopedOverride)?,
-                Excludes::from_entries(excludes.iter().cloned()),
-            )
+            root_modifiers.clone()
         } else {
             DependencyModifiers::default()
         };
         // Projectless workspace groups and scripts are root declarations, so apply only
         // global overrides and exclusions before using them for sources or validation.
-        let root_requirements = dependency_modifiers
+        let root_requirements = root_modifiers
             .apply(
                 DependencyModifierScope::Global,
                 requirements
@@ -4595,13 +4728,13 @@ impl Lock {
         }
 
         if !root_requirements.is_empty() {
-            for requirement in root_requirements {
+            for requirement in &root_requirements {
                 for package in self.packages_for_name(&requirement.name) {
                     if !package.id.source.is_source_tree() {
                         continue;
                     }
                     if allow_missing_package_metadata {
-                        if !Self::package_satisfies_requirement(package, &requirement, root)? {
+                        if !Self::package_satisfies_requirement(package, requirement, root)? {
                             continue;
                         }
                         let is_bare_registry_requirement = matches!(
@@ -4630,10 +4763,8 @@ impl Lock {
                     if marker.is_false() {
                         continue;
                     }
-                    if !marker.evaluate(markers, &[]) {
-                        continue;
-                    }
-
+                    // Local metadata must satisfy the entire locked Python range, including
+                    // requirements that are inactive for the interpreter performing this check.
                     let activated = activated_extras.entry(package.id.clone()).or_default();
                     let activation = UniversalMarker::from_combined(marker);
                     for extra in &requirement.extras {
@@ -4684,7 +4815,14 @@ impl Lock {
                 }
             }
 
-            // If the package is immutable, we don't need to validate it (or its dependencies).
+            // Immutable package metadata can still lead to mutable local dependencies.
+            for dependency in package.all_dependencies() {
+                if seen.insert(dependency.index) {
+                    queue.push_back(dependency.index);
+                }
+            }
+
+            // Immutable metadata needs no refresh; its descendants are validated separately.
             if package.id.source.is_immutable() {
                 continue;
             }
@@ -4769,6 +4907,9 @@ impl Lock {
                             metadata.dependency_groups,
                             &dependency_sources,
                             &dependency_modifiers,
+                            &root_requirements,
+                            packages,
+                            &mut package_reachability,
                             requires_python.as_ref(),
                             Some(version),
                             package,
@@ -4835,6 +4976,9 @@ impl Lock {
                         metadata.dependency_groups,
                         &dependency_sources,
                         &dependency_modifiers,
+                        &root_requirements,
+                        packages,
+                        &mut package_reachability,
                         metadata.requires_python.as_ref(),
                         Some(&metadata.version),
                         package,
@@ -4903,6 +5047,9 @@ impl Lock {
                         metadata.dependency_groups,
                         &dependency_sources,
                         &dependency_modifiers,
+                        &root_requirements,
+                        packages,
+                        &mut package_reachability,
                         requires_python.as_ref(),
                         None,
                         package,
@@ -4968,6 +5115,9 @@ impl Lock {
                         metadata.dependency_groups,
                         &dependency_sources,
                         &dependency_modifiers,
+                        &root_requirements,
+                        packages,
+                        &mut package_reachability,
                         metadata.requires_python.as_ref(),
                         Some(&metadata.version),
                         package,
@@ -4999,7 +5149,7 @@ impl Lock {
                     .get(&dependency.index)
                     .zip(activated_extras.get(&dependency.package_id))
                     .is_some_and(|(validated, activated)| validated != activated);
-                if seen.insert(dependency.index) || needs_extra_validation {
+                if needs_extra_validation {
                     queue.push_back(dependency.index);
                 }
             }
@@ -5966,6 +6116,16 @@ impl Lock {
         package: &Package,
         database: &DistributionDatabase<'_, Context>,
     ) -> Result<Option<SourceTreeRequiresDist>, LockError> {
+        // Configured metadata is authoritative even when builds are disabled; obtaining it does
+        // not require selecting or preparing a source distribution.
+        if let Some(metadata) = database.dependency_metadata(&package.id.name, None) {
+            let metadata = DistributionMetadata::from_dependency_metadata(metadata);
+            return Ok(Some(SourceTreeRequiresDist {
+                version: Some(metadata.version.clone()),
+                requires_python: metadata.requires_python.clone(),
+                metadata: metadata.into(),
+            }));
+        }
         let parent = root.join(source_tree);
         let path = parent.join("pyproject.toml");
         match fs_err::tokio::read_to_string(&path).await {
@@ -5981,10 +6141,12 @@ impl Lock {
                     .and_then(|project| project.version.clone());
                 let requires_python = match pyproject_toml.requires_python() {
                     Ok(requires_python) => requires_python,
-                    Err(
-                        uv_pypi_types::MetadataError::FieldNotFound("project")
-                        | uv_pypi_types::MetadataError::DynamicField("requires-python"),
-                    ) => None,
+                    Err(uv_pypi_types::MetadataError::FieldNotFound("project")) => None,
+                    // A dynamic Python requirement needs backend metadata before the lock can
+                    // be accepted, even when the version and dependencies are static.
+                    Err(uv_pypi_types::MetadataError::DynamicField("requires-python")) => {
+                        return Ok(None);
+                    }
                     Err(err) => {
                         return Err(LockErrorKind::InvalidPyprojectToml {
                             path: path.clone(),
@@ -6170,6 +6332,12 @@ pub enum SatisfiesResult<'lock> {
         Option<&'lock Version>,
         BTreeSet<Requirement>,
         BTreeSet<Requirement>,
+    ),
+    /// A package does not support every Python version for which its locked entry is selected.
+    MismatchedPackageRequiresPython(
+        &'lock PackageName,
+        Option<&'lock Version>,
+        VersionSpecifiers,
     ),
     /// Refreshed declarations regenerate different resolved dependency edges.
     MismatchedPackageDependencies(
