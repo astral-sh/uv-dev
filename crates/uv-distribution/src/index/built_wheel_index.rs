@@ -161,7 +161,7 @@ impl<'a> BuiltWheelIndex<'a> {
     ) -> Result<Option<CachedWheel>, Error> {
         let cache_shard = self.cache.shard(
             CacheBucket::SourceDistributions,
-            if source_dist.editable.unwrap_or(false) {
+            if source_dist.mode.editable().unwrap_or(false) {
                 WheelCache::Editable(&source_dist.url).root()
             } else {
                 WheelCache::Path(&source_dist.url).root()

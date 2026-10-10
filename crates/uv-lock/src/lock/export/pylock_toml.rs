@@ -25,10 +25,10 @@ use uv_distribution_filename::{
     SourceDistFilenameError, WheelFilename, WheelFilenameError,
 };
 use uv_distribution_types::{
-    BuiltDist, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist, Dist, Edge,
-    FileLocation, FirstParty, GitDirectorySourceDist, IndexUrl, Name, Node, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
+    BuiltDist, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist, DirectorySourceMode,
+    Dist, Edge, FileLocation, FirstParty, GitDirectorySourceDist, IndexUrl, Name, Node,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
 };
 use uv_fs::{PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -600,7 +600,7 @@ impl<'lock> PylockToml {
                     .unwrap_or_else(|_| dist.install_path.clone());
                     package.directory = Some(PylockTomlDirectory {
                         path: PortablePathBuf::from(path),
-                        editable: dist.editable,
+                        editable: dist.mode.editable(),
                         subdirectory: None,
                     });
                 }
@@ -898,7 +898,7 @@ impl<'lock> PylockToml {
                     editable: match editable
                         .and_then(|editable| editable.for_package(&package.id.name))
                     {
-                        None => sdist.editable,
+                        None => sdist.mode.editable(),
                         Some(false) => None,
                         Some(true) => Some(true),
                     },
@@ -1694,8 +1694,7 @@ impl PylockTomlDirectory {
         Ok(DirectorySourceDist {
             name: name.clone(),
             install_path: path.into_owned().into_boxed_path(),
-            editable: self.editable,
-            r#virtual: Some(false),
+            mode: DirectorySourceMode::packaged(self.editable),
             first_party: FirstParty::No,
             url,
         })

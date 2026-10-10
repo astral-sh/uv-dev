@@ -4,6 +4,9 @@ use uv_redacted::DisplaySafeUrl;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("A virtual source directory cannot be installed in editable mode")]
+    EditableVirtualDirectory,
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 

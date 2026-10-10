@@ -36,13 +36,13 @@ use uv_distribution_filename::{
 };
 use uv_distribution_types::{
     ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
-    DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
-    FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
-    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId,
+    DirectoryInstallMode, DirectorySourceDist, DirectorySourceMode, Dist, ExcludeNewerOverride,
+    ExcludeNewerSpan, ExcludeNewerValue, FileLocation, FirstParty, GitDirectorySourceDist,
+    GitPathBuiltDist, GitPathSourceDist, HashValidation, Identifier, IndexLocations, IndexMetadata,
+    IndexUrl, MetadataHashPolicy, MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString, VersionId,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -6960,8 +6960,7 @@ impl Package {
                     name: self.id.name.clone(),
                     url: verbatim_url(&install_path, &self.id)?.with_given(given),
                     install_path: install_path.into_boxed_path(),
-                    editable: Some(false),
-                    r#virtual: Some(false),
+                    mode: DirectorySourceMode::Resolved(DirectoryInstallMode::Wheel),
                     first_party,
                 };
                 uv_distribution_types::SourceDist::Directory(dir_dist)
@@ -6973,8 +6972,7 @@ impl Package {
                     name: self.id.name.clone(),
                     url: verbatim_url(&install_path, &self.id)?.with_given(given),
                     install_path: install_path.into_boxed_path(),
-                    editable: Some(true),
-                    r#virtual: Some(false),
+                    mode: DirectorySourceMode::Resolved(DirectoryInstallMode::Editable),
                     first_party,
                 };
                 uv_distribution_types::SourceDist::Directory(dir_dist)
@@ -6986,8 +6984,7 @@ impl Package {
                     name: self.id.name.clone(),
                     url: verbatim_url(&install_path, &self.id)?.with_given(given),
                     install_path: install_path.into_boxed_path(),
-                    editable: Some(false),
-                    r#virtual: Some(true),
+                    mode: DirectorySourceMode::Resolved(DirectoryInstallMode::Virtual),
                     first_party,
                 };
                 uv_distribution_types::SourceDist::Directory(dir_dist)
@@ -7814,9 +7811,9 @@ impl Source {
             directory_dist.url.prefers_relative(),
         )
         .map_err(LockErrorKind::DistributionRelativePath)?;
-        if directory_dist.editable.unwrap_or(false) {
+        if directory_dist.mode.editable().unwrap_or(false) {
             Ok(Self::Editable(path.into_boxed_path()))
-        } else if directory_dist.r#virtual.unwrap_or(false) {
+        } else if directory_dist.mode.virtual_project().unwrap_or(false) {
             Ok(Self::Virtual(path.into_boxed_path()))
         } else {
             Ok(Self::Directory(path.into_boxed_path()))
