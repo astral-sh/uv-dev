@@ -7,9 +7,12 @@ use smallvec::SmallVec;
 use tracing::{debug, trace};
 
 use uv_configuration::IndexStrategy;
-use uv_distribution_types::{DistributionMetadata, IndexUrl, Name, ResolutionRecorder};
+use uv_distribution_types::{
+    DistributionMetadata, IndexUrl, MinimumLibcVersion, Name, ResolutionRecorder,
+};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
 use uv_types::InstalledPackagesProvider;
 
@@ -29,6 +32,18 @@ pub(crate) struct CandidateSelector {
     resolution_strategy: ResolutionStrategy,
     prerelease_strategy: PrereleaseStrategy,
     index_strategy: IndexStrategy,
+    minimum_libc_version: Option<MinimumLibcVersion>,
+}
+
+/// The soft wheel preference pass and the unfiltered resolution fallback.
+#[derive(Clone, Copy)]
+enum CandidateSelectionPass<'a> {
+    Preferred {
+        required_environments: &'a [MarkerTree],
+        environment: &'a ResolverEnvironment,
+        minimum_libc_version: Option<MinimumLibcVersion>,
+    },
+    Fallback,
 }
 
 impl CandidateSelector {
@@ -53,6 +68,7 @@ impl CandidateSelector {
                 options.dependency_mode,
             ),
             index_strategy: options.index_strategy,
+            minimum_libc_version: options.minimum_libc_version,
         }
     }
 
@@ -89,6 +105,7 @@ impl CandidateSelector {
         exclusions: &'a Exclusions,
         index: Option<&'a IndexUrl>,
         env: &ResolverEnvironment,
+        required_environments: &[MarkerTree],
         tags: Option<&'a Tags>,
     ) -> Option<Candidate<'a>> {
         if let Some(recorder) = &self.recorder {
@@ -119,6 +136,28 @@ impl CandidateSelector {
             env,
             tags,
         ) {
+            if preferred.dist().prioritized().is_some_and(|dist| {
+                !Self::supports_required_environments(
+                    dist,
+                    env,
+                    required_environments,
+                    self.minimum_libc_version,
+                )
+            }) && let Some(candidate) = self.select_no_preference_with(
+                package_name,
+                range,
+                version_maps,
+                prerelease_selection,
+                env,
+                required_environments,
+            ) {
+                debug!(
+                    "Reselecting preference {} {} as {} after checking required-environment wheel availability",
+                    preferred.name, preferred.version, candidate.version
+                );
+                return Some(candidate);
+            }
+
             trace!("Using preference {} {}", preferred.name, preferred.version);
             return Some(preferred);
         }
@@ -147,6 +186,7 @@ impl CandidateSelector {
             version_maps,
             prerelease_selection,
             env,
+            required_environments,
         );
 
         // Cross-reference against the already-installed distribution.
@@ -438,6 +478,7 @@ impl CandidateSelector {
             version_maps,
             self.prerelease_strategy.selection(package_name, env),
             env,
+            &[],
         )
     }
 
@@ -448,6 +489,7 @@ impl CandidateSelector {
         version_maps: &'a [VersionMap],
         prerelease_selection: PrereleaseSelection,
         env: &ResolverEnvironment,
+        required_environments: &[MarkerTree],
     ) -> Option<Candidate<'a>> {
         match prerelease_selection {
             PrereleaseSelection::Allow => self.select_no_preference_from(
@@ -456,6 +498,7 @@ impl CandidateSelector {
                 version_maps,
                 PrereleaseCandidates::All,
                 env,
+                required_environments,
             ),
             PrereleaseSelection::Disallow => self.select_no_preference_from(
                 package_name,
@@ -463,6 +506,7 @@ impl CandidateSelector {
                 version_maps,
                 PrereleaseCandidates::Stable,
                 env,
+                required_environments,
             ),
             PrereleaseSelection::PreferStable
                 if self.index_strategy == IndexStrategy::UnsafeFirstMatch =>
@@ -475,6 +519,7 @@ impl CandidateSelector {
                         version_maps,
                         PrereleaseCandidates::Stable,
                         env,
+                        required_environments,
                     )
                     .or_else(|| {
                         self.select_no_preference_from(
@@ -483,6 +528,7 @@ impl CandidateSelector {
                             version_maps,
                             PrereleaseCandidates::Prerelease,
                             env,
+                            required_environments,
                         )
                     })
                 })
@@ -494,6 +540,7 @@ impl CandidateSelector {
                     version_maps,
                     PrereleaseCandidates::Stable,
                     env,
+                    required_environments,
                 )
                 .or_else(|| {
                     self.select_no_preference_from(
@@ -502,6 +549,7 @@ impl CandidateSelector {
                         version_maps,
                         PrereleaseCandidates::Prerelease,
                         env,
+                        required_environments,
                     )
                 }),
         }
@@ -514,6 +562,54 @@ impl CandidateSelector {
         version_maps: &'a [VersionMap],
         prerelease_candidates: PrereleaseCandidates,
         env: &ResolverEnvironment,
+        required_environments: &[MarkerTree],
+    ) -> Option<Candidate<'a>> {
+        let select = |version_maps: &'a [VersionMap]| {
+            if !required_environments.is_empty()
+                && let Some(candidate) = self.select_no_preference_inner(
+                    package_name,
+                    range,
+                    version_maps,
+                    prerelease_candidates,
+                    env,
+                    CandidateSelectionPass::Preferred {
+                        required_environments,
+                        environment: env,
+                        minimum_libc_version: self.minimum_libc_version,
+                    },
+                )
+            {
+                return Some(candidate);
+            }
+            self.select_no_preference_inner(
+                package_name,
+                range,
+                version_maps,
+                prerelease_candidates,
+                env,
+                CandidateSelectionPass::Fallback,
+            )
+        };
+        // Index priority takes precedence over the soft preference for wheels.
+        if self.index_strategy == IndexStrategy::UnsafeFirstMatch {
+            version_maps
+                .iter()
+                .find_map(|version_map| select(std::slice::from_ref(version_map)))
+        } else {
+            select(version_maps)
+        }
+    }
+
+    /// Select a candidate without checking for version preferences, optionally requiring matching
+    /// wheels for the required environments.
+    fn select_no_preference_inner<'a>(
+        &'a self,
+        package_name: &'a PackageName,
+        range: &Range<Version>,
+        version_maps: &'a [VersionMap],
+        prerelease_candidates: PrereleaseCandidates,
+        env: &ResolverEnvironment,
+        pass: CandidateSelectionPass<'_>,
     ) -> Option<Candidate<'a>> {
         trace!(
             "Selecting candidate for {package_name} with range {range} with {} remote versions",
@@ -547,6 +643,7 @@ impl CandidateSelector {
                     range,
                     prerelease_candidates,
                     highest,
+                    pass,
                 )
             } else {
                 Self::select_candidate(
@@ -572,6 +669,7 @@ impl CandidateSelector {
                     range,
                     prerelease_candidates,
                     highest,
+                    pass,
                 )
             }
         } else {
@@ -583,6 +681,7 @@ impl CandidateSelector {
                         range,
                         prerelease_candidates,
                         highest,
+                        pass,
                     )
                 })
             } else {
@@ -593,6 +692,7 @@ impl CandidateSelector {
                         range,
                         prerelease_candidates,
                         highest,
+                        pass,
                     )
                 })
             }
@@ -630,6 +730,7 @@ impl CandidateSelector {
         range: &Range<Version>,
         prerelease_candidates: PrereleaseCandidates,
         highest: bool,
+        pass: CandidateSelectionPass<'_>,
     ) -> Option<Candidate<'a>> {
         let segments = range.iter();
         let segments = if highest {
@@ -671,6 +772,20 @@ impl CandidateSelector {
                 let Some(dist) = maybe_dist.prioritized_dist() else {
                     continue;
                 };
+                if let CandidateSelectionPass::Preferred {
+                    required_environments,
+                    environment,
+                    minimum_libc_version,
+                } = pass
+                    && !Self::supports_required_environments(
+                        dist,
+                        environment,
+                        required_environments,
+                        minimum_libc_version,
+                    )
+                {
+                    continue;
+                }
                 trace!(
                     "Found candidate for package {package_name} with range {range} after {steps} steps: {version} version"
                 );
@@ -716,6 +831,11 @@ impl CandidateSelector {
             // return the first _compatible_ candidate across all indexes, if such a candidate
             // exists.
             if matches!(candidate.dist(), CandidateDist::Incompatible { .. }) {
+                // Soft ranking must leave hard incompatibilities to the unfiltered pass.
+                match pass {
+                    CandidateSelectionPass::Preferred { .. } => continue,
+                    CandidateSelectionPass::Fallback => {}
+                }
                 if incompatible.is_none() {
                     incompatible = Some(candidate);
                 }
@@ -739,6 +859,24 @@ impl CandidateSelector {
             "Exhausted all candidates for package {package_name} with range {range} after {steps} steps"
         );
         None
+    }
+
+    /// Return whether the candidate has compatible wheels for every applicable required
+    /// environment.
+    fn supports_required_environments(
+        dist: &PrioritizedDist,
+        env: &ResolverEnvironment,
+        required_environments: &[MarkerTree],
+        minimum_libc_version: Option<MinimumLibcVersion>,
+    ) -> bool {
+        // Wheel-only releases use the resolver's existing platform-forking path.
+        if required_environments.is_empty() || !dist.has_compatible_source() {
+            return true;
+        }
+        let wheel_markers = dist.implied_wheel_markers(minimum_libc_version);
+        required_environments.iter().copied().all(|marker| {
+            !env.included_by_marker(marker) || env.included_by_marker(wheel_markers.and(marker))
+        })
     }
 }
 

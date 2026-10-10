@@ -175,6 +175,111 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
     Ok(())
 }
 
+/// Prefer Python 3.13-ready candidates before newer candidates without matching wheels, while
+/// falling back for a package that has no ready release.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_tries_matching_wheels_first() -> Result<()> {
+    let scenario: Scenario = toml::from_str(
+        r#"
+        name = "required-environment-soft-ranking"
+
+        [root]
+        requires = ["upgradeable", "holdout"]
+
+        [expected]
+        satisfiable = true
+
+        [packages.upgradeable.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+
+        [packages.upgradeable.versions."2.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+
+        [packages.upgradeable.versions."3.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+
+        [packages.holdout.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable", "holdout"]
+
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        required-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+
+        [[package]]
+        name = "holdout"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/holdout-1.0.0.tar.gz", hash = "sha256:[SHA256:holdout-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/holdout-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:holdout-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "holdout" },
+            { name = "upgradeable" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "holdout" },
+            { name = "upgradeable" },
+        ]
+
+        [[package]]
+        name = "upgradeable"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/upgradeable-2.0.0.tar.gz", hash = "sha256:[SHA256:upgradeable-2.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/upgradeable-2.0.0-cp313-cp313-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:upgradeable-2.0.0-cp313-cp313-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#);
+    });
+
+    Ok(())
+}
+
 /// Equivalent dependency declarations should reuse metadata already stored in a lockfile.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -48680,5 +48785,713 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
+    Ok(())
+}
+
+/// Adding a required environment replaces a nonmatching locked preference without --upgrade.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_replaces_existing_preference() -> Result<()> {
+    let scenario: Scenario = toml::from_str(
+        r#"
+        name = "required-environment-soft-ranking"
+
+        [root]
+        requires = ["upgradeable", "holdout"]
+
+        [expected]
+        satisfiable = true
+
+        [packages.upgradeable.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+
+        [packages.upgradeable.versions."2.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+
+        [packages.upgradeable.versions."3.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+
+        [packages.holdout.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable", "holdout"]
+
+        [tool.uv]
+
+        "#,
+    )?;
+
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "holdout"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/holdout-1.0.0.tar.gz", hash = "sha256:[SHA256:holdout-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/holdout-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:holdout-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "holdout" },
+            { name = "upgradeable" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "holdout" },
+            { name = "upgradeable" },
+        ]
+
+        [[package]]
+        name = "upgradeable"
+        version = "3.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/upgradeable-3.0.0.tar.gz", hash = "sha256:[SHA256:upgradeable-3.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/upgradeable-3.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:upgradeable-3.0.0-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#);
+    });
+    pyproject_toml.write_str(&format!(
+        "{}\nrequired-environments = [\"python_version == '3.13'\"]\n",
+        fs_err::read_to_string(pyproject_toml.path())?
+    ))?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated upgradeable v3.0.0 -> v2.0.0
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        required-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+
+        [[package]]
+        name = "holdout"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/holdout-1.0.0.tar.gz", hash = "sha256:[SHA256:holdout-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/holdout-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:holdout-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "holdout" },
+            { name = "upgradeable" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "holdout" },
+            { name = "upgradeable" },
+        ]
+
+        [[package]]
+        name = "upgradeable"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/upgradeable-2.0.0.tar.gz", hash = "sha256:[SHA256:upgradeable-2.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/upgradeable-2.0.0-cp313-cp313-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:upgradeable-2.0.0-cp313-cp313-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#);
+    });
+
+    Ok(())
+}
+
+/// Required environments only rank packages that are installed in those environments.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_respects_package_activation() -> Result<()> {
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheels-package-activation"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["py3-none-manylinux_2_17_x86_64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example; sys_platform == 'linux'"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"sys_platform == 'win32'\"]\n",
+        fs_err::read_to_string(pyproject.path())?
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        required-markers = [
+            "sys_platform == 'win32'",
+        ]
+
+        [[package]]
+        name = "example"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/example-2.0.0.tar.gz", hash = "sha256:[SHA256:example-2.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/example-2.0.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:example-2.0.0-py3-none-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example", marker = "sys_platform == 'linux'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example", marker = "sys_platform == 'linux'" }]
+        "#);
+    });
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        required-markers = [
+            "sys_platform == 'win32'",
+        ]
+
+        [[package]]
+        name = "example"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/example-2.0.0.tar.gz", hash = "sha256:[SHA256:example-2.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/example-2.0.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:example-2.0.0-py3-none-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example", marker = "sys_platform == 'linux'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example", marker = "sys_platform == 'linux'" }]
+        "#);
+    });
+    Ok(())
+}
+
+/// A wheel outside the current Python fork cannot satisfy its required Linux environment.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_wheels_match_current_fork() -> Result<()> {
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheels-current-fork"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64", "cp313-cp313-win_amd64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        environments = ["python_version == '3.13'"]
+        required-environments = ["sys_platform == 'linux'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+        supported-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+        required-markers = [
+            "sys_platform == 'linux'",
+        ]
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/example-1.0.0.tar.gz", hash = "sha256:[SHA256:example-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/example-1.0.0-cp313-cp313-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:example-1.0.0-cp313-cp313-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example" }]
+        "#);
+    });
+    Ok(())
+}
+
+/// Requires-Python exclusions remain part of a wheel's readiness for a required environment.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_wheel_excludes_python() -> Result<()> {
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheels-python-exclusion"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-any"]
+        requires_python = ">=3.12"
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["py3-none-any"]
+        requires_python = ">=3.12,!=3.13.*"
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        environments = ["python_version == '3.13'"]
+        required-environments = ["python_version == '3.13'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+        supported-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+        required-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/example-1.0.0.tar.gz", hash = "sha256:[SHA256:example-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:example-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example" }]
+        "#);
+    });
+    Ok(())
+}
+
+/// Separate Linux libc wheels are combined before ranking a release against both baselines.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_combines_libc_wheels() -> Result<()> {
+    let scenario = toml::from_str(indoc! {r#"
+        name = "required-wheels-combined-libc"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-manylinux_2_17_x86_64", "py3-none-musllinux_1_2_x86_64"]
+        [packages.example.versions."2.0.0"]
+        wheel = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        preview-features = ["minimum-libc-version"]
+        minimum-libc-version = { glibc = "2.17", musl = "1.2" }
+        required-environments = ["sys_platform == 'linux'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        required-markers = [
+            "sys_platform == 'linux'",
+        ]
+
+        [options]
+        minimum-libc-version = { glibc = "2.17", musl = "1.2" }
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/example-1.0.0.tar.gz", hash = "sha256:[SHA256:example-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:example-1.0.0-py3-none-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:[SHA256:example-1.0.0-py3-none-musllinux_1_2_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example" }]
+        "#);
+    });
+    Ok(())
+}
+
+/// unsafe-first-match completes each index's wheel and source passes before visiting another index.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_preserves_first_match_index() -> Result<()> {
+    let first = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "required-wheels-first-index"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel = false
+    "#})?);
+    let second = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "required-wheels-second-index"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["py3-none-any"]
+    "#})?);
+    let context = uv_test::test_context!("3.12").with_filters(
+        first
+            .files()
+            .chain(second.files())
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        index-strategy = "unsafe-first-match"
+        required-environments = ["python_version == '3.13'"]
+        [[tool.uv.index]]
+        url = "{}"
+        [[tool.uv.index]]
+        url = "{}"
+        default = true
+    "#, first.index_url(), second.index_url()})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--prerelease", "allow"]).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        required-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+
+        [options]
+        prerelease-mode = "allow"
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/example-1.0.0.tar.gz", hash = "sha256:[SHA256:example-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example" }]
+        "#);
+    });
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--prerelease", "disallow"]).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        required-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+
+        [options]
+        prerelease-mode = "disallow"
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/example-1.0.0.tar.gz", hash = "sha256:[SHA256:example-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example" }]
+        "#);
+    });
+    Ok(())
+}
+
+/// An incompatible wheel on one index cannot hide a usable source from the fallback pass.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_best_match_incompatible_wheel_fallback() -> Result<()> {
+    let first = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "required-wheels-incompatible-index"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        wheel_tags = ["cp311-cp311-manylinux_2_17_x86_64"]
+    "#})?);
+    let second = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "required-wheels-source-fallback-index"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel = false
+    "#})?);
+    let context = uv_test::test_context!("3.12").with_filters(
+        first
+            .files()
+            .chain(second.files())
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        index-strategy = "unsafe-best-match"
+        required-environments = ["python_version == '3.13'"]
+        [[tool.uv.index]]
+        url = "{}"
+        [[tool.uv.index]]
+        url = "{}"
+        default = true
+    "#, first.index_url(), second.index_url()})?;
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        required-markers = [
+            "python_full_version == '3.13.*'",
+        ]
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/example-1.0.0.tar.gz", hash = "sha256:[SHA256:example-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example" }]
+        "#);
+    });
     Ok(())
 }
