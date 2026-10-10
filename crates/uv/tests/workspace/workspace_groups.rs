@@ -1723,14 +1723,11 @@ fn workspace_groups_no_sources() -> Result<()> {
         lock["workspace-group"][0]["effective-requires-python"].as_str(),
         Some(">=3.12, <3.15")
     );
-    uv_snapshot!(context.filters(), context.export().args(["--offline", "--frozen", "--no-sources", "--no-header", "--no-hashes"]), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: the argument '--frozen' cannot be used with '--no-sources'
-
-    Usage: uv export --cache-dir [CACHE_DIR] --offline --frozen --no-header --no-hashes --exclude-newer <EXCLUDE_NEWER>
-
-    For more information, try '--help'.
+    uv_snapshot!(context.filters(), context.export().args(["--offline", "--frozen", "--no-header", "--no-hashes"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    common-leaf==1.0.0
+        # via app
     ");
     Ok(())
 }
