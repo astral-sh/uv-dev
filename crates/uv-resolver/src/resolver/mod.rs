@@ -474,12 +474,21 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                     .try_universal_markers()
                                     .unwrap_or(UniversalMarker::TRUE);
                                 for (package, version) in &resolution.nodes {
+                                    let preference_ids = if package.url.is_none() {
+                                        resolution
+                                            .pins
+                                            .dist_and_id(&package.name, version)
+                                            .map_or(&[][..], |(_, _, ids)| ids)
+                                    } else {
+                                        &[]
+                                    };
                                     preferences.insert(
                                         package.name.clone(),
                                         package.index.clone(),
                                         marker,
                                         version.clone(),
                                         PreferenceSource::Resolver,
+                                        preference_ids,
                                     );
                                 }
                             }

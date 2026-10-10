@@ -987,12 +987,7 @@ async fn do_lock(
                 // refresh request. Recheck wheel preferences against the actual selected graph.
                 // Each retry removes at least one retained preference; removed preferences are
                 // never restored, so the preference set strictly decreases until resolution settles.
-                if !retain_wheel_ready_preferences(
-                    &mut preferences,
-                    &resolution,
-                    lock_required_environments.as_markers(),
-                    minimum_libc_version,
-                ) {
+                if !retain_wheel_ready_preferences(&mut preferences, &resolution) {
                     break resolution;
                 }
             };
