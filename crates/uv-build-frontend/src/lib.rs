@@ -50,7 +50,8 @@ use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
-pub use crate::error::{Error, MissingHeaderCause};
+use crate::error::BuildBackendMessage;
+pub use crate::error::{BuildRequirementsError, Error, MissingHeaderCause};
 
 /// The default backend to use when PEP 517 is used without a `build-system` section.
 static DEFAULT_BACKEND: LazyLock<Pep517Backend> = LazyLock::new(|| Pep517Backend {
@@ -1107,6 +1108,26 @@ impl SourceBuildTrait for SourceBuild {
     }
 }
 
+/// Read the requirements emitted by a successful PEP 517 hook.
+fn read_build_requirements(
+    path: &Path,
+    backend: &str,
+    build_kind: BuildKind,
+) -> Result<Vec<uv_pep508::Requirement<VerbatimParsedUrl>>, BuildRequirementsError> {
+    let contents = fs_err::read(path).map_err(|source| BuildRequirementsError::Read {
+        backend: backend.to_owned(),
+        build_kind,
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_slice(&contents).map_err(|source| BuildRequirementsError::Parse {
+        backend: backend.to_owned(),
+        build_kind,
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 /// Discover additional requirements before completing build environment setup.
 async fn get_pep517_build_requirements(
     runner: &PythonRunner,
@@ -1189,26 +1210,20 @@ async fn get_pep517_build_requirements(
     }
 
     // Read and deserialize the requirements from the output file.
-    let read_requires_result = fs_err::read(&outfile)
-        .map_err(|err| err.to_string())
-        .and_then(|contents| serde_json::from_slice(&contents).map_err(|err| err.to_string()));
-    let extra_requires: Vec<uv_pep508::Requirement<VerbatimParsedUrl>> = match read_requires_result
-    {
-        Ok(extra_requires) => extra_requires,
-        Err(err) => {
-            return Err(Error::from_command_output(
-                format!(
-                    "Call to `{}.get_requires_for_build_{}` failed: {}",
-                    pep517_backend.backend, build_kind, err
-                ),
-                &output,
-                level,
-                package_name,
-                package_version,
-                version_id,
-            ));
-        }
-    };
+    let extra_requires =
+        match read_build_requirements(&outfile, &pep517_backend.backend, build_kind) {
+            Ok(extra_requires) => extra_requires,
+            Err(error) => {
+                return Err(Error::from_command_output(
+                    BuildBackendMessage::Requirements(Box::new(error)),
+                    &output,
+                    level,
+                    package_name,
+                    package_version,
+                    version_id,
+                ));
+            }
+        };
 
     // If necessary, lower the requirements.
     let extra_requires = if no_sources.all() {

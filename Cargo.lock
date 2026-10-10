@@ -6198,6 +6198,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "temp-env",
  "tempfile",
  "thiserror",
  "tokio",
