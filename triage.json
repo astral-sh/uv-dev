@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22421,
+        "title": "Promote Python 3.15 Docker images to stable tags",
+        "url": "https://github.com/astral-sh/uv/pull/22421",
+        "state": "merged",
+        "reason": "Merged on October 9, 2026, replacing all three Python 3.15 RC base-image mappings and four documented tags with stable equivalents. Its changes were subsequently reversed, so it is the historical fix for the reported regression, not a completed resolution."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22435,
+        "title": "Restore Python 3.15 release-candidate Docker images",
+        "url": "https://github.com/astral-sh/uv/pull/22435",
+        "state": "merged",
+        "reason": "Merged about 25 minutes after astral-sh/uv#22421 and reversed its stable mappings and documentation. The PR explains that upstream stable base images were unavailable and Docker builds could not resolve them; this rollback directly explains the current RC references."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22438,
+        "title": "Require planned Docker builds to pass",
+        "url": "https://github.com/astral-sh/uv/pull/22438",
+        "state": "merged",
+        "reason": "Explicitly cites astral-sh/uv#22421 as an image change that merged before its Docker builds finished. Adds Docker builds to the required CI dependencies; it addresses the validation gap, not restoration of stable Python 3.15 tags."
+      },
+      {
+        "kind": "issue",
+        "number": 22439,
+        "title": "Make CPython 3.15.0 final available through the released uv managed-Python catalog",
+        "url": "https://github.com/astral-sh/uv/issues/22439",
+        "state": "closed",
+        "reason": "Concerns the same Python final-release timing, but reports missing downloads for uv python install. Its linked catalog update, astral-sh/uv#22400, does not change Docker mappings, so this is adjacent context rather than a duplicate or Docker fix."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open/closed issues and open/closed/merged PRs for py315, python3.15-rc, 3.15 with Docker, stable tags, RC/prerelease/release-candidate images, base images, and internal:releases. Broadened to version-independent Docker titles and historical Python 3.14/3.13 image transitions. PR text searches returned no matches, so supplemented them with paginated open PRs, recent all-state PRs, workflow commit history, and direct inspection of candidate bodies, comments, reviews, diffs, and cross-reference timelines. No open tracker for the rollback was found. Ruled out astral-sh/uv#22439 and astral-sh/uv#22400 as managed-Python catalog work, astral-sh/uv#8954 as uv prerelease-version syntax, astral-sh/uv#16652 as floating latest-version aliases, and astral-sh/uv#21597 as shared-action refactoring that retains the image matrix."
+  },
+  "type": "bug",
+  "type_reason": "The stable-tag transition was implemented by astral-sh/uv#22421 and then reversed by astral-sh/uv#22435; the checkout confirms that all Python 3.15 Docker mappings and documented tags again contain -rc. This is a source-level regression, not a duplicate of the merged promotion. The rollback had a documented upstream-availability reason, and upstream metadata still lists 3.15.0rc3; restoring stable images remains dependent on upstream publication. There is no evidence that stable uv Docker tags were successfully published before the rollback, and no open tracker for this regression was found.",
+  "summary": "astral-sh/uv#22421 promoted Python 3.15 Docker tags, but astral-sh/uv#22435 reverted them because upstream stable images were unavailable. astral-sh/uv#22438 fixes the CI validation gap; astral-sh/uv#22439 concerns a separate managed-Python release path.",
+  "draft_response": "You're seeing the temporary rollback of the stable-tag update. astral-sh/uv#22421 switched the Python 3.15 Docker variants to stable tags, but astral-sh/uv#22435 restored the RC tags because the upstream stable base images could not be resolved. The current build matrix still uses those RC mappings, and upstream Docker metadata still lists 3.15.0rc3. Python's final release and publication of its Docker images are separate steps. The next step is to verify availability of the stable Alpine, Trixie, and slim-Trixie base images, then restore the stable mappings and publish updated uv images."
+}
