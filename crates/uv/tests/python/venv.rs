@@ -710,7 +710,8 @@ fn create_centralized_project_environment_link_failure() -> Result<()> {
             ----- stderr -----
             Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
             Creating virtual environment `project-cp3.12.[X]-[HASH]`
-            warning: Failed to write the environment path: failed to rename file from [TEMP_DIR]/[TMP] to [VENV]/: Is a directory (os error 21)
+            warning: Failed to write the environment path
+              cause: failed to rename file from [TEMP_DIR]/[TMP] to [VENV]/: Is a directory (os error 21)
             Activate with: source [CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]/[BIN]/activate
             "#);
         },
