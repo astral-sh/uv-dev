@@ -18,6 +18,7 @@ use tracing::{debug, trace, warn};
 use url::Url;
 
 use uv_cache::Cache;
+use uv_cache_key::cache_digest;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{
     ExitStatus, Printer, UvError, child::read_env_files, child::run_to_completion,
@@ -1052,18 +1053,14 @@ pub async fn run(
                 return Err(anyhow!("Base environment has no site packages directory"));
             }
 
-            let overlay_content = format!(
-                "import site; {}",
-                std::iter::once(requirements_site_packages)
-                    .chain(base_site_packages)
-                    .dedup()
-                    .inspect(|path| debug!("Adding `{}` to site packages", path.display()))
-                    .map(|path| format!("site.addsitedir({})", path.escape_for_python()))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            );
+            let overlay_paths = std::iter::once(requirements_site_packages)
+                .chain(base_site_packages)
+                .dedup()
+                .inspect(|path| debug!("Adding `{}` to site packages", path.display()))
+                .map(Cow::into_owned)
+                .collect::<Vec<_>>();
 
-            set_overlay(ephemeral_env, &overlay_content)?;
+            set_overlay(ephemeral_env, &overlay_paths)?;
 
             // N.B. The order here matters — earlier interpreters take precedence over the
             // later ones.
@@ -1288,21 +1285,37 @@ pub async fn run(
 }
 
 /// Add the parent environments' site packages to an ephemeral environment.
-fn set_overlay(environment: &PythonEnvironment, contents: &str) -> anyhow::Result<()> {
+fn set_overlay(environment: &PythonEnvironment, paths: &[PathBuf]) -> anyhow::Result<()> {
     let site_packages = environment
         .site_packages()
         .next()
         .context("Failed to find `site-packages` directory for environment")?;
-    let overlay_path = site_packages.join("_uv_ephemeral_overlay.pth");
-    fs_err::write(overlay_path, contents)?;
+    // Distinct modules keep nested overlays from sharing another environment's startup data.
+    let module = format!("_uv_ephemeral_overlay_{}", cache_digest(&paths));
+    let paths = paths
+        .iter()
+        .map(PythonExt::escape_for_python)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let contents = include_str!("_overlay.py")
+        .replace("SITE_PACKAGES = ()", &format!("SITE_PACKAGES = [{paths}]"));
+    fs_err::write(site_packages.join(format!("{module}.py")), contents)?;
+    fs_err::write(
+        site_packages.join("_uv_ephemeral_overlay.pth"),
+        format!("import {module}; {module}.apply()\n"),
+    )?;
+    fs_err::write(
+        site_packages.join("_uv_ephemeral_overlay.start"),
+        format!("{module}:apply\n"),
+    )?;
     Ok(())
 }
 
 /// Set the `extends-environment` key in the `pyvenv.cfg` file to the given path.
 ///
 /// Ephemeral environments created by `uv run --with` extend a parent (virtual or system)
-/// environment by adding a `.pth` file to the ephemeral environment's `site-packages`
-/// directory. The `pth` file contains Python code to dynamically add the parent
+/// environment by adding startup files to the ephemeral environment's `site-packages`
+/// directory. The startup hook dynamically adds the parent
 /// environment's `site-packages` directory to Python's import search paths in addition to
 /// the ephemeral environment's `site-packages` directory. This works well at runtime, but
 /// is too dynamic for static analysis tools like ty to understand. As such, we

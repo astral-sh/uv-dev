@@ -7,6 +7,8 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+#[cfg(feature = "test-python-managed")]
+use std::collections::BTreeMap;
 use std::path::Path;
 use uv_fs::copy_dir_all;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
@@ -14,6 +16,8 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[cfg(feature = "test-python-managed")]
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
 
 #[test]
@@ -1946,6 +1950,86 @@ fn run_with_overlay_interpreter() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
+    Ok(())
+}
+
+#[cfg(feature = "test-python-managed")]
+#[test]
+fn run_with_overlay_startup_files() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.15").assert().success();
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.15")
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.15.0rc2"
+    "#})?;
+    let source = context.temp_dir.child("source");
+    source
+        .child("project_only.py")
+        .write_str("TOKEN = 'project path'\n")?;
+    fs_err::write(
+        uv_test::site_packages_path(&context.venv, "python3.15").join("project_path.pth"),
+        source.path().as_os_str().as_encoded_bytes(),
+    )?;
+
+    let (filename, wheel) = generate_wheel_with_files(
+        &"overlay-hooks".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "overlay_hooks/startup.py",
+                indoc! {r"
+                import sys
+
+                def apply():
+                    from project_only import TOKEN
+                    events = getattr(sys, '_uv_overlay_events', [])
+                    events.append(TOKEN)
+                    sys._uv_overlay_events = events
+            "},
+            ),
+            (
+                "overlay_hooks.pth",
+                "import overlay_hooks.startup; overlay_hooks.startup.apply()\n",
+            ),
+            ("overlay_hooks.start", "overlay_hooks.startup:apply\n"),
+        ],
+    );
+    context.temp_dir.child(&filename).write_binary(&wheel)?;
+
+    // The requirements environment is visited first, but its startup hook can import a module
+    // exposed only by a path extension in the project environment.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--quiet")
+        .arg("--no-index")
+        .arg("--with").arg(&filename)
+        .arg("python").arg("-c").arg(indoc! {r"
+            import sys
+            import sysconfig
+            from pathlib import Path
+
+            print(sys._uv_overlay_events)
+            print((Path(sysconfig.get_path('purelib')) / '_uv_ephemeral_overlay.start').is_file())
+        "}), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ['project path']
+    True
+    ");
     Ok(())
 }
 
