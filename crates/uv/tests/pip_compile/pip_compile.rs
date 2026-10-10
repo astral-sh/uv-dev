@@ -21872,7 +21872,7 @@ fn include_build_dependencies_direct_url_root() -> Result<()> {
     );
     let helper_path = context.temp_dir.child(helper_filename);
     helper_path.write_binary(&helper)?;
-    let helper_url = Url::from_file_path(helper_path.path())
+    let helper_url = SafeUrl::from_file_path(helper_path.path())
         .map_err(|()| anyhow!("invalid helper wheel path"))?;
     let (backend_filename, backend) = generate_wheel(
         &PackageName::from_str("backend")?,
@@ -21885,7 +21885,7 @@ fn include_build_dependencies_direct_url_root() -> Result<()> {
     );
     let backend_path = context.temp_dir.child(backend_filename);
     backend_path.write_binary(&backend)?;
-    let backend_url = Url::from_file_path(backend_path.path())
+    let backend_url = SafeUrl::from_file_path(backend_path.path())
         .map_err(|()| anyhow!("invalid backend wheel path"))?;
     context
         .temp_dir
@@ -22001,7 +22001,7 @@ fn include_build_dependencies_direct_url_constraint() -> Result<()> {
     );
     let helper_path = context.temp_dir.child(helper_filename);
     helper_path.write_binary(&helper)?;
-    let helper_url = Url::from_file_path(helper_path.path())
+    let helper_url = SafeUrl::from_file_path(helper_path.path())
         .map_err(|()| anyhow!("invalid helper wheel path"))?;
     let (backend_filename, backend) = generate_wheel(
         &PackageName::from_str("backend")?,
@@ -22014,7 +22014,7 @@ fn include_build_dependencies_direct_url_constraint() -> Result<()> {
     );
     let backend_path = context.temp_dir.child(backend_filename);
     backend_path.write_binary(&backend)?;
-    let backend_url = Url::from_file_path(backend_path.path())
+    let backend_url = SafeUrl::from_file_path(backend_path.path())
         .map_err(|()| anyhow!("invalid backend wheel path"))?;
     context
         .temp_dir
@@ -22075,7 +22075,7 @@ fn include_build_dependencies_selected_direct_url_backend() -> Result<()> {
     );
     let helper_path = context.temp_dir.child(helper_filename);
     helper_path.write_binary(&helper)?;
-    let helper_url = Url::from_file_path(helper_path.path())
+    let helper_url = SafeUrl::from_file_path(helper_path.path())
         .map_err(|()| anyhow!("invalid helper wheel path"))?;
     let (backend_filename, backend) = generate_wheel(
         &PackageName::from_str("backend")?,
@@ -22088,7 +22088,7 @@ fn include_build_dependencies_selected_direct_url_backend() -> Result<()> {
     );
     let backend_path = context.temp_dir.child(backend_filename);
     backend_path.write_binary(&backend)?;
-    let backend_url = Url::from_file_path(backend_path.path())
+    let backend_url = SafeUrl::from_file_path(backend_path.path())
         .map_err(|()| anyhow!("invalid backend wheel path"))?;
     context
         .temp_dir
