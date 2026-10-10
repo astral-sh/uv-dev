@@ -3480,6 +3480,8 @@ fn require_hashes_in_requirements_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: anyio
+
+    hint: `--require-hashes` was enabled in `requirements.txt`
     "
     );
 
@@ -3494,8 +3496,74 @@ fn require_hashes_in_requirements_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in `requirements.txt`
     "
     );
+
+    Ok(())
+}
+
+/// Identify the declaring file when hash checking is enabled through nested constraints.
+#[test]
+fn require_hashes_in_nested_requirements_txt() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        -c constraints.txt
+        iniconfig==2.0.0
+    "})?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("-c nested/hashes.txt")?;
+    context
+        .temp_dir
+        .child("nested/hashes.txt")
+        .write_str("--require-hashes")?;
+
+    uv_snapshot!(context.pip_sync()
+        .arg("requirements.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in `nested/hashes.txt`
+    ");
+
+    Ok(())
+}
+
+/// Hash failures for dependencies loaded from project metadata identify the declaring input.
+#[test]
+fn require_hashes_pyproject_dependency_origin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = ["iniconfig @ https://example.com/iniconfig-2.0.0-py3-none-any.whl"]
+    "#})?;
+    context
+        .temp_dir
+        .child("hashes.txt")
+        .write_str("--require-hashes")?;
+
+    uv_snapshot!(context.pip_sync()
+        .arg("pyproject.toml")
+        .args(["-c", "hashes.txt", "--no-index"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `iniconfig`
+
+    hint: `--require-hashes` was enabled in `hashes.txt`
+    ");
 
     Ok(())
 }

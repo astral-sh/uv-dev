@@ -85,8 +85,8 @@ pub struct RequirementsSpecification {
     pub extra_index_urls: Vec<IndexUrl>,
     /// Whether to disallow index usage.
     pub no_index: bool,
-    /// Whether all requirements must be hashed.
-    pub require_hashes: bool,
+    /// The first input that enabled `--require-hashes`, including nested inputs.
+    pub require_hashes: Option<RequirementsInput>,
     /// The `--find-links` locations to use for fetching packages.
     pub find_links: Vec<IndexUrl>,
     /// The `--no-binary` flags to enforce when selecting distributions.
@@ -227,8 +227,10 @@ impl RequirementsSpecification {
             constraints: requirements_txt
                 .constraints
                 .into_iter()
-                .map(Requirement::from)
-                .map(NameRequirementSpecification::from)
+                .map(|entry| NameRequirementSpecification {
+                    requirement: Requirement::from(entry.requirement),
+                    hashes: entry.hashes,
+                })
                 .collect(),
             index_url: requirements_txt.index_url.map(IndexUrl::from),
             extra_index_urls: requirements_txt
@@ -600,7 +602,7 @@ impl RequirementsSpecification {
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
-            spec.require_hashes |= source.require_hashes;
+            spec.require_hashes = spec.require_hashes.or(source.require_hashes);
         }
 
         // Read all constraints, treating both requirements _and_ constraints as constraints.
@@ -640,7 +642,7 @@ impl RequirementsSpecification {
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
-            spec.require_hashes |= source.require_hashes;
+            spec.require_hashes = spec.require_hashes.or(source.require_hashes);
         }
 
         // Read all overrides, treating both requirements _and_ overrides as overrides.
@@ -668,7 +670,7 @@ impl RequirementsSpecification {
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
-            spec.require_hashes |= source.require_hashes;
+            spec.require_hashes = spec.require_hashes.or(source.require_hashes);
         }
 
         // Collect excludes.
