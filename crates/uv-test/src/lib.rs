@@ -8,13 +8,14 @@ pub mod package_server;
 pub mod packse;
 mod path;
 pub mod pypi_proxy;
+mod snapshot_filters;
 mod vendor;
 
 pub use path::{assert_link_target, assert_path_missing};
+use snapshot_filters::ContextFilters;
+pub use snapshot_filters::{PreparedFilters, SnapshotFilterSource};
 
 use std::borrow::BorrowMut;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Write as _;
 use std::iter::Iterator;
@@ -152,7 +153,7 @@ pub struct TestContext {
     uv_bin: PathBuf,
 
     /// Standard filters for this test context.
-    filters: Vec<(String, String)>,
+    filters: ContextFilters,
 
     /// Extra environment variables to apply to all commands.
     extra_env: Vec<(OsString, OsString)>,
@@ -1215,7 +1216,7 @@ impl TestContext {
             python_version,
             python_versions,
             uv_bin,
-            filters,
+            filters: filters.into(),
             extra_env: vec![(
                 EnvVars::UV_PYTHON_CACHE_DIR.into(),
                 // Respect `UV_PYTHON_CACHE_DIR` if set, or use the default cache directory.
@@ -1980,6 +1981,14 @@ impl TestContext {
         }
     }
 
+    /// Prepare and reuse this context's ordered filters for command snapshots.
+    ///
+    /// Use [`Self::filters`] for raw pairs accepted by Insta settings. Changing context filters
+    /// invalidates preparation; previously acquired views retain their original replacements.
+    pub fn prepared_filters(&self) -> PreparedFilters {
+        self.filters.prepared()
+    }
+
     /// Standard snapshot filters _plus_ those for this test context.
     pub fn filters(&self) -> Vec<(&str, &str)> {
         // Put test context snapshots before the default filters
@@ -2335,31 +2344,12 @@ pub enum WindowsFilters {
     Universal,
 }
 
-thread_local! {
-    /// Reuse compiled patterns across snapshots and contexts on the same test thread.
-    static SNAPSHOT_FILTER_CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
-}
-
 /// Helper method to apply filters to a string. Useful when `!uv_snapshot` cannot be used.
-pub fn apply_filters<T: AsRef<str>>(mut snapshot: String, filters: impl AsRef<[(T, T)]>) -> String {
-    let filters = filters.as_ref();
-    // Release the thread-local borrow before converting the caller's filters.
-    let mut compiled_filters = SNAPSHOT_FILTER_CACHE.take();
-    for (matcher, replacement) in filters {
-        let matcher = matcher.as_ref();
-        if !compiled_filters.contains_key(matcher) {
-            compiled_filters.insert(
-                matcher.to_owned(),
-                Regex::new(matcher).expect("Do you need to regex::escape your filter?"),
-            );
-        }
-        let re = &compiled_filters[matcher];
-        if re.is_match(&snapshot) {
-            snapshot = re.replace_all(&snapshot, replacement.as_ref()).to_string();
-        }
-    }
-    SNAPSHOT_FILTER_CACHE.set(compiled_filters);
-    snapshot
+pub fn apply_filters<T: AsRef<str>>(
+    snapshot: String,
+    filters: impl SnapshotFilterSource<T>,
+) -> String {
+    filters.apply(snapshot)
 }
 
 /// Execute the command and format its output status, stdout and stderr into a snapshot string.
@@ -2368,7 +2358,7 @@ pub fn apply_filters<T: AsRef<str>>(mut snapshot: String, filters: impl AsRef<[(
 #[expect(clippy::print_stderr)]
 pub fn run_and_format<T: AsRef<str>>(
     command: impl BorrowMut<Command>,
-    filters: impl AsRef<[(T, T)]>,
+    filters: impl SnapshotFilterSource<T>,
     function_name: &str,
     windows_filters: Option<WindowsFilters>,
     input: Option<&str>,
@@ -2390,7 +2380,7 @@ pub fn run_and_format<T: AsRef<str>>(
 #[doc(hidden)]
 pub fn run_and_format_silent<T: AsRef<str>>(
     mut command: impl BorrowMut<Command>,
-    filters: impl AsRef<[(T, T)]>,
+    filters: impl SnapshotFilterSource<T>,
     function_name: &str,
     windows_filters: Option<WindowsFilters>,
     input: Option<&str>,
