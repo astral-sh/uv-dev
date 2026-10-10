@@ -74,8 +74,8 @@ impl Drop for BuildGuard<'_, '_> {
 
 /// A started download attempt that reports failure if it does not complete.
 pub(crate) struct DownloadGuard<'a> {
-    pub(crate) reporter: &'a dyn Reporter,
-    pub(crate) id: usize,
+    reporter: &'a dyn Reporter,
+    id: usize,
     name: &'a PackageName,
     completed: bool,
 }
@@ -92,6 +92,10 @@ impl<'a> DownloadGuard<'a> {
             name,
             completed: false,
         }
+    }
+
+    pub(crate) fn on_progress(&self, bytes: u64) {
+        self.reporter.on_download_progress(self.id, bytes);
     }
 
     pub(crate) fn complete(mut self) {
