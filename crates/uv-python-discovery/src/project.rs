@@ -1,6 +1,9 @@
 //! Project Python requests and compatibility validation.
 
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::{LazyLock, Mutex};
 
 use crate::ConfigDiscovery;
 use crate::PythonInstallation;
@@ -19,7 +22,7 @@ use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
 use uv_settings::PythonInstallMirrors;
-use uv_warnings::warn_user_once;
+use uv_warnings::{ENABLED, warn_user_once};
 use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, Workspace};
 
 use crate::PythonDownloadReporter;
@@ -263,25 +266,7 @@ fn find_workspace_python_requirement(
     if requires_python.is_empty() {
         return Ok(None);
     }
-    for (source, specifiers) in &requires_python {
-        if let [spec] = &specifiers[..] {
-            if let Some(spec) = TildeVersionSpecifier::from_specifier_ref(spec) {
-                if spec.has_patch() {
-                    continue;
-                }
-                let (lower, upper) = spec.bounding_specifiers();
-                let spec_0 = spec.with_patch_version(0);
-                let (lower_0, upper_0) = spec_0.bounding_specifiers();
-                warn_user_once!(
-                    "The `requires-python` specifier (`{spec}`) in `{source}` \
-                    uses the tilde specifier (`~=`) without a patch version. This will be \
-                    interpreted as `{lower}, {upper}`. Did you mean `{spec_0}` to constrain the \
-                    version as `{lower_0}, {upper_0}`? We recommend only using \
-                    the tilde specifier with a patch version to avoid ambiguity.",
-                );
-            }
-        }
-    }
+    warn_tilde_requires_python(&requires_python);
     match RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers)) {
         Some(intersection) => Ok(Some(ProjectPythonRequirement {
             requires_python: intersection,
@@ -293,6 +278,75 @@ fn find_workspace_python_requirement(
         None => Err(PythonSelectionError::DisjointRequiresPython(
             requires_python,
         )),
+    }
+}
+
+/// A declaration can be revisited with different selected groups during one command.
+fn warn_tilde_requires_python(requires_python: &RequiresPythonSources) {
+    static WARNED: LazyLock<Mutex<BTreeSet<(RequiresPythonDeclaration, String)>>> =
+        LazyLock::new(Mutex::default);
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let Ok(mut warned) = WARNED.lock() else {
+        return;
+    };
+    let unreported = requires_python
+        .iter()
+        .filter_map(|(source, specifiers)| {
+            let [specifier] = &specifiers[..] else {
+                return None;
+            };
+            let specifier = TildeVersionSpecifier::from_specifier_ref(specifier)?;
+            if specifier.has_patch() || !warned.insert((source.clone(), specifier.to_string())) {
+                return None;
+            }
+            Some((source, specifier))
+        })
+        .collect::<Vec<_>>();
+    drop(warned);
+    if let Some(warning) = format_tilde_requires_python_warning(&unreported) {
+        warn_user_once!("{warning}");
+    }
+}
+
+/// Consolidate ambiguous tilde specifiers without changing the single-source warning.
+fn format_tilde_requires_python_warning(
+    sources: &[(&RequiresPythonDeclaration, TildeVersionSpecifier<'_>)],
+) -> Option<String> {
+    match sources {
+        [] => None,
+        [(source, spec)] => {
+            let (lower, upper) = spec.bounding_specifiers();
+            let spec_0 = spec.with_patch_version(0);
+            let (lower_0, upper_0) = spec_0.bounding_specifiers();
+            Some(format!(
+                "The `requires-python` specifier (`{spec}`) in `{source}` \
+                uses the tilde specifier (`~=`) without a patch version. This will be \
+                interpreted as `{lower}, {upper}`. Did you mean `{spec_0}` to constrain the \
+                version as `{lower_0}, {upper_0}`? We recommend only using \
+                the tilde specifier with a patch version to avoid ambiguity."
+            ))
+        }
+        _ => {
+            let sources = sources
+                .iter()
+                .map(|(source, spec)| {
+                    let (lower, upper) = spec.bounding_specifiers();
+                    let spec_0 = spec.with_patch_version(0);
+                    let (lower_0, upper_0) = spec_0.bounding_specifiers();
+                    format!(
+                        "- `{source}`: `{spec}` is interpreted as `{lower}, {upper}`; use \
+                        `{spec_0}` to constrain the version as `{lower_0}, {upper_0}`"
+                    )
+                })
+                .join("\n");
+            Some(format!(
+                "The following `requires-python` specifiers use the tilde specifier (`~=`) \
+                without a patch version:\n{sources}\nWe recommend only using the tilde \
+                specifier with a patch version to avoid ambiguity."
+            ))
+        }
     }
 }
 
