@@ -36,7 +36,7 @@ use uv_python_types::{
     ImplementationName, LenientImplementationName, Prefix, PythonDownloadRequest,
     PythonInstallationKey, PythonRequest, PythonVariant, Target, VersionRequest,
 };
-use which::which;
+use which::which_all;
 
 #[cfg(windows)]
 use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_CANT_ACCESS_FILE, WIN32_ERROR};
@@ -826,13 +826,26 @@ impl Interpreter {
         true
     }
 
+    /// Compare the identity reported by a queried executable, including wrapper targets.
+    pub fn matches_resolved_interpreter(&self, other: &Self) -> bool {
+        let executable = other.sys_executable();
+        if is_same_executable(executable, self.sys_executable())
+            || self
+                .sys_base_executable()
+                .is_some_and(|base| is_same_executable(executable, base))
+        {
+            return true;
+        }
+        // Windows virtual environments copy executables, so compare their base interpreters.
+        cfg!(windows)
+            && other
+                .sys_base_executable()
+                .zip(self.sys_base_executable())
+                .is_some_and(|(other, current)| is_same_executable(other, current))
+    }
+
     /// Check whether this interpreter satisfies the given request.
     pub fn matches_request(&self, request: &PythonRequest, cache: &Cache) -> bool {
-        /// Returns `true` if the two paths refer to the same interpreter executable.
-        fn is_same_executable(path1: &Path, path2: &Path) -> bool {
-            path1 == path2 || is_same_file(path1, path2).unwrap_or(false)
-        }
-
         match request {
             PythonRequest::Default | PythonRequest::Any => true,
             PythonRequest::Version(version_request) => {
@@ -860,21 +873,9 @@ impl Interpreter {
                 {
                     return true;
                 }
-                // ...or, on Windows, if both interpreters have the same base executable. On
-                // Windows, interpreters are copied rather than symlinked, so a virtual environment
-                // created from within a virtual environment will _not_ evaluate to the same
-                // `sys.executable`, but will have the same `sys._base_executable`.
-                if cfg!(windows) {
-                    if let Ok(file_interpreter) = Self::query(file, cache) {
-                        if let (Some(file_base), Some(interpreter_base)) = (
-                            file_interpreter.sys_base_executable(),
-                            self.sys_base_executable(),
-                        ) {
-                            if is_same_executable(file_base, interpreter_base) {
-                                return true;
-                            }
-                        }
-                    }
+                // A wrapper can report a different executable from the file used to invoke it.
+                if let Ok(file_interpreter) = Self::query(file, cache) {
+                    return self.matches_resolved_interpreter(&file_interpreter);
                 }
                 false
             }
@@ -895,15 +896,14 @@ impl Interpreter {
                 {
                     return true;
                 }
-                // ... check in `PATH`. The name we find here does not need to be the
-                // name we install, so we can find `foopython` here which got installed as `python`.
-                if which(name)
-                    .ok()
-                    .as_ref()
-                    .and_then(|executable| executable.file_name())
-                    .is_some_and(|file_name| file_name == name.as_str())
-                {
-                    return true;
+                // ... check in `PATH`. The name we find here does not need to be the name we
+                // install, so we can find `foopython` here which got installed as `python`.
+                for executable in which_all(name).into_iter().flatten() {
+                    match Self::query(&executable, cache) {
+                        Ok(interpreter) => return self.matches_resolved_interpreter(&interpreter),
+                        Err(err) if err.is_critical() => return false,
+                        Err(_) => {}
+                    }
                 }
                 false
             }
@@ -917,6 +917,11 @@ impl Interpreter {
             PythonRequest::Key(request) => self.matches_download_request(request),
         }
     }
+}
+
+/// Returns `true` if the two paths refer to the same interpreter executable.
+fn is_same_executable(path1: &Path, path2: &Path) -> bool {
+    path1 == path2 || is_same_file(path1, path2).unwrap_or(false)
 }
 
 /// Calls `fs_err::canonicalize` on Unix. On Windows, avoids attempting to resolve symlinks
@@ -963,7 +968,7 @@ pub struct UnexpectedResponseError {
     err: serde_json::Error,
     stdout: String,
     stderr: String,
-    pub path: PathBuf,
+    path: PathBuf,
 }
 
 impl Display for UnexpectedResponseError {
@@ -1000,7 +1005,7 @@ pub struct StatusCodeError {
     code: ExitStatus,
     stdout: String,
     stderr: String,
-    pub path: PathBuf,
+    path: PathBuf,
 }
 
 impl Display for StatusCodeError {
@@ -1071,6 +1076,24 @@ pub enum Error {
     },
     #[error("Failed to write to cache")]
     Encode(#[from] rmp_serde::encode::Error),
+}
+
+impl Error {
+    /// Return whether a query failure prevents searching for another Python installation.
+    /// Missing interpreters in active virtual environments also require source-specific handling.
+    pub fn is_critical(&self) -> bool {
+        match self {
+            Self::Encode(_) | Self::Io(_) | Self::SpawnFailed { .. } => true,
+            Self::BrokenLink(_)
+            | Self::NotFound(_)
+            | Self::PermissionDenied { .. }
+            | Self::UnexpectedResponse(_)
+            | Self::StatusCode(_)
+            | Self::QueryScript { .. } => false,
+            #[cfg(windows)]
+            Self::CorruptWindowsPackage { .. } => false,
+        }
+    }
 }
 
 impl uv_errors::Hinted for Error {

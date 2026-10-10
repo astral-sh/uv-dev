@@ -284,6 +284,7 @@ fn discover_project_environment(
     let compatibility = check_environment_compatibility(
         &environment,
         EnvironmentKind::Project,
+        EnvironmentPreference::OnlySystem,
         python_request,
         python_preference,
         python_arch,

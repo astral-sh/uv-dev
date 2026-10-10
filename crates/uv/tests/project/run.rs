@@ -7,6 +7,10 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+#[cfg(unix)]
+use std::fs::Permissions;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use uv_fs::copy_dir_all;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
@@ -139,6 +143,251 @@ fn run_with_python_version() -> Result<()> {
     error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.11, <4` (from `project.requires-python`)
     ");
 
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_python_executable_wrapper_reuses_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let python_dir = context.temp_dir.child("python-bin");
+    python_dir.create_dir_all()?;
+    let wrapper = python_dir.child("requested-python");
+    wrapper.write_str(&formatdoc! {r#"
+        #!/bin/sh
+        printf 'query\n' >> "{queries}"
+        exec "{python}" "$@"
+    "#, python = context.python_versions[0].1.display(), queries = context.temp_dir.child("queries").display()})?;
+    fs_err::set_permissions(wrapper.path(), Permissions::from_mode(0o755))?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("-p").arg("requested-python").arg("python").arg("--version")
+        .env(EnvVars::PATH, python_dir.as_os_str())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    let retained = context.temp_dir.child(".venv/keep");
+    retained.write_str("keep")?;
+    context.temp_dir.child("queries").write_str("")?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("-p").arg("requested-python").arg("python").arg("--version")
+        .env(EnvVars::PATH, python_dir.as_os_str())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    retained.assert(predicate::path::exists());
+    assert_eq!(context.read("queries"), "query\n");
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_broken_first_python_wrapper_reuses_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let python_dir = context.temp_dir.child("python-bin");
+    python_dir.create_dir_all()?;
+    let wrapper = python_dir.child("requested-python");
+    wrapper.write_str(&formatdoc! {r#"
+        #!/bin/sh
+        exec "{python}" "$@"
+    "#, python = context.python_versions[0].1.display()})?;
+    fs_err::set_permissions(wrapper.path(), Permissions::from_mode(0o755))?;
+
+    let broken_dir = context.temp_dir.child("broken-bin");
+    broken_dir.create_dir_all()?;
+    let broken_wrapper = broken_dir.child("requested-python");
+    broken_wrapper.write_str("#!/bin/sh\nexit 1\n")?;
+    fs_err::set_permissions(broken_wrapper.path(), Permissions::from_mode(0o755))?;
+    let search_path = std::env::join_paths([broken_dir.path(), python_dir.path()])?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("-p").arg("requested-python").arg("python").arg("--version")
+        .env(EnvVars::PATH, &search_path)
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, &search_path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    let retained = context.temp_dir.child(".venv/keep");
+    retained.write_str("keep")?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("-p").arg("requested-python").arg("python").arg("--version")
+        .env(EnvVars::PATH, &search_path)
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, &search_path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    retained.assert(predicate::path::exists());
+    Ok(())
+}
+
+// System CPython can canonicalize executable symlinks; this snapshot observes the invoked path.
+#[test]
+#[cfg(all(unix, feature = "test-python-managed"))]
+fn run_with_python_executable_name() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+        dependencies = []
+        "#
+        })?;
+
+    context
+        .run()
+        .arg("-p")
+        .arg("3.12")
+        .arg("python")
+        .arg("--version")
+        .assert()
+        .success();
+
+    let python_dir = context.temp_dir.child("python-bin");
+    python_dir.create_dir_all()?;
+    python_dir
+        .child("requested-python")
+        .symlink_to_file(&context.python_versions[1].1)?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("-p")
+        .arg("requested-python")
+        .arg("python")
+        .arg("--version")
+        .env(EnvVars::PATH, python_dir.as_os_str())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.11.[X]
+
+    ----- stderr -----
+    Using CPython 3.11.[X] interpreter at: python-bin/requested-python
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_python_name_skips_virtualenv_candidate() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = []
+    "#})?;
+    context
+        .venv()
+        .arg("other-venv")
+        .args(["--python", "3.11"])
+        .assert()
+        .success();
+    context
+        .run()
+        .args(["--python", "3.12", "python", "--version"])
+        .assert()
+        .success();
+    let first = context.temp_dir.child("first");
+    let second = context.temp_dir.child("second");
+    first.create_dir_all()?;
+    second.create_dir_all()?;
+    first.child("requested-python").write_str(&formatdoc! {r#"
+        #!/bin/sh
+        exec "{python}" "$@"
+    "#, python = context.temp_dir.child("other-venv/bin/python").display()})?;
+    second.child("requested-python").write_str(&formatdoc! {r#"
+        #!/bin/sh
+        exec "{python}" "$@"
+    "#, python = context.python_versions[0].1.display()})?;
+    fs_err::set_permissions(
+        first.child("requested-python"),
+        Permissions::from_mode(0o755),
+    )?;
+    fs_err::set_permissions(
+        second.child("requested-python"),
+        Permissions::from_mode(0o755),
+    )?;
+    let search_path = std::env::join_paths([first.path(), second.path()])?;
+    context.temp_dir.child(".venv/keep").write_str("keep")?;
+    uv_snapshot!(context.filters(), context.run().args(["--python", "requested-python", "python", "--version"])
+        .env(EnvVars::PATH, &search_path).env(EnvVars::UV_PYTHON_SEARCH_PATH, &search_path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(context.read(".venv/keep"), "keep");
+    uv_snapshot!(context.filters(), context.run().args(["--python", "requested-python", "python", "--version"])
+        .env(EnvVars::PATH, &search_path).env(EnvVars::UV_PYTHON_SEARCH_PATH, &search_path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(context.read(".venv/keep"), "keep");
     Ok(())
 }
 
