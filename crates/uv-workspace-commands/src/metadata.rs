@@ -22,7 +22,9 @@ use uv_lock_operations::{
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::ScriptInterpreter;
+use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -71,6 +73,20 @@ pub async fn metadata(
         );
     }
 
+    let script_environment_mode = if sync.is_none() {
+        script
+            .as_ref()
+            .map_or(ScriptEnvironmentMode::Isolated, |script| {
+                ScriptEnvironmentMode::from_script(
+                    script.into(),
+                    active,
+                    &settings.build_isolation,
+                    preview,
+                )
+            })
+    } else {
+        ScriptEnvironmentMode::Isolated
+    };
     let project;
     let source = if let Some(script) = script.as_ref() {
         MetadataSource::Manifest(LockTarget::Script(script))
@@ -108,6 +124,7 @@ pub async fn metadata(
             } else {
                 interpreter = match target {
                     LockTarget::Script(script) => ScriptInterpreter::discover(
+                        script_environment_mode,
                         script.into(),
                         python.as_deref().map(PythonRequest::parse),
                         &client_builder,
@@ -233,6 +250,7 @@ pub async fn metadata(
                 .into_environment()?
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => ScriptEnvironment::get_or_init(
+                ScriptEnvironmentMode::Isolated,
                 (*script).into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
@@ -279,7 +297,12 @@ pub async fn metadata(
                 ProjectInterpreter::discover_existing(workspace.install_path(), active, cache)?
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => {
-                ScriptInterpreter::discover_existing((*script).into(), active, cache)
+                ScriptInterpreter::discover_existing(
+                    script_environment_mode,
+                    (*script).into(),
+                    active,
+                    cache,
+                )
             }
             MetadataSource::Lockfile(workspace) => {
                 ProjectInterpreter::discover_existing(workspace.root(), active, cache)?
@@ -295,9 +318,19 @@ pub async fn metadata(
                 tracing::warn!("Failed to acquire environment lock: {err}");
             })
             .ok();
+        let parent = if script_environment_mode == ScriptEnvironmentMode::Shared {
+            environment
+                .cfg()?
+                .extends_environment()
+                .map(|parent| PythonEnvironment::from_root(environment.root().join(parent), cache))
+                .transpose()?
+        } else {
+            None
+        };
         let module_owners = collect_module_owners(
             install_target,
             &environment,
+            parent.as_ref(),
             &settings,
             &client_builder,
             &state,

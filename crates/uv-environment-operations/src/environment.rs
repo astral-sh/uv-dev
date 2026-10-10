@@ -7,7 +7,9 @@ use crate::{
 use uv_command_support::Printer;
 use uv_configuration::{Concurrency, Constraints, HashCheckingMode, Modifications, TargetTriple};
 use uv_dispatch::PlatformState;
+use uv_distribution::LoweredExtraBuildDependencies;
 use uv_install_operations::loggers::InstallLogger;
+use uv_installer::BuildSettings;
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::ResolverInstallerSettings;
 use uv_virtualenv::UpgradePolicy;
@@ -17,7 +19,7 @@ use uv_cache_info::CacheInfo;
 use uv_cache_key::{cache_digest, hash_digest};
 use uv_client::BaseClientBuilder;
 use uv_distribution_types::{
-    BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
+    BuildInfo, BuiltDist, Dist, Identifier, Name, Node, Resolution, ResolvedDist, SourceDist,
 };
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment, canonicalize_executable};
@@ -40,14 +42,16 @@ struct CachedEnvironmentDist {
     dist: ResolvedDist,
     hashes: uv_pypi_types::HashDigests,
     cache_info: Option<CacheInfo>,
+    build_info: Option<BuildInfo>,
 }
 
 fn cached_environment_resolution_hash(
     resolution_hash: String,
     hash_strategy: &HashStrategy,
 ) -> String {
+    // Use a separate namespace for environments whose identity includes build settings.
+    let resolution_hash = hash_digest(&("build-settings", resolution_hash));
     match hash_strategy.verification() {
-        // Preserve existing cache identities for environments materialized without verification.
         HashVerification::None => resolution_hash,
         // Never reuse an environment materialized without hash verification for a lock-backed
         // resolution with the same distributions and expected hashes.
@@ -189,8 +193,18 @@ impl CachedEnvironment {
         printer: Printer,
         preview: Preview,
     ) -> Result<Self, EnvironmentError> {
-        // Hash the resolution by hashing the generated lockfile.
+        // Include the effective build settings for each source distribution in the identity.
         let resolution_hash = {
+            let extra_build_requires = LoweredExtraBuildDependencies::from_non_lowered(
+                settings.resolver.extra_build_dependencies.clone(),
+            )
+            .into_inner();
+            let build_settings = BuildSettings {
+                config_settings: &settings.resolver.config_setting,
+                config_settings_package: &settings.resolver.config_settings_package,
+                extra_build_requires: &extra_build_requires,
+                extra_build_variables: &settings.resolver.extra_build_variables,
+            };
             let mut distributions = resolution
                 .graph()
                 .node_weights()
@@ -207,6 +221,13 @@ impl CachedEnvironment {
                         dist: dist.clone(),
                         hashes: hashes.clone(),
                         cache_info: Self::cache_info(dist).map_err(EnvironmentError::from)?,
+                        build_info: match dist {
+                            ResolvedDist::Installable { dist, .. } => match dist.as_ref() {
+                                Dist::Source(_) => Some(build_settings.for_package(dist.name())),
+                                Dist::Built(_) => None,
+                            },
+                            ResolvedDist::Installed { .. } => None,
+                        },
                     })
                 })
                 .collect::<Result<Vec<_>, EnvironmentError>>()?;
@@ -238,9 +259,18 @@ impl CachedEnvironment {
         // Search in the content-addressed cache.
         let cache_entry = cache.entry(CacheBucket::Environments, interpreter_hash, resolution_hash);
 
-        if let Ok(root) = cache.resolve_link(cache_entry.path()) {
-            if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
-                return Ok(Self(environment));
+        // A reinstall needs a new archive, since another overlay may still use this base.
+        let reinstall = resolution.distributions().any(|dist| {
+            settings.reinstall.contains_package(dist.name())
+                || dist
+                    .source_tree()
+                    .is_some_and(|path| settings.reinstall.contains_path(path))
+        });
+        if !reinstall {
+            if let Ok(root) = cache.resolve_link(cache_entry.path()) {
+                if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
+                    return Ok(Self(environment));
+                }
             }
         }
 
@@ -257,7 +287,7 @@ impl CachedEnvironment {
             UpgradePolicy::Fixed,
         )?;
 
-        sync_environment(
+        let venv = sync_environment(
             venv,
             resolution,
             hash_strategy,
@@ -274,6 +304,8 @@ impl CachedEnvironment {
             preview,
         )
         .await?;
+
+        venv.set_pyvenv_cfg("immutable", "true")?;
 
         // Now that the environment is complete, sync it to its content-addressed location.
         let id = cache.persist(temp_dir.keep(), cache_entry.path()).await?;
@@ -338,7 +370,7 @@ mod tests {
     use super::{cached_environment_resolution_hash, hash_digest};
 
     #[test]
-    fn verified_cached_environment_uses_separate_resolution_hash() {
+    fn cached_environment_hash_separates_legacy_and_verified_entries() {
         let resolution_hash = hash_digest(&["ty==0.0.17"]);
         let unverified =
             cached_environment_resolution_hash(resolution_hash.clone(), &HashStrategy::default());
@@ -347,7 +379,8 @@ mod tests {
             &HashStrategy::verify(Arc::default()),
         );
 
-        assert_eq!(unverified, resolution_hash);
+        assert_ne!(unverified, resolution_hash);
+        assert_ne!(verified, hash_digest(&("verify", resolution_hash)));
         assert_ne!(verified, unverified);
     }
 }

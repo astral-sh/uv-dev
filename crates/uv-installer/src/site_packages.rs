@@ -48,6 +48,64 @@ pub struct SitePackages {
     by_url: FxHashMap<DisplaySafeUrl, Vec<usize>>,
 }
 
+/// Read-only access to packages visible through an environment and its parents.
+///
+/// Visible packages can belong to other environments. Installation planning uses [`SitePackages`]
+/// scoped to a single environment.
+#[derive(Debug)]
+pub struct LayeredSitePackages {
+    site_packages: SitePackages,
+}
+
+impl From<SitePackages> for LayeredSitePackages {
+    fn from(site_packages: SitePackages) -> Self {
+        Self { site_packages }
+    }
+}
+
+impl LayeredSitePackages {
+    /// Return the visible installed distributions in environment precedence order.
+    pub fn iter(&self) -> impl Iterator<Item = &InstalledDist> {
+        self.site_packages.iter()
+    }
+
+    /// Check whether visible packages satisfy the specification without changing installations.
+    pub fn satisfies_spec(
+        &self,
+        requirements: &[UnresolvedRequirementSpecification],
+        constraints: &[NameRequirementSpecification],
+        overrides: &[UnresolvedRequirementSpecification],
+        override_dependencies: &[Override<Requirement>],
+        exclude_dependencies: &[ExcludeDependency],
+        dependency_metadata: &DependencyMetadata,
+        dependency_mode: DependencyMode,
+        installation: InstallationStrategy,
+        markers: &ResolverMarkerEnvironment,
+        tags: &Tags,
+        config_settings: &ConfigSettings,
+        config_settings_package: &PackageConfigSettings,
+        extra_build_requires: &ExtraBuildRequires,
+        extra_build_variables: &ExtraBuildVariables,
+    ) -> Result<SatisfiesResult<UnresolvedRequirement>> {
+        self.site_packages.satisfies_spec(
+            requirements,
+            constraints,
+            overrides,
+            override_dependencies,
+            exclude_dependencies,
+            dependency_metadata,
+            dependency_mode,
+            installation,
+            markers,
+            tags,
+            config_settings,
+            config_settings_package,
+            extra_build_requires,
+            extra_build_variables,
+        )
+    }
+}
+
 impl SitePackages {
     /// Build an index of installed packages from the given Python environment.
     pub fn from_environment(environment: &PythonEnvironment) -> Result<Self> {
@@ -73,9 +131,12 @@ impl SitePackages {
         interpreter: &Interpreter,
         package_names: Option<&FxHashSet<&PackageName>>,
     ) -> Result<Self> {
-        let mut distributions: Vec<Option<InstalledDist>> = Vec::new();
-        let mut by_name: FxHashMap<PackageName, Vec<usize>> = FxHashMap::default();
-        let mut by_url: FxHashMap<DisplaySafeUrl, Vec<usize>> = FxHashMap::default();
+        let mut index = Self {
+            interpreter: interpreter.clone(),
+            distributions: Vec::new(),
+            by_name: FxHashMap::default(),
+            by_url: FxHashMap::default(),
+        };
 
         for site_packages in interpreter.site_packages() {
             // Read the site-packages directory.
@@ -129,30 +190,35 @@ impl SitePackages {
                     continue;
                 }
 
-                let idx = distributions.len();
-
-                // Index the distribution by name.
-                by_name
-                    .entry(dist_info.name().clone())
-                    .or_default()
-                    .push(idx);
-
-                // Index the distribution by URL.
-                if let InstalledDistKind::Url(dist) = &dist_info.kind {
-                    by_url.entry(dist.url.clone()).or_default().push(idx);
-                }
-
-                // Add the distribution to the database.
-                distributions.push(Some(dist_info));
+                index.insert(dist_info);
             }
         }
 
-        Ok(Self {
-            interpreter: interpreter.clone(),
-            distributions,
-            by_name,
-            by_url,
-        })
+        Ok(index)
+    }
+
+    /// View parent packages unless this environment shadows their name.
+    #[must_use]
+    pub fn with_fallback(mut self, fallback: Self) -> LayeredSitePackages {
+        let primary = self.by_name.keys().cloned().collect::<FxHashSet<_>>();
+        for distribution in fallback {
+            if !primary.contains(distribution.name()) {
+                self.insert(distribution);
+            }
+        }
+        LayeredSitePackages::from(self)
+    }
+
+    fn insert(&mut self, distribution: InstalledDist) {
+        let index = self.distributions.len();
+        self.by_name
+            .entry(distribution.name().clone())
+            .or_default()
+            .push(index);
+        if let InstalledDistKind::Url(dist) = &distribution.kind {
+            self.by_url.entry(dist.url.clone()).or_default().push(index);
+        }
+        self.distributions.push(Some(distribution));
     }
 
     /// Returns the [`Interpreter`] used to install the packages.

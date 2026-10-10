@@ -43,6 +43,7 @@ use uv_project_edit::{ArrayEdit, DependencyTarget, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::init_script_python_requirement;
 use uv_python_interpreter::PythonEnvironment;
@@ -245,6 +246,7 @@ pub async fn add(
 
         // Discover the interpreter.
         let interpreter = ScriptInterpreter::discover(
+            ScriptEnvironmentMode::Isolated,
             (&script).into(),
             python.as_deref().map(PythonRequest::parse),
             &client_builder,

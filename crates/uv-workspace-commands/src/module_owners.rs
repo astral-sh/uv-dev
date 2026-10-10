@@ -35,6 +35,7 @@ use uv_workspace::WorkspaceCache;
 pub(super) async fn collect_module_owners(
     target: InstallTarget<'_>,
     venv: &PythonEnvironment,
+    parent: Option<&PythonEnvironment>,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     state: &UniversalState,
@@ -101,7 +102,7 @@ pub(super) async fn collect_module_owners(
         return Ok(BTreeMap::new());
     };
 
-    find_module_owners_in_environment(venv, &package_ids)
+    find_module_owners_in_environment(venv, parent, &package_ids)
 }
 
 /// Select the package IDs that can own modules in the target resolution.
@@ -141,10 +142,18 @@ fn selected_package_ids(
 /// Map modules in an existing environment to their selected package IDs.
 fn find_module_owners_in_environment(
     venv: &PythonEnvironment,
+    parent: Option<&PythonEnvironment>,
     package_ids: &BTreeMap<PackageName, String>,
 ) -> Result<BTreeMap<ModuleName, Vec<String>>> {
+    let site_packages = SitePackages::from_environment(venv)?;
+    let parent_site_packages = parent.map(SitePackages::from_environment).transpose()?;
     let mut owners = BTreeMap::<ModuleName, BTreeSet<String>>::new();
-    for dist in SitePackages::from_environment(venv)?.iter() {
+    for dist in site_packages.iter().chain(
+        parent_site_packages
+            .as_ref()
+            .into_iter()
+            .flat_map(SitePackages::iter),
+    ) {
         let Some(package_id) = package_ids.get(dist.name()) else {
             continue;
         };

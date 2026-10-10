@@ -4,11 +4,13 @@ use std::path::Path;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
+use uv_configuration::{ActiveEnvironment, BuildIsolation, DependencyGroupsWithDefaults};
 use uv_errors::ErrorWithHints;
 use uv_fs::Simplified;
+use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -131,15 +133,23 @@ pub async fn find_script(
     script: Pep723ItemRef<'_>,
     show_version: bool,
     resolve_links: bool,
+    build_isolation: BuildIsolation,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
+    preview: Preview,
     printer: Printer,
 ) -> Result<ExitStatus> {
     let interpreter = match ScriptInterpreter::discover(
+        ScriptEnvironmentMode::from_script(
+            script,
+            ActiveEnvironment::Ignore,
+            &build_isolation,
+            preview,
+        ),
         script,
         None,
         client_builder,

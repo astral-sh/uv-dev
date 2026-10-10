@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env::VarError;
 use std::ffi::OsString;
 use std::fmt::Write;
@@ -6,7 +7,7 @@ use std::io;
 use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
 use futures::StreamExt;
@@ -18,6 +19,7 @@ use tracing::{debug, trace, warn};
 use url::Url;
 
 use uv_cache::Cache;
+use uv_cache_key::cache_digest;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{
     ExitStatus, Printer, UvError, child::read_env_files, child::run_to_completion,
@@ -28,19 +30,22 @@ use uv_configuration::{
 };
 use uv_dispatch::UniversalState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::NameRequirementSpecification;
+use uv_distribution_types::{InstalledDistKind, Name, NameRequirementSpecification, Resolution};
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     EnvironmentError, EnvironmentSpecification, LinkErrorReporting, PreferenceLocation,
-    ProjectEnvironment, ProjectEnvironmentTarget, ScriptEnvironment, sync_from_lock,
-    update_environment,
+    ProjectEnvironment, ProjectEnvironmentTarget, ScriptEnvironment, sync_environment,
+    sync_from_lock, update_environment,
 };
 use uv_fs::which::is_executable;
-use uv_fs::{PythonExt, Simplified, create_symlink};
+use uv_fs::{PythonExt, Simplified, create_symlink, normalize_path};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
-use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
+#[cfg(unix)]
+use uv_install_wheel::format_shebang;
+use uv_install_wheel::read_record;
+use uv_installer::{InstallationStrategy, LayeredSitePackages, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
@@ -50,6 +55,7 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::PythonVersionFile;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::VersionFileDiscoveryOptions;
 use uv_python_interpreter::{Interpreter, PyVenvConfiguration, PythonEnvironment};
@@ -70,7 +76,7 @@ use uv_settings::{
 };
 use uv_shell::WindowsRunnable;
 use uv_static::EnvVars;
-use uv_types::SourceTreeEditablePolicy;
+use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
@@ -183,6 +189,7 @@ pub async fn run(
 
     // Determine whether the command to execute is a PEP 723 script.
     let temp_dir;
+    let mut shared_interpreter = None;
     let script_interpreter = if let Some(script) = script {
         match &script {
             Pep723Item::Script(script) => {
@@ -212,6 +219,7 @@ pub async fn run(
 
             // Discover the interpreter for the script.
             let environment = ScriptEnvironment::get_or_init(
+                ScriptEnvironmentMode::Isolated,
                 (&script).into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
@@ -382,7 +390,7 @@ pub async fn run(
                 .unwrap_or_default();
 
             // Install the script requirements, if necessary. Otherwise, use an isolated environment.
-            if let Some(spec) = script_specification(
+            if let Some(mut spec) = script_specification(
                 (&script).into(),
                 &settings.resolver.sources,
                 &settings.resolver.index_locations,
@@ -402,7 +410,14 @@ pub async fn run(
                 )
                 .await?
                 .into_inner();
+                let environment_mode = ScriptEnvironmentMode::from_script(
+                    (&script).into(),
+                    active,
+                    &settings.resolver.build_isolation,
+                    preview,
+                );
                 let environment = ScriptEnvironment::get_or_init(
+                    environment_mode,
                     (&script).into(),
                     python.as_deref().map(PythonRequest::parse),
                     &client_builder,
@@ -428,47 +443,163 @@ pub async fn run(
                     })
                     .ok();
 
-                match update_environment(
-                    environment,
-                    spec,
-                    modifications,
-                    python_platform.as_ref(),
-                    SourceTreeEditablePolicy::Project,
-                    unlocked_build_constraints.clone(),
-                    script_extra_build_requires,
-                    &settings,
-                    &client_builder,
-                    &sync_state,
-                    if show_resolution {
-                        Box::new(DefaultResolveLogger)
-                    } else {
-                        Box::new(SummaryResolveLogger)
-                    },
-                    if show_resolution {
-                        Box::new(DefaultInstallLogger)
-                    } else {
-                        Box::new(SummaryInstallLogger)
-                    },
-                    installer_metadata,
-                    &concurrency,
-                    &cache,
-                    workspace_cache,
-                    DryRun::Disabled,
-                    printer,
-                    preview,
-                )
-                .await
-                {
-                    Ok(update) => Some(update.environment.into_interpreter()),
-                    Err(EnvironmentError::Resolve(err)) => {
-                        let err = *err;
-                        return Err(UvError::from(err.with_resolution_context("script")).into());
+                if environment_mode == ScriptEnvironmentMode::Shared {
+                    // Cached environments resolve without installed preferences, but package
+                    // upgrade bounds still constrain the script's dependencies.
+                    spec.constraints.extend(
+                        settings
+                            .resolver
+                            .upgrade
+                            .constraints()
+                            .cloned()
+                            .map(NameRequirementSpecification::from),
+                    );
+                    let result = CachedEnvironment::from_spec(
+                        spec.into(),
+                        unlocked_build_constraints.clone(),
+                        environment.interpreter(),
+                        python_platform.as_ref(),
+                        &settings,
+                        &client_builder,
+                        &sync_state,
+                        if show_resolution {
+                            Box::new(DefaultResolveLogger)
+                        } else {
+                            Box::new(SummaryResolveLogger)
+                        },
+                        if show_resolution {
+                            Box::new(DefaultInstallLogger)
+                        } else {
+                            Box::new(SummaryInstallLogger)
+                        },
+                        installer_metadata,
+                        &concurrency,
+                        &cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .await;
+
+                    match result {
+                        Ok(shared_environment) => {
+                            let shared_environment = PythonEnvironment::from(shared_environment);
+                            // Shared dependencies live in the base; exact synchronization removes
+                            // distributions installed directly into the writable overlay.
+                            let environment = if matches!(modifications, Modifications::Exact) {
+                                sync_environment(
+                                    environment,
+                                    &Resolution::default(),
+                                    HashStrategy::default(),
+                                    Modifications::Exact,
+                                    unlocked_build_constraints.clone(),
+                                    (&settings).into(),
+                                    &client_builder,
+                                    &sync_state,
+                                    if show_resolution {
+                                        Box::new(DefaultInstallLogger)
+                                    } else {
+                                        Box::new(SummaryInstallLogger)
+                                    },
+                                    installer_metadata,
+                                    &concurrency,
+                                    &cache,
+                                    printer,
+                                    preview,
+                                )
+                                .await?
+                            } else if !settings.reinstall.is_none() {
+                                // Overlay installations must not shadow dependencies replaced by
+                                // a reinstall, but unrelated overlay packages remain available.
+                                let shared_packages =
+                                    SitePackages::from_environment(&shared_environment)?;
+                                let reinstalls = SitePackages::from_environment_for_packages(
+                                    &environment,
+                                    shared_packages
+                                        .iter()
+                                        .filter(|dist| {
+                                            settings.reinstall.contains_package(dist.name())
+                                        })
+                                        .map(Name::name),
+                                )?;
+                                uv_install_operations::uninstall(
+                                    reinstalls.into_iter().collect(),
+                                    &environment,
+                                    if show_resolution {
+                                        Box::new(DefaultInstallLogger)
+                                    } else {
+                                        Box::new(SummaryInstallLogger)
+                                    },
+                                    printer,
+                                )
+                                .await?;
+                                environment
+                            } else {
+                                environment
+                            };
+                            let parent_site_packages =
+                                shared_environment.site_packages().next().context(
+                                    "Failed to find `site-packages` directory for environment",
+                                )?;
+                            set_shared_overlay(&environment, &parent_site_packages)?;
+                            sync_shared_environment_files(
+                                &environment,
+                                shared_environment.interpreter(),
+                            )?;
+                            set_parent_environment(&environment, shared_environment.root())?;
+                            shared_interpreter = Some(shared_environment.into_interpreter());
+                            Some(environment.into_interpreter())
+                        }
+                        Err(EnvironmentError::Resolve(err)) => {
+                            let err = *err;
+                            return Err(UvError::from(err.with_resolution_context("script")).into());
+                        }
+                        Err(err) => return Err(UvError::from(err).into()),
                     }
-                    Err(err) => return Err(UvError::from(err).into()),
+                } else {
+                    match update_environment(
+                        environment,
+                        spec,
+                        modifications,
+                        python_platform.as_ref(),
+                        SourceTreeEditablePolicy::Project,
+                        unlocked_build_constraints.clone(),
+                        script_extra_build_requires,
+                        &settings,
+                        &client_builder,
+                        &sync_state,
+                        if show_resolution {
+                            Box::new(DefaultResolveLogger)
+                        } else {
+                            Box::new(SummaryResolveLogger)
+                        },
+                        if show_resolution {
+                            Box::new(DefaultInstallLogger)
+                        } else {
+                            Box::new(SummaryInstallLogger)
+                        },
+                        installer_metadata,
+                        &concurrency,
+                        &cache,
+                        workspace_cache,
+                        DryRun::Disabled,
+                        printer,
+                        preview,
+                    )
+                    .await
+                    {
+                        Ok(update) => Some(update.environment.into_interpreter()),
+                        Err(EnvironmentError::Resolve(err)) => {
+                            let err = *err;
+                            return Err(UvError::from(err.with_resolution_context("script")).into());
+                        }
+                        Err(err) => return Err(UvError::from(err).into()),
+                    }
                 }
             } else {
                 // Create a virtual environment.
                 let interpreter = ScriptInterpreter::discover(
+                    ScriptEnvironmentMode::Isolated,
                     (&script).into(),
                     python.as_deref().map(PythonRequest::parse),
                     &client_builder,
@@ -920,6 +1051,11 @@ pub async fn run(
 
     // If necessary, create an environment for the ephemeral requirements or command.
     let base_site_packages = SitePackages::from_interpreter(&base_interpreter)?;
+    let base_site_packages = if let Some(shared_interpreter) = &shared_interpreter {
+        base_site_packages.with_fallback(SitePackages::from_interpreter(shared_interpreter)?)
+    } else {
+        base_site_packages.into()
+    };
     let requirements_env = match spec {
         None => None,
         Some(spec)
@@ -1068,46 +1204,7 @@ pub async fn run(
             // N.B. The order here matters — earlier interpreters take precedence over the
             // later ones.
             for interpreter in [requirements_env.interpreter(), &base_interpreter] {
-                // Copy each entrypoint from the base environments to the ephemeral environment,
-                // updating the Python executable target to ensure they run in the ephemeral
-                // environment.
-                let scripts = match fs_err::read_dir(interpreter.scripts()) {
-                    Ok(scripts) => scripts,
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-                    Err(err) => return Err(err.into()),
-                };
-                for entry in scripts {
-                    let entry = entry?;
-                    if !entry.file_type()?.is_file() {
-                        continue;
-                    }
-                    match copy_entrypoint(
-                        &entry.path(),
-                        &ephemeral_env.scripts().join(entry.file_name()),
-                        interpreter.sys_executable(),
-                        ephemeral_env.interpreter().sys_executable(),
-                    ) {
-                        Ok(()) => {}
-                        // If the entrypoint already exists, skip it.
-                        Err(CopyEntrypointError::Io(err))
-                            if err.kind() == std::io::ErrorKind::AlreadyExists =>
-                        {
-                            trace!(
-                                "Skipping copy of entrypoint `{}`: already exists",
-                                &entry.path().display()
-                            );
-                        }
-                        Err(CopyEntrypointError::Io(err))
-                            if err.kind() == std::io::ErrorKind::PermissionDenied =>
-                        {
-                            trace!(
-                                "Skipping copy of entrypoint `{}`: permission denied",
-                                &entry.path().display()
-                            );
-                        }
-                        Err(err) => return Err(err.into()),
-                    }
-                }
+                copy_environment_entrypoints(interpreter, ephemeral_env, &BTreeSet::new(), None)?;
 
                 // Link data directories from the base environment to the ephemeral environment.
                 //
@@ -1238,6 +1335,7 @@ pub async fn run(
             .into_iter()
             .chain(requirements_env.as_ref().map(PythonEnvironment::scripts))
             .chain(std::iter::once(base_interpreter.scripts()))
+            .chain(shared_interpreter.as_ref().map(Interpreter::scripts))
             .chain(
                 // On Windows, non-virtual Python distributions put `python.exe` in the top-level
                 // directory, rather than in the `Scripts` subdirectory.
@@ -1287,14 +1385,45 @@ pub async fn run(
     run_to_completion(handle).await
 }
 
+/// Add shared dependencies after the writable environment's editable paths.
+fn set_shared_overlay(
+    environment: &PythonEnvironment,
+    parent_site_packages: &Path,
+) -> anyhow::Result<()> {
+    let site_packages = environment
+        .site_packages()
+        .next()
+        .context("Failed to find `site-packages` directory for environment")?;
+    write_overlay_file(
+        &site_packages.join("_uv_shared_overlay.py"),
+        include_str!("_uv_shared_overlay.py"),
+    )?;
+    set_overlay(
+        environment,
+        &format!(
+            "import _uv_shared_overlay; _uv_shared_overlay.add_overlay({})",
+            parent_site_packages.escape_for_python()
+        ),
+    )
+}
+
 /// Add the parent environments' site packages to an ephemeral environment.
 fn set_overlay(environment: &PythonEnvironment, contents: &str) -> anyhow::Result<()> {
     let site_packages = environment
         .site_packages()
         .next()
         .context("Failed to find `site-packages` directory for environment")?;
-    let overlay_path = site_packages.join("_uv_ephemeral_overlay.pth");
-    fs_err::write(overlay_path, contents)?;
+    write_overlay_file(&site_packages.join("_uv_ephemeral_overlay.pth"), contents)
+}
+
+fn write_overlay_file(path: &Path, contents: &str) -> anyhow::Result<()> {
+    match fs_err::read(path) {
+        Ok(current) if current == contents.as_bytes() => return Ok(()),
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    uv_fs::write_atomic_sync(path, contents)?;
     Ok(())
 }
 
@@ -1325,7 +1454,7 @@ fn set_parent_environment(
 fn can_skip_ephemeral(
     spec: &RequirementsSpecification,
     interpreter: &Interpreter,
-    site_packages: &SitePackages,
+    site_packages: &LayeredSitePackages,
     settings: &ResolverInstallerSettings,
 ) -> bool {
     // Extract the build settings.
@@ -2026,23 +2155,572 @@ enum CopyEntrypointError {
     Trampoline(#[from] uv_trampoline_builder::Error),
 }
 
-/// Create a copy of the entrypoint at `source` at `target`, if it has a Python shebang, replacing
-/// the previous Python executable with a new one.
-///
-/// This is a no-op if the target already exists.
-///
-/// Note on Windows, the entrypoints do not use shebangs and require a rewrite of the trampoline.
+/// Copy Python entrypoints into an overlay, rewriting them to use its interpreter.
+fn copy_environment_entrypoints(
+    source: &Interpreter,
+    target: &PythonEnvironment,
+    owned_files: &BTreeSet<PathBuf>,
+    pending: Option<(&Path, BTreeMap<PathBuf, String>)>,
+) -> anyhow::Result<(Vec<PathBuf>, bool)> {
+    let (pending_path, mut pending) = match pending {
+        Some((path, pending)) => (Some(path), pending),
+        None => (None, BTreeMap::new()),
+    };
+    let scripts = match fs_err::read_dir(source.scripts()) {
+        Ok(scripts) => scripts,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), false)),
+        Err(err) => return Err(err.into()),
+    };
+    let mut copied = Vec::new();
+    let mut staging: Option<tempfile::TempDir> = None;
+    let mut staged = Vec::new();
+    for entry in scripts {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = PathBuf::from(entry.file_name());
+        let target_path = if pending_path.is_some() {
+            let Some(path) = shared_entrypoint_path(target, &name)? else {
+                continue;
+            };
+            path
+        } else {
+            target.scripts().join(&name)
+        };
+        if owned_files.contains(normalize_path(&target_path).as_ref())
+            || fs_err::symlink_metadata(&target_path).is_ok()
+        {
+            continue;
+        }
+        let result = (|| -> Result<(), CopyEntrypointError> {
+            let Some(prepared) = prepare_entrypoint(
+                &entry.path(),
+                source.sys_executable(),
+                target.interpreter().sys_executable(),
+            )?
+            else {
+                return Ok(());
+            };
+            if pending_path.is_some() {
+                // Stage only recognized launchers, keeping cache hits free of temporary files.
+                let directory = if let Some(directory) = staging.as_ref() {
+                    directory.path().to_path_buf()
+                } else {
+                    let directory = tempfile::Builder::new()
+                        .prefix(".uv-shared-")
+                        .tempdir_in(uv_fs::verbatim_path(target.scripts()))?;
+                    let path = directory.path().to_path_buf();
+                    staging = Some(directory);
+                    path
+                };
+                let staged_path = directory.join(&name);
+                prepared.write(&staged_path)?;
+                pending.insert(name.clone(), cache_digest(&fs_err::read(&staged_path)?));
+                staged.push((name.clone(), staged_path));
+            } else {
+                prepared.write(&target_path)?;
+                copied.push(name.clone());
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {}
+            Err(CopyEntrypointError::Io(err))
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::AlreadyExists | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                trace!(
+                    "Skipping copy of entrypoint `{}`: {err}",
+                    entry.path().display()
+                );
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+    let mut journal_written = false;
+    if let Some(pending_path) = pending_path
+        && !staged.is_empty()
+    {
+        // Persist ownership of the exact rewritten bytes before publishing any launcher.
+        uv_fs::write_atomic_sync(pending_path, serde_json::to_vec(&pending)?)?;
+        journal_written = true;
+        for (name, path) in staged {
+            let Some(target_path) = shared_entrypoint_path(target, &name)? else {
+                continue;
+            };
+            let path = tempfile::TempPath::try_from_path(uv_fs::verbatim_path(&path).into_owned())?;
+            match path.persist_noclobber(uv_fs::verbatim_path(&target_path)) {
+                Ok(()) => copied.push(name),
+                Err(err)
+                    if matches!(
+                        err.error.kind(),
+                        io::ErrorKind::AlreadyExists | io::ErrorKind::PermissionDenied
+                    ) =>
+                {
+                    trace!(
+                        "Skipping copy of entrypoint `{}`: {}",
+                        target_path.display(),
+                        err.error
+                    );
+                }
+                Err(err) => return Err(err.error.into()),
+            }
+        }
+    }
+    copied.sort();
+    Ok((copied, journal_written))
+}
+
+#[derive(PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct SharedEnvironmentFiles {
+    source: PathBuf,
+    names: Vec<PathBuf>,
+    data: BTreeMap<PathBuf, String>,
+    owned_data: BTreeSet<PathBuf>,
+}
+
+impl SharedEnvironmentFiles {
+    /// Load and validate paths before any managed files are synchronized.
+    fn load(path: &Path) -> anyhow::Result<Option<Self>> {
+        let bytes = match fs_err::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        let manifest: Self = serde_json::from_slice(&bytes)?;
+        for name in &manifest.names {
+            validate_shared_entrypoint_name(name)?;
+        }
+        validate_shared_data_paths(&manifest.data)?;
+        Ok(Some(manifest))
+    }
+}
+
+/// Read files owned by distributions installed directly into the writable overlay.
+fn installed_environment_files(
+    environment: &PythonEnvironment,
+) -> anyhow::Result<BTreeSet<PathBuf>> {
+    let mut files = BTreeSet::new();
+    for distribution in SitePackages::from_environment(environment)?.iter() {
+        match &distribution.kind {
+            InstalledDistKind::Registry(_) | InstalledDistKind::Url(_) => {}
+            InstalledDistKind::EggInfoFile(_)
+            | InstalledDistKind::EggInfoDirectory(_)
+            | InstalledDistKind::LegacyEditable(_) => continue,
+        }
+        let directory = distribution.install_path();
+        let site_packages = directory
+            .parent()
+            .context("Installed distribution has no site-packages directory")?;
+        for entry in read_record(fs_err::File::open(directory.join("RECORD"))?)? {
+            files.insert(normalize_path(site_packages.join(entry.path)).into_owned());
+        }
+    }
+    Ok(files)
+}
+
+/// Synchronize shared commands and data while retaining overlay installations and edited data files.
+fn sync_shared_environment_files(
+    environment: &PythonEnvironment,
+    shared: &Interpreter,
+) -> anyhow::Result<()> {
+    let manifest = environment.root().join(".uv-shared-entrypoints.json");
+    let previous = SharedEnvironmentFiles::load(&manifest)?;
+    let pending_path = environment.root().join(".uv-shared-data.pending.json");
+    let pending = load_pending_shared_data(&pending_path)?;
+    let pending_entrypoints_path = environment
+        .root()
+        .join(".uv-shared-entrypoints.pending.json");
+    let pending_entrypoints = load_pending_shared_entrypoints(&pending_entrypoints_path)?;
+    let names = previous
+        .as_ref()
+        .map_or(&[][..], |previous| previous.names.as_slice());
+    let source_changed = previous
+        .as_ref()
+        .is_none_or(|previous| previous.source != shared.sys_prefix());
+    let owned_files = installed_environment_files(environment)?;
+    if let Some(pending) = pending.as_ref() {
+        // An interrupted update can leave bytes from the next base alongside the old manifest.
+        // Reconcile those copies before replacing their ownership record with another update.
+        remove_shared_data(environment.root(), pending, &owned_files)?;
+    }
+    let protected_entrypoints = if let Some(pending) = pending_entrypoints.as_ref() {
+        remove_pending_shared_entrypoints(environment, pending, &owned_files)?
+    } else {
+        BTreeSet::new()
+    };
+    let owned_data = owned_files
+        .iter()
+        .filter_map(|path| path.strip_prefix(environment.root()).ok())
+        .filter(|path| {
+            SHARED_DATA_DIRECTORIES
+                .iter()
+                .any(|directory| path.starts_with(directory))
+        })
+        .map(Path::to_path_buf)
+        .collect::<BTreeSet<_>>();
+    let mut retained = Vec::new();
+    for name in names {
+        if protected_entrypoints.contains(name) {
+            continue;
+        }
+        let Some(path) = shared_entrypoint_path(environment, name)? else {
+            continue;
+        };
+        if owned_files.contains(normalize_path(&path).as_ref()) {
+            continue;
+        }
+        if source_changed {
+            match fs_err::remove_file(&path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+        } else if path.is_file() {
+            retained.push(name.clone());
+        }
+    }
+    // Keep edited commands protected if another update fails before the manifest commits.
+    let preserved_entrypoints = pending_entrypoints
+        .as_ref()
+        .into_iter()
+        .flat_map(|pending| pending.iter())
+        .filter(|(name, _)| protected_entrypoints.contains(*name))
+        .map(|(name, digest)| (name.clone(), digest.clone()))
+        .collect();
+    let (copied_entrypoints, entrypoints_journal_written) = copy_environment_entrypoints(
+        shared,
+        environment,
+        &owned_files,
+        Some((&pending_entrypoints_path, preserved_entrypoints)),
+    )?;
+    retained.extend(copied_entrypoints);
+    retained.sort();
+    retained.dedup();
+    let (data, synchronized) = if pending.is_none()
+        && let Some(previous) = previous.as_ref()
+        && !source_changed
+        && previous.owned_data == owned_data
+        && shared_data_is_present(environment.root(), &previous.data)?
+    {
+        (previous.data.clone(), false)
+    } else {
+        (
+            sync_shared_data(
+                environment,
+                shared,
+                previous.as_ref().map(|previous| &previous.data),
+                &owned_files,
+                &pending_path,
+            )?,
+            true,
+        )
+    };
+    let copied = SharedEnvironmentFiles {
+        source: shared.sys_prefix().to_path_buf(),
+        names: retained,
+        data,
+        owned_data,
+    };
+    if previous.as_ref() != Some(&copied) {
+        uv_fs::write_atomic_sync(manifest, serde_json::to_vec(&copied)?)?;
+    }
+    if pending_entrypoints.is_some() || entrypoints_journal_written {
+        fs_err::remove_file(pending_entrypoints_path)?;
+    }
+    if synchronized {
+        // Keep pending ownership until the final manifest commits, including on write failures.
+        fs_err::remove_file(pending_path)?;
+    }
+    Ok(())
+}
+
+/// Resolve a shared launcher without following directory links out of the overlay.
+fn shared_entrypoint_path(
+    environment: &PythonEnvironment,
+    name: &Path,
+) -> anyhow::Result<Option<PathBuf>> {
+    let relative = environment
+        .scripts()
+        .strip_prefix(environment.root())
+        .context("Script directory is outside its environment")?
+        .join(name);
+    shared_environment_path(environment.root(), &relative)
+}
+
+/// Validate a command name before resolving it inside the overlay's scripts directory.
+fn validate_shared_entrypoint_name(name: &Path) -> anyhow::Result<()> {
+    if name.components().count() != 1 || name.file_name().is_none() {
+        bail!("Invalid shared entrypoint name: {}", name.display());
+    }
+    Ok(())
+}
+
+/// Read the exact launcher bytes recorded before an interrupted publication.
+fn load_pending_shared_entrypoints(
+    path: &Path,
+) -> anyhow::Result<Option<BTreeMap<PathBuf, String>>> {
+    let bytes = match fs_err::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let pending: BTreeMap<PathBuf, String> = serde_json::from_slice(&bytes)?;
+    for name in pending.keys() {
+        validate_shared_entrypoint_name(name)?;
+    }
+    Ok(Some(pending))
+}
+
+/// Reconcile interrupted launcher copies without claiming local or directly installed commands.
+fn remove_pending_shared_entrypoints(
+    environment: &PythonEnvironment,
+    pending: &BTreeMap<PathBuf, String>,
+    owned_files: &BTreeSet<PathBuf>,
+) -> anyhow::Result<BTreeSet<PathBuf>> {
+    let mut protected = BTreeSet::new();
+    for (name, digest) in pending {
+        let Some(path) = shared_entrypoint_path(environment, name)? else {
+            protected.insert(name.clone());
+            continue;
+        };
+        if owned_files.contains(normalize_path(&path).as_ref()) {
+            continue;
+        }
+        match fs_err::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                if cache_digest(&fs_err::read(&path)?) == *digest {
+                    fs_err::remove_file(&path)?;
+                } else {
+                    protected.insert(name.clone());
+                }
+            }
+            Ok(_) => {
+                protected.insert(name.clone());
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(protected)
+}
+
+const SHARED_DATA_DIRECTORIES: [&str; 2] = ["etc/jupyter", "share/jupyter"];
+
+/// Validate persisted ownership before using any of its paths for cleanup.
+fn validate_shared_data_paths(data: &BTreeMap<PathBuf, String>) -> anyhow::Result<()> {
+    for relative in data.keys() {
+        if !relative.components().all(|component| match component {
+            Component::Normal(_) => true,
+            Component::Prefix(_)
+            | Component::RootDir
+            | Component::CurDir
+            | Component::ParentDir => false,
+        }) || !SHARED_DATA_DIRECTORIES
+            .iter()
+            .any(|directory| relative.starts_with(directory) && relative != Path::new(directory))
+        {
+            bail!("Invalid shared data path: {}", relative.display());
+        }
+    }
+    Ok(())
+}
+
+/// Read the ownership recorded before an interrupted data update.
+fn load_pending_shared_data(path: &Path) -> anyhow::Result<Option<BTreeMap<PathBuf, String>>> {
+    let bytes = match fs_err::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let data = serde_json::from_slice(&bytes)?;
+    validate_shared_data_paths(&data)?;
+    Ok(Some(data))
+}
+
+/// Remove managed copies only when their contents still match their ownership record.
+fn remove_shared_data(
+    root: &Path,
+    data: &BTreeMap<PathBuf, String>,
+    owned_files: &BTreeSet<PathBuf>,
+) -> anyhow::Result<()> {
+    for (relative, digest) in data {
+        let Some(target) = shared_environment_path(root, relative)? else {
+            continue;
+        };
+        if owned_files.contains(normalize_path(&target).as_ref()) {
+            continue;
+        }
+        match fs_err::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                if cache_digest(&fs_err::read(&target)?) == *digest {
+                    fs_err::remove_file(&target)?;
+                }
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
+}
+
+/// Resolve a managed file path without following directory links out of the overlay.
+fn shared_environment_path(root: &Path, relative: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let mut directory = root.to_path_buf();
+    if let Some(parent) = relative.parent() {
+        for component in parent.components() {
+            directory.push(component);
+            match fs_err::symlink_metadata(&directory) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+                Ok(_) => return Ok(None),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => break,
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+    Ok(Some(root.join(relative)))
+}
+
+/// Check for removals that occurred without changing the overlay's installed distributions.
+fn shared_data_is_present(root: &Path, data: &BTreeMap<PathBuf, String>) -> anyhow::Result<bool> {
+    for relative in data.keys() {
+        let Some(path) = shared_environment_path(root, relative)? else {
+            continue;
+        };
+        match fs_err::symlink_metadata(path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(true)
+}
+
+/// Materialize independent data files: overlay installs must not write through to the shared base.
+fn sync_shared_data(
+    environment: &PythonEnvironment,
+    shared: &Interpreter,
+    previous: Option<&BTreeMap<PathBuf, String>>,
+    owned_files: &BTreeSet<PathBuf>,
+    pending_path: &Path,
+) -> anyhow::Result<BTreeMap<PathBuf, String>> {
+    if let Some(previous) = previous {
+        remove_shared_data(environment.root(), previous, owned_files)?;
+    }
+
+    let mut copied = BTreeMap::new();
+    let mut planned = Vec::new();
+    let mut directories = SHARED_DATA_DIRECTORIES
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    while let Some(directory) = directories.pop() {
+        let entries = match fs_err::read_dir(shared.sys_prefix().join(&directory)) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let relative = directory.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                directories.push(relative);
+                continue;
+            }
+            let Some(target) = shared_environment_path(environment.root(), &relative)? else {
+                continue;
+            };
+            if owned_files.contains(normalize_path(&target).as_ref()) {
+                continue;
+            }
+            match fs_err::symlink_metadata(&target) {
+                Ok(_) => continue,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+            let bytes = fs_err::read(entry.path())?;
+            copied.insert(relative.clone(), cache_digest(&bytes));
+            planned.push(relative);
+        }
+    }
+
+    // Record only files eligible for a managed copy. Existing local files and files owned by an
+    // overlay installation must never be adopted by an interrupted update's recovery record.
+    uv_fs::write_atomic_sync(pending_path, serde_json::to_vec(&copied)?)?;
+    for relative in planned {
+        let Some(target) = shared_environment_path(environment.root(), &relative)? else {
+            copied.remove(&relative);
+            continue;
+        };
+        match fs_err::symlink_metadata(&target) {
+            Ok(_) => {
+                copied.remove(&relative);
+                continue;
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+        if let Some(parent) = target.parent() {
+            fs_err::create_dir_all(parent)?;
+        }
+        uv_fs::copy_atomic_sync(shared.sys_prefix().join(relative), target)?;
+    }
+    Ok(copied)
+}
+
+/// A recognized launcher whose interpreter has already been rewritten.
+struct PreparedEntrypoint {
+    #[cfg(unix)]
+    contents: String,
+    #[cfg(unix)]
+    mode: u32,
+    #[cfg(windows)]
+    launcher: uv_trampoline_builder::Launcher,
+    #[cfg(windows)]
+    is_gui: bool,
+}
+
+impl PreparedEntrypoint {
+    /// Write a launcher without replacing an existing destination.
+    fn write(self, target: &Path) -> Result<(), CopyEntrypointError> {
+        #[cfg(unix)]
+        {
+            use fs_err::os::unix::fs::OpenOptionsExt;
+            use std::io::Write;
+
+            let mut file = fs_err::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(self.mode)
+                .open(target)?;
+            file.write_all(self.contents.as_bytes())?;
+        }
+        #[cfg(windows)]
+        {
+            let mut file = fs_err::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(target)?;
+            self.launcher.write_to_file(&mut file, self.is_gui)?;
+        }
+        trace!("Updated entrypoint at `{}`", target.user_display());
+        Ok(())
+    }
+}
+
+/// Prepare a Python entrypoint with the target environment's interpreter.
 #[cfg(unix)]
-fn copy_entrypoint(
+fn prepare_entrypoint(
     source: &Path,
-    target: &Path,
     previous_executable: &Path,
     python_executable: &Path,
-) -> Result<(), CopyEntrypointError> {
-    use std::io::{Seek, Write};
+) -> Result<Option<PreparedEntrypoint>, CopyEntrypointError> {
+    use std::io::Seek;
     use std::os::unix::fs::PermissionsExt;
-
-    use fs_err::os::unix::fs::OpenOptionsExt;
 
     let mut file = fs_err::File::open(source)?;
     let mut buffer = [0u8; 2];
@@ -2052,7 +2730,7 @@ fn copy_entrypoint(
             "Skipping copy of entrypoint `{}`: file is too small to contain a shebang",
             source.user_display()
         );
-        return Ok(());
+        return Ok(None);
     }
 
     // Check if it starts with `#!` to avoid reading binary files and such into memory
@@ -2061,7 +2739,7 @@ fn copy_entrypoint(
             "Skipping copy of entrypoint `{}`: does not start with #!",
             source.user_display()
         );
-        return Ok(());
+        return Ok(None);
     }
 
     let mut contents = String::new();
@@ -2075,7 +2753,7 @@ fn copy_entrypoint(
                 "Skipping copy of entrypoint `{}`: is not valid UTF-8",
                 source.user_display()
             );
-            return Ok(());
+            return Ok(None);
         }
         Err(err) => return Err(err.into()),
     }
@@ -2088,14 +2766,25 @@ fn copy_entrypoint(
 ' '''
 "#,
         )
-        // Or, an absolute path shebang
+        // Or, an absolute path shebang, including a shell wrapper for long or spaced paths.
         .or_else(|| contents.strip_prefix(&format!("#!{}\n", previous_executable.display())))
+        .or_else(|| {
+            contents.strip_prefix(&format!(
+                "{}\n",
+                format_shebang(previous_executable, "posix", false)
+            ))
+        })
         // If the previous executable ends with `python3`, check for a shebang with `python` too
         .or_else(|| {
             previous_executable
                 .to_str()
                 .and_then(|path| path.strip_suffix("3"))
-                .and_then(|path| contents.strip_prefix(&format!("#!{path}\n")))
+                .and_then(|path| {
+                    contents.strip_prefix(&format!("#!{path}\n")).or_else(|| {
+                        contents
+                            .strip_prefix(&format!("{}\n", format_shebang(path, "posix", false)))
+                    })
+                })
         })
     else {
         // If it's not a Python shebang, we'll skip it
@@ -2103,36 +2792,28 @@ fn copy_entrypoint(
             "Skipping copy of entrypoint `{}`: does not start with expected shebang",
             source.user_display()
         );
-        return Ok(());
+        return Ok(None);
     };
 
-    let contents = format!("#!{}\n{}", python_executable.display(), contents);
+    let contents = format!(
+        "{}\n{contents}",
+        format_shebang(python_executable, "posix", false)
+    );
     let mode = fs_err::metadata(source)?.permissions().mode();
-    let mut file = fs_err::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(mode)
-        .open(target)?;
-    file.write_all(contents.as_bytes())?;
-
-    trace!("Updated entrypoint at `{}`", target.user_display());
-
-    Ok(())
+    Ok(Some(PreparedEntrypoint { contents, mode }))
 }
 
-/// Create a copy of the entrypoint at `source` at `target`, if it's a Python script launcher,
-/// replacing the target Python executable with a new one.
+/// Prepare a Windows launcher with the target environment's interpreter.
 #[cfg(windows)]
-fn copy_entrypoint(
+fn prepare_entrypoint(
     source: &Path,
-    target: &Path,
     _previous_executable: &Path,
     python_executable: &Path,
-) -> Result<(), CopyEntrypointError> {
+) -> Result<Option<PreparedEntrypoint>, CopyEntrypointError> {
     use uv_trampoline_builder::Launcher;
 
     let Some(launcher) = Launcher::try_from_path(source)? else {
-        return Ok(());
+        return Ok(None);
     };
 
     let is_gui = launcher.python_path.ends_with("pythonw.exe");
@@ -2143,16 +2824,10 @@ fn copy_entrypoint(
         python_executable.to_path_buf()
     };
 
-    let launcher = launcher.with_python_path(python_path);
-    let mut file = fs_err::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(target)?;
-    launcher.write_to_file(&mut file, is_gui)?;
-
-    trace!("Updated entrypoint at `{}`", target.user_display());
-
-    Ok(())
+    Ok(Some(PreparedEntrypoint {
+        launcher: launcher.with_python_path(python_path),
+        is_gui,
+    }))
 }
 
 /// `uv run` was invoked recursively too many times.

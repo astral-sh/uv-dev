@@ -1050,11 +1050,147 @@ fn python_find_script() {
     Checked in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py"), @"
+    uv_snapshot!(context.filters(), context.python_find().args(["--no-preview", "--script", "foo.py"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     [CACHE_DIR]/environments-v2/foo-[HASH]/[BIN]/[PYTHON]
     ");
+}
+
+#[test]
+fn python_find_script_shared() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("foo.py").write_str(indoc! {r"
+        # /// script
+        # dependencies = []
+        # ///
+    "})?;
+    context
+        .run()
+        .args(["--no-index", "foo.py"])
+        .assert()
+        .success();
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "foo.py",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--preview-features", "shared-script-environments", "--script", "foo.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-foo-[HASH]/[BIN]/[PYTHON]
+    ");
+    uv_snapshot!(context.filters(), context.python_find().args(["--no-preview", "--script", "foo.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/foo-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
+}
+
+#[test]
+fn python_find_script_shared_locked() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("foo.py").write_str(indoc! {r"
+        # /// script
+        # dependencies = []
+        # ///
+    "})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "foo.py",
+        ])
+        .assert()
+        .success();
+    context
+        .lock()
+        .args(["--script", "foo.py", "--no-index"])
+        .assert()
+        .success();
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "foo.py",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--preview-features", "shared-script-environments", "--script", "foo.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/foo-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
+}
+
+#[test]
+fn python_find_script_shared_extra_build_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    let script = context.temp_dir.child("foo.py");
+    script.write_str(indoc! {r"
+        # /// script
+        # dependencies = []
+        # ///
+    "})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "foo.py",
+        ])
+        .assert()
+        .success();
+    script.write_str(indoc! {r#"
+        # /// script
+        # dependencies = []
+        # [tool.uv.extra-build-dependencies]
+        # unrelated = ["setuptools"]
+        # ///
+    "#})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--no-index",
+            "foo.py",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--preview-features", "shared-script-environments", "--script", "foo.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/foo-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
 }
 
 #[test]
@@ -1694,4 +1830,227 @@ fn python_find_project_requires_python_minor_range() {
     ----- stdout -----
     [TEMP_DIR]/child/python3.12
     "#);
+}
+
+/// Script-configured non-isolated builds use the ordinary script environment for discovery.
+#[test]
+fn python_find_script_shared_no_build_isolation() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # [tool.uv]
+        # no-build-isolation = true
+        # ///
+    "#})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "--build-isolation",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--preview-features", "shared-script-environments", "--script", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
+}
+
+/// Environment build policy overrides the script policy when discovering its environment.
+#[test]
+fn python_find_script_shared_environment_build_isolation() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12,<3.13"
+        # dependencies = []
+        # [tool.uv]
+        # no-build-isolation = false
+        # ///
+    "#})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "script.py",
+        ])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "1")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--preview-features", "shared-script-environments", "--script", "script.py"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "1"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
+}
+
+/// A disabled environment flag leaves the filesystem build policy in effect.
+#[test]
+fn python_find_script_shared_filesystem_build_isolation() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("no-build-isolation = true\n")?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12,<3.13"
+        # dependencies = []
+        # ///
+    "#})?;
+    context
+        .run()
+        .args([
+            "--config-file",
+            "uv.toml",
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "script.py",
+        ])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "0")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--config-file", "uv.toml", "--preview-features", "shared-script-environments", "--script", "script.py"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "0"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
+}
+
+/// Package-specific filesystem build policy also selects the mutable script environment.
+#[test]
+fn python_find_script_shared_filesystem_package_build_isolation() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("no-build-isolation-package = [\"example\"]\n")?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12,<3.13"
+        # dependencies = []
+        # ///
+    "#})?;
+    context
+        .run()
+        .args([
+            "--config-file",
+            "uv.toml",
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--config-file", "uv.toml", "--preview-features", "shared-script-environments", "--script", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
+}
+
+/// Script build policy overrides filesystem policy, including package-specific exceptions.
+#[test]
+fn python_find_script_shared_script_build_isolation_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        no-build-isolation = true
+        no-build-isolation-package = ["example"]
+    "#})?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12,<3.13"
+        # dependencies = []
+        # [tool.uv]
+        # no-build-isolation = false
+        # ///
+    "#})?;
+    context
+        .run()
+        .args([
+            "--config-file",
+            "uv.toml",
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "script.py",
+        ])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "0")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--config-file", "uv.toml", "--preview-features", "shared-script-environments", "--script", "script.py"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "0"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/shared-script-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
+}
+
+/// Build isolation settings do not affect interpreter discovery without a script.
+#[test]
+fn python_find_without_script_ignores_invalid_build_isolation() {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    uv_snapshot!(context.filters(), context.python_find()
+        .arg("3.12")
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "invalid"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [VENV]/[BIN]/[PYTHON]
+    ");
 }
