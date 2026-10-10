@@ -1002,8 +1002,7 @@ fn tool_upgrade_no_binary_package_env_var() {
     Installed 2 executables: black, blackd
     ");
 
-    let receipt: toml::Value =
-        toml::from_str(&context.read("tools/black/uv-receipt.toml")).unwrap();
+    let receipt: toml::Value = context.read_toml("tools/black/uv-receipt.toml");
     assert_snapshot!(
         receipt["tool"]["options"]["no-binary-package"].to_string(),
         @r#"["iniconfig"]"#
