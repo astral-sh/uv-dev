@@ -1,4 +1,3 @@
-#[cfg(feature = "schemars")]
 use std::borrow::Cow;
 use std::{
     fmt::{self, Debug},
@@ -2459,6 +2458,133 @@ pub struct ToolOptionsWire {
     torch_backend: Option<TorchMode>,
 }
 
+/// A borrowed serialization view of the tool receipt options.
+#[derive(Serialize)]
+#[serde(rename = "ToolOptionsWire", rename_all = "kebab-case")]
+struct ToolOptionsWireRef<'a> {
+    index: &'a Option<Vec<Index>>,
+    index_url: &'a Option<PipIndex>,
+    extra_index_url: &'a Option<Vec<PipExtraIndex>>,
+    no_index: &'a Option<bool>,
+    find_links: &'a Option<Vec<PipFindLinks>>,
+    index_strategy: &'a Option<IndexStrategy>,
+    keyring_provider: &'a Option<KeyringProviderType>,
+    resolution: &'a Option<ResolutionMode>,
+    prerelease: &'a Option<PrereleaseMode>,
+    prerelease_package: &'a Option<PrereleasePackage>,
+    fork_strategy: &'a Option<ForkStrategy>,
+    dependency_metadata: &'a Option<Vec<StaticMetadata>>,
+    config_settings: &'a Option<ConfigSettings>,
+    config_settings_package: &'a Option<PackageConfigSettings>,
+    build_isolation: &'a Option<BuildIsolation>,
+    extra_build_dependencies: &'a Option<ExtraBuildDependencies>,
+    extra_build_variables: &'a Option<ExtraBuildVariables>,
+    exclude_newer: Option<Cow<'a, ExcludeNewerOverride>>,
+    exclude_newer_span: Option<ExcludeNewerSpan>,
+    #[serde(serialize_with = "serialize_exclude_newer_package_with_spans")]
+    exclude_newer_package: &'a Option<ExcludeNewerPackage>,
+    link_mode: &'a Option<LinkMode>,
+    compile_bytecode: &'a Option<bool>,
+    no_sources: &'a Option<bool>,
+    no_sources_package: &'a Option<Vec<PackageName>>,
+    no_build: &'a Option<bool>,
+    no_build_package: &'a Option<Vec<PackageName>>,
+    no_binary: &'a Option<bool>,
+    no_binary_package: &'a Option<Vec<PackageName>>,
+    torch_backend: &'a Option<TorchMode>,
+}
+
+impl ToolOptions {
+    /// Borrow the representation used when writing a tool receipt.
+    pub fn as_wire(&self) -> impl Serialize + '_ {
+        let (exclude_newer, exclude_newer_span) = self.exclude_newer_wire();
+        let Self {
+            index,
+            index_url,
+            extra_index_url,
+            no_index,
+            find_links,
+            index_strategy,
+            keyring_provider,
+            resolution,
+            prerelease,
+            prerelease_package,
+            fork_strategy,
+            dependency_metadata,
+            config_settings,
+            config_settings_package,
+            build_isolation,
+            extra_build_dependencies,
+            extra_build_variables,
+            exclude_newer: _,
+            exclude_newer_package,
+            link_mode,
+            compile_bytecode,
+            no_sources,
+            no_sources_package,
+            no_build,
+            no_build_package,
+            no_binary,
+            no_binary_package,
+            torch_backend,
+        } = self;
+        ToolOptionsWireRef {
+            index,
+            index_url,
+            extra_index_url,
+            no_index,
+            find_links,
+            index_strategy,
+            keyring_provider,
+            resolution,
+            prerelease,
+            prerelease_package,
+            fork_strategy,
+            dependency_metadata,
+            config_settings,
+            config_settings_package,
+            build_isolation,
+            extra_build_dependencies,
+            extra_build_variables,
+            exclude_newer,
+            exclude_newer_span,
+            exclude_newer_package,
+            link_mode,
+            compile_bytecode,
+            no_sources,
+            no_sources_package,
+            no_build,
+            no_build_package,
+            no_binary,
+            no_binary_package,
+            torch_backend,
+        }
+    }
+
+    fn exclude_newer_wire(
+        &self,
+    ) -> (
+        Option<Cow<'_, ExcludeNewerOverride>>,
+        Option<ExcludeNewerSpan>,
+    ) {
+        match self.exclude_newer.as_ref() {
+            Some(exclude_newer @ ExcludeNewerOverride::Disabled) => {
+                (Some(Cow::Borrowed(exclude_newer)), None)
+            }
+            Some(exclude_newer @ ExcludeNewerOverride::Enabled(value)) => match value.as_ref() {
+                ExcludeNewerValue::Absolute(_) => (Some(Cow::Borrowed(exclude_newer)), None),
+                ExcludeNewerValue::Relative(span) => (
+                    Some(Cow::Owned(
+                        ExcludeNewerValue::absolute(value.timestamp()).into(),
+                    )),
+                    Some(*span),
+                ),
+            },
+            None => (None, None),
+        }
+    }
+}
+
 impl From<ResolverInstallerOptions> for ToolOptions {
     fn from(value: ResolverInstallerOptions) -> Self {
         Self {
@@ -2554,19 +2680,8 @@ impl From<ToolOptionsWire> for ToolOptions {
 
 impl From<ToolOptions> for ToolOptionsWire {
     fn from(value: ToolOptions) -> Self {
-        let (exclude_newer, exclude_newer_span) = match &value.exclude_newer {
-            Some(ExcludeNewerOverride::Disabled) => (Some(ExcludeNewerOverride::Disabled), None),
-            Some(ExcludeNewerOverride::Enabled(value)) => match value.as_ref() {
-                ExcludeNewerValue::Absolute(_) => {
-                    (Some(ExcludeNewerOverride::Enabled(value.clone())), None)
-                }
-                ExcludeNewerValue::Relative(span) => (
-                    Some(ExcludeNewerValue::absolute(value.timestamp()).into()),
-                    Some(*span),
-                ),
-            },
-            None => (None, None),
-        };
+        let (exclude_newer, exclude_newer_span) = value.exclude_newer_wire();
+        let exclude_newer = exclude_newer.map(Cow::into_owned);
 
         Self {
             index: value.index,

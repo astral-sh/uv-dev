@@ -337,7 +337,7 @@ impl Tool {
 
         if self.options != ToolOptions::default() {
             let serialized = serde::Serialize::serialize(
-                &ToolOptionsWire::from(self.options.clone()),
+                &self.options.as_wire(),
                 toml_edit::ser::ValueSerializer::new(),
             )?;
             let Value::InlineTable(serialized) = serialized else {
