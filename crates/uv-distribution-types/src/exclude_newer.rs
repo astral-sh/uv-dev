@@ -236,16 +236,7 @@ impl FromStr for ExcludeNewerValue {
 
         let span_err = match input.parse::<Span>() {
             Ok(span) => {
-                let now = if let Ok(test_time) =
-                    std::env::var("UV_INTERNAL__TEST_CURRENT_TIMESTAMP")
-                {
-                    test_time
-                        .parse::<Timestamp>()
-                        .expect("UV_INTERNAL__TEST_CURRENT_TIMESTAMP must be a valid RFC 3339 timestamp")
-                        .to_zoned(TimeZone::UTC)
-                } else {
-                    Timestamp::now().to_zoned(TimeZone::UTC)
-                };
+                let now = current_time();
 
                 if span.get_years() != 0 {
                     let years = span
