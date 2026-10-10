@@ -37,7 +37,7 @@ use uv_python_types::{
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{
-    DependencyMode, FlatIndex, OptionsBuilder, Preference, PythonRequirement, ResolverEnvironment,
+    DependencyMode, FlatIndex, Options, Preference, PythonRequirement, ResolverEnvironment,
     ResolverOutput,
 };
 use uv_scripts::Pep723ItemRef;
@@ -1470,14 +1470,15 @@ pub async fn resolve_environment(
         }
     };
 
-    let options = OptionsBuilder::new()
-        .resolution_mode(*resolution)
-        .prerelease(prerelease.clone())
-        .fork_strategy(*fork_strategy)
-        .exclude_newer(exclude_newer.clone())
-        .index_strategy(*index_strategy)
-        .build_options(build_options.clone())
-        .build();
+    let options = Options {
+        resolution_mode: *resolution,
+        prerelease: prerelease.clone(),
+        fork_strategy: *fork_strategy,
+        exclude_newer: exclude_newer.clone(),
+        index_strategy: *index_strategy,
+        build_options: build_options.clone(),
+        ..Options::default()
+    };
 
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.
@@ -1894,14 +1895,15 @@ pub async fn update_environment(
         }
     };
 
-    let options = OptionsBuilder::new()
-        .resolution_mode(*resolution)
-        .prerelease(prerelease.clone())
-        .fork_strategy(*fork_strategy)
-        .exclude_newer(exclude_newer.clone())
-        .index_strategy(*index_strategy)
-        .build_options(build_options.clone())
-        .build();
+    let options = Options {
+        resolution_mode: *resolution,
+        prerelease: prerelease.clone(),
+        fork_strategy: *fork_strategy,
+        exclude_newer: exclude_newer.clone(),
+        index_strategy: *index_strategy,
+        build_options: build_options.clone(),
+        ..Options::default()
+    };
 
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
