@@ -6697,6 +6697,7 @@ dependencies = [
  "rustc-hash",
  "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
  "uv-audit",
  "uv-auth",

@@ -17,6 +17,7 @@ use std::sync::Arc;
 use fs_err::tokio as fs;
 use futures::{FutureExt, TryStreamExt};
 use reqwest::{Response, StatusCode};
+use tokio::sync::Semaphore;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Instrument, debug, info_span, instrument, warn};
 use url::Url;
@@ -57,6 +58,7 @@ use crate::source::validated_archive::{ArchiveValidation, ValidatedSourceArchive
 use crate::{FirstPartyPackages, Reporter, RequiresDist};
 
 mod built_wheel_metadata;
+mod cache_info;
 mod revision;
 mod validated_archive;
 
@@ -210,6 +212,8 @@ async fn fetch_git_source_tree(
 /// Fetch and build a source distribution from a remote source, or from a local cache.
 pub(crate) struct SourceDistributionBuilder<'a, T: BuildContext> {
     build_context: &'a T,
+    /// Shared I/O admission for source cache-key scans.
+    cache_info_slots: Arc<Semaphore>,
     build_stack: Option<&'a BuildStack>,
     reporter: Option<Arc<dyn Reporter>>,
     metadata_first_party_packages: Option<&'a FirstPartyPackages>,
@@ -231,10 +235,11 @@ const METADATA: &str = "metadata.msgpack";
 const SOURCE: &str = "src";
 
 impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
-    /// Initialize a [`SourceDistributionBuilder`] from a [`BuildContext`].
-    pub(crate) fn new(build_context: &'a T) -> Self {
+    /// Initialize a [`SourceDistributionBuilder`] with the shared I/O concurrency quota.
+    pub(crate) fn new(build_context: &'a T, cache_info_slots: Arc<Semaphore>) -> Self {
         Self {
             build_context,
+            cache_info_slots,
             build_stack: None,
             reporter: None,
             metadata_first_party_packages: None,
@@ -248,6 +253,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> SourceDistributionBuilder<'metadata, T> {
         SourceDistributionBuilder {
             build_context: self.build_context,
+            cache_info_slots: self.cache_info_slots.clone(),
             build_stack: self.build_stack,
             reporter: self.reporter.clone(),
             metadata_first_party_packages: first_party_packages,
@@ -1733,7 +1739,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Determine the last-modified time of the source distribution.
-        let cache_info = CacheInfo::from_directory(resource.install_path)?;
+        let cache_info = cache_info::read_source_cache_info(
+            resource.install_path.to_path_buf(),
+            self.cache_info_slots.clone(),
+        )
+        .await?;
 
         // Read the existing metadata from the cache.
         let entry = cache_shard.entry(LOCAL_REVISION);
