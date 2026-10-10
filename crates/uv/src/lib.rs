@@ -36,7 +36,7 @@ use uv_cli::{
     AuthCommand, AuthHelperCommand, AuthNamespace, BuildBackendCommand, CacheCommand,
     CacheNamespace, CacheSizeOutputFormat, Cli, Commands, PipCommand, PipNamespace, ProjectCommand,
     PythonCommand, PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace,
-    TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs, options::ArgumentError,
+    TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, options::ArgumentError,
 };
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
