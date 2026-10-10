@@ -335,19 +335,29 @@ async fn perform_install(
         .inspect(|installation| trace!("Found existing installation {}", installation.key()))
         .collect();
 
+    if targets.is_empty()
+        && existing_installations.is_empty()
+        && matches!(
+            upgrade,
+            PythonUpgrade::Enabled(PythonUpgradeSource::Upgrade)
+        )
+    {
+        writeln!(
+            printer.stderr(),
+            "There are no installed versions to upgrade"
+        )?;
+        return Ok(ExitStatus::Success);
+    }
+
     // Resolve the requests
     let mut is_default_install = false;
     let mut is_unspecified_upgrade = false;
-    let retry_policy = client_builder.retry_policy();
     let download_list = ManagedPythonDownloadList::new(
         &client_builder,
         cache,
         install_mirrors.python_downloads_json_url.as_deref(),
     )
     .await?;
-    // Python downloads are performing their own retries to catch stream errors, disable the
-    // default retries to avoid the middleware from performing uncontrolled retries.
-    let client = client_builder.retries(0).build()?;
     // TODO(zanieb): We use this variable to special-case .python-version files, but it'd be nice to
     // have generalized request source tracking instead
     let mut is_from_python_version_file = false;
@@ -591,68 +601,74 @@ async fn perform_install(
         .unique_by(|download| download.key())
         .collect::<Vec<_>>();
 
-    // Download and unpack the Python versions concurrently
-    let reporter = PythonDownloadReporter::new(printer, Some(downloads.len() as u64));
-    let replacements = changelog.existing.clone();
-
-    let mut tasks = futures::stream::iter(&downloads)
-        .map(async |download| {
-            (
-                *download,
-                download
-                    .fetch_with_retry(
-                        &client,
-                        &retry_policy,
-                        installations_dir,
-                        &scratch_dir,
-                        reinstall || replacements.contains(download.key()),
-                        install_mirrors.mirrors(),
-                        Some(&reporter),
-                    )
-                    .await,
-            )
-        })
-        .buffer_unordered(concurrency.downloads);
-
     let mut errors = vec![];
     let mut downloaded = Vec::with_capacity(downloads.len());
     let mut requests_by_new_installation = BTreeMap::new();
-    while let Some((download, result)) = tasks.next().await {
-        match result {
-            Ok(download_result) => {
-                let path = match download_result {
-                    // We should only encounter already-available during concurrent installs
-                    DownloadResult::AlreadyAvailable(path) => path,
-                    DownloadResult::Fetched(path) => path,
-                };
+    if !downloads.is_empty() {
+        let retry_policy = client_builder.retry_policy();
+        // Python downloads are performing their own retries to catch stream errors, disable the
+        // default retries to avoid the middleware from performing uncontrolled retries.
+        let client = client_builder.retries(0).build()?;
+        // Download and unpack the Python versions concurrently
+        let reporter = PythonDownloadReporter::new(printer, Some(downloads.len() as u64));
+        let replacements = changelog.existing.clone();
 
-                let installation = ManagedPythonInstallation::new(path, download)?;
-                if let Some(ref sender) = bytecode_compilation_sender {
-                    sender
-                        .send(installation.clone())
-                        .map_err(|err| anyhow::anyhow!(err))?;
-                }
-                changelog.installed.insert(installation.key().clone());
-                for request in &requests {
-                    // Take note of which installations satisfied which requests
-                    if request.matches_installation(&installation) {
-                        requests_by_new_installation
-                            .entry(installation.key().clone())
-                            .or_insert(Vec::new())
-                            .push(request);
+        let mut tasks = futures::stream::iter(&downloads)
+            .map(async |download| {
+                (
+                    *download,
+                    download
+                        .fetch_with_retry(
+                            &client,
+                            &retry_policy,
+                            installations_dir,
+                            &scratch_dir,
+                            reinstall || replacements.contains(download.key()),
+                            install_mirrors.mirrors(),
+                            Some(&reporter),
+                        )
+                        .await,
+                )
+            })
+            .buffer_unordered(concurrency.downloads);
+
+        while let Some((download, result)) = tasks.next().await {
+            match result {
+                Ok(download_result) => {
+                    let path = match download_result {
+                        // We should only encounter already-available during concurrent installs
+                        DownloadResult::AlreadyAvailable(path) => path,
+                        DownloadResult::Fetched(path) => path,
+                    };
+
+                    let installation = ManagedPythonInstallation::new(path, download)?;
+                    if let Some(ref sender) = bytecode_compilation_sender {
+                        sender
+                            .send(installation.clone())
+                            .map_err(|err| anyhow::anyhow!(err))?;
                     }
+                    changelog.installed.insert(installation.key().clone());
+                    for request in &requests {
+                        // Take note of which installations satisfied which requests
+                        if request.matches_installation(&installation) {
+                            requests_by_new_installation
+                                .entry(installation.key().clone())
+                                .or_insert(Vec::new())
+                                .push(request);
+                        }
+                    }
+                    if changelog.existing.contains(installation.key()) {
+                        changelog.uninstalled.insert(installation.key().clone());
+                    }
+                    downloaded.push(installation.clone());
                 }
-                if changelog.existing.contains(installation.key()) {
-                    changelog.uninstalled.insert(installation.key().clone());
+                Err(err) => {
+                    errors.push((
+                        InstallErrorKind::DownloadUnpack,
+                        download.key().clone(),
+                        anyhow::Error::new(err),
+                    ));
                 }
-                downloaded.push(installation.clone());
-            }
-            Err(err) => {
-                errors.push((
-                    InstallErrorKind::DownloadUnpack,
-                    download.key().clone(),
-                    anyhow::Error::new(err),
-                ));
             }
         }
     }
