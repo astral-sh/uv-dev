@@ -20,11 +20,123 @@ use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio_stream::wrappers::ReceiverStream;
-use wiremock::matchers::{any, method};
+use wiremock::matchers::{any, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_static::EnvVars;
 use uv_test::{TestContext, uv_snapshot};
+
+/// An unchanged strong index hash can identify a previously validated source archive even when
+/// its HTTP response is stale. Missing or weak hashes, changed content, and explicit refreshes
+/// still require an artifact request.
+#[tokio::test]
+async fn source_revision_reuses_matching_index_hashes() -> Result<()> {
+    for algorithm in [Some("sha256"), Some("md5"), None] {
+        let context = uv_test::test_context!("3.12");
+        context
+            .temp_dir
+            .child("requirements.in")
+            .write_str("basic-package==0.1.0\n")?;
+        let original = fs_err::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../test/links/basic_package-0.1.0.tar.gz"),
+        )?;
+        let mut changed = original.clone();
+        // The gzip timestamp changes the archive digest without changing its source tree.
+        changed[4..8].copy_from_slice(&1_u32.to_le_bytes());
+        assert_ne!(original, changed);
+        let archives = Arc::new([original, changed]);
+        let generation = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server = MockServer::start().await;
+        let index_archives = archives.clone();
+        let index_generation = generation.clone();
+        Mock::given(method("GET"))
+            .and(path("/simple/basic-package/"))
+            .respond_with(move |_: &Request| {
+                let archive = &index_archives[index_generation.load(Ordering::SeqCst)];
+                let mut hashes = serde_json::Map::new();
+                if let Some(algorithm) = algorithm {
+                    let digest = if algorithm == "sha256" {
+                        hex::encode(Sha256::digest(archive))
+                    } else {
+                        let mut hasher =
+                            uv_extract::hash::Hasher::from(uv_pypi_types::HashAlgorithm::Md5);
+                        hasher.update(archive);
+                        uv_pypi_types::HashDigest::from(hasher)
+                            .to_string()
+                            .strip_prefix("md5:")
+                            .unwrap()
+                            .to_owned()
+                    };
+                    hashes.insert(algorithm.to_owned(), json!(digest));
+                }
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .set_body_raw(
+                        json!({
+                            "meta": {"api-version": "1.0"},
+                            "name": "basic-package",
+                            "files": [{
+                                "filename": "basic_package-0.1.0.tar.gz",
+                                "url": "/files/basic_package-0.1.0.tar.gz",
+                                "hashes": hashes,
+                                "size": archive.len(),
+                                "upload-time": "2023-01-01T00:00:00Z"
+                            }]
+                        })
+                        .to_string(),
+                        "application/vnd.pypi.simple.v1+json",
+                    )
+            })
+            .mount(&server)
+            .await;
+        let artifact_generation = generation.clone();
+        let artifact_requests = requests.clone();
+        Mock::given(method("GET"))
+            .and(path("/files/basic_package-0.1.0.tar.gz"))
+            .respond_with(move |_: &Request| {
+                artifact_requests.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .set_body_bytes(archives[artifact_generation.load(Ordering::SeqCst)].clone())
+            })
+            .mount(&server)
+            .await;
+        let run = async |refresh| -> Result<Vec<u8>> {
+            let mut command = context.pip_compile();
+            command
+                .arg("requirements.in")
+                .arg("--python-version")
+                .arg("3.13")
+                .arg("--default-index")
+                .arg(format!("{}/simple", server.uri()))
+                .arg("--no-header")
+                .arg("--no-annotate");
+            if refresh {
+                command.arg("--refresh");
+            }
+            let output = tokio::task::spawn_blocking(move || command.output()).await??;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(output.stdout)
+        };
+        let first = run(false).await?;
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(run(false).await?, first);
+        let reused = usize::from(algorithm == Some("sha256"));
+        assert_eq!(requests.load(Ordering::SeqCst), 2 - reused);
+        generation.store(1, Ordering::SeqCst);
+        assert_eq!(run(false).await?, first);
+        assert_eq!(requests.load(Ordering::SeqCst), 3 - reused);
+        assert_eq!(run(true).await?, first);
+        assert_eq!(requests.load(Ordering::SeqCst), 4 - reused);
+    }
+    Ok(())
+}
 
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
 ///
