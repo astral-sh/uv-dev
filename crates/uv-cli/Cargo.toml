@@ -45,6 +45,9 @@ rustc-hash = { workspace = true }
 serde = { workspace = true }
 url = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+uv-unix = { workspace = true }
+
 [dev-dependencies]
 insta = { workspace = true }
 

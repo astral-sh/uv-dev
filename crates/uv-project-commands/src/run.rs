@@ -124,7 +124,7 @@ pub async fn run(
     preview: Preview,
     max_recursion_depth: u32,
     malware_settings: MalwareCheckSettings,
-    #[cfg(unix)] run_rlimit_nofile: Option<u32>,
+    #[cfg(unix)] run_resource_limits: Vec<uv_unix::ResourceLimit>,
 ) -> anyhow::Result<ExitStatus> {
     // Check if max recursion depth was exceeded. This most commonly happens
     // for scripts with a shebang line like `#!/usr/bin/env -S uv run`, so try
@@ -1268,21 +1268,49 @@ pub async fn run(
     }
 
     #[cfg(unix)]
-    if let Some(limit) = run_rlimit_nofile {
-        uv_unix::set_open_file_limit(limit).with_context(|| {
-            format!(
-                "Failed to apply `{}` value `{limit}`",
-                EnvVars::UV_RUN_RLIMIT_NOFILE
-            )
-        })?;
+    if !run_resource_limits.is_empty() {
+        let resource_limits = run_resource_limits
+            .iter()
+            .map(|limit| {
+                limit.prepare().with_context(|| {
+                    format!(
+                        "Failed to apply `{}` value `{}`",
+                        limit.environment_variable(),
+                        limit.value()
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // SAFETY: Validation and allocation happen before the fork. The callback only
+        // invokes resource-limit system calls and constructs errors from OS error codes.
+        #[expect(unsafe_code)]
+        unsafe {
+            process.pre_exec(move || {
+                for limit in &resource_limits {
+                    limit.apply()?;
+                }
+                Ok(())
+            });
+        }
     }
 
     // Spawn and wait for completion
     // Standard input, output, and error streams are all inherited
     // TODO(zanieb): Throw a nicer error message if the command is not found
-    let handle = process
-        .spawn()
-        .with_context(|| format!("Failed to spawn: {}", command.display_executable()))?;
+    let handle = process.spawn().with_context(|| {
+        #[cfg(unix)]
+        if !run_resource_limits.is_empty() {
+            let limits = run_resource_limits
+                .iter()
+                .map(|limit| format!("`{}={}`", limit.environment_variable(), limit.value()))
+                .join(", ");
+            return format!(
+                "Failed to spawn: {} (configured resource limits: {limits})",
+                command.display_executable()
+            );
+        }
+        format!("Failed to spawn: {}", command.display_executable())
+    })?;
 
     run_to_completion(handle).await
 }
