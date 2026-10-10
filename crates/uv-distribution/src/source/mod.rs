@@ -701,7 +701,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     },
                 );
                 let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
-                self.setup_build_environment(
+                self.discover_build_requirements(
                     &source,
                     &dist.install_path,
                     None,
@@ -732,7 +732,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
                 );
                 let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
-                self.setup_build_environment(
+                self.discover_build_requirements(
                     &source,
                     fetch.path(),
                     resource.subdirectory,
@@ -785,8 +785,13 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         revision.hashes(),
                     ));
                 }
-                self.setup_build_environment(&source, source_entry.path(), None, NoSources::None)
-                    .await?;
+                self.discover_build_requirements(
+                    &source,
+                    source_entry.path(),
+                    None,
+                    NoSources::None,
+                )
+                .await?;
             }
         }
         Ok(())
@@ -838,8 +843,13 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 subdirectory.to_path_buf(),
             ));
         }
-        self.setup_build_environment(source, source_entry.path(), subdirectory, NoSources::None)
-            .await?;
+        self.discover_build_requirements(
+            source,
+            source_entry.path(),
+            subdirectory,
+            NoSources::None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -868,7 +878,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 revision.hashes(),
             ));
         }
-        self.setup_build_environment(source, source_entry.path(), None, NoSources::None)
+        self.discover_build_requirements(source, source_entry.path(), None, NoSources::None)
             .await?;
         Ok(())
     }
@@ -3363,6 +3373,43 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         Ok(())
+    }
+
+    /// Capture declarations or backend hooks after materializing a source for discovery.
+    async fn discover_build_requirements(
+        &self,
+        source: &BuildableSource<'_>,
+        source_root: &Path,
+        subdirectory: Option<&Path>,
+        no_sources: NoSources,
+    ) -> Result<(), Error> {
+        self.validate_build_policy(source)?;
+        let build_kind = if source.is_editable() {
+            BuildKind::Editable
+        } else {
+            BuildKind::Wheel
+        };
+        let install_path =
+            subdirectory.map_or_else(|| source_root.to_path_buf(), |path| source_root.join(path));
+        self.build_context
+            .setup_build_requirements(
+                source_root,
+                subdirectory,
+                &install_path,
+                Self::stop_discovery_at(source, source_root),
+                Some(&source.to_string()),
+                source.as_dist(),
+                &no_sources,
+                build_kind,
+                if uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT) {
+                    BuildOutput::Quiet
+                } else {
+                    BuildOutput::Debug
+                },
+                self.build_stack.cloned().unwrap_or_default(),
+            )
+            .await
+            .map_err(|err| Error::Build(err.into()))
     }
 
     /// Initialize a [`BuildableSource`]'s isolated environment and run backend requirement hooks.

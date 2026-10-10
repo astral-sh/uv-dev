@@ -195,6 +195,24 @@ pub trait BuildContext {
         build_stack: BuildStack,
     ) -> impl Future<Output = Result<Self::SourceDistBuilder, impl IsBuildBackendError>> + 'a;
 
+    /// Capture a source's build requirements within the current discovery scope.
+    ///
+    /// Declaration discovery reads configuration without invoking the backend; full discovery
+    /// prepares the environment and collects backend hook requirements as well.
+    fn setup_build_requirements<'a>(
+        &'a self,
+        source: &'a Path,
+        subdirectory: Option<&'a Path>,
+        install_path: &'a Path,
+        stop_discovery_at: Option<&'a Path>,
+        version_id: Option<&'a str>,
+        dist: Option<&'a SourceDist>,
+        sources: &'a NoSources,
+        build_kind: BuildKind,
+        build_output: BuildOutput,
+        build_stack: BuildStack,
+    ) -> impl Future<Output = Result<(), impl IsBuildBackendError>> + 'a;
+
     /// Build by calling directly into the uv build backend without PEP 517, if possible.
     ///
     /// Checks if the source tree uses uv as build backend. If not, it returns `Ok(None)`, otherwise

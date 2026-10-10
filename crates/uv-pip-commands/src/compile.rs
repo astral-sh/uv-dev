@@ -48,7 +48,7 @@ use uv_requirements::{
 use uv_resolver::{
     AnnotationStyle, BuildDependencies, DependencyMode, DisplayResolutionGraph, ExcludeNewer,
     FlatIndex, ForkStrategy, InMemoryIndex, OptionsBuilder, Preference, Prerelease,
-    PythonRequirement, ResolutionMode, ResolverEnvironment,
+    PythonRequirement, ResolutionMode, ResolverEnvironment, ResolverOutput,
 };
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
@@ -64,7 +64,7 @@ use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations::locked_requirements::{
     LockedRequirements, read_pylock_toml_requirements, read_requirements_txt,
 };
-use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::loggers::{DefaultResolveLogger, ResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// Resolve a set of requirements into a set of pinned versions.
@@ -612,10 +612,14 @@ pub async fn pip_compile(
         .build();
 
     // All passes share resolver configuration; build roots retain their own constraint context.
-    let resolve = async |requirements, build_requirements: Vec<Requirement>| {
+    let resolve = async |requirements,
+                         build_requirements: Vec<Requirement>,
+                         constraints,
+                         preferences,
+                         logger: Box<dyn ResolveLogger>| {
         uv_resolve_operations::resolve(
             requirements,
-            constraints.clone(),
+            constraints,
             (!build_requirements.is_empty()).then(|| BuildDependencies {
                 requirements: build_requirements,
                 constraints: build_constraints.clone(),
@@ -628,7 +632,7 @@ pub async fn pip_compile(
             BTreeMap::default(),
             &extras,
             &groups,
-            preferences.clone(),
+            preferences,
             None,
             &hasher,
             &Reinstall::None,
@@ -645,66 +649,118 @@ pub async fn pip_compile(
             &concurrency,
             options.clone(),
             None,
-            Box::new(DefaultResolveLogger),
+            logger,
             printer,
         )
         .await
         .map(|(resolution, _)| resolution)
         .map_err(UvError::from)
     };
-    let mut resolution = resolve(requirements.clone(), Vec::new()).await?;
+    let mut resolution = resolve(
+        requirements.clone(),
+        Vec::new(),
+        constraints.clone(),
+        preferences.clone(),
+        Box::new(DefaultResolveLogger),
+    )
+    .await?;
 
     if include_build_dependencies {
+        let mut declarations_by_source = FxHashMap::default();
         let mut requirements_by_source = FxHashMap::default();
+        let discovery_inputs = |resolution: &ResolverOutput| {
+            let mut constraints = constraints.clone();
+            let mut preferences = Vec::new();
+            for (_, distribution) in resolution.base_dists() {
+                let source = RequirementSource::from(&distribution.dist);
+                if !matches!(source, RequirementSource::Registry { .. }) {
+                    constraints.push(NameRequirementSpecification::from(Requirement {
+                        name: distribution.name.clone(),
+                        extras: Box::new([]),
+                        groups: Box::new([]),
+                        marker: distribution.marker.pep508(),
+                        source,
+                        scope: RequirementScope::Global,
+                        origin: None,
+                    }));
+                }
+                preferences.push(Preference::from_locked(
+                    distribution.name.clone(),
+                    distribution.version.clone(),
+                    distribution.index().cloned(),
+                    Vec::new(),
+                ));
+            }
+            (constraints, preferences)
+        };
         let mut previous_requirements = FxHashSet::default();
         let mut requirement_states = Vec::new();
 
         loop {
-            let mut active_requirements = Vec::new();
-            let mut active_seen = FxHashSet::default();
+            let sources = resolution
+                .distributions()
+                .filter_map(|distribution| {
+                    let ResolvedDist::Installable { dist, .. } = distribution else {
+                        return None;
+                    };
+                    let Dist::Source(source) = dist.as_ref() else {
+                        return None;
+                    };
+                    Some(source)
+                })
+                .collect::<Vec<_>>();
+            let mut declared_requirements = Vec::new();
+            let mut declared_seen = FxHashSet::default();
+            for &source in &sources {
+                let id = source.distribution_id();
+                if !declarations_by_source.contains_key(&id) {
+                    let declared = build_dispatch
+                        .discover_declared_build_requirements(
+                            source,
+                            hasher.metadata_policy(source),
+                        )
+                        .await
+                        .map_err(|err| {
+                            if err.is_user_failure() {
+                                UvError::User(err.into())
+                            } else {
+                                UvError::Unexpected(err.into())
+                            }
+                        })?;
+                    declarations_by_source.insert(id.clone(), declared);
+                }
+                if let Some(declared) = declarations_by_source.get(&id) {
+                    declared_requirements.extend(
+                        declared
+                            .iter()
+                            .filter(|requirement| declared_seen.insert((*requirement).clone()))
+                            .cloned(),
+                    );
+                }
+            }
+            // Reconcile every source's declarations before running hooks. Hook results from
+            // independently selected backend versions need not form a compatible environment.
+            let (backend_constraints, backend_preferences) = discovery_inputs(&resolution);
+            let backend_resolution = resolve(
+                requirements.clone(),
+                declared_requirements,
+                backend_constraints,
+                backend_preferences,
+                Box::new(SummaryResolveLogger),
+            )
+            .await?;
             let selection = Arc::new(
-                resolution
+                backend_resolution
                     .distributions()
                     .map(Identifier::distribution_id)
                     .collect::<FxHashSet<_>>(),
             );
-            // Backend declarations must use direct sources already selected in this resolution.
-            let selected_sources = resolution.base_dists().filter_map(|(_, distribution)| {
-                let source = RequirementSource::from(&distribution.dist);
-                if matches!(source, RequirementSource::Registry { .. }) {
-                    return None;
-                }
-                Some(NameRequirementSpecification::from(Requirement {
-                    name: distribution.name.clone(),
-                    extras: Box::new([]),
-                    groups: Box::new([]),
-                    marker: distribution.marker.pep508(),
-                    source,
-                    scope: RequirementScope::Global,
-                    origin: None,
-                }))
-            });
-            let discovery_constraints = Constraints::from_specifications(
-                constraints.iter().cloned().chain(selected_sources),
-            );
-            let preferences = resolution
-                .base_dists()
-                .map(|(_, distribution)| {
-                    Preference::from_locked(
-                        distribution.name.clone(),
-                        distribution.version.clone(),
-                        distribution.index().cloned(),
-                        Vec::new(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            for distribution in resolution.distributions() {
-                let ResolvedDist::Installable { dist, .. } = distribution else {
-                    continue;
-                };
-                let Dist::Source(source) = dist.as_ref() else {
-                    continue;
-                };
+            let (discovery_constraints, discovery_preferences) =
+                discovery_inputs(&backend_resolution);
+            let discovery_constraints = Constraints::from_specifications(discovery_constraints);
+            let mut active_requirements = Vec::new();
+            let mut active_seen = FxHashSet::default();
+            for source in sources {
                 let id = source.distribution_id();
                 if requirements_by_source
                     .get(&id)
@@ -715,7 +771,7 @@ pub async fn pip_compile(
                             source,
                             hasher.metadata_policy(source),
                             &discovery_constraints,
-                            preferences.clone(),
+                            discovery_preferences.clone(),
                         )
                         .await
                         .map_err(|err| {
@@ -751,7 +807,14 @@ pub async fn pip_compile(
             requirement_states.push(previous_requirements);
             previous_requirements = active_state;
 
-            resolution = resolve(requirements.clone(), active_requirements).await?;
+            resolution = resolve(
+                requirements.clone(),
+                active_requirements,
+                constraints.clone(),
+                preferences.clone(),
+                Box::new(DefaultResolveLogger),
+            )
+            .await?;
         }
     }
 

@@ -21391,12 +21391,12 @@ fn include_build_dependencies_hook_matches_selected_backend() -> Result<()> {
     Ok(())
 }
 
-/// A second source can change the selected backend after another source's hook was probed.
+/// Sources agree on their declared backend versions before their hook requirements are combined.
 #[test]
-fn include_build_dependencies_rediscovers_changed_backend_hook() -> Result<()> {
+fn include_build_dependencies_reconciles_backend_hooks() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let scenario = toml::from_str::<Scenario>(indoc! {r#"
-        name = "rediscover-changed-build-backend-hook"
+        name = "reconcile-build-backend-hooks"
         [root]
         [expected]
         satisfiable = true
@@ -21446,10 +21446,10 @@ fn include_build_dependencies_rediscovers_changed_backend_hook() -> Result<()> {
     context
         .temp_dir
         .child("project-b/custom.py")
-        .write_str(indoc! {r"
+        .write_str(indoc! {r#"
         def get_requires_for_build_wheel(config_settings=None):
-            return []
-    "})?;
+            return ["helper==1"]
+    "#})?;
     context
         .temp_dir
         .child("requirements.in")
@@ -21467,7 +21467,6 @@ fn include_build_dependencies_rediscovers_changed_backend_hook() -> Result<()> {
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Resolved 4 packages in [TIME]
     Resolved 4 packages in [TIME]
     ");
     Ok(())

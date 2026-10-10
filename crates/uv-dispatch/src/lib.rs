@@ -149,6 +149,18 @@ impl IsBuildBackendError for BuildDispatchError {
     }
 }
 
+#[derive(Clone, Copy)]
+enum BuildRequirementMode {
+    Declared,
+    Backend,
+}
+
+#[derive(Clone)]
+struct BuildRequirementDiscovery {
+    mode: BuildRequirementMode,
+    requirements: Arc<Mutex<Vec<Requirement>>>,
+}
+
 /// The main implementation of [`BuildContext`], used by the CLI, see [`BuildContext`]
 /// documentation.
 #[derive(Clone)]
@@ -180,7 +192,7 @@ pub struct BuildDispatch<'a> {
     concurrency: Concurrency,
     preview: Preview,
     tar_backend: TarBackend,
-    build_requirements: Option<Arc<Mutex<Vec<Requirement>>>>,
+    build_requirements: Option<BuildRequirementDiscovery>,
     build_preferences: Vec<Preference>,
 }
 
@@ -246,6 +258,22 @@ impl<'a> BuildDispatch<'a> {
         }
     }
 
+    /// Read one source's declared requirements without installing or invoking its backend.
+    pub async fn discover_declared_build_requirements(
+        &self,
+        source: &SourceDist,
+        hashes: MetadataHashPolicy<'_>,
+    ) -> Result<Vec<Requirement>, uv_distribution::Error> {
+        self.discover_build_requirements_with_mode(
+            source,
+            hashes,
+            &Constraints::default(),
+            Vec::new(),
+            BuildRequirementMode::Declared,
+        )
+        .await
+    }
+
     /// Discover one source's build requirements in a private capture scope.
     pub async fn discover_build_requirements(
         &self,
@@ -253,6 +281,24 @@ impl<'a> BuildDispatch<'a> {
         hashes: MetadataHashPolicy<'_>,
         constraints: &Constraints,
         preferences: Vec<Preference>,
+    ) -> Result<Vec<Requirement>, uv_distribution::Error> {
+        self.discover_build_requirements_with_mode(
+            source,
+            hashes,
+            constraints,
+            preferences,
+            BuildRequirementMode::Backend,
+        )
+        .await
+    }
+
+    async fn discover_build_requirements_with_mode(
+        &self,
+        source: &SourceDist,
+        hashes: MetadataHashPolicy<'_>,
+        constraints: &Constraints,
+        preferences: Vec<Preference>,
+        mode: BuildRequirementMode,
     ) -> Result<Vec<Requirement>, uv_distribution::Error> {
         let requirements = Arc::new(Mutex::new(Vec::new()));
         let constraints = Constraints::from_specifications(
@@ -264,7 +310,10 @@ impl<'a> BuildDispatch<'a> {
         let dispatch = BuildDispatch {
             constraints: &constraints,
             build_preferences: preferences,
-            build_requirements: Some(requirements.clone()),
+            build_requirements: Some(BuildRequirementDiscovery {
+                mode,
+                requirements: requirements.clone(),
+            }),
             source_build_context: SourceBuildContext::new(
                 self.concurrency.builds_semaphore.clone(),
             ),
@@ -490,6 +539,7 @@ impl BuildContext for BuildDispatch<'_> {
         })?);
         if let Some(build_requirements) = &self.build_requirements {
             build_requirements
+                .requirements
                 .lock()
                 .await
                 .extend(requirements.iter().cloned());
@@ -720,9 +770,62 @@ impl BuildContext for BuildDispatch<'_> {
                         .await?,
                 );
             }
-            build_requirements.lock().await.extend(requirements);
+            build_requirements
+                .requirements
+                .lock()
+                .await
+                .extend(requirements);
         }
         Ok(builder)
+    }
+
+    async fn setup_build_requirements<'data>(
+        &'data self,
+        source: &'data Path,
+        subdirectory: Option<&'data Path>,
+        install_path: &'data Path,
+        stop_discovery_at: Option<&'data Path>,
+        version_id: Option<&'data str>,
+        dist: Option<&'data SourceDist>,
+        sources: &'data NoSources,
+        build_kind: BuildKind,
+        build_output: BuildOutput,
+        build_stack: BuildStack,
+    ) -> Result<(), uv_build_frontend::Error> {
+        if let Some(discovery) = &self.build_requirements {
+            match discovery.mode {
+                BuildRequirementMode::Declared => {
+                    let requirements = SourceBuild::declared_build_requirements(
+                        source,
+                        subdirectory,
+                        install_path,
+                        stop_discovery_at,
+                        dist.map(Name::name),
+                        self,
+                        sources,
+                        self.client.credentials_cache(),
+                    )
+                    .await?;
+                    discovery.requirements.lock().await.extend(requirements);
+                    return Ok(());
+                }
+                BuildRequirementMode::Backend => {}
+            }
+        }
+        self.setup_build(
+            source,
+            subdirectory,
+            install_path,
+            stop_discovery_at,
+            version_id,
+            dist,
+            sources,
+            build_kind,
+            build_output,
+            build_stack,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn direct_build<'data>(
