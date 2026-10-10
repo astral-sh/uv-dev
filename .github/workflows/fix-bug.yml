@@ -1,5 +1,5 @@
 # Attempt a focused production fix for a reproduced bug with a passing regression test.
-name: "fix-bug"
+name: Fix
 
 on:
   workflow_call:
