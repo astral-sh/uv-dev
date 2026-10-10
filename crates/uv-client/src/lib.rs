@@ -1,6 +1,5 @@
 pub use base_client::{
-    AuthIntegration, BaseClient, BaseClientBuilder, ClientBuildError, DEFAULT_CONNECT_TIMEOUT,
-    DEFAULT_MAX_REDIRECTS, DEFAULT_READ_TIMEOUT, DEFAULT_READ_TIMEOUT_UPLOAD, DEFAULT_RETRIES,
+    AuthIntegration, BaseClient, BaseClientBuilder, ClientBuildError, DEFAULT_MAX_REDIRECTS,
     ExtraMiddleware, RedirectClientWithMiddleware, RedirectPolicy, RequestBuilder,
     RetryParsingError, fetch_with_url_fallback,
 };
