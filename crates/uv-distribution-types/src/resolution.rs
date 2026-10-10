@@ -2,9 +2,7 @@ use uv_distribution_filename::DistExtension;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pypi_types::{HashDigest, HashDigests};
 
-use crate::{
-    BuiltDist, Diagnostic, Dist, IndexMetadata, Name, RequirementSource, ResolvedDist, SourceDist,
-};
+use crate::{BuiltDist, Dist, IndexMetadata, RequirementSource, ResolvedDist, SourceDist};
 
 /// A set of packages pinned at specific versions.
 ///
@@ -136,9 +134,9 @@ pub enum ResolutionDiagnostic {
     },
 }
 
-impl Diagnostic for ResolutionDiagnostic {
+impl ResolutionDiagnostic {
     /// Convert the diagnostic into a user-facing message.
-    fn message(&self) -> String {
+    pub fn message(&self) -> String {
         match self {
             Self::MissingExtra { dist, extra } => {
                 format!("The package `{dist}` does not have an extra named `{extra}`")
@@ -162,16 +160,6 @@ impl Diagnostic for ResolutionDiagnostic {
                     `--resolution lowest` to avoid using outdated versions."
                 )
             }
-        }
-    }
-
-    /// Returns `true` if the [`PackageName`] is involved in this diagnostic.
-    fn includes(&self, name: &PackageName) -> bool {
-        match self {
-            Self::MissingExtra { dist, .. } => name == dist.name(),
-            Self::MissingGroup { dist, .. } => name == dist.name(),
-            Self::YankedVersion { dist, .. } => name == dist.name(),
-            Self::MissingLowerBound { package_name } => name == package_name,
         }
     }
 }
