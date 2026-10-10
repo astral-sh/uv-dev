@@ -1,6 +1,6 @@
 //! Shared project, script, and tool environment workflows.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -23,10 +23,13 @@ use uv_distribution_types::{
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
-use uv_lock::{Installable, Lock};
+use uv_lock::{Installable, Lock, implicit_constraints_marker};
 use uv_normalize::PackageName;
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
+use uv_pypi_types::{
+    ConflictItem, ConflictKind, ConflictSet, Conflicts, ResolverMarkerEnvironment,
+};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
 use uv_python_interpreter::{BrokenLink, Interpreter, InvalidEnvironmentKind, PythonEnvironment};
@@ -832,6 +835,7 @@ impl ProjectEnvironment {
     pub async fn get_or_init(
         target: ProjectEnvironmentTarget<'_>,
         frozen_target: Option<InstallTarget<'_>>,
+        python_roots: Option<&[PackageName]>,
         groups: &DependencyGroupsWithDefaults,
         python: Option<PythonRequest>,
         install_mirrors: &PythonInstallMirrors,
@@ -880,12 +884,13 @@ impl ProjectEnvironment {
             )
             .await?
         } else {
-            ProjectPythonRequest::from_request(
+            ProjectPythonRequest::from_request_for_roots(
                 python,
                 target.workspace(),
                 groups,
                 target.install_path(),
                 config_discovery,
+                python_roots,
             )
             .await?
         };
@@ -1565,6 +1570,7 @@ pub async fn resolve_environment(
         source_trees,
         project,
         BTreeMap::default(),
+        None,
         &extras,
         &groups,
         preferences,
@@ -1958,6 +1964,7 @@ pub async fn update_environment(
         source_trees,
         project,
         BTreeMap::default(),
+        None,
         &extras,
         &groups,
         preferences,
@@ -2020,12 +2027,29 @@ pub async fn update_environment(
     })
 }
 
-/// Validate that we aren't trying to install extras or groups that
-/// are declared as conflicting.
+/// Validate selected roots, extras, and groups before discovering an environment.
+pub fn detect_root_conflicts(
+    target: &InstallTarget,
+    extras: &ExtrasSpecification,
+    groups: &DependencyGroupsWithDefaults,
+) -> Result<(), EnvironmentError> {
+    if target.lock().conflicts().is_empty() {
+        return Ok(());
+    }
+    let roots = target
+        .roots()
+        .map(|name| (name, MarkerTree::TRUE))
+        .collect();
+    detect_conflicts_with_members(target, extras, groups, &roots, None)
+}
+
+/// Validate selected options and reachable production members against declared conflicts.
 pub fn detect_conflicts(
     target: &InstallTarget,
     extras: &ExtrasSpecification,
     groups: &DependencyGroupsWithDefaults,
+    requires_python: &RequiresPython,
+    marker_env: Option<&ResolverMarkerEnvironment>,
 ) -> Result<(), EnvironmentError> {
     // Validate that we aren't trying to install extras or groups that
     // are declared as conflicting. Note that we need to collect all
@@ -2034,24 +2058,111 @@ pub fn detect_conflicts(
     // group `g` are declared as conflicting, then enabling both of
     // those should result in an error.
     let lock = target.lock();
-    let packages = target.packages(extras, groups);
     let conflicts = lock.conflicts();
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+
+    let packages = if groups.prod()
+        && conflicts
+            .iter()
+            .flat_map(ConflictSet::iter)
+            .any(|item| matches!(item.kind(), ConflictKind::Project))
+    {
+        target.selected_workspace_members(extras, groups, requires_python, marker_env)?
+    } else {
+        BTreeMap::new()
+    };
+    let root_markers = if marker_env.is_none() {
+        let requirements = target.selected_root_python_requirements(groups)?;
+        let domain = implicit_constraints_marker(
+            requires_python.to_exact_marker_tree(),
+            lock.supported_environments(),
+        );
+        Some(
+            lock.workspace_packages()
+                .map(|package| {
+                    let marker = package.environment_marker().and(domain);
+                    let marker = requirements
+                        .get(package.name())
+                        .map_or(marker, |requirement| {
+                            marker.and(requirement.to_exact_marker_tree())
+                        });
+                    (package.name(), marker)
+                })
+                .collect::<BTreeMap<_, _>>(),
+        )
+    } else {
+        None
+    };
+    detect_conflicts_with_members(target, extras, groups, &packages, root_markers.as_ref())
+}
+
+fn detect_conflicts_with_members(
+    target: &InstallTarget,
+    extras: &ExtrasSpecification,
+    groups: &DependencyGroupsWithDefaults,
+    packages: &BTreeMap<&PackageName, MarkerTree>,
+    root_markers: Option<&BTreeMap<&PackageName, MarkerTree>>,
+) -> Result<(), EnvironmentError> {
+    let conflicts = target.lock().conflicts();
+    let root_marker = |name: &PackageName| {
+        root_markers
+            .and_then(|markers| markers.get(name))
+            .copied()
+            .unwrap_or(MarkerTree::TRUE)
+    };
+    // CLI extras and groups apply to selected roots, independently of transitive production members.
+    let roots = target.roots().collect::<BTreeSet<_>>();
+    let group_root = target.group_root(groups);
     for set in conflicts.iter() {
-        let mut conflicts: Vec<ConflictItem> = vec![];
+        let mut selected = Vec::new();
         for item in set.iter() {
-            if !packages.contains(item.package()) {
-                // Ignore items that are not in the install targets
-                continue;
-            }
-            let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
-                ConflictKind::Extra(extra) => extras.contains(extra),
-                ConflictKind::Group(group1) => groups.contains(group1),
+            let marker = match item.kind() {
+                ConflictKind::Project => {
+                    if groups.prod() {
+                        packages
+                            .get(item.package())
+                            .copied()
+                            .unwrap_or(MarkerTree::FALSE)
+                    } else {
+                        MarkerTree::FALSE
+                    }
+                }
+                ConflictKind::Extra(extra) => {
+                    if groups.prod() && roots.contains(item.package()) && extras.contains(extra) {
+                        root_marker(item.package())
+                    } else {
+                        MarkerTree::FALSE
+                    }
+                }
+                ConflictKind::Group(group) => {
+                    if (roots.contains(item.package()) || group_root == Some(item.package()))
+                        && target.includes_group(Some(item.package()), group, groups)
+                    {
+                        root_marker(item.package())
+                    } else {
+                        MarkerTree::FALSE
+                    }
+                }
             };
-            if is_conflicting {
-                conflicts.push(item.clone());
+            if !marker.is_false() {
+                selected.push((item, marker));
             }
         }
+        let conflicts = selected
+            .iter()
+            .enumerate()
+            .filter(|(index, (_, marker))| {
+                selected
+                    .iter()
+                    .enumerate()
+                    .any(|(other_index, (_, other))| {
+                        *index != other_index && !marker.is_disjoint(*other)
+                    })
+            })
+            .map(|(_, (item, _))| (*item).clone())
+            .collect::<Vec<_>>();
         if conflicts.len() >= 2 {
             return Err(EnvironmentError::Conflict(ConflictError {
                 set: set.clone(),

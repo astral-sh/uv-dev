@@ -6,10 +6,9 @@ use uv_command_support::UvError;
 use uv_distribution_types::{IndexCredentialsError, IndexUrlError, RequiresPython};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
-use uv_python_discovery::format_requires_python_sources;
 use uv_requirements::ScriptRequirementsError;
-use uv_workspace::RequiresPythonSources;
 use uv_workspace::dependency_groups::DependencyGroupError;
+use uv_workspace::{RequiresPythonSources, format_requires_python_sources};
 
 use crate::ConflictError;
 
@@ -50,6 +49,9 @@ pub enum EnvironmentError {
         "The current Python version ({0}) is not compatible with the locked Python requirement: `{1}`"
     )]
     LockedPythonIncompatibility(Version, RequiresPython),
+
+    #[error("The current Python version ({0}) is not supported by locked workspace member `{1}`")]
+    LockedRootPythonIncompatibility(Version, PackageName),
 
     #[error(
         "The current Python platform is not compatible with the lockfile's supported environments: {0}"
@@ -217,6 +219,7 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::MissingExtraScript(..)
             | EnvironmentError::DisjointLockedRequiresPython { .. }
             | EnvironmentError::LockedPythonIncompatibility(..)
+            | EnvironmentError::LockedRootPythonIncompatibility(..)
             | EnvironmentError::LockedPlatformIncompatibility(..)
             | EnvironmentError::InvalidProjectEnvironmentDir(..)
             | EnvironmentError::MalwareFound
@@ -270,6 +273,7 @@ impl uv_errors::Hinted for EnvironmentError {
             | Self::MissingExtraScript(..)
             | Self::DisjointLockedRequiresPython { .. }
             | Self::LockedPythonIncompatibility(..)
+            | Self::LockedRootPythonIncompatibility(..)
             | Self::LockedPlatformIncompatibility(..)
             | Self::InvalidProjectEnvironmentDir(..)
             | Self::MalwareFound

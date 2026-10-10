@@ -85,7 +85,6 @@ struct GistResponse {
 struct GistFile {
     raw_url: String,
 }
-
 /// Run a command.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn run(
@@ -647,6 +646,9 @@ pub async fn run(
             let default_extras = DefaultExtras::default();
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);
+            let python_roots =
+                PackageSelection::from_args(all_packages, &[], project.project_name())
+                    .python_roots(project.workspace());
 
             let venv = if isolated {
                 debug!("Creating isolated virtual environment");
@@ -655,12 +657,13 @@ pub async fn run(
                 // base environment for the project.
 
                 // Resolve the Python request and requirement for the workspace.
-                let project_python = ProjectPythonRequest::from_request(
+                let project_python = ProjectPythonRequest::from_request_for_roots(
                     python.as_deref().map(PythonRequest::parse),
                     Some(project.workspace()),
                     &groups,
                     project_dir,
                     config_discovery,
+                    python_roots.as_deref(),
                 )
                 .await?;
 
@@ -697,6 +700,7 @@ pub async fn run(
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(project.workspace()),
                     None,
+                    python_roots.as_deref(),
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,

@@ -438,6 +438,10 @@ impl UniversalMarker {
     /// conflict expressions. For example, given `sys_platform == 'linux' or extra == 'foo'`, the
     /// conflict marker is always true on Linux but still depends on `foo` elsewhere.
     pub fn conflict_for_environment(self, env: &MarkerEnvironment) -> ConflictMarker {
+        // The display-oriented DNF representation omits the constant-true conjunction.
+        if self.marker.is_true() {
+            return ConflictMarker::TRUE;
+        }
         let mut remaining = MarkerTree::FALSE;
 
         'conjunctions: for conjunction in self.marker.to_dnf() {
@@ -1037,6 +1041,19 @@ mod tests {
         cm.marker
             .try_to_string()
             .unwrap_or_else(|| "true".to_string())
+    }
+
+    #[test]
+    fn conflict_for_environment_preserves_constants() {
+        let environment = marker_environment();
+        assert!(
+            UniversalMarker::TRUE
+                .conflict_for_environment(&environment)
+                .is_true()
+        );
+        let false_marker = UniversalMarker::FALSE.conflict_for_environment(&environment);
+        assert!(false_marker.is_constant());
+        assert!(!false_marker.is_true());
     }
 
     /// This tests that an activated set encodes all three kinds of conflict

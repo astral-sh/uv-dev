@@ -14,7 +14,6 @@ use uv_configuration::{
 };
 use uv_dispatch::UniversalState;
 use uv_distribution_types::IndexCapabilities;
-use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
@@ -23,8 +22,10 @@ use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOpera
 use uv_normalize::{DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
-use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
+use uv_python_discovery::{
+    ProjectPythonRequest, ProjectPythonRequirement, PythonRequirementSource,
+};
 use uv_python_types::{
     PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest, PythonVersion,
 };
@@ -34,7 +35,7 @@ use uv_resolve_operations::resolution_markers;
 use uv_scripts::Pep723Script;
 use uv_settings::{FrozenSource, LockCheck, PythonInstallMirrors, ResolverSettings};
 use uv_warnings::warn_user;
-use uv_workspace::{DiscoveryOptions, WorkspaceCache};
+use uv_workspace::{DiscoveryOptions, RequiresPythonSources, WorkspaceCache};
 
 use uv_resolve_operations::reporters::LatestVersionReporter;
 
@@ -180,17 +181,16 @@ pub async fn tree(
                     root
                 };
 
-                let target = InstallTarget::Lockfile {
-                    root,
-                    project_name: lock.root().map(uv_lock::Package::name),
-                    selection: PackageSelection::Workspace,
-                    lock,
-                };
-
                 let project_python = ProjectPythonRequest::from_requirements(
                     python.as_deref().map(PythonRequest::parse),
                     Some(root),
-                    Some(target.python_requirement(&groups)?),
+                    Some(ProjectPythonRequirement {
+                        requires_python: lock.requires_python().clone(),
+                        source: PythonRequirementSource::Lockfile {
+                            locked: lock.requires_python().clone(),
+                            groups: RequiresPythonSources::new(),
+                        },
+                    }),
                     discovery_dir,
                     config_discovery,
                 )

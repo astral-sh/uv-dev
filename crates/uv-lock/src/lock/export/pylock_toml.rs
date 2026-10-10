@@ -17,8 +17,8 @@ use url::Url;
 
 use uv_client::{FileHashError, RegistryClient};
 use uv_configuration::{
-    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,
-    InstallOptions,
+    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExportFormat,
+    ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_filename::{
     BuildTag, DistExtension, ExtensionError, SourceDistExtension, SourceDistFilename,
@@ -769,6 +769,8 @@ impl<'lock> PylockToml {
     }
 
     /// Construct a [`PylockToml`] from a uv lockfile. Relative paths are based on `output_dir`.
+    ///
+    /// The Python requirement is derived from the selected roots and dependency groups.
     pub fn from_lock(
         target: &impl Installable<'lock>,
         output_dir: &Path,
@@ -779,9 +781,12 @@ impl<'lock> PylockToml {
         editable: Option<&EditableMode>,
         install_options: &'lock InstallOptions,
     ) -> Result<Self, PylockTomlErrorKind> {
+        let requires_python = target.export_python_requirement(dev)?;
+
         // Extract the packages from the lock file.
         let ExportableRequirements(mut nodes) = ExportableRequirements::from_lock(
             target,
+            ExportFormat::PylockToml,
             prune,
             extras,
             dev,
@@ -798,9 +803,6 @@ impl<'lock> PylockToml {
         // The created by field is always `uv` at time of writing.
         let created_by = "uv".to_string();
 
-        // Use the `requires-python` from the target lockfile.
-        let requires_python = target.lock().requires_python.clone();
-
         // We don't support locking for multiple extras at time of writing.
         let extras = vec![];
 
@@ -815,7 +817,12 @@ impl<'lock> PylockToml {
 
         // Convert each node to a `pylock.toml`-style package.
         let mut packages = Vec::with_capacity(nodes.len());
+        let python_environment = requires_python.to_exact_marker_tree();
         for node in nodes {
+            let marker = requires_python.simplify_markers(node.marker.restrict(python_environment));
+            if marker.is_false() {
+                continue;
+            }
             let package = node.package;
 
             // Extract the `packages.wheels` field.
@@ -1037,7 +1044,7 @@ impl<'lock> PylockToml {
             let package = PylockTomlPackage {
                 name,
                 version,
-                marker: node.marker,
+                marker,
                 requires_python: None,
                 dependencies: vec![],
                 index,

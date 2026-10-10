@@ -22,7 +22,7 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     EnvironmentError, EnvironmentUpdate, LinkErrorReporting, ProjectEnvironment,
-    ProjectEnvironmentTarget, ScriptEnvironment, detect_conflicts, sync_from_lock,
+    ProjectEnvironmentTarget, ScriptEnvironment, detect_root_conflicts, sync_from_lock,
     update_environment,
 };
 use uv_fs::{PortablePathBuf, Simplified};
@@ -179,7 +179,8 @@ pub async fn sync(
         SyncTarget::Manifest(SyncManifest::Project(project)) => {
             groups.with_defaults(match locked_default_groups {
                 Some(defaults) => defaults,
-                None => project.default_groups()?,
+                None if frozen.is_some() => project.default_groups()?,
+                None => project.default_groups_for_packages(&package)?,
             })
         }
         SyncTarget::Manifest(SyncManifest::Script(..)) => {
@@ -205,8 +206,16 @@ pub async fn sync(
             identify_installation_target(&target, workspace.lock(), all_packages, &package);
         install_target.validate_extras(&extras)?;
         install_target.validate_groups(&groups)?;
-        detect_conflicts(&install_target, &extras, &groups)?;
+        detect_root_conflicts(&install_target, &extras, &groups)?;
     }
+
+    let python_roots = match &target {
+        SyncTarget::Manifest(SyncManifest::Project(project)) => {
+            PackageSelection::from_args(all_packages, &package, project.project_name())
+                .python_roots(project.workspace())
+        }
+        SyncTarget::Manifest(SyncManifest::Script(_)) | SyncTarget::Lockfile { .. } => None,
+    };
 
     // Discover or create the virtual environment.
     let environment = match &target {
@@ -219,6 +228,7 @@ pub async fn sync(
                     .map(|lock| {
                         identify_installation_target(&target, lock, all_packages, &package)
                     }),
+                python_roots.as_deref(),
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
@@ -248,6 +258,7 @@ pub async fn sync(
                     all_packages,
                     &package,
                 )),
+                None,
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,

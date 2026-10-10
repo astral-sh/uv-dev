@@ -18,7 +18,9 @@ use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
 use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults, ExcludeDependency};
-use uv_distribution_types::{Index, MinimumLibcVersion, Requirement, RequirementSource};
+use uv_distribution_types::{
+    Index, MinimumLibcVersion, Requirement, RequirementSource, RequiresPython,
+};
 use uv_fs::{CWD, Simplified, normalize_path};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
 use uv_once_map::OnceMap;
@@ -277,6 +279,12 @@ impl Error for WorkspaceError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum WorkspaceErrorKind {
+    #[error("`tool.uv.workspace.roots` must contain at least one member")]
+    EmptyResolutionRoots,
+    #[error("Workspace resolution root `{0}` is not a workspace member")]
+    UnknownResolutionRoot(PackageName),
+    #[error("Changing workspace resolution roots requires rediscovering the workspace")]
+    ResolutionRootsChanged,
     // Workspace structure errors.
     #[error("No `pyproject.toml` found in current directory or any parent directory")]
     MissingPyprojectToml,
@@ -378,6 +386,14 @@ impl std::fmt::Display for RequiresPythonDeclaration {
 }
 
 pub type RequiresPythonSources = BTreeMap<RequiresPythonDeclaration, VersionSpecifiers>;
+
+/// Format the declarations contributing to a Python requirement diagnostic.
+pub fn format_requires_python_sources(conflicts: &RequiresPythonSources) -> String {
+    conflicts
+        .iter()
+        .map(|(source, specifiers)| format!("- {source}: {specifiers}"))
+        .join("\n")
+}
 
 pub type Editability = Option<bool>;
 
@@ -579,6 +595,13 @@ impl Workspace {
         package_name: &PackageName,
         pyproject_toml: PyProjectToml,
     ) -> Result<Option<Arc<Self>>, WorkspaceError> {
+        if self
+            .packages
+            .get(package_name)
+            .is_some_and(|member| member.root == self.install_path)
+        {
+            self.validate_root_update(&pyproject_toml)?;
+        }
         debug_assert_eq!(
             Arc::strong_count(&self),
             1,
@@ -649,7 +672,56 @@ impl Workspace {
             .any(|member| *member.root() == self.install_path)
     }
 
-    /// Returns the set of all workspace members.
+    /// Returns the explicitly configured workspace resolution roots, if any.
+    pub fn resolution_roots(&self) -> Option<&BTreeSet<PackageName>> {
+        Self::configured_resolution_roots(&self.pyproject_toml)
+    }
+
+    fn validate_root_update(&self, pyproject_toml: &PyProjectToml) -> Result<(), WorkspaceError> {
+        if self.resolution_roots() != Self::configured_resolution_roots(pyproject_toml) {
+            return Err(WorkspaceErrorKind::ResolutionRootsChanged.into());
+        }
+        Ok(())
+    }
+
+    fn configured_resolution_roots(
+        pyproject_toml: &PyProjectToml,
+    ) -> Option<&BTreeSet<PackageName>> {
+        pyproject_toml
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.workspace.as_ref())
+            .and_then(|workspace| workspace.roots.as_ref())
+    }
+
+    fn is_resolution_root(&self, name: &PackageName) -> bool {
+        self.resolution_roots()
+            .is_none_or(|roots| roots.contains(name))
+    }
+
+    /// Limit an explicit root to the Python versions supported by that project.
+    fn resolution_root_marker(&self, member: &WorkspaceMember) -> MarkerTree {
+        if self.resolution_roots().is_none() {
+            return MarkerTree::TRUE;
+        }
+        member
+            .pyproject_toml()
+            .project
+            .as_ref()
+            .and_then(|project| project.requires_python.as_ref())
+            .map_or(MarkerTree::TRUE, |specifiers| {
+                RequiresPython::from_specifiers(specifiers.clone()).to_exact_marker_tree()
+            })
+    }
+
+    /// Returns the workspace members that are resolution roots.
+    pub fn resolution_root_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
+        self.members_requirements()
+            .filter(|requirement| self.is_resolution_root(&requirement.name))
+    }
+
+    /// Returns the requirements identifying all workspace members and their local sources.
     pub fn members_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
         self.packages.iter().filter_map(|(name, member)| {
             let url = VerbatimUrl::from_absolute_path(&member.root).expect("path is valid URL");
@@ -657,7 +729,7 @@ impl Workspace {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
                 extras: Box::new([]),
                 groups: Box::new([]),
-                marker: MarkerTree::TRUE,
+                marker: self.resolution_root_marker(member),
                 source: if member
                     .pyproject_toml()
                     .is_package(!self.is_required_member(name))
@@ -768,6 +840,9 @@ impl Workspace {
     /// Returns the set of all workspace member dependency groups.
     pub fn group_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
         self.packages.iter().filter_map(|(name, member)| {
+            if !self.is_resolution_root(name) {
+                return None;
+            }
             let url = VerbatimUrl::from_absolute_path(&member.root).expect("path is valid URL");
 
             let groups = {
@@ -802,7 +877,7 @@ impl Workspace {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
                 extras: Box::new([]),
                 groups: groups.into_boxed_slice(),
-                marker: MarkerTree::TRUE,
+                marker: self.resolution_root_marker(member),
                 source: if member.pyproject_toml().is_package(!is_required_member) {
                     RequirementSource::Directory {
                         install_path: member.root.clone().into_boxed_path(),
@@ -876,9 +951,29 @@ impl Workspace {
         &self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<RequiresPythonSources, DependencyGroupError> {
+        self.requires_python_matching(groups, |name| self.is_resolution_root(name))
+    }
+
+    /// Returns the Python requirements for a selected set of workspace members.
+    pub fn requires_python_for(
+        &self,
+        groups: &DependencyGroupsWithDefaults,
+        packages: &[PackageName],
+    ) -> Result<RequiresPythonSources, DependencyGroupError> {
+        self.requires_python_matching(groups, |name| packages.contains(name))
+    }
+
+    fn requires_python_matching(
+        &self,
+        groups: &DependencyGroupsWithDefaults,
+        includes: impl Fn(&PackageName) -> bool,
+    ) -> Result<RequiresPythonSources, DependencyGroupError> {
         let mut requires = RequiresPythonSources::new();
         for (name, member) in self.packages() {
-            // Get the top-level requires-python for this package, which is always active
+            if !includes(name) {
+                continue;
+            }
+            // Get the top-level requires-python for this resolution root, which is always active
             //
             // Arguably we could check groups.prod() to disable this, since, the requires-python
             // of the project is *technically* not relevant if you're doing `--only-group`, but,
@@ -919,6 +1014,32 @@ impl Workspace {
                         }
                     });
             requires.extend(group_requires);
+        }
+        // A selected member inherits explicitly requested groups absent from its own manifest.
+        let mut selected = self.packages().iter().filter(|(name, _)| includes(name));
+        if let Some((name, member)) = selected.next()
+            && selected.next().is_none()
+            && let Some(root) = self.pyproject_toml().project.as_ref()
+            && root.name != *name
+        {
+            let member_groups =
+                FlatDependencyGroups::from_pyproject_toml(member.root(), member.pyproject_toml())?;
+            let root_groups = FlatDependencyGroups::from_pyproject_toml(
+                self.install_path(),
+                self.pyproject_toml(),
+            )?;
+            for (group, metadata) in root_groups {
+                if groups.contains(&group)
+                    && !groups.contains_because_default(&group)
+                    && member_groups.get(&group).is_none()
+                    && let Some(requires_python) = metadata.requires_python
+                {
+                    requires.insert(
+                        RequiresPythonDeclaration::Member(root.name.clone(), Some(group)),
+                        requires_python,
+                    );
+                }
+            }
         }
         for (group, flat_group) in self.workspace_dependency_groups()? {
             if groups.contains(&group)
@@ -1183,6 +1304,18 @@ impl Workspace {
             indexes: workspace_indexes,
             pyproject_toml: workspace_pyproject_toml,
         };
+        if options.members == MemberDiscovery::All
+            && let Some(roots) = workspace.resolution_roots()
+        {
+            if roots.is_empty() {
+                return Err(WorkspaceErrorKind::EmptyResolutionRoots.into());
+            }
+            for root in roots {
+                if !workspace.packages.contains_key(root) {
+                    return Err(WorkspaceErrorKind::UnknownResolutionRoot(root.clone()).into());
+                }
+            }
+        }
         Ok(Arc::new(workspace))
     }
 
@@ -2294,6 +2427,7 @@ impl VirtualProject {
     /// workspaces.
     ///
     /// The [`WorkspaceCache`] is passed to ensure the caller doesn't forget to clear it.
+    /// Workspace resolution roots must remain unchanged; changing them requires rediscovery.
     pub fn update_member(
         self,
         pyproject_toml: PyProjectToml,
@@ -2309,6 +2443,7 @@ impl VirtualProject {
                 Some(Self::Project(project))
             }
             Self::NonProject(workspace) => {
+                workspace.validate_root_update(&pyproject_toml)?;
                 debug_assert_eq!(
                     Arc::strong_count(&workspace),
                     1,
@@ -2417,7 +2552,7 @@ mod tests {
 
     use crate::pyproject::PyProjectToml;
     use crate::workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, Workspace};
-    use crate::{WorkspaceCache, WorkspaceError};
+    use crate::{VirtualProject, WorkspaceCache, WorkspaceError};
 
     async fn workspace_test(folder: &str) -> (ProjectWorkspace, String) {
         let root_dir = env::current_dir()
@@ -2456,6 +2591,169 @@ mod tests {
         .map_err(|error| (error, root_escaped.clone()))?;
 
         Ok((project, root_escaped))
+    }
+
+    #[tokio::test]
+    async fn update_project_rejects_changed_resolution_roots() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        root.child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "root"
+            version = "1.0.0"
+            [tool.uv.workspace]
+            roots = ["root"]
+        "#,
+        )?;
+        let cache = Cache::from_path(root.join(".cache"));
+        let workspace_cache = WorkspaceCache::default();
+        let project = VirtualProject::discover(
+            root.path(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+        let unchanged = PyProjectToml::from_string(
+            r#"
+            [project]
+            name = "root"
+            version = "2.0.0"
+            [tool.uv.workspace]
+            roots = ["root"]
+        "#
+            .to_owned(),
+            root.join("pyproject.toml"),
+        )?;
+        let project = project
+            .update_member(unchanged, &workspace_cache)?
+            .expect("member exists");
+        let replacement = PyProjectToml::from_string(
+            r#"
+            [project]
+            name = "root"
+            version = "2.0.0"
+            [tool.uv.workspace]
+            roots = []
+        "#
+            .to_owned(),
+            root.join("pyproject.toml"),
+        )?;
+        let error = project
+            .update_member(replacement, &workspace_cache)
+            .expect_err("changed roots require rediscovery");
+        assert_snapshot!(error.to_string(), @"Changing workspace resolution roots requires rediscovering the workspace");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_non_project_rejects_changed_resolution_roots() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        root.child("pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            members = ["member"]
+            roots = ["member"]
+        "#,
+        )?;
+        root.child("member/pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "member"
+            version = "1.0.0"
+        "#,
+        )?;
+        let cache = Cache::from_path(root.join(".cache"));
+        let workspace_cache = WorkspaceCache::default();
+        let project = VirtualProject::discover(
+            root.path(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+        let replacement = PyProjectToml::from_string(
+            r#"
+            [tool.uv.workspace]
+            members = ["member"]
+            roots = ["missing"]
+        "#
+            .to_owned(),
+            root.join("pyproject.toml"),
+        )?;
+        let error = project
+            .update_member(replacement, &workspace_cache)
+            .expect_err("changed roots require rediscovery");
+        assert_snapshot!(error.to_string(), @"Changing workspace resolution roots requires rediscovering the workspace");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_resolution_roots() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new()?;
+        let root = ChildPath::new(temp_dir.path());
+        root.child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "root"
+            version = "1.0.0"
+            requires-python = ">=3.12"
+            dependencies = ["leaf"]
+
+            [tool.uv.workspace]
+            members = ["leaf", "unused"]
+            roots = ["root"]
+
+            [tool.uv.sources]
+            leaf = { workspace = true }
+            "#,
+        )?;
+        for (name, requires_python) in [("leaf", ">=3.12"), ("unused", ">=3.14")] {
+            root.child(name)
+                .child("pyproject.toml")
+                .write_str(&format!(
+                    r#"
+                [project]
+                name = "{name}"
+                version = "1.0.0"
+                requires-python = "{requires_python}"
+                "#,
+                ))?;
+        }
+
+        let cache = Cache::from_path(root.join(".cache"));
+        let workspace = Workspace::discover(
+            root.as_ref(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &WorkspaceCache::default(),
+        )
+        .await?;
+        assert_json_snapshot!(workspace.packages().keys().collect::<Vec<_>>(), @r#"
+        [
+          "leaf",
+          "root",
+          "unused"
+        ]
+        "#);
+        assert_json_snapshot!(
+            workspace.members_requirements().map(|requirement| requirement.name).collect::<Vec<_>>(),
+            @r#"
+        [
+          "leaf",
+          "root",
+          "unused"
+        ]
+        "#);
+        assert_json_snapshot!(
+            workspace.resolution_root_requirements().map(|requirement| requirement.name).collect::<Vec<_>>(),
+            @r#"
+        [
+          "root"
+        ]
+        "#);
+
+        Ok(())
     }
 
     #[tokio::test]

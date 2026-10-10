@@ -9,12 +9,13 @@ use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_configuration::{
-    DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults, InstallOptions,
+    DependencyGroupsWithDefaults, ExportFormat, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
-use uv_pypi_types::ConflictItem;
+use uv_pypi_types::{ConflictItem, ConflictKindRef};
 
+use uv_resolver_types::UniversalMarker;
 use uv_resolver_types::graph_ops::Reachable;
 use uv_resolver_types::universal_marker::resolve_activated_extras;
 
@@ -25,8 +26,8 @@ pub(crate) use crate::lock::export::metadata::{
 };
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
-use crate::lock::{LockErrorKind, PackageIndex};
-use crate::{Installable, InstallableRootKind, LockError, Package};
+use crate::lock::{Dependency, LockErrorKind, PackageIndex};
+use crate::{Installable, InstallableRootKind, Lock, LockError, Package};
 
 pub mod cyclonedx_json;
 mod metadata;
@@ -52,12 +53,32 @@ impl<'lock> ExportableRequirements<'lock> {
     /// Generate the set of exportable [`ExportableRequirement`] entries from the given lockfile.
     fn from_lock(
         target: &impl Installable<'lock>,
+        format: ExportFormat,
         prune: &[PackageName],
         extras: &ExtrasSpecificationWithDefaults,
         groups: &DependencyGroupsWithDefaults,
         annotate: bool,
         install_options: &'lock InstallOptions,
     ) -> Result<Self, LockError> {
+        target.validate_workspace_resolution(extras, groups, None)?;
+        let root_requirements = match format {
+            ExportFormat::RequirementsTxt | ExportFormat::PylockToml => {
+                Some(target.selected_root_python_requirements(groups)?)
+            }
+            // An SBOM can describe groups with incompatible Python requirements.
+            ExportFormat::CycloneDX1_5 => None,
+        };
+        let dependency_marker = |dependency: &Dependency| {
+            let marker = dependency.simplified_marker.as_simplified_marker_tree();
+            match format {
+                ExportFormat::RequirementsTxt | ExportFormat::PylockToml => target
+                    .lock()
+                    .constrain_conflicts(UniversalMarker::from_combined(marker))
+                    .combined(),
+                // An SBOM can include mutually exclusive package and extra selections.
+                ExportFormat::CycloneDX1_5 => marker,
+            }
+        };
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
@@ -91,10 +112,18 @@ impl<'lock> ExportableRequirements<'lock> {
                 .ok_or_else(|| LockErrorKind::MissingRootPackage {
                     name: root_name.clone(),
                 })?;
+            let mut root_marker = dist.environment_marker();
+            if let Some(requirement) = root_requirements
+                .as_ref()
+                .and_then(|requirements| requirements.get(root_name))
+            {
+                root_marker = root_marker.and(requirement.to_exact_marker_tree());
+            }
+            let root_marker = target.lock().simplify_environment(root_marker);
 
             if root_kind == InstallableRootKind::Production {
                 // Track the activated package in the list of known conflicts.
-                activated_items.insert(ConflictItem::from(dist.id.name.clone()), MarkerTree::TRUE);
+                activated_items.insert(ConflictItem::from(dist.id.name.clone()), root_marker);
             }
 
             if root_kind == InstallableRootKind::Production && groups.prod() {
@@ -107,7 +136,7 @@ impl<'lock> ExportableRequirements<'lock> {
                     root,
                     index,
                     Edge::Prod {
-                        marker: MarkerTree::TRUE,
+                        marker: root_marker,
                         dep_extras: Vec::new(),
                     },
                 );
@@ -118,7 +147,7 @@ impl<'lock> ExportableRequirements<'lock> {
                     queue.push_back((package_index, Some(extra)));
                     activated_items.insert(
                         ConflictItem::from((dist.id.name.clone(), extra.clone())),
-                        MarkerTree::TRUE,
+                        root_marker,
                     );
                 }
             }
@@ -139,7 +168,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 // Track the activated group in the list of known conflicts.
                 activated_items.insert(
                     ConflictItem::from((dist.id.name.clone(), group.clone())),
-                    MarkerTree::TRUE,
+                    root_marker,
                 );
 
                 if prune.contains(&dep.package_id.name) {
@@ -152,15 +181,14 @@ impl<'lock> ExportableRequirements<'lock> {
                 let dep_index = *inverse[dep.index.0]
                     .get_or_insert_with(|| graph.add_node(Node::Package(dep_dist)));
 
-                // Add an edge from the root. Development dependencies may be installed without
-                // installing the workspace package itself (which can never have markers on it
-                // anyway), so they're directly connected to the root.
+                // Development dependencies may be installed without the workspace package, so
+                // connect them directly to the root while retaining the project's Python domain.
                 graph.add_edge(
                     root,
                     dep_index,
                     Edge::Dev {
                         group,
-                        marker: dep.simplified_marker.as_simplified_marker_tree(),
+                        marker: root_marker.and(dependency_marker(dep)),
                         dep_extras: dep.extra.iter().collect(),
                     },
                 );
@@ -291,12 +319,12 @@ impl<'lock> ExportableRequirements<'lock> {
                     if let Some(extra) = extra {
                         Edge::Optional {
                             extra,
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
+                            marker: dependency_marker(dep),
                             dep_extras,
                         }
                     } else {
                         Edge::Prod {
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
+                            marker: dependency_marker(dep),
                             dep_extras,
                         }
                     },
@@ -315,7 +343,8 @@ impl<'lock> ExportableRequirements<'lock> {
         }
 
         // Determine the reachability of each node in the graph.
-        let mut reachability = conflict_marker_reachability(&graph, &[], &activated_items);
+        let mut reachability =
+            conflict_marker_reachability(target.lock(), &graph, &[], &activated_items);
 
         // Collect all packages.
         let nodes = graph
@@ -328,7 +357,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 install_options.include_package(
                     package.as_install_target(),
                     target.project_name(),
-                    target.lock().members(),
+                    target.lock().workspace_members(),
                 )
             })
             .map(|(index, package)| ExportableRequirement {
@@ -426,6 +455,7 @@ impl Reachable<MarkerTree> for Edge<'_> {
 /// when evaluating the marker for the node, we inline the conflict marker conditions, thus removing
 /// all conflict items from the marker expression.
 fn conflict_marker_reachability<'lock>(
+    lock: &Lock,
     graph: &Graph<Node<'lock>, Edge<'lock>>,
     fork_markers: &[Edge<'lock>],
     known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
@@ -497,6 +527,14 @@ fn conflict_marker_reachability<'lock>(
                 .unwrap_or_else(|| known_conflicts.clone());
 
             if let Node::Package(child) = graph[child_edge.target()] {
+                // Dependency edges activate a workspace project's production context on this path.
+                if lock
+                    .conflicts()
+                    .contains(child.name(), ConflictKindRef::Project)
+                    && lock.is_workspace_package(child)
+                {
+                    parent_map.insert(ConflictItem::from(child.name().clone()), parent_marker);
+                }
                 for extra in child_edge.weight().dep_extras() {
                     let item = ConflictItem::from((child.name().clone(), (*extra).clone()));
                     parent_map.insert(item, parent_marker);

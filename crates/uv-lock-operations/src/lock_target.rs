@@ -17,9 +17,9 @@ use uv_distribution_types::{
     Index, IndexLocations, MinimumLibcVersion, NameRequirementSpecification, Requirement,
     RequiresPython,
 };
-use uv_lock::Lock;
+use uv_lock::{Lock, implicit_constraints_marker};
 use uv_normalize::{GroupName, PackageName};
-use uv_pep508::RequirementOrigin;
+use uv_pep508::{MarkerTree, RequirementOrigin};
 use uv_pypi_types::{Conflicts, SupportedEnvironments, VerbatimParsedUrl};
 use uv_python_discovery::find_requires_python;
 use uv_scripts::Pep723Script;
@@ -188,6 +188,27 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
+    /// Return the Python markers attached to explicitly configured resolution roots.
+    pub(crate) fn resolution_root_markers(self) -> Option<BTreeMap<PackageName, MarkerTree>> {
+        match self {
+            Self::Workspace(workspace) => workspace.resolution_roots().map(|_| {
+                workspace
+                    .resolution_root_requirements()
+                    .map(|requirement| (requirement.name, requirement.marker))
+                    .collect()
+            }),
+            Self::Script(_) => None,
+        }
+    }
+
+    /// Returns the workspace requirements that seed resolution.
+    pub(crate) fn resolution_root_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
+        match self {
+            Self::Workspace(workspace) => Either::Left(workspace.resolution_root_requirements()),
+            Self::Script(_) => Either::Right(std::iter::empty()),
+        }
+    }
+
     /// Returns the set of all dependency groups within the target.
     pub(crate) fn group_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
         match self {
@@ -196,21 +217,23 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
-    /// Return the list of members to include in the [`Lock`].
-    pub(crate) fn members(self) -> Vec<PackageName> {
+    /// Return the resolution roots to record in the [`Lock`].
+    pub(crate) fn resolution_roots(self) -> Vec<PackageName> {
         match self {
             Self::Workspace(workspace) => {
-                let mut members = workspace.packages().keys().cloned().collect::<Vec<_>>();
-                members.sort();
+                if let Some(roots) = workspace.resolution_roots() {
+                    return roots.iter().cloned().collect();
+                }
+                let mut roots = workspace.packages().keys().cloned().collect::<Vec<_>>();
+                roots.sort();
 
-                // If this is a non-virtual project with a single member, we can omit it from the lockfile.
-                // If any members are added or removed, it will inherently mismatch. If the member is
-                // renamed, it will also mismatch.
-                if members.len() == 1 && !workspace.is_non_project() {
-                    members.clear();
+                // A workspace with one project can infer its root from the package source.
+                // Adding, removing, or renaming a member still invalidates the lockfile.
+                if roots.len() == 1 && !workspace.is_non_project() {
+                    roots.clear();
                 }
 
-                members
+                roots
             }
             Self::Script(_) => Vec::new(),
         }
@@ -371,7 +394,23 @@ impl<'lock> LockTarget<'lock> {
 
         // Check if the discovered workspace members match the locked workspace members.
         if let Self::Workspace(workspace) = self {
-            for package_name in workspace.packages().keys() {
+            let root_markers = self.resolution_root_markers();
+            let environment = implicit_constraints_marker(
+                existing.requires_python().to_marker_tree(),
+                existing.supported_environments(),
+            );
+            for package_name in workspace.packages().keys().filter(|name| {
+                workspace
+                    .resolution_roots()
+                    .is_none_or(|roots| roots.contains(*name))
+            }) {
+                if root_markers
+                    .as_ref()
+                    .and_then(|markers| markers.get(package_name))
+                    .is_some_and(|marker| marker.is_disjoint(environment))
+                {
+                    continue;
+                }
                 existing
                     .find_by_name(package_name)
                     .map_err(|_| LockError::LockWorkspaceMismatch(package_name.clone(), source))?

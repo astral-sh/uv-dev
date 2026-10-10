@@ -310,15 +310,18 @@ pub async fn add(
 
         // Enable the default groups of the project
         defaulted_groups = groups.with_defaults(project.default_groups()?);
+        let python_roots = PackageSelection::from_args(false, &[], project.project_name())
+            .python_roots(project.workspace());
 
         if frozen.is_some() || no_sync {
             // Discover the interpreter.
-            let project_python = ProjectPythonRequest::from_request(
+            let project_python = ProjectPythonRequest::from_request_for_roots(
                 python.as_deref().map(PythonRequest::parse),
                 Some(project.workspace()),
                 &defaulted_groups,
                 project_dir,
                 config_discovery,
+                python_roots.as_deref(),
             )
             .await?;
             let interpreter = ProjectInterpreter::discover(
@@ -347,6 +350,7 @@ pub async fn add(
             let environment = ProjectEnvironment::get_or_init(
                 ProjectEnvironmentTarget::from(project.workspace()),
                 None,
+                python_roots.as_deref(),
                 &defaulted_groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,

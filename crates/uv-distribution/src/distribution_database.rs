@@ -99,9 +99,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
     #[must_use]
     pub fn with_first_party_packages(
         mut self,
-        first_party_packages: &'a FirstPartyPackages,
+        first_party_packages: Option<&'a FirstPartyPackages>,
     ) -> Self {
-        self.first_party_packages = Some(first_party_packages);
+        self.first_party_packages = first_party_packages;
         self
     }
 

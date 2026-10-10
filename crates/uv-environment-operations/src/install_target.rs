@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -11,8 +11,10 @@ use uv_configuration::{
     ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
 };
 use uv_distribution_types::{Index, RequiresPython, Resolution};
-use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
-use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
+use uv_lock::{Installable, Lock, LockError, Package};
+use uv_normalize::{DEV_DEPENDENCIES, GroupName, PackageName};
+use uv_pep440::{Version, VersionSpecifier};
+use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{
     DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,
@@ -22,7 +24,7 @@ use uv_python_discovery::ProjectPythonRequirement;
 use uv_python_discovery::PythonRequirementSource;
 use uv_scripts::Pep723Script;
 use uv_workspace::pyproject::{Source, Sources, ToolUvSources};
-use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, VirtualProject, Workspace};
+use uv_workspace::{VirtualProject, Workspace};
 
 use crate::EnvironmentError;
 
@@ -92,6 +94,15 @@ impl<'lock> PackageSelection<'lock> {
         }
     }
 
+    /// Derive Python roots from the selected packages of an explicit-roots workspace.
+    pub fn python_roots(self, workspace: &Workspace) -> Option<Vec<PackageName>> {
+        let roots = workspace.resolution_roots()?;
+        Some(match self {
+            Self::Projects(names) => names.to_vec(),
+            Self::Workspace | Self::NonProjectWorkspace => roots.iter().cloned().collect(),
+        })
+    }
+
     /// Identify workspace members excluded from installation before a lockfile is available.
     pub fn first_party_exclusions(
         self,
@@ -154,16 +165,16 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         let lock = self.lock();
         match self.package_selection() {
             Some(PackageSelection::Projects(names)) => Box::new(names.iter()),
-            Some(PackageSelection::NonProjectWorkspace) => Box::new(lock.members().iter()),
+            Some(PackageSelection::NonProjectWorkspace) => Box::new(lock.resolution_roots().iter()),
             Some(PackageSelection::Workspace) => {
-                // Identify the workspace members.
+                // Identify the resolution roots.
                 //
-                // The members are encoded directly in the lockfile, unless the workspace contains a
-                // single member at the root, in which case, we identify it by its source.
-                if lock.members().is_empty() {
+                // The roots are encoded directly in the lockfile, unless the workspace contains a
+                // single project at the root, in which case, we identify it by its source.
+                if lock.resolution_roots().is_empty() {
                     Box::new(lock.root().into_iter().map(Package::name))
                 } else {
-                    Box::new(lock.members().iter())
+                    Box::new(lock.resolution_roots().iter())
                 }
             }
             None => Box::new(std::iter::empty()),
@@ -262,7 +273,7 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
                 project_name, lock, ..
             } => project_name.or_else(|| {
                 // A single-member workspace omits the member list from the lockfile.
-                if lock.members().is_empty() {
+                if lock.resolution_roots().is_empty() {
                     lock.root().map(Package::name)
                 } else {
                     None
@@ -286,47 +297,13 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
 }
 
 impl<'lock> InstallTarget<'lock> {
-    /// Intersect the lockfile's Python requirement with the selected groups' requirements.
-    pub fn python_requirement(
+    /// Intersect the lockfile's Python requirement with selected members, roots, and groups.
+    pub(crate) fn python_requirement(
         &self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<ProjectPythonRequirement, EnvironmentError> {
         let lock = self.lock();
-        let mut group_requirements = RequiresPythonSources::new();
-
-        if let Some(members) = lock.member_group_metadata() {
-            let group_root = self.group_root(groups);
-
-            for (member, member_groups) in members {
-                // The group root can contribute groups without being an install root.
-                let is_install_root = self.roots().any(|root| root == member);
-                if !is_install_root && group_root != Some(member) {
-                    continue;
-                }
-
-                for (group, metadata) in member_groups {
-                    if self.includes_group(Some(member), group, groups)
-                        && let Some(requires_python) = &metadata.requires_python
-                    {
-                        group_requirements.insert(
-                            RequiresPythonDeclaration::Member(member.clone(), Some(group.clone())),
-                            requires_python.clone(),
-                        );
-                    }
-                }
-            }
-        }
-
-        for (group, metadata) in lock.workspace_group_metadata() {
-            if self.includes_group(None, group, groups)
-                && let Some(requires_python) = &metadata.requires_python
-            {
-                group_requirements.insert(
-                    RequiresPythonDeclaration::Workspace(group.clone()),
-                    requires_python.clone(),
-                );
-            }
-        }
+        let group_requirements = self.workspace_python_requirements(groups)?;
 
         let Some(requires_python) = RequiresPython::intersection(
             std::iter::once(lock.requires_python().specifiers()).chain(group_requirements.values()),
@@ -402,8 +379,31 @@ impl<'lock> InstallTarget<'lock> {
                 selection: PackageSelection::Projects([name]),
                 ..
             } => Some((name, None)),
-            _ => None,
+            Self::Projects { .. }
+            | Self::Workspace { .. }
+            | Self::NonProjectWorkspace { .. }
+            | Self::Lockfile { .. }
+            | Self::Script { .. } => None,
         }
+    }
+
+    /// Reject selected roots whose locked graph is unavailable on this Python version.
+    pub(crate) fn validate_python(self, version: &Version) -> Result<(), EnvironmentError> {
+        let marker = MarkerTree::expression(MarkerExpression::Version {
+            key: MarkerValueVersion::PythonFullVersion,
+            specifier: VersionSpecifier::equals_version(version.only_release()),
+        });
+        for name in self.roots() {
+            if let Ok(Some(package)) = self.lock().find_by_name(name)
+                && !package.is_included_by_marker(marker)
+            {
+                return Err(EnvironmentError::LockedRootPythonIncompatibility(
+                    version.clone(),
+                    name.clone(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Convert the target's locked packages to a [`Resolution`].
@@ -783,129 +783,5 @@ impl<'lock> InstallTarget<'lock> {
         }
 
         Ok(())
-    }
-
-    /// Returns the names of all packages in the workspace that will be installed.
-    ///
-    /// Note this only includes workspace members.
-    pub(super) fn packages(
-        &self,
-        extras: &ExtrasSpecification,
-        groups: &DependencyGroupsWithDefaults,
-    ) -> BTreeSet<&PackageName> {
-        match self.package_selection() {
-            Some(PackageSelection::Projects(_)) => {
-                let lock = self.lock();
-                let roots = self.roots().collect::<FxHashSet<_>>();
-
-                // Collect the packages by name for efficient lookup.
-                let packages = lock
-                    .packages()
-                    .iter()
-                    .map(|package| (package.name(), package))
-                    .collect::<BTreeMap<_, _>>();
-
-                // We'll include all specified projects
-                let mut required_members = BTreeSet::new();
-                for name in &roots {
-                    required_members.insert(*name);
-                }
-
-                // Find all workspace member dependencies recursively for all specified packages
-                let mut queue: VecDeque<(&PackageName, Option<&ExtraName>)> = VecDeque::new();
-                let mut seen: FxHashSet<(&PackageName, Option<&ExtraName>)> = FxHashSet::default();
-
-                for (name, root_kind) in roots
-                    .iter()
-                    .copied()
-                    .map(|name| (name, InstallableRootKind::Production))
-                    .chain(
-                        self.group_root(groups)
-                            .map(|name| (name, InstallableRootKind::DependencyGroups)),
-                    )
-                {
-                    let Some(root_package) = packages.get(name) else {
-                        continue;
-                    };
-
-                    if root_kind == InstallableRootKind::Production && groups.prod() {
-                        // Add the root package
-                        if seen.insert((name, None)) {
-                            queue.push_back((name, None));
-                        }
-
-                        // Add explicitly activated extras for the root package
-                        for extra in extras.extra_names(root_package.optional_dependencies().keys())
-                        {
-                            if seen.insert((name, Some(extra))) {
-                                queue.push_back((name, Some(extra)));
-                            }
-                        }
-                    }
-
-                    // Add activated dependency groups for the root package
-                    for (group_name, dependencies) in root_package.resolved_dependency_groups() {
-                        if !self.includes_group(Some(root_package.name()), group_name, groups) {
-                            continue;
-                        }
-                        for dependency in dependencies {
-                            let dep_name = dependency.package_name();
-                            if seen.insert((dep_name, None)) {
-                                queue.push_back((dep_name, None));
-                            }
-                            for extra in dependency.extra() {
-                                if seen.insert((dep_name, Some(extra))) {
-                                    queue.push_back((dep_name, Some(extra)));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                while let Some((package_name, extra)) = queue.pop_front() {
-                    if lock.members().contains(package_name) {
-                        required_members.insert(package_name);
-                    }
-
-                    let Some(package) = packages.get(package_name) else {
-                        continue;
-                    };
-
-                    let Some(dependencies) = extra
-                        .map(|extra_name| {
-                            package
-                                .optional_dependencies()
-                                .get(extra_name)
-                                .map(Vec::as_slice)
-                        })
-                        .unwrap_or(Some(package.dependencies()))
-                    else {
-                        continue;
-                    };
-
-                    for dependency in dependencies {
-                        let name = dependency.package_name();
-                        if seen.insert((name, None)) {
-                            queue.push_back((name, None));
-                        }
-                        for extra in dependency.extra() {
-                            if seen.insert((name, Some(extra))) {
-                                queue.push_back((name, Some(extra)));
-                            }
-                        }
-                    }
-                }
-
-                required_members
-            }
-            Some(PackageSelection::Workspace | PackageSelection::NonProjectWorkspace) => {
-                // Return all workspace members
-                self.lock().members().iter().collect()
-            }
-            None => {
-                // Scripts don't have workspace members
-                BTreeSet::new()
-            }
-        }
     }
 }
