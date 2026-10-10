@@ -5577,3 +5577,70 @@ fn no_cache_env_override() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Explicit pip options override environment values, which override pip configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn pip_system_environment_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let baseline = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.pip_install())
+            .arg("--show-settings")
+            .arg("-r")
+            .arg("requirements.in")
+            .env_remove(EnvVars::UV_SYSTEM_PYTHON)
+    );
+
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.pip_install())
+        .arg("--show-settings")
+        .arg("-r").arg("requirements.in")
+        .env(EnvVars::UV_SYSTEM_PYTHON, "1"), @"
+    ...
+                 pyodide_install_mirror: None,
+                 python_downloads_json_url: None,
+             },
+    -        system: false,
+    +        system: true,
+             extras: ExtrasSpecification(
+                 ExtrasSpecificationInner {
+                     include: Some(
+    ...
+    ");
+
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.pip_install())
+        .arg("--show-settings")
+        .arg("-r").arg("requirements.in")
+        .env(EnvVars::UV_SYSTEM_PYTHON, "1")
+        .arg("--no-system"), @"");
+
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("[pip]\nsystem = true\n")?;
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.pip_install())
+        .arg("--show-settings")
+        .arg("-r").arg("requirements.in")
+        .env_remove(EnvVars::UV_SYSTEM_PYTHON), @"
+    ...
+                 pyodide_install_mirror: None,
+                 python_downloads_json_url: None,
+             },
+    -        system: false,
+    +        system: true,
+             extras: ExtrasSpecification(
+                 ExtrasSpecificationInner {
+                     include: Some(
+    ...
+    ");
+
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.pip_install())
+        .arg("--show-settings")
+        .arg("-r").arg("requirements.in")
+        .env(EnvVars::UV_SYSTEM_PYTHON, "0"), @"");
+
+    Ok(())
+}
