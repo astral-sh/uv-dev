@@ -205,7 +205,11 @@ impl CandidateSelector {
                 if index.is_some_and(|index| !entry.index().matches(index)) {
                     return None;
                 }
-                Either::Left(std::iter::once((entry.pin().version(), entry.source())))
+                Either::Left(std::iter::once((
+                    entry.pin().version(),
+                    entry.source(),
+                    entry.preference_id(),
+                )))
             }
             [..] => {
                 type Entries<'a> = SmallVec<[&'a Entry; 3]>;
@@ -234,9 +238,9 @@ impl CandidateSelector {
                 });
 
                 Either::Right(
-                    preferences
-                        .into_iter()
-                        .map(|entry| (entry.pin().version(), entry.source())),
+                    preferences.into_iter().map(|entry| {
+                        (entry.pin().version(), entry.source(), entry.preference_id())
+                    }),
                 )
             }
         };
@@ -255,7 +259,7 @@ impl CandidateSelector {
 
     /// Return the first preference that satisfies the current range and is allowed.
     fn get_preferred_from_iter<'a, InstalledPackages: InstalledPackagesProvider>(
-        preferences: impl Iterator<Item = (&'a Version, PreferenceSource)>,
+        preferences: impl Iterator<Item = (&'a Version, PreferenceSource, Option<usize>)>,
         package_name: &'a PackageName,
         range: &Range<Version>,
         version_maps: &'a [VersionMap],
@@ -264,7 +268,7 @@ impl CandidateSelector {
         prerelease_selection: PrereleaseSelection,
         tags: Option<&Tags>,
     ) -> Option<Candidate<'a>> {
-        for (version, source) in preferences {
+        for (version, source, preference_id) in preferences {
             // Respect the version range for this requirement.
             if !range.contains(version) {
                 continue;
@@ -300,6 +304,7 @@ impl CandidateSelector {
                                     dist,
                                 )),
                                 choice_kind: VersionChoiceKind::Preference,
+                                preference_id,
                             });
                         }
                     }
@@ -355,22 +360,23 @@ impl CandidateSelector {
                         }
                         if let Some(dist) = version_map.get(local) {
                             debug!("Preferring local version `{package_name}` (v{local})");
-                            return Some(Candidate::new(
-                                package_name,
-                                local,
-                                dist,
-                                VersionChoiceKind::Preference,
-                            ));
+                            return Some(
+                                Candidate::new(
+                                    package_name,
+                                    local,
+                                    dist,
+                                    VersionChoiceKind::Preference,
+                                )
+                                .with_preference_id(preference_id),
+                            );
                         }
                     }
                 }
 
-                return Some(Candidate::new(
-                    package_name,
-                    version,
-                    file,
-                    VersionChoiceKind::Preference,
-                ));
+                return Some(
+                    Candidate::new(package_name, version, file, VersionChoiceKind::Preference)
+                        .with_preference_id(preference_id),
+                );
             }
         }
         None
@@ -410,6 +416,7 @@ impl CandidateSelector {
                     version,
                     dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(dist)),
                     choice_kind: VersionChoiceKind::Installed,
+                    preference_id: None,
                 });
             }
             // We do not consider installed distributions with multiple versions because
@@ -950,6 +957,7 @@ pub(crate) struct Candidate<'a> {
     dist: CandidateDist<'a>,
     /// Whether this candidate was selected from a preference.
     choice_kind: VersionChoiceKind,
+    preference_id: Option<usize>,
 }
 
 impl<'a> Candidate<'a> {
@@ -964,7 +972,17 @@ impl<'a> Candidate<'a> {
             version,
             dist: CandidateDist::from(dist),
             choice_kind,
+            preference_id: None,
         }
+    }
+
+    fn with_preference_id(mut self, preference_id: Option<usize>) -> Self {
+        self.preference_id = preference_id;
+        self
+    }
+
+    pub(crate) fn preference_id(&self) -> Option<usize> {
+        self.preference_id
     }
 
     /// Return the name of the package.
