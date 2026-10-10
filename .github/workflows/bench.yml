@@ -27,6 +27,7 @@ jobs:
       - name: "Checkout Branch"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -53,7 +54,7 @@ jobs:
           cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
 
       - name: "Build benchmarks"
-        run: uv run --only-dev cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery
+        run: uv run --only-dev cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery --bench git_fetch
 
       - name: "Create artifact archive"
         run: |
@@ -80,6 +81,7 @@ jobs:
       - name: "Checkout Branch"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: "Install uv"
