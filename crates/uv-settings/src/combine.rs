@@ -20,7 +20,7 @@ use uv_redacted::DisplaySafeUrl;
 use uv_torch::TorchMode;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
-use crate::{AuditOptions, FilesystemOptions, Options, PipOptions, PreviewOption};
+use crate::{AuditOptions, FilesystemOptions, GlobalOptions, Options, PipOptions, PreviewOption};
 
 pub trait Combine {
     /// Combine two values, preferring the values in `self`.
@@ -36,6 +36,43 @@ pub trait Combine {
     /// ...with one exception: we place items with higher precedence earlier in the merged array.
     #[must_use]
     fn combine(self, other: Self) -> Self;
+}
+
+impl Combine for GlobalOptions {
+    #[expect(
+        deprecated,
+        reason = "The legacy certificate setting shares precedence with its replacement"
+    )]
+    fn combine(self, other: Self) -> Self {
+        // Either spelling selects the certificate policy for this configuration layer. Keep
+        // that layer's spellings so a lower-priority alias cannot produce a deprecation warning.
+        let (system_certs, native_tls) = if self.system_certs.is_some() || self.native_tls.is_some()
+        {
+            (self.system_certs, self.native_tls)
+        } else {
+            (other.system_certs, other.native_tls)
+        };
+        Self {
+            required_version: self.required_version.combine(other.required_version),
+            system_certs,
+            native_tls,
+            offline: self.offline.combine(other.offline),
+            no_cache: self.no_cache.combine(other.no_cache),
+            cache_dir: self.cache_dir.combine(other.cache_dir),
+            preview: self.preview.combine(other.preview),
+            python_preference: self.python_preference.combine(other.python_preference),
+            python_downloads: self.python_downloads.combine(other.python_downloads),
+            concurrent_downloads: self
+                .concurrent_downloads
+                .combine(other.concurrent_downloads),
+            concurrent_builds: self.concurrent_builds.combine(other.concurrent_builds),
+            concurrent_installs: self.concurrent_installs.combine(other.concurrent_installs),
+            http_proxy: self.http_proxy.combine(other.http_proxy),
+            https_proxy: self.https_proxy.combine(other.https_proxy),
+            no_proxy: self.no_proxy.combine(other.no_proxy),
+            allow_insecure_host: self.allow_insecure_host.combine(other.allow_insecure_host),
+        }
+    }
 }
 
 impl Combine for Option<FilesystemOptions> {

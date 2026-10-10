@@ -5577,3 +5577,186 @@ fn no_cache_env_override() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn system_certs_aliases_follow_configuration_layers() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    let user = user_dir.child("uv/uv.toml");
+    let system = system_dir.child("uv/uv.toml");
+    let project = context.temp_dir.child("uv.toml");
+    user.write_str("")?;
+    system.write_str("")?;
+    project.write_str("")?;
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.version())
+            .arg("--show-settings")
+            .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+            .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+            .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+            .env_remove(EnvVars::UV_SYSTEM_CERTS)
+            .env_remove(EnvVars::UV_NATIVE_TLS)
+    );
+    let enabled = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.version())
+            .arg("--show-settings")
+            .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+            .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+            .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+            .env_remove(EnvVars::UV_SYSTEM_CERTS)
+            .env_remove(EnvVars::UV_NATIVE_TLS)
+            .arg("--system-certs")
+    );
+    project.write_str("native-tls = false\n")?;
+    let disabled_alias = diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"
+    ...
+             malware_check_url: None,
+         },
+     }
+    +
+    +----- stderr -----
+    +warning: The `native-tls` setting is deprecated and will be removed in a future release. Use `system-certs` instead.
+    ...
+    ");
+    project.write_str("native-tls = true\n")?;
+    let enabled_alias = diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"
+    ...
+             malware_check_url: None,
+         },
+     }
+    +
+    +----- stderr -----
+    +warning: The `native-tls` setting is deprecated and will be removed in a future release. Use `system-certs` instead.
+    ...
+    ");
+    system.write_str("system-certs = true")?;
+    user.write_str("native-tls = false")?;
+    project.write_str("")?;
+    diff_uv_snapshot!(context.filters(), &disabled_alias, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"");
+
+    system.write_str("system-certs = false")?;
+    user.write_str("native-tls = true")?;
+    project.write_str("")?;
+    diff_uv_snapshot!(context.filters(), &enabled_alias, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"");
+
+    system.write_str("native-tls = true")?;
+    user.write_str("system-certs = false")?;
+    project.write_str("")?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"");
+
+    system.write_str("native-tls = false")?;
+    user.write_str("system-certs = true")?;
+    project.write_str("")?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"");
+
+    system.write_str("system-certs = false")?;
+    user.write_str("system-certs = true")?;
+    project.write_str("native-tls = false")?;
+    diff_uv_snapshot!(context.filters(), &disabled_alias, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"");
+
+    system.write_str("system-certs = true")?;
+    user.write_str("system-certs = false")?;
+    project.write_str("native-tls = true")?;
+    diff_uv_snapshot!(context.filters(), &enabled_alias, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"");
+
+    system.write_str("system-certs = true")?;
+    user.write_str("native-tls = true")?;
+    project.write_str("system-certs = false")?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"");
+
+    system.write_str("system-certs = false")?;
+    user.write_str("native-tls = false")?;
+    project.write_str("system-certs = true")?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"");
+
+    system.write_str("native-tls = true")?;
+    user.write_str("native-tls = true")?;
+    project.write_str("system-certs = false\nnative-tls = true")?;
+    diff_uv_snapshot!(context.filters(), &disabled, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"");
+
+    system.write_str("native-tls = false")?;
+    user.write_str("native-tls = false")?;
+    project.write_str("system-certs = true\nnative-tls = false")?;
+    diff_uv_snapshot!(context.filters(), &enabled, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env_remove(EnvVars::UV_SYSTEM_CERTS)
+        .env_remove(EnvVars::UV_NATIVE_TLS), @"");
+
+    Ok(())
+}
