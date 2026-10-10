@@ -24,10 +24,14 @@ mod project;
 mod reporter;
 mod script;
 mod selection_error;
+#[cfg(test)]
+mod test_utils;
 mod version_files;
 mod virtualenv_discovery;
 #[cfg(windows)]
 mod windows_registry;
+#[cfg(all(test, windows))]
+mod windows_tests;
 
 pub use project::{
     CompatibleProjectPython, ProjectPythonRequest, ProjectPythonRequirement, PythonRequestSource,
@@ -203,8 +207,7 @@ impl From<PythonEnvironmentError> for Error {
     }
 }
 
-// The mock interpreters are not valid on Windows so we don't have unit test coverage there
-// TODO(zanieb): We should write a mock interpreter script that works on Windows
+// These tests use Unix executable fixtures; Windows batch-file coverage lives in `windows_tests`.
 #[cfg(all(test, unix))]
 mod tests {
     fn parse_request(value: &str) -> PythonRequest {
@@ -244,6 +247,7 @@ mod tests {
     use crate::find_all_python_installations;
     use crate::find_python_installations;
     use crate::installation::PythonInstallation;
+    use crate::test_utils::mock_interpreter_response;
     use uv_python_interpreter::virtualenv_python_executable;
     use uv_python_managed::ManagedPythonInstallations;
     use uv_python_types::{
@@ -356,83 +360,8 @@ mod tests {
             system: bool,
             free_threaded: bool,
         ) -> Result<()> {
-            let json = indoc! {r##"
-                {
-                    "result": "success",
-                    "platform": {
-                        "os": {
-                            "name": "manylinux",
-                            "major": 2,
-                            "minor": 38
-                        },
-                        "arch": "x86_64"
-                    },
-                    "manylinux_compatible": true,
-                    "standalone": true,
-                    "markers": {
-                        "implementation_name": "{IMPLEMENTATION}",
-                        "implementation_version": "{FULL_VERSION}",
-                        "os_name": "posix",
-                        "platform_machine": "x86_64",
-                        "platform_python_implementation": "{IMPLEMENTATION}",
-                        "platform_release": "6.5.0-13-generic",
-                        "platform_system": "Linux",
-                        "platform_version": "#13-Ubuntu SMP PREEMPT_DYNAMIC Fri Nov  3 12:16:05 UTC 2023",
-                        "python_full_version": "{FULL_VERSION}",
-                        "python_version": "{VERSION}",
-                        "sys_platform": "linux"
-                    },
-                    "sys_base_exec_prefix": "/home/ferris/.pyenv/versions/{FULL_VERSION}",
-                    "sys_base_prefix": "/home/ferris/.pyenv/versions/{FULL_VERSION}",
-                    "sys_prefix": "{PREFIX}",
-                    "sys_executable": "{PATH}",
-                    "sys_path": [
-                        "/home/ferris/.pyenv/versions/{FULL_VERSION}/lib/python{VERSION}/lib/python{VERSION}",
-                        "/home/ferris/.pyenv/versions/{FULL_VERSION}/lib/python{VERSION}/site-packages"
-                    ],
-                    "site_packages": [
-                        "/home/ferris/.pyenv/versions/{FULL_VERSION}/lib/python{VERSION}/site-packages"
-                    ],
-                    "stdlib": "/home/ferris/.pyenv/versions/{FULL_VERSION}/lib/python{VERSION}",
-                    "extension_suffixes": [".cpython-{VERSION}-x86_64-linux-gnu.so", ".abi3.so", ".so"],
-                    "scheme": {
-                        "data": "/home/ferris/.pyenv/versions/{FULL_VERSION}",
-                        "include": "/home/ferris/.pyenv/versions/{FULL_VERSION}/include",
-                        "platlib": "/home/ferris/.pyenv/versions/{FULL_VERSION}/lib/python{VERSION}/site-packages",
-                        "purelib": "/home/ferris/.pyenv/versions/{FULL_VERSION}/lib/python{VERSION}/site-packages",
-                        "scripts": "/home/ferris/.pyenv/versions/{FULL_VERSION}/bin"
-                    },
-                    "virtualenv": {
-                        "data": "",
-                        "include": "include",
-                        "platlib": "lib/python{VERSION}/site-packages",
-                        "purelib": "lib/python{VERSION}/site-packages",
-                        "scripts": "bin"
-                    },
-                    "pointer_size": "64",
-                    "gil_disabled": {FREE_THREADED},
-                    "debug_enabled": false
-                }
-            "##};
-
-            let json = if system {
-                json.replace("{PREFIX}", "/home/ferris/.pyenv/versions/{FULL_VERSION}")
-            } else {
-                json.replace("{PREFIX}", "/home/ferris/projects/uv/.venv")
-            };
-
-            let json = json
-                .replace(
-                    "{PATH}",
-                    path.to_str().expect("Path can be represented as string"),
-                )
-                .replace("{FULL_VERSION}", &version.to_string())
-                .replace(
-                    "{VERSION}",
-                    &format!("{}.{}", version.major(), version.minor()),
-                )
-                .replace("{FREE_THREADED}", &free_threaded.to_string())
-                .replace("{IMPLEMENTATION}", implementation.long_name());
+            let json =
+                mock_interpreter_response(path, version, implementation, system, free_threaded);
 
             fs_err::create_dir_all(path.parent().unwrap())?;
             fs_err::write(
