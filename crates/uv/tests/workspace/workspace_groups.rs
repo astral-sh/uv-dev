@@ -2377,6 +2377,97 @@ fn workspace_groups_ordinary_python_intersection() -> Result<()> {
     Ok(())
 }
 
+/// A registry release does not replace the identity of a same-name local workspace member.
+#[test]
+fn workspace_groups_frozen_local_member_shares_registry_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("wheels").create_dir_all()?;
+    write_wheel_with_metadata(
+        &context.temp_dir.child("wheels/leaf-1.0.0-py3-none-any.whl"),
+        "leaf",
+        "1.0.0",
+        "leaf-1.0.0",
+        "",
+        &[],
+    )?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["app"]
+        requires-python = ">=3.12,<3.13"
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["app"]
+        requires-python = ">=3.13,<3.14"
+        [tool.uv.sources]
+        leaf = { workspace = true, marker = "python_version >= '3.13'" }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index", "--find-links", "wheels"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--workspace-group", "modern", "--package", "leaf",
+        "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf-dep==1.0.0
+    ");
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("app/pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("leaf/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--offline", "--frozen", "--workspace-group", "modern", "--package", "leaf",
+        "--preview-features", "frozen-lockfile", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf-dep==1.0.0
+    ");
+    Ok(())
+}
+
 #[test]
 fn workspace_groups_frozen_transitive_member() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -3910,6 +4001,476 @@ fn workspace_groups_init_does_not_build_metadata() -> Result<()> {
         .temp_dir
         .child(".venv")
         .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Removing from a modern group replaces an incompatible environment accepted by another group.
+#[test]
+fn workspace_groups_remove_selects_target_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["old"]
+        [tool.uv]
+        package = false
+
+    "#})?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    uv_snapshot!(context.filters(), context.remove().args([
+        "--package", "modern", "old", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
+        .success();
+    assert!(!context.read("modern/pyproject.toml").contains("old"));
+    Ok(())
+}
+
+/// Adding to a modern group uses the same Python context for discovery and synchronization.
+#[test]
+fn workspace_groups_add_selects_target_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+        [tool.uv]
+        package = false
+
+    "#})?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/fresh-1.0.0-py3-none-any.whl"),
+        "fresh",
+        "1.0.0",
+        "fresh-1.0.0",
+        "",
+        &[],
+    )?;
+    uv_snapshot!(context.filters(), context.add().args([
+        "--package", "modern", "fresh", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + fresh==1.0.0
+    ");
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
+        .success();
+    Ok(())
+}
+
+/// Version edits synchronize using the edited member's Python domain.
+#[test]
+fn workspace_groups_version_selects_target_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+        [tool.uv]
+        package = false
+
+    "#})?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    uv_snapshot!(context.filters(), context.version()
+        .current_dir(context.temp_dir.child("modern"))
+        .args(["0.2.0", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    modern 0.1.0 => 0.2.0
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: [VENV]/
+    Creating virtual environment at: [VENV]/
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
+        .success();
+    assert!(
+        context
+            .read("modern/pyproject.toml")
+            .contains("version = \"0.2.0\"")
+    );
+    Ok(())
+}
+
+/// A lock-only edit can use any interpreter in the combined workspace domain.
+#[test]
+fn workspace_groups_remove_no_sync_keeps_union_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["old"]
+        [tool.uv]
+        package = false
+
+    "#})?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    uv_snapshot!(context.filters(), context.remove().args([
+        "--package", "modern", "old", "--offline", "--no-sync", "--python", "3.12",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 12)")
+        .success();
+    Ok(())
+}
+
+/// Frozen tool lookup projects the selected group without changing an incompatible environment.
+#[test]
+fn workspace_groups_check_frozen_no_sync_selects_locked_tool() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+        [tool.uv]
+        package = false
+        [dependency-groups]
+        dev = ["ty==1.2.3"]
+    "#})?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let (filename, wheel) = generate_wheel_with_files(
+        &"ty".parse()?,
+        &"1.2.3".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.13".parse()?),
+        "py3-none-any",
+        &[
+            (
+                "ty/cli.py",
+                indoc! {r#"
+                import sys
+
+                def main():
+                    assert sys.version_info[:2] == (3, 13)
+                    if "--version" in sys.argv:
+                        print("ty 1.2.3")
+                    else:
+                        print("All checks passed!")
+            "#},
+            ),
+            (
+                "ty-1.2.3.dist-info/entry_points.txt",
+                "[console_scripts]\nty=ty.cli:main\n",
+            ),
+        ],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context.lock().arg("--offline").assert().success();
+    uv_snapshot!(context.filters(), context.check().args([
+        "--package", "modern", "--frozen", "--no-sync", "--offline", "--show-version",
+        "--preview-features", "check-command",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python >=3.13`)
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Installed 1 package in [TIME]
+    Using ty 1.2.3
+    ");
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 12)")
+        .success();
+    uv_test::assert_path_missing(context.site_packages().join("ty"));
+    Ok(())
+}
+
+/// Tool lookup and synchronization traverse the same selected workspace context.
+#[test]
+fn workspace_groups_check_selects_locked_tool_and_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+        [tool.uv]
+        package = false
+        [dependency-groups]
+        dev = ["ty==1.2.3"]
+    "#})?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let (filename, wheel) = generate_wheel_with_files(
+        &"ty".parse()?,
+        &"1.2.3".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.13".parse()?),
+        "py3-none-any",
+        &[
+            (
+                "ty/cli.py",
+                indoc! {r#"
+                import sys
+
+                def main():
+                    assert sys.version_info[:2] == (3, 13)
+                    if "--version" in sys.argv:
+                        print("ty 1.2.3")
+                    else:
+                        print("All checks passed!")
+            "#},
+            ),
+            (
+                "ty-1.2.3.dist-info/entry_points.txt",
+                "[console_scripts]\nty=ty.cli:main\n",
+            ),
+        ],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.check().args([
+        "--package", "modern", "--offline", "--show-version",
+        "--preview-features", "check-command",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Installed 1 package in [TIME]
+    Using ty 1.2.3
+    ");
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
+        .success();
     Ok(())
 }
 

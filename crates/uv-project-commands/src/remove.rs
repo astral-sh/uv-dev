@@ -40,6 +40,7 @@ use uv_workspace::pyproject::DependencyType;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
+use crate::lock::workspace_for_project_groups;
 
 /// Remove one or more packages from the project requirements.
 pub async fn remove(
@@ -266,7 +267,11 @@ pub async fn remove(
                 preview,
             )
             .await?;
-            let workspace = project.workspace().with_workspace_groups(&discovered)?;
+            let workspace = if no_sync {
+                project.workspace().with_workspace_groups(&discovered)?
+            } else {
+                workspace_for_project_groups(project, &[], false, &discovered)?
+            };
 
             if no_sync {
                 // Discover the interpreter.

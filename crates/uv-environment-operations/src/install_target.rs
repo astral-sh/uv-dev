@@ -11,7 +11,9 @@ use uv_configuration::{
     ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
 };
 use uv_distribution_types::{Index, RequiresPython, Resolution};
-use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
+use uv_lock::{
+    Installable, InstallableRootKind, Lock, LockError, Package, WorkspaceGroupSelectionError,
+};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{
@@ -404,6 +406,34 @@ impl<'lock> InstallTarget<'lock> {
             } => Some((name, None)),
             _ => None,
         }
+    }
+
+    /// Select the workspace context before traversing packages for installation or tool lookup.
+    pub fn select_workspace_context(
+        &self,
+    ) -> Result<Cow<'lock, Lock>, WorkspaceGroupSelectionError> {
+        let lock = self.lock();
+        if lock.workspace_groups().is_empty() {
+            return Ok(Cow::Borrowed(lock));
+        }
+        let workspace_target = match self {
+            Self::Workspace { .. } | Self::NonProjectWorkspace { .. } => true,
+            Self::Project { .. }
+            | Self::Projects { .. }
+            | Self::Lockfile { .. }
+            | Self::Script { .. } => false,
+        };
+        let members = if workspace_target
+            && let Some(group) = lock
+                .workspace_groups()
+                .iter()
+                .find(|group| group.definition.default)
+        {
+            group.definition.members.clone()
+        } else {
+            self.roots().cloned().collect()
+        };
+        Ok(Cow::Owned(lock.select_workspace_context(None, &members)?))
     }
 
     /// Use a projected lock while retaining the installation target.

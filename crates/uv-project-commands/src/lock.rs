@@ -89,6 +89,41 @@ pub(crate) fn workspace_selection_members(
     }
 }
 
+/// Select the same Python domain that synchronization uses for the command's project target.
+pub(crate) fn workspace_for_project_groups(
+    project: &VirtualProject,
+    packages: &[PackageName],
+    all_packages: bool,
+    groups: &[ResolvedWorkspaceGroup],
+) -> Result<Workspace, ProjectError> {
+    let members = workspace_selection_members(project, packages, all_packages);
+    let selection = command_workspace_group(project.workspace(), None, Some(&members), groups)?;
+    Ok(workspace_for_group_selection(
+        project.workspace(),
+        &members,
+        all_packages || (packages.is_empty() && project.is_non_project()),
+        selection.as_ref(),
+    ))
+}
+
+/// Scope a workspace to selected roots, applying a named default to whole-workspace targets.
+pub(crate) fn workspace_for_group_selection(
+    workspace: &Workspace,
+    members: &BTreeSet<PackageName>,
+    workspace_target: bool,
+    selection: Option<&CommandWorkspaceSelection>,
+) -> Workspace {
+    let Some(selection) = selection else {
+        return workspace.clone();
+    };
+    let members = if workspace_target && selection.name.is_some() {
+        &selection.members
+    } else {
+        members
+    };
+    selection.scoped_workspace(workspace, members)
+}
+
 /// Select workspace members when only a lockfile is available.
 pub(crate) fn lockfile_selection_members(
     lock: &Lock,

@@ -2734,7 +2734,8 @@ impl Lock {
             }
 
             // A single-project lockfile can omit its root from the manifest's member list.
-            let is_member = manifest.workspace_members().contains(&dist.id.name)
+            let is_member = (dist.id.source.is_source_tree()
+                && manifest.workspace_members().contains(&dist.id.name))
                 || (manifest.workspace_members().is_empty()
                     && workspace_members.is_empty()
                     && dist.id.source.is_implicit_root());

@@ -22,7 +22,7 @@ use uv_environment_operations::{
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
-use uv_lock_operations::{LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -43,6 +43,10 @@ use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
+use crate::lock::{
+    CommandWorkspaceSelection, command_workspace_group_from_lock, workspace_for_group_selection,
+    workspace_for_project_groups, workspace_selection_members,
+};
 use crate::toolchain;
 
 mod ty;
@@ -294,13 +298,41 @@ pub async fn check(
         DependencyGroupsWithDefaults::none()
     };
 
+    let mut frozen_workspace_lock =
+        if let (Some(source), Some(project)) = (frozen, project.as_ref()) {
+            Some(
+                LockTarget::Workspace(project.workspace())
+                    .read_frozen(source.into())
+                    .await
+                    .map_err(UvError::from)?,
+            )
+        } else {
+            None
+        };
+    let frozen_grouped_tool = ty_path.is_none()
+        && ty_version.is_none()
+        && frozen_workspace_lock
+            .as_ref()
+            .is_some_and(|lock| !lock.workspace_groups().is_empty());
     let state = UniversalState::default();
     let discovery_workspace = if let Some(project) = &project {
         let workspace = project.workspace();
-        Some(if frozen.is_some() {
-            workspace.with_provisional_workspace_groups(
-                &workspace.workspace_groups_with_sources(&settings.resolver.sources)?,
-            )?
+        Some(if let Some(lock) = frozen_workspace_lock.as_ref() {
+            let members = workspace_selection_members(project, &package, all_packages);
+            let mut selection = command_workspace_group_from_lock(lock, None, Some(&members))?;
+            let scoped = workspace_for_group_selection(
+                workspace,
+                &members,
+                all_packages || (package.is_empty() && project.is_non_project()),
+                selection.as_ref(),
+            );
+            if let Some(selected) = selection
+                .as_mut()
+                .and_then(CommandWorkspaceSelection::take_selected_lock)
+            {
+                frozen_workspace_lock = Some(selected);
+            }
+            scoped
         } else {
             let install_options = InstallOptions::new(
                 no_install_project,
@@ -319,7 +351,10 @@ pub async fn check(
                 project.project_name(),
                 &install_options,
             );
-            workspace.with_workspace_groups(
+            workspace_for_project_groups(
+                project,
+                &package,
+                all_packages,
                 &discover_workspace_groups(
                     workspace,
                     project_dir,
@@ -580,9 +615,10 @@ pub async fn check(
             .into_environment()?
         };
 
-        // `--no-sync` intentionally permits an incompatible project environment, but locking must
-        // still use an interpreter that satisfies the project and any explicit Python request.
-        let lock_interpreter = if no_sync && !isolated && frozen.is_none() {
+        // `--no-sync` permits an incompatible project environment. Locking and grouped frozen tool
+        // lookup still need an interpreter in the selected context to evaluate dependency markers.
+        let lock_interpreter = if no_sync && !isolated && (frozen.is_none() || frozen_grouped_tool)
+        {
             let project_python = ProjectPythonRequest::from_request(
                 python.as_deref().map(PythonRequest::parse),
                 Some(workspace),
@@ -639,33 +675,40 @@ pub async fn check(
         };
 
         let selection = PackageSelection::from_args(all_packages, &package, project.project_name());
-        let result = match Box::pin(
-            LockOperation::new(
-                mode,
-                &settings.resolver,
-                &client_builder,
-                &state,
-                Box::new(SummaryResolveLogger),
-                &concurrency,
-                cache,
-                workspace_cache,
-                printer,
-                preview,
+        let result = if let Some(lock) = frozen_workspace_lock.take() {
+            LockResult::Unchanged(lock)
+        } else {
+            match Box::pin(
+                LockOperation::new(
+                    mode,
+                    &settings.resolver,
+                    &client_builder,
+                    &state,
+                    Box::new(SummaryResolveLogger),
+                    &concurrency,
+                    cache,
+                    workspace_cache,
+                    printer,
+                    preview,
+                )
+                .with_first_party_exclusions(selection.first_party_exclusions(
+                    project.workspace(),
+                    project.project_name(),
+                    &install_options,
+                ))
+                .execute(project.workspace().into()),
             )
-            .with_first_party_exclusions(selection.first_party_exclusions(
-                project.workspace(),
-                project.project_name(),
-                &install_options,
-            ))
-            .execute(project.workspace().into()),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(err) => return Err(UvError::from(err).into()),
+            .await
+            {
+                Ok(result) => result,
+                Err(err) => return Err(UvError::from(err).into()),
+            }
         };
 
         let target = InstallTarget::from_project(project, result.lock(), selection);
+        let selected_lock = target.select_workspace_context()?;
+        let lock = selected_lock.as_ref();
+        let target = InstallTarget::from_project(project, lock, selection);
 
         target.validate_extras(&extras)?;
         target.validate_groups(&groups)?;
@@ -674,7 +717,7 @@ pub async fn check(
             && ty_version.is_none()
             && let Some(tool) = toolchain::find_locked_tool(
                 project,
-                result.lock(),
+                lock,
                 lock_interpreter,
                 &PackageName::from_str("ty")?,
                 &DEV_DEPENDENCIES,
@@ -693,7 +736,7 @@ pub async fn check(
                     CachedEnvironment::base_interpreter(lock_interpreter, cache)?;
                 let resolution = toolchain::resolution_from_lock(
                     project,
-                    result.lock(),
+                    lock,
                     &tool,
                     &base_interpreter,
                     &settings.resolver.build_options,
@@ -702,9 +745,7 @@ pub async fn check(
                 let ty_state = state.fork();
                 let environment = match CachedEnvironment::from_locked_resolution(
                     &resolution,
-                    result
-                        .lock()
-                        .build_constraints(project.workspace().install_path()),
+                    lock.build_constraints(project.workspace().install_path()),
                     &base_interpreter,
                     &settings,
                     &malware_settings,

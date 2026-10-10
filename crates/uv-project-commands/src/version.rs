@@ -43,6 +43,7 @@ use uv_workspace::{
 
 use crate::ProjectError;
 use crate::edit::{ProjectEdit, PythonTarget};
+use crate::lock::workspace_for_project_groups;
 
 /// Version information for a project (`uv version`).
 #[derive(serde::Serialize)]
@@ -554,7 +555,11 @@ async fn lock_and_sync(
         preview,
     )
     .await?;
-    let workspace = project.workspace().with_workspace_groups(&discovered)?;
+    let workspace = if no_sync {
+        project.workspace().with_workspace_groups(&discovered)?
+    } else {
+        workspace_for_project_groups(&project, &[], false, &discovered)?
+    };
 
     // Discover the interpreter or environment used to lock and sync the project.
     let python_target = if no_sync {

@@ -56,33 +56,8 @@ pub async fn sync_from_lock(
     preview: Preview,
     malware_context: MalwareCheckContext<'_>,
 ) -> Result<Changelog, EnvironmentError> {
-    // Commands that edit a project also sync through this entry point. A grouped lock
-    // must be projected before any installation graph is traversed.
-    let selected_lock;
-    let target = if target.lock().workspace_groups().is_empty() {
-        target
-    } else {
-        let workspace_target = match target {
-            InstallTarget::Workspace { .. } | InstallTarget::NonProjectWorkspace { .. } => true,
-            InstallTarget::Project { .. }
-            | InstallTarget::Projects { .. }
-            | InstallTarget::Lockfile { .. }
-            | InstallTarget::Script { .. } => false,
-        };
-        let members = if workspace_target
-            && let Some(group) = target
-                .lock()
-                .workspace_groups()
-                .iter()
-                .find(|group| group.definition.default)
-        {
-            group.definition.members.clone()
-        } else {
-            target.roots().cloned().collect()
-        };
-        selected_lock = target.lock().select_workspace_context(None, &members)?;
-        target.with_lock(&selected_lock)
-    };
+    let selected_lock = target.select_workspace_context()?;
+    let target = target.with_lock(&selected_lock);
 
     // Extract the project settings.
     let InstallerSettingsRef {

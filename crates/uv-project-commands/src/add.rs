@@ -65,6 +65,7 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 use crate::ProjectError;
 use crate::ScriptPath;
 use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
+use crate::lock::workspace_for_project_groups;
 use uv_resolve_operations::reporters::ResolverReporter;
 
 /// A failed dependency addition, with `uv add`-specific recovery context.
@@ -846,7 +847,11 @@ pub async fn add(
             preview,
         )
         .await?;
-        let workspace = project.workspace().with_workspace_groups(&discovered)?;
+        let workspace = if no_sync {
+            project.workspace().with_workspace_groups(&discovered)?
+        } else {
+            workspace_for_project_groups(project, &[], false, &discovered)?
+        };
         Some(if no_sync {
             let project_python = ProjectPythonRequest::from_request(
                 python.as_deref().map(PythonRequest::parse),
