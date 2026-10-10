@@ -4,13 +4,17 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use itertools::Itertools;
 use tracing::info_span;
 
 use uv_client::BaseClientBuilder;
-use uv_configuration::{BuildOptions, HashCheckingMode, RequirementsInput, TargetTriple};
+use uv_configuration::{
+    BuildOptions, DependencyGroups, ExtrasSpecification, HashCheckingMode, RequirementsInput,
+    TargetTriple,
+};
 use uv_distribution_types::{RequiresPython, Resolution};
 use uv_lock::{PylockToml, PylockTomlError};
-use uv_normalize::{ExtraName, GroupName};
+use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName};
 use uv_pep440::Version;
 use uv_platform_tags::TagsError;
 use uv_python_interpreter::Interpreter;
@@ -132,4 +136,29 @@ pub(crate) fn resolve_pylock_toml(
     };
 
     Ok((resolution, hasher))
+}
+
+/// Select the extras and groups activated when installing a `pylock.toml`.
+pub(crate) fn select_extras_and_groups(
+    lock: &PylockToml,
+    extras: &ExtrasSpecification,
+    groups: &DependencyGroups,
+) -> (Vec<ExtraName>, Vec<GroupName>) {
+    let extras = extras.with_defaults(DefaultExtras::default());
+    let extras = extras.extra_names(lock.extras.iter()).cloned().collect();
+
+    let groups = groups.with_defaults(DefaultGroups::from_groups(lock.default_groups.clone()));
+    let groups = groups
+        .group_names(lock.dependency_groups.iter())
+        // PEP 751 allows synthetic default groups that aren't publicly selectable.
+        .chain(
+            lock.default_groups
+                .iter()
+                .filter(|group| groups.contains_because_default(group)),
+        )
+        .unique()
+        .cloned()
+        .collect();
+
+    (extras, groups)
 }
