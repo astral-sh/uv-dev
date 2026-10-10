@@ -30289,6 +30289,234 @@ fn lock_python_upper_bound() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_environment_implied_by_requires_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.9"
+
+        [tool.uv]
+        environments = ["python_version >= '3.9'"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    assert_snapshot!(lock, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.9"
+    supported-markers = [
+        "python_version >= '0'",
+    ]
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    "#);
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_environment_unconditional() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.9"
+
+        [tool.uv]
+        environments = ["python_version >= '0'"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    assert_snapshot!(lock, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.9"
+    supported-markers = [
+        "python_version >= '0'",
+    ]
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    "#);
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_implied_by_requires_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.9"
+
+        [tool.uv]
+        required-environments = ["python_version >= '3.9'"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    assert_snapshot!(lock, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.9"
+    required-markers = [
+        "python_version >= '0'",
+    ]
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    "#);
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_unconditional() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.9"
+
+        [tool.uv]
+        required-environments = ["python_version >= '0'"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    assert_snapshot!(lock, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.9"
+    required-markers = [
+        "python_version >= '0'",
+    ]
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    "#);
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+
+    Ok(())
+}
+
 /// See: <https://github.com/astral-sh/uv/issues/7876>
 #[cfg(feature = "test-universal")]
 #[test]
