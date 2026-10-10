@@ -887,6 +887,7 @@ async fn do_lock(
                         &overrides,
                         &excludes,
                         dependency_metadata,
+                        index_locations,
                         &database,
                     )
                     .await?,
