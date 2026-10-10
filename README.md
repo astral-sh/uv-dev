@@ -10,7 +10,7 @@ The reporter cannot update uv through Scoop because ESET Internet Security block
 
 Affected URL: https://github.com/astral-sh/uv/releases/download/0.13.0/uv-x86_64-pc-windows-msvc.zip
 
-Related vendor-support guidance and antivirus reports exist, but no exact ESET URL-blacklist duplicate was found. Windows signing predates the affected release. Independent reproduction needs more information about the Windows/ESET setup and access to that environment; the available Linux runner cannot exercise ESET Internet Security’s URL filtering.
+Related vendor-support guidance and antivirus reports exist, but no exact ESET URL-blacklist duplicate was found. Windows signing predates the affected release. Independent reproduction needs more information about the Windows/ESET setup and access to that environment; the available Linux runner cannot exercise ESET Internet Security’s URL filtering. Maintainer zanieb has directed the reporter to astral-sh/uv#20792; the comment supplies no new reproduction details or diagnosis.
 
 ## Reproduction
 
@@ -64,14 +64,15 @@ No existing issue was found tracking this specific ESET URL block. The broad AV/
 
 ## Related
 
-- astral-sh/uv#20792 — Windows antivirus/EDR issues (open). Maintainer guidance for antivirus interference recommends contacting the vendor and sharing its support ticket ID. The August 4 clarification treats new vendors or failure modes separately; this thread does not establish the cause of ESET's URL blacklist.
+- astral-sh/uv#20792 — Windows antivirus/EDR issues (open). Explicitly referenced by maintainer zanieb in astral-sh/uv#22456 on October 10, 2026. Maintainer guidance for antivirus interference recommends contacting the vendor and sharing its support ticket ID. The August 4 clarification treats new vendors or failure modes separately; this thread does not establish the cause of ESET's URL blacklist.
 - astral-sh/uv#10079 — Antivirus detects `uv` installer as malicious on Windows (closed). Reports a BitDefender installer block and includes a September 2026 ESET report. That ESET comment concerns CI execution and hidden-file activity, whereas the new report concerns a release URL blocked during download. Maintainer advice is to submit the detection to the antivirus vendor.
 - astral-sh/uv#21336 — Uv 0.12.7 and 0.12.6 removed by netskope (closed). Another vendor prevented installation of specific uv releases. Maintainers directed the reporter to vendor support and astral-sh/uv#20792, noting that signatures cannot prevent all false positives. Different vendor and older releases; no evidence of the same ESET blacklist.
 - astral-sh/uv#10336 — Sign published executables for Windows (closed). Windows signing shipped in uv 0.12.12 on September 9, 2026, before the affected 0.13.0 release. This establishes the mitigation's status, not a fix for ESET URL blocking or evidence that signing has regressed.
 
 ## Supporting evidence
 
-- The issue was opened on October 10, 2026, with no comments or labels at inspection. Its log names ESET's PUA blacklist and the exact GitHub release URL. It reports a Scoop update, not an invocation of uv's self-update command.
+- The issue was opened on October 10, 2026. Its log names ESET's PUA blacklist and the exact GitHub release URL. It reports a Scoop update, not an invocation of uv's self-update command.
+- In astral-sh/uv#22456, maintainer zanieb's October 10, 2026 comment at 14:59:26 UTC (comment ID 6098820785) directs the reporter to astral-sh/uv#20792. This confirms the relevance of the existing AV/EDR guidance to this report, but does not explicitly classify it as a duplicate, confirm a false positive, or provide a fix.
 - In astral-sh/uv#20792, woodruffw's August 4, 2026 clarification describes the tracker as a place to aggregate vendor support IDs and says new vendors or failure modes should receive separate triage. The same thread's September 9 comment by zanieb confirms signing since uv 0.12.12 and explicitly says this will not immediately resolve antivirus false positives.
 - In astral-sh/uv#10079, zanieb's December 21, 2024 comment recommends submitting the software to the antivirus vendor. The September 9, 2026 ESET comment is a user's report about hidden-file activity in CI; it does not diagnose the new release URL block.
 - In astral-sh/uv#21336, woodruffw directs the Netskope reporter to the AV/EDR guidance and vendor support, explaining that false positives can occur despite signatures. That issue has question and external labels.
