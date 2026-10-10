@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_command_support::command_header::{HeaderArgument, format_command_header};
 use uv_command_support::{ExitStatus, OutputWriter, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, EditableMode,
@@ -731,64 +732,13 @@ async fn render_export<'output>(
 
 /// Format the uv command used to generate the output file.
 fn cmd() -> String {
-    let args = env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().to_string())
-        .scan(None, move |skip_next, arg| {
-            if matches!(skip_next, Some(true)) {
-                // Reset state; skip this iteration.
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--upgrade` flag.
-            if arg == "--upgrade" || arg == "-U" {
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--upgrade-package` and mark the next item to be skipped
-            if arg == "--upgrade-package" || arg == "-P" {
-                *skip_next = Some(true);
-                return Some(None);
-            }
-
-            // Skip only this argument if option and value are together
-            if arg.starts_with("--upgrade-package=") || arg.starts_with("-P") {
-                // Reset state; skip this iteration.
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--upgrade-group` and mark the next item to be skipped
-            if arg == "--upgrade-group" {
-                *skip_next = Some(true);
-                return Some(None);
-            }
-
-            // Skip only this argument if option and value are together
-            if arg.starts_with("--upgrade-group=") {
-                // Reset state; skip this iteration.
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--quiet` flag.
-            if arg == "--quiet" || arg == "-q" {
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--verbose` flag.
-            if arg == "--verbose" || arg == "-v" {
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Return the argument.
-            Some(Some(arg))
-        })
-        .flatten()
-        .join(" ");
-    format!("uv {args}")
+    format_command_header(env::args_os(), |arg| {
+        if arg == "--upgrade-group" {
+            HeaderArgument::OmitWithValue
+        } else if arg.starts_with("--upgrade-group=") {
+            HeaderArgument::Omit
+        } else {
+            HeaderArgument::Keep
+        }
+    })
 }
