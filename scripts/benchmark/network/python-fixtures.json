@@ -1,0 +1,9 @@
+[
+  {
+    "kind": "raw",
+    "filename": "cpython-3.12.12-20260211-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260211/cpython-3.12.12%2B20260211-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "1dbaa624a09e15afe7efbdac08d42993135a68db8d34f986ef6977a6d77bdc3c",
+    "size": 33887801
+  }
+]
