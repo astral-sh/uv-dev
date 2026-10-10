@@ -8290,6 +8290,132 @@ fn run_pep723_shared_mode_replaces_normal_installations() -> Result<()> {
     Ok(())
 }
 
+/// Upgrade bounds constrain shared resolution while equivalent resolutions reuse the same base.
+#[test]
+fn run_pep723_shared_upgrade_package_constraints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (first_name, first) = generate_wheel_with_files(
+        &"shared-upgrade".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(first_name).write_binary(&first)?;
+    let (second_name, second) = generate_wheel_with_files(
+        &"shared-upgrade".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(second_name).write_binary(&second)?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-upgrade"]
+        # ///
+        from importlib.metadata import distribution
+        from pathlib import Path
+        dist = distribution("shared-upgrade")
+        base = next(parent for parent in Path(dist.locate_file("")).parents if parent.joinpath("pyvenv.cfg").is_file())
+        Path("shared-base").write_text(base.as_posix())
+        print(dist.version)
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-upgrade==2.0.0
+    ");
+    let latest_base = context.read("shared-base");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "--upgrade-package", "shared-upgrade<2", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-upgrade==1.0.0
+    ");
+    let constrained_base = context.read("shared-base");
+    assert_ne!(constrained_base, latest_base);
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "--upgrade-package", "shared-upgrade<=1", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(context.read("shared-base"), constrained_base);
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "--upgrade-package", "unrelated-package<2", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(context.read("shared-base"), latest_base);
+    Ok(())
+}
+
+/// A conflicting upgrade bound must fail before an unlocked shared script executes.
+#[test]
+fn run_pep723_shared_upgrade_package_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"shared-upgrade".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-upgrade>=2"]
+        # ///
+        from pathlib import Path
+        Path("ran").touch()
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "--upgrade-package", "shared-upgrade<2", "script.py"]), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving script dependencies
+      cause: Because you require shared-upgrade>=2 and shared-upgrade<2, we can conclude that your requirements are unsatisfiable.
+    ");
+    context
+        .temp_dir
+        .child("ran")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
 /// Reinstallation replaces a shared base without mutating another script's environment.
 #[test]
 fn run_pep723_shared_reinstall_replaces_base() -> Result<()> {
@@ -9668,10 +9794,6 @@ fn run_pep723_shared_entrypoints_with_spaces() -> Result<()> {
         from pathlib import Path
         import subprocess
         import sysconfig
-        import sys
-        Path("script-python").write_text(sys.executable)
-        Path("entrypoint-path").write_text(str(Path(sysconfig.get_path("scripts")) / "uv-shared-command"))
-        Path("manifest-path").write_text(str(Path(sys.prefix) / ".uv-shared-entrypoints.json"))
         Path(sysconfig.get_path("purelib"), "overlay_value.py").write_text("VALUE = 'overlay'\n")
         subprocess.run([str(Path(sysconfig.get_path("scripts")) / "uv-shared-command")], check=True)
         subprocess.run(["uv-shared-command"], check=True)
@@ -9689,23 +9811,6 @@ fn run_pep723_shared_entrypoints_with_spaces() -> Result<()> {
     Installed 1 package in [TIME]
      + shared-cli==1.0.0
     ");
-    // Legacy manifests contain launchers whose absolute shebang cannot address a spaced path.
-    let entrypoint = context.read("entrypoint-path");
-    let launcher = context.read(&entrypoint);
-    let (_, body) = launcher
-        .split_once("\n' '''\n")
-        .context("Expected a shell wrapper")?;
-    fs_err::write(
-        &entrypoint,
-        format!("#!{}\n{body}", context.read("script-python")),
-    )?;
-    let manifest_path = context.read("manifest-path");
-    let mut manifest: serde_json::Value = serde_json::from_str(&context.read(&manifest_path))?;
-    manifest
-        .as_object_mut()
-        .context("Expected a manifest object")?
-        .remove("version");
-    fs_err::write(manifest_path, serde_json::to_vec(&manifest)?)?;
     uv_snapshot!(context.filters(), context.run()
         .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
     exit_code: 0 (success)

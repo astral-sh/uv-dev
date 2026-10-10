@@ -390,7 +390,7 @@ pub async fn run(
                 .unwrap_or_default();
 
             // Install the script requirements, if necessary. Otherwise, use an isolated environment.
-            if let Some(spec) = script_specification(
+            if let Some(mut spec) = script_specification(
                 (&script).into(),
                 &settings.resolver.sources,
                 &settings.resolver.index_locations,
@@ -444,6 +444,16 @@ pub async fn run(
                     .ok();
 
                 if environment_mode == ScriptEnvironmentMode::Shared {
+                    // Cached environments resolve without installed preferences, but package
+                    // upgrade bounds still constrain the script's dependencies.
+                    spec.constraints.extend(
+                        settings
+                            .resolver
+                            .upgrade
+                            .constraints()
+                            .cloned()
+                            .map(NameRequirementSpecification::from),
+                    );
                     let result = CachedEnvironment::from_spec(
                         spec.into(),
                         unlocked_build_constraints.clone(),
@@ -2175,17 +2185,11 @@ fn copy_environment_entrypoints(
     Ok(copied)
 }
 
-const SHARED_ENVIRONMENT_FILES_VERSION: u8 = 1;
-
 #[derive(PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct SharedEnvironmentFiles {
-    #[serde(default)]
-    version: u8,
     source: PathBuf,
     names: Vec<PathBuf>,
-    #[serde(default)]
-    data: Option<BTreeMap<PathBuf, String>>,
-    #[serde(default)]
+    data: BTreeMap<PathBuf, String>,
     owned_data: BTreeSet<PathBuf>,
 }
 
@@ -2203,7 +2207,7 @@ impl SharedEnvironmentFiles {
                 bail!("Invalid shared entrypoint name: {}", name.display());
             }
         }
-        for relative in manifest.data.iter().flat_map(BTreeMap::keys) {
+        for relative in manifest.data.keys() {
             if !relative.components().all(|component| match component {
                 Component::Normal(_) => true,
                 Component::Prefix(_)
@@ -2256,10 +2260,6 @@ fn sync_shared_environment_files(
     let source_changed = previous
         .as_ref()
         .is_none_or(|previous| previous.source != shared.sys_prefix());
-    let entrypoints_changed = source_changed
-        || previous
-            .as_ref()
-            .is_none_or(|previous| previous.version != SHARED_ENVIRONMENT_FILES_VERSION);
     let owned_files = installed_environment_files(environment)?;
     let owned_data = owned_files
         .iter()
@@ -2277,7 +2277,7 @@ fn sync_shared_environment_files(
         if owned_files.contains(normalize_path(&path).as_ref()) {
             continue;
         }
-        if entrypoints_changed {
+        if source_changed {
             match fs_err::remove_file(&path) {
                 Ok(()) => {}
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -2294,31 +2294,24 @@ fn sync_shared_environment_files(
     )?);
     retained.sort();
     retained.dedup();
-    let data = if !source_changed
-        && previous
-            .as_ref()
-            .is_some_and(|previous| previous.owned_data == owned_data)
-        && let Some(data) = previous
-            .as_ref()
-            .and_then(|previous| previous.data.as_ref())
-        && shared_data_is_present(environment.root(), data)?
+    let data = if let Some(previous) = previous.as_ref()
+        && !source_changed
+        && previous.owned_data == owned_data
+        && shared_data_is_present(environment.root(), &previous.data)?
     {
-        data.clone()
+        previous.data.clone()
     } else {
         sync_shared_data(
             environment,
             shared,
-            previous
-                .as_ref()
-                .and_then(|previous| previous.data.as_ref()),
+            previous.as_ref().map(|previous| &previous.data),
             &owned_files,
         )?
     };
     let copied = SharedEnvironmentFiles {
-        version: SHARED_ENVIRONMENT_FILES_VERSION,
         source: shared.sys_prefix().to_path_buf(),
         names: retained,
-        data: Some(data),
+        data,
         owned_data,
     };
     if previous.as_ref() != Some(&copied) {
