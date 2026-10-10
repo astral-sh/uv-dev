@@ -258,6 +258,101 @@ async fn python_pin_downloads_metadata_once_for_multiple_pins() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn python_pin_rejects_incompatible_version_before_download_discovery() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#,
+    )?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.python_pin()
+        .arg("3.10")
+        .arg("--python-downloads-json-url")
+        .arg(server.uri())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The requested Python version `3.10` is incompatible with the project `requires-python` value of `>=3.12`.
+    ");
+
+    uv_snapshot!(context.filters(), context.python_pin()
+        .arg("3.10")
+        .arg("--python-downloads-json-url")
+        .arg(server.uri())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic")
+        .arg("--resolved"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The requested Python version `3.10` is incompatible with the project `requires-python` value of `>=3.12`.
+    ");
+    assert!(!context.temp_dir.child(PYTHON_VERSION_FILENAME).exists());
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn python_pin_reuses_workspace_requirement_for_multiple_pins() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [tool.uv.workspace]
+        members = ["a", "b"]
+        "#,
+    )?;
+    context.temp_dir.child("a/pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "a"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        "#,
+    )?;
+    context.temp_dir.child("b/pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "b"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        "#,
+    )?;
+    context
+        .temp_dir
+        .child(PYTHON_VERSION_FILENAME)
+        .write_str("3.11\n3.12\n")?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.python_pin()
+        .arg("--python-downloads-json-url")
+        .arg(server.uri())
+        .env(EnvVars::RUST_LOG, "uv_python_commands::pin=debug"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.11
+    3.12
+
+    ----- stderr -----
+    DEBUG Discovered virtual workspace at: [TEMP_DIR]/
+    DEBUG The pinned Python version `Python 3.11` resolves to `3.11.[X]`
+    DEBUG The pinned Python version `Python 3.12` resolves to `3.12.[X]`
+    ");
+    Ok(())
+}
+
 // If there is no project-level `.python-version` file, respect the global pin.
 #[test]
 fn python_pin_global_if_no_local() -> Result<()> {
