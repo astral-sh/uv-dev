@@ -1,0 +1,185 @@
+name: Native signature verifier shape experiment
+"on":
+  push:
+    branches:
+      - zb/ci-native-verifier-shape-20260909
+permissions:
+  contents: read
+  actions: read
+env:
+  ACTIONS_CACHE_MODE: none
+  UV_LOCKED: "1"
+  AZURE_CORE_OUTPUT: none
+jobs:
+  macos:
+    name: macos / ${{ matrix.platform.target }} / ${{ matrix.shape.id }} / ${{ matrix.replica }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        replica:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+        shape:
+          - id: 12x28
+            runner: namespace-profile-macos-15
+          - id: 4x7
+            runner: namespace-profile-uv-ci-macos-15-4x7
+        platform:
+          - target: aarch64-apple-darwin
+            python-architecture: arm64
+          - target: x86_64-apple-darwin
+            python-architecture: x64
+    runs-on: ${{ matrix.shape.runner }}
+    permissions:
+      contents: read
+      actions: read
+    env:
+      TARGET: ${{ matrix.platform.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: c4be691531385fd7563e2a29d9bfa2e19b4c2025
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          cache: ""
+          python-version: "3.13"
+          architecture: ${{ matrix.platform.python-architecture }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.10
+          checksum: 51c6170e8e3a01cef9f33b94f582b7b81ac65046f55d40afb35f9cff5a68c179
+          enable-cache: false
+      - name: Download signed executables
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: "10114286136"
+          path: signed
+          merge-multiple: true
+          repository: astral-sh/uv
+          run-id: 34373205953
+          github-token: ${{ github.token }}
+      - name: Download signed wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: "10114389705"
+          path: wheels
+          merge-multiple: true
+          repository: astral-sh/uv
+          run-id: 34373205953
+          github-token: ${{ github.token }}
+      - name: Verify packaged executables and signatures
+        run: uv run scripts/verify-release-wheels-macos.py "./signed/$TARGET" "./wheels/$TARGET"
+      - name: Download signed GitHub release archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: "10114395311"
+          path: github-archives
+          merge-multiple: true
+          repository: astral-sh/uv
+          run-id: 34373205953
+          github-token: ${{ github.token }}
+      - name: Verify GitHub release archive
+        run: uv run scripts/verify-github-release-macos.py "./signed/$TARGET" "./github-archives/uv-$TARGET.tar.gz"
+      - name: Install and run the signed wheels
+        run: ./scripts/test-release-wheels-macos.sh "./wheels/$TARGET"
+    timeout-minutes: 15
+  windows:
+    name: windows / ${{ matrix.platform.target }} / ${{ matrix.shape.id }} / ${{ matrix.replica }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        replica:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+        shape:
+          - id: 16x32
+            runner: namespace-profile-windows-2022-x86-64-16x32
+          - id: 4x8
+            runner: namespace-profile-uv-ci-windows-2022-4x8
+        platform:
+          - target: x86_64-pc-windows-msvc
+            python-architecture: x64
+          - target: i686-pc-windows-msvc
+            python-architecture: x86
+    runs-on: ${{ matrix.shape.runner }}
+    permissions:
+      contents: read
+      actions: read
+    env:
+      TARGET: ${{ matrix.platform.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: c4be691531385fd7563e2a29d9bfa2e19b4c2025
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          cache: ""
+          python-version: "3.13"
+          architecture: ${{ matrix.platform.python-architecture }}
+      - name: Install uv on Windows x64
+        if: ${{ runner.arch == 'X64' }}
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.10
+          checksum: f65744f94072152b1f86ba2aace4d01f1124d9a8ecb235805039e3718c36cac2
+          enable-cache: false
+      - name: Install uv on Windows ARM64
+        if: ${{ runner.arch == 'ARM64' }}
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.10
+          checksum: ee985c51c0c9c1f82267a5d80f959b34a7ff888c109182bd3b2b35c4661bbcde
+          enable-cache: false
+      - name: Download signed executables
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: "10114307180"
+          path: signed
+          merge-multiple: true
+          repository: astral-sh/uv
+          run-id: 34373205953
+          github-token: ${{ github.token }}
+      - name: Download signed wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: "10114391042"
+          path: wheels
+          merge-multiple: true
+          repository: astral-sh/uv
+          run-id: 34373205953
+          github-token: ${{ github.token }}
+      - name: Verify packaged executables and signatures
+        shell: pwsh
+        run: ./scripts/verify-release-wheels-windows.ps1 "./signed/$env:TARGET" "./wheels/$env:TARGET"
+      - name: Download signed GitHub release archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: "10114395311"
+          path: github-archives
+          merge-multiple: true
+          repository: astral-sh/uv
+          run-id: 34373205953
+          github-token: ${{ github.token }}
+      - name: Verify GitHub release archive
+        shell: pwsh
+        run: ./scripts/verify-github-release-windows.ps1 "./signed/$env:TARGET" "./github-archives/uv-${env:TARGET}.zip"
+      - name: Install and run the signed wheels
+        shell: pwsh
+        run: ./scripts/test-release-wheels-windows.ps1 "./wheels/$env:TARGET"
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
