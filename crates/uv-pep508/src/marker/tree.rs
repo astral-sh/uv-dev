@@ -1050,67 +1050,24 @@ impl MarkerTree {
         extras: ExtrasEnvironment,
         reporter: &mut impl Reporter,
     ) -> bool {
+        if !self.is_true()
+            && !self.is_false()
+            && let Some(child) = INTERNER
+                .shared
+                .node(self.0)
+                .environment_child(self.0, env, reporter)
+        {
+            return Self(child).evaluate_reporter_impl(env, extras, reporter);
+        }
+
         match self.kind() {
             MarkerTreeKind::True => return true,
             MarkerTreeKind::False => return false,
-            MarkerTreeKind::Version(marker) => {
-                for (range, tree) in marker.edges() {
-                    if range.contains(env.get_version(marker.key())) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
-                }
-            }
-            MarkerTreeKind::String(marker) => {
-                for (range, tree) in marker.children() {
-                    let l_string = env.get_string(marker.key());
-
-                    if matches!(
-                        marker.key(),
-                        CanonicalMarkerValueString::PlatformRelease
-                            | CanonicalMarkerValueString::PlatformVersion
-                    ) && range.as_singleton().is_none()
-                        && let Some((start, end)) = range.bounding_range()
-                    {
-                        if let Bound::Included(value) | Bound::Excluded(value) = start {
-                            reporter.report(
-                                MarkerWarningKind::LexicographicComparison,
-                                format!("Comparing {l_string} and {value} lexicographically"),
-                            );
-                        }
-
-                        if let Bound::Included(value) | Bound::Excluded(value) = end {
-                            reporter.report(
-                                MarkerWarningKind::LexicographicComparison,
-                                format!("Comparing {l_string} and {value} lexicographically"),
-                            );
-                        }
-                    }
-
-                    if range.contains(l_string) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
-                }
-            }
-            MarkerTreeKind::VersionString(marker) => {
-                let Ok(version) = env.get_string(marker.key()).parse::<Version>() else {
-                    return false;
-                };
-                for (range, tree) in marker.edges() {
-                    if range.contains(&version) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
-                }
-            }
-            MarkerTreeKind::In(marker) => {
-                return marker
-                    .edge(marker.value().contains(env.get_string(marker.key())))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
-            MarkerTreeKind::Contains(marker) => {
-                return marker
-                    .edge(env.get_string(marker.key()).contains(marker.value()))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
+            MarkerTreeKind::Version(_)
+            | MarkerTreeKind::String(_)
+            | MarkerTreeKind::VersionString(_)
+            | MarkerTreeKind::In(_)
+            | MarkerTreeKind::Contains(_) => {}
             MarkerTreeKind::Extra(marker) => {
                 return marker
                     .edge(extras.extra().contains(marker.name().extra()))
@@ -1402,6 +1359,15 @@ impl MarkerTree {
         Self(INTERNER.lock().only_extras(self.0))
     }
 
+    /// Returns a new [`MarkerTree`] with all environment expressions evaluated for `env`, while
+    /// preserving `extra` expressions.
+    ///
+    /// PEP 751 `extras` and `dependency_groups` expressions are evaluated as empty lists.
+    #[must_use]
+    pub fn only_extras_for_environment(self, env: &MarkerEnvironment) -> Self {
+        Self(INTERNER.lock().only_extras_for_environment(self.0, env))
+    }
+
     /// Calls the provided function on every `extra` in this tree.
     ///
     /// The operator provided to the function is guaranteed to be
@@ -1617,15 +1583,6 @@ impl InMarkerTree<'_> {
     pub fn children(&self) -> impl Iterator<Item = (bool, MarkerTree)> {
         [(true, MarkerTree(self.high)), (false, MarkerTree(self.low))].into_iter()
     }
-
-    /// Returns the subtree associated with the given edge value.
-    fn edge(&self, value: bool) -> MarkerTree {
-        if value {
-            MarkerTree(self.high)
-        } else {
-            MarkerTree(self.low)
-        }
-    }
 }
 
 impl PartialOrd for InMarkerTree<'_> {
@@ -1666,15 +1623,6 @@ impl ContainsMarkerTree<'_> {
     /// The edges of this node, corresponding to the boolean evaluation of the expression.
     pub fn children(&self) -> impl Iterator<Item = (bool, MarkerTree)> {
         [(true, MarkerTree(self.high)), (false, MarkerTree(self.low))].into_iter()
-    }
-
-    /// Returns the subtree associated with the given edge value.
-    fn edge(&self, value: bool) -> MarkerTree {
-        if value {
-            MarkerTree(self.high)
-        } else {
-            MarkerTree(self.low)
-        }
     }
 }
 
@@ -2302,6 +2250,19 @@ mod test {
         let marker = MarkerTree::from_str("platform_release < '2'").unwrap();
         assert!(marker.evaluate(&env, &[]));
         logs_contain("Comparing 10 and 2 lexicographically");
+    }
+
+    #[test]
+    #[cfg(feature = "tracing")]
+    #[tracing_test::traced_test]
+    fn only_extras_for_environment_warns_for_lexicographic_comparison() {
+        let env = env37().with_platform_release("10");
+        let marker = m("platform_release < '2' and extra == 'foo'");
+        assert_eq!(
+            marker.only_extras_for_environment(&env),
+            m("extra == 'foo'")
+        );
+        assert!(logs_contain("Comparing 10 and 2 lexicographically"));
     }
 
     #[test]
@@ -3676,6 +3637,108 @@ mod test {
                 or (os_name == 'nt' and sys_platform == 'win32')")
             .only_extras(),
             m("os_name == 'Linux' or os_name != 'Linux'"),
+        );
+    }
+
+    #[test]
+    fn only_extras_for_environment() {
+        fn from_dnf(marker: MarkerTree, env: &MarkerEnvironment) -> MarkerTree {
+            let mut remaining = MarkerTree::FALSE;
+            'conjunctions: for conjunction in marker.to_dnf() {
+                let mut extras = MarkerTree::TRUE;
+                for expression in conjunction {
+                    match expression {
+                        expression @ MarkerExpression::Extra { .. } => {
+                            extras = extras.and(MarkerTree::expression(expression));
+                        }
+                        expression => {
+                            if !MarkerTree::expression(expression).evaluate(env, &[]) {
+                                continue 'conjunctions;
+                            }
+                        }
+                    }
+                }
+                remaining = remaining.or(extras);
+            }
+            remaining
+        }
+
+        let env = env37()
+            .with_platform_release("10")
+            .with_platform_version("10");
+        let foo = ExtraName::from_str("foo").unwrap();
+        let bar = ExtraName::from_str("bar").unwrap();
+        let scoped = ExtraName::from_str("extra-3-pkg-foo").unwrap();
+
+        for input in [
+            "python_version >= '3.7' and extra == 'foo'",
+            "python_version < '3.7' or extra != 'extra-3-pkg-foo'",
+            "python_version in '3.6 3.7' and extra == 'foo'",
+            "python_full_version not in '3.7 3.8' or extra != 'bar'",
+            "sys_platform in 'linux win32' and extra == 'foo'",
+            "sys_platform not in 'linux win32' or extra != 'bar'",
+            "'lin' in sys_platform and extra == 'foo'",
+            "'win' not in sys_platform or extra != 'bar'",
+            "'foo' in extras and extra == 'bar'",
+            "'foo' not in extras or extra != 'bar'",
+            "'test' in dependency_groups and extra == 'foo'",
+            "'test' not in dependency_groups or extra != 'foo'",
+            "'invalid@' in extras and extra == 'foo'",
+            "'invalid@' not in extras or extra == 'foo'",
+            "'invalid@' in dependency_groups and extra == 'foo'",
+            "'invalid@' not in dependency_groups or extra == 'foo'",
+            "(sys_platform == 'linux' and extra == 'foo') or \
+             (sys_platform != 'linux' and extra == 'bar')",
+            "(python_version >= '3.7' and extra != 'foo' and extra == 'bar') or \
+             (python_version < '3.7' and extra == 'foo')",
+            "platform_release < '2' and extra == 'foo'",
+            "platform_version >= '2' or extra != 'foo'",
+        ] {
+            let marker = m(input);
+            for marker in [marker, marker.negate()] {
+                let expected = from_dnf(marker, &env);
+                let actual = marker.only_extras_for_environment(&env);
+                assert_eq!(actual, expected, "{input}");
+
+                for extras in [
+                    &[][..],
+                    std::slice::from_ref(&foo),
+                    std::slice::from_ref(&bar),
+                    std::slice::from_ref(&scoped),
+                    &[foo.clone(), bar.clone(), scoped.clone()][..],
+                ] {
+                    assert_eq!(actual.evaluate(&env, extras), marker.evaluate(&env, extras));
+                }
+            }
+        }
+
+        assert!(MarkerTree::TRUE.only_extras_for_environment(&env).is_true());
+        assert!(
+            MarkerTree::FALSE
+                .only_extras_for_environment(&env)
+                .is_false()
+        );
+    }
+
+    #[test]
+    fn only_extras_for_environment_darwin_release() {
+        let env = env37()
+            .with_sys_platform("darwin")
+            .with_platform_release("24.10.0");
+        let marker = m("platform_release >= '24.9' and extra == 'foo'");
+        assert_eq!(
+            marker.only_extras_for_environment(&env),
+            m("extra == 'foo'")
+        );
+        assert!(
+            marker
+                .only_extras_for_environment(&env.clone().with_platform_release("24.8.0"))
+                .is_false()
+        );
+        assert!(
+            marker
+                .only_extras_for_environment(&env.with_platform_release("invalid"))
+                .is_false()
         );
     }
 

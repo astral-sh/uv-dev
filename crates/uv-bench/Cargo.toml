@@ -44,6 +44,11 @@ path = "benches/uv_python.rs"
 harness = false
 
 [[bench]]
+name = "marker_environment"
+path = "benches/marker_environment.rs"
+harness = false
+
+[[bench]]
 name = "macos_python_install"
 path = "benches/macos_python_install.rs"
 harness = false
