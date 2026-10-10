@@ -7,7 +7,7 @@ use tracing::info_span;
 use uv_client::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT, DEFAULT_READ_TIMEOUT_UPLOAD};
 use uv_configuration::RequiredVersion;
 use uv_dirs::{system_config_file, user_config_dir};
-use uv_distribution_types::{IndexUrlError, Origin};
+use uv_distribution_types::{IndexName, IndexSourceError, IndexUrlError, Origin};
 use uv_flags::EnvironmentFlags;
 use uv_fs::Simplified;
 use uv_normalize::{GroupName, PackageName};
@@ -23,6 +23,8 @@ pub use crate::resolved::*;
 pub use crate::settings::*;
 
 mod combine;
+mod index;
+pub use index::IndexArg;
 mod resolved;
 mod settings;
 
@@ -57,11 +59,20 @@ pub struct ToolInstallOptions {
     cli_environment: ResolverInstallerOptions,
     filesystem: ResolverInstallerOptions,
     discover_project: bool,
+    pending_indexes: Option<Vec<IndexArg>>,
 }
 
 impl std::fmt::Debug for ToolInstallOptions {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.options, formatter)
+        if let Some(indexes) = self.pending_indexes.as_ref() {
+            formatter
+                .debug_struct("ToolInstallOptions")
+                .field("options", &self.options)
+                .field("pending_indexes", indexes)
+                .finish_non_exhaustive()
+        } else {
+            std::fmt::Debug::fmt(&self.options, formatter)
+        }
     }
 }
 
@@ -71,6 +82,7 @@ impl ToolInstallOptions {
         cli_environment: ResolverInstallerOptions,
         filesystem: ResolverInstallerOptions,
         discover_project: bool,
+        pending_indexes: Option<Vec<IndexArg>>,
     ) -> Self {
         let options = cli_environment.clone().combine(filesystem.clone());
         Self {
@@ -78,6 +90,7 @@ impl ToolInstallOptions {
             cli_environment,
             filesystem,
             discover_project,
+            pending_indexes,
         }
     }
 
@@ -88,18 +101,33 @@ impl ToolInstallOptions {
 
     /// Resolve options using CLI/environment, source-project, then user/system precedence.
     pub fn for_project(&self, project_root: &Path) -> Result<ResolverInstallerOptions, Error> {
-        if !self.discover_project {
-            return Ok(self.options.clone());
+        let project = if self.discover_project {
+            FilesystemOptions::find(project_root)?
+                .map(FilesystemOptions::into_options)
+                .map(|options| ResolverInstallerOptions::from(options.top_level))
+                .unwrap_or_default()
+        } else {
+            ResolverInstallerOptions::default()
+        };
+        let configured = project.combine(self.filesystem.clone());
+        let mut cli_environment = self.cli_environment.clone();
+        if let Some(indexes) = self.pending_indexes.as_ref() {
+            let indexes = IndexOptions {
+                index: Some(
+                    indexes
+                        .iter()
+                        .cloned()
+                        .map(|index| {
+                            index.resolve(configured.indexes.index.as_deref().unwrap_or_default())
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+                ..IndexOptions::default()
+            }
+            .relative_to(&std::env::current_dir()?)?;
+            cli_environment.indexes.index = indexes.index;
         }
-        let project = FilesystemOptions::find(project_root)?
-            .map(FilesystemOptions::into_options)
-            .map(|options| ResolverInstallerOptions::from(options.top_level))
-            .unwrap_or_default();
-        Ok(self
-            .cli_environment
-            .clone()
-            .combine(project)
-            .combine(self.filesystem.clone()))
+        Ok(cli_environment.combine(configured))
     }
 }
 
@@ -738,6 +766,12 @@ fn warn_uv_toml_masked_fields(options: &Options) {
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("Could not find an index named `{0}`")]
+    UnknownIndex(IndexName),
+
+    #[error(transparent)]
+    IndexSource(#[from] IndexSourceError),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 

@@ -5215,6 +5215,14 @@ fn tool_install_python() {
     ----- stderr -----
     error: Cannot install Python with `uv tool install`. Did you mean to use `uv python install`?
     ");
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["python", "--locked", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot install Python with `uv tool install`. Did you mean to use `uv python install`?
+    ");
 }
 
 #[test]
@@ -8772,5 +8780,210 @@ fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
     ----- stdout -----
     Hello from foo!
     ");
+    Ok(())
+}
+
+/// Named indexes are resolved against the imported source project's configuration.
+#[test]
+fn tool_install_locked_project_named_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let project = context.temp_dir.child("foo");
+    let bin = context.temp_dir.child("bin");
+    let (child_filename, child_wheel) = generate_wheel(
+        &"index-child".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    project
+        .child(format!("simple/index-child/{child_filename}"))
+        .write_binary(&child_wheel)?;
+    project
+        .child("simple/index-child/index.html")
+        .write_str(&format!("<a href='{child_filename}'>{child_filename}</a>"))?;
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &["index-child==1.0.0".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["foo".to_owned()],
+    );
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["index-child==1.0.0"]
+        [project.scripts]
+        foo = "foo.cli:main"
+        [[tool.uv.index]]
+        name = "internal"
+        url = "./simple"
+        explicit = true
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+    ", bytes=hex::encode(wheel)})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .current_dir(project.path())
+        .args(["--index", "internal", "--preview-features", "index-by-name"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tool_install().arg("./foo").env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .args(["--locked", "--index", "internal", "--preview-features", "tool-install-locks,index-by-name"])
+        .env(EnvVars::PATH, bin.as_os_str()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+     + index-child==1.0.0
+    Installed 1 executable: foo
+    "#);
+    uv_snapshot!(context.filters(), context.tool_install().arg("./foo").env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .args(["--locked", "--force", "--preview-features", "tool-install-locks,index-by-name"])
+        .env(EnvVars::UV_INDEX, "internal")
+        .env(EnvVars::PATH, bin.as_os_str()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+     + index-child==1.0.0
+    Installed 1 executable: foo
+    "#);
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
+    [tool]
+    requirements = [{ name = "foo", directory = "[TEMP_DIR]/foo" }]
+    entrypoints = [
+        { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
+    ]
+
+    [tool.options]
+    index = [{ name = "internal", url = "file://[TEMP_DIR]/foo/simple", explicit = false, default = false, format = "simple", authenticate = "auto" }, { name = "internal", url = "file://[TEMP_DIR]/foo/simple", explicit = true, default = false, format = "simple", authenticate = "auto" }]
+    "#);
+    });
+    Ok(())
+}
+
+/// Unnamed Git tools use their required static project name before building dynamic metadata.
+#[cfg(feature = "test-git")]
+#[test]
+fn tool_install_locked_unnamed_git_project_build_settings() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let repository = context.temp_dir.child("repository");
+    let bin = context.temp_dir.child("bin");
+    let path = tool_install_git_path(&bin);
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["foo".to_owned()],
+    );
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        dynamic = ["version"]
+        requires-python = ">=3.12"
+        [project.scripts]
+        foo = "foo.cli:main"
+        [tool.uv.config-settings]
+        required = "project-value"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    repository.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            assert config_settings == {{"required": "project-value"}}, config_settings
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+        build_editable = build_wheel
+    "#, bytes=hex::encode(wheel)})?;
+    context
+        .lock()
+        .current_dir(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository directory URL"))?;
+    let mut filters = context.filters();
+    filters.push((
+        r"file://[^\s]+/git-v1/checkouts/",
+        "file://[CACHE_DIR]/git-v1/checkouts/",
+    ));
+    filters.push((r"[0-9a-f]{40}", "[COMMIT]"));
+    filters.push((
+        r"git-v1/checkouts/[0-9a-f]+/[0-9a-f]+",
+        "git-v1/checkouts/[CHECKOUT]/[REV]",
+    ));
+    uv_snapshot!(filters, context.tool_install().arg(format!("git+{repository_url}"))
+        .args(["--locked", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV])
+    Installed 1 executable: foo
+    "#);
+    uv_snapshot!(context.filters(), context.external_command("foo")
+        .env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from foo!
+    "#);
     Ok(())
 }

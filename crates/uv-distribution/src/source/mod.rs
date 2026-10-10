@@ -47,7 +47,7 @@ use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, PyProjectToml, Resol
 use uv_redacted::DisplaySafeUrl;
 use uv_types::{BuildContext, BuildKey, BuildStack, SourceBuildTrait};
 use uv_workspace::pyproject::ToolUvSources;
-use uv_workspace::{DiscoveryOptions, ProjectWorkspace, VirtualProject, WorkspaceCache};
+use uv_workspace::{DiscoveryOptions, ProjectWorkspace, WorkspaceCache};
 
 use crate::distribution_database::ManagedClient;
 use crate::error::Error;
@@ -174,16 +174,16 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
         self.source_tree_requires_python(&source_tree).await
     }
 
-    /// Discover a [`VirtualProject`] from a direct source-tree requirement.
+    /// Discover a [`ProjectWorkspace`] from a direct source-tree requirement.
     ///
     /// Git source trees are materialized into the Git cache before project discovery. Returns
-    /// `None` when the requirement does not identify a source tree. Git fetch metadata accompanies
+    /// `None` when the requirement does not identify a source tree defining a project. Git metadata accompanies
     /// the project so repository-local requirements can retain their original source.
     pub async fn source_tree_project(
         &self,
         source: &RequirementSource,
         workspace_cache: &WorkspaceCache,
-    ) -> Result<Option<(VirtualProject, Option<Fetch>)>, Error> {
+    ) -> Result<Option<(ProjectWorkspace, Option<Fetch>)>, Error> {
         let Some(source_tree) = self.materialize_source_tree(source).await? else {
             return Ok(None);
         };
@@ -204,7 +204,7 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
         )
         .await
         .map_err(MetadataError::from)?;
-        Ok(project.map(|project| (VirtualProject::Project(project), source_tree.git)))
+        Ok(project.map(|project| (project, source_tree.git)))
     }
 }
 

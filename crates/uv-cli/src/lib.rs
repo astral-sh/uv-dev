@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::ops::{Deref, DerefMut};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::{Result, anyhow};
@@ -23,19 +23,18 @@ use uv_configuration::{
     VersionControlSystem, VersionFormat,
 };
 use uv_distribution_types::{
-    ConfigSettingEntry, ConfigSettingPackageEntry, ExcludeNewerOverride, Index, IndexName,
-    IndexSourceError, IndexUrl, Origin, PipExtraIndex, PipFindLinks, PipIndex,
+    ConfigSettingEntry, ConfigSettingPackageEntry, ExcludeNewerOverride, Index, IndexUrl, Origin,
+    PipExtraIndex, PipFindLinks, PipIndex,
 };
 use uv_normalize::{ExtraName, GroupName, PackageName, PipGroupName};
-use uv_pep508::{MarkerTree, Requirement, VerbatimUrl};
-use uv_preview::{MaybePreviewFeature, PreviewFeature};
+use uv_pep508::{MarkerTree, Requirement};
+use uv_preview::MaybePreviewFeature;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_types::{PythonDownloads, PythonPreference, PythonVersion};
 use uv_redacted::DisplaySafeUrl;
-use uv_settings::PythonInstallMirrors;
+use uv_settings::{IndexArg, PythonInstallMirrors};
 use uv_static::EnvVars;
 use uv_torch::TorchMode;
-use uv_warnings::warn_user_once;
 
 pub mod comma;
 pub mod compat;
@@ -1135,111 +1134,6 @@ fn parse_find_links(input: &str) -> Result<Maybe<PipFindLinks>, String> {
             .map(PipFindLinks::from)
             .map(Maybe::Some)
             .map_err(|err| err.to_string())
-    }
-}
-
-/// An unresolved index passed by the user by its name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnresolvedIndex {
-    name: IndexName,
-    default: bool,
-}
-
-impl UnresolvedIndex {
-    /// Resolve an index name against the effective filesystem configuration.
-    fn resolve(self, indexes: &[Index], preview_enabled: bool) -> Result<Index> {
-        let Self { name, default } = self;
-        let path_exists = Path::new(name.as_ref()).exists();
-
-        // Outside preview, an existing path retains its current interpretation.
-        if preview_enabled || !path_exists {
-            if let Some(index) = indexes
-                .iter()
-                .find(|index| index.name.as_ref() == Some(&name))
-            {
-                if !preview_enabled {
-                    warn_user_once!(
-                        "Referencing an index by name is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
-                        PreviewFeature::IndexByName
-                    );
-                }
-
-                let mut index = index.clone();
-                // Keep relative paths anchored to their configuration file without marking them
-                // as absolute when CLI settings are rebased or written back to a project.
-                if let IndexUrl::Path(url) = index.url()
-                    && url.prefers_relative()
-                {
-                    index.url = IndexUrl::from(VerbatimUrl::from_url(index.raw_url().clone()));
-                }
-
-                return Ok(Index {
-                    default,
-                    explicit: false,
-                    origin: Some(Origin::Cli),
-                    ..index
-                });
-            }
-
-            if preview_enabled && !path_exists {
-                return Err(anyhow!("Could not find an index named `{name}`"));
-            }
-        }
-
-        Ok(Index {
-            default,
-            origin: Some(Origin::Cli),
-            ..Index::from_str(name.as_ref())?
-        })
-    }
-}
-
-/// A potentially unresolved index.
-#[expect(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IndexArg {
-    /// A usable index with a URL.
-    Resolved(Index),
-    /// An unresolved index specification.
-    Unresolved(UnresolvedIndex),
-}
-
-impl IndexArg {
-    fn new(value: &str, default: bool) -> Result<Self, IndexSourceError> {
-        if let Ok(name) = IndexName::from_str(value) {
-            return Ok(Self::Unresolved(UnresolvedIndex { name, default }));
-        }
-
-        let index = Index::from_str(value)?;
-        Ok(Self::Resolved(Index {
-            default,
-            origin: Some(Origin::Cli),
-            ..index
-        }))
-    }
-
-    /// Parse an index passed via `--index`.
-    fn from_index(value: &str) -> Result<Self, IndexSourceError> {
-        Self::new(value, false)
-    }
-
-    /// Parse an index passed via `--default-index`.
-    fn from_default_index(value: &str) -> Result<Self, IndexSourceError> {
-        Self::new(value, true)
-    }
-
-    /// Resolve the argument against indexes from the effective configuration.
-    fn resolve(self, indexes: &[Index]) -> Result<Index> {
-        let index = match self {
-            Self::Resolved(index) => index,
-            Self::Unresolved(index) => {
-                index.resolve(indexes, uv_preview::is_enabled(PreviewFeature::IndexByName))?
-            }
-        };
-
-        index.url().warn_on_disambiguated_relative_path();
-
-        Ok(index)
     }
 }
 

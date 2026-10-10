@@ -1093,7 +1093,7 @@ impl ToolInstallSettings {
                     build_constraints,
                 },
             lfs,
-            installer,
+            mut installer,
             force,
             build,
             refresh,
@@ -1101,6 +1101,13 @@ impl ToolInstallSettings {
             python_platform,
             torch_backend,
         } = args;
+
+        let locked = resolve_lock_check(locked, false, LockedFlag::Locked, environment.locked);
+        let pending_indexes = if matches!(locked, LockCheck::Enabled(_)) {
+            installer.index_args.take_indexes()
+        } else {
+            None
+        };
 
         let filesystem_options = filesystem.map(FilesystemOptions::into_options);
 
@@ -1175,12 +1182,13 @@ impl ToolInstallSettings {
             python_platform,
             force,
             editable,
-            locked: resolve_lock_check(locked, false, LockedFlag::Locked, environment.locked),
+            locked,
             refresh: Refresh::try_from(refresh)?,
             options: ToolInstallOptions::new(
                 cli_environment_options,
                 resolver_filesystem_options,
                 discover_project,
+                pending_indexes,
             ),
             settings,
             install_mirrors: environment
