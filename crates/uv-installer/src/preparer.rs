@@ -266,17 +266,26 @@ pub trait Reporter: Send + Sync {
     /// Callback to invoke when a download is complete.
     fn on_download_complete(&self, name: &PackageName, index: usize);
 
+    /// Callback to invoke when a download attempt is abandoned or fails.
+    fn on_download_failed(&self, _name: &PackageName, _id: usize) {}
+
     /// Callback to invoke when a source distribution build is kicked off.
     fn on_build_start(&self, source: &BuildableSource) -> usize;
 
     /// Callback to invoke when a source distribution build is complete.
     fn on_build_complete(&self, source: &BuildableSource, id: usize);
 
+    /// Callback to invoke when a source build attempt fails or is abandoned.
+    fn on_build_failed(&self, _source: &BuildableSource, _id: usize) {}
+
     /// Callback to invoke when a repository checkout begins.
     fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize;
 
     /// Callback to invoke when a repository checkout completes.
     fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, index: usize);
+
+    /// Callback to invoke when a repository checkout fails or is abandoned.
+    fn on_checkout_failed(&self, _url: &DisplaySafeUrl, _rev: &str, _id: usize) {}
 }
 
 impl dyn Reporter {
@@ -302,12 +311,20 @@ impl uv_distribution::Reporter for Facade {
         self.reporter.on_build_complete(source, id);
     }
 
+    fn on_build_failed(&self, source: &BuildableSource, id: usize) {
+        self.reporter.on_build_failed(source, id);
+    }
+
     fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize {
         self.reporter.on_checkout_start(url, rev)
     }
 
     fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, index: usize) {
         self.reporter.on_checkout_complete(url, rev, index);
+    }
+
+    fn on_checkout_failed(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+        self.reporter.on_checkout_failed(url, rev, id);
     }
 
     fn on_download_start(&self, name: &PackageName, size: Option<u64>) -> usize {
@@ -320,5 +337,9 @@ impl uv_distribution::Reporter for Facade {
 
     fn on_download_complete(&self, name: &PackageName, index: usize) {
         self.reporter.on_download_complete(name, index);
+    }
+
+    fn on_download_failed(&self, name: &PackageName, index: usize) {
+        self.reporter.on_download_failed(name, index);
     }
 }

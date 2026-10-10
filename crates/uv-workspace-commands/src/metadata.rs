@@ -5,9 +5,10 @@ use anyhow::{Context, Result};
 
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
-use uv_command_support::{ExitStatus, Printer, Stdout, UvError};
+use uv_command_support::{ExitStatus, Printer, Stdout, UvError, jsonl_result};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, Modifications,
+    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, MetadataOutputFormat,
+    Modifications,
 };
 use uv_dispatch::UniversalState;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
@@ -63,6 +64,7 @@ pub async fn metadata(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
+    output_format: MetadataOutputFormat,
 ) -> Result<ExitStatus> {
     if !preview.is_enabled(PreviewFeature::WorkspaceMetadata) {
         warn_user!(
@@ -307,6 +309,7 @@ pub async fn metadata(
             preview,
             &malware_settings,
             sync,
+            printer,
         )
         .await
         .context("Failed to collect module owners")?;
@@ -315,7 +318,7 @@ pub async fn metadata(
             .with_module_owners(module_owners);
     }
 
-    print_metadata(&export, printer)
+    print_metadata(&export, output_format, printer)
 }
 
 fn metadata_for_target(target: InstallTarget<'_>) -> Metadata {
@@ -337,10 +340,17 @@ fn metadata_for_target(target: InstallTarget<'_>) -> Metadata {
     }
 }
 
-fn print_metadata(export: &Metadata, printer: Printer) -> Result<ExitStatus> {
+fn print_metadata(
+    export: &Metadata,
+    output_format: MetadataOutputFormat,
+    printer: Printer,
+) -> Result<ExitStatus> {
     if printer.stdout_important() == Stdout::Enabled {
         let mut stdout = BufWriter::new(anstream::stdout().lock());
-        export.write_json(&mut stdout)?;
+        match output_format {
+            MetadataOutputFormat::Json => export.write_json(&mut stdout)?,
+            MetadataOutputFormat::Jsonl => write!(stdout, "{}", jsonl_result(export)?)?,
+        }
         writeln!(stdout)?;
         stdout.flush()?;
     }

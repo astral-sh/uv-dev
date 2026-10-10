@@ -13,7 +13,7 @@ mod printer;
 pub mod progress;
 pub mod update_shell;
 
-pub use printer::{Printer, Stderr, Stdout};
+pub use printer::{Printer, Stderr, Stdout, jsonl_result, jsonl_result_data};
 
 /// The process status for a command that completed without a final error to render.
 #[derive(Copy, Clone)]

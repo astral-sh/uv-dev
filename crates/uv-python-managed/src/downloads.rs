@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::str::FromStr;
-use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTimeError};
 use std::{env, io};
 use uv_python_types::{PythonDownloadRequest, PythonDownloadRequestError};
@@ -21,7 +19,7 @@ use reqwest_retry::policies::ExponentialBackoff;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
 use tracing::{debug, instrument};
@@ -704,19 +702,24 @@ impl ManagedPythonDownload {
         let temp_dir = tempfile::tempdir_in(python_builds_dir)?;
         let temp_file = temp_dir.path().join("download");
 
+        let progress = reporter
+            .map(|reporter| RequestGuard::new(reporter, Direction::Download, &self.key, size));
+
         // Download to a temporary file. We verify the hash when unpacking the file.
         {
             let mut archive_writer = BufWriter::new(fs_err::tokio::File::create(&temp_file).await?);
 
             // Download with or without progress bar.
-            if let Some(reporter) = reporter {
-                let key = reporter.on_request_start(Direction::Download, &self.key, size);
+            if let Some(progress) = progress.as_ref() {
                 tokio::io::copy(
-                    &mut ProgressReader::new(reader, key, reporter),
+                    &mut uv_fs::ProgressReader::new(reader, |bytes| {
+                        progress
+                            .reporter
+                            .on_request_progress(progress.id, bytes as u64);
+                    }),
                     &mut archive_writer,
                 )
                 .await?;
-                reporter.on_request_complete(Direction::Download, key);
             } else {
                 tokio::io::copy(&mut reader, &mut archive_writer).await?;
             }
@@ -728,6 +731,9 @@ impl ManagedPythonDownload {
             Ok(()) => {}
             Err(_) if target_cache_file.is_file() => {}
             Err(err) => return Err(err.into()),
+        }
+        if let Some(progress) = progress {
+            progress.complete();
         }
         Ok(())
     }
@@ -745,26 +751,23 @@ impl ManagedPythonDownload {
         direction: Direction,
         tar_backend: TarBackend,
     ) -> Result<TempDir, Error> {
+        let progress =
+            reporter.map(|reporter| RequestGuard::new(reporter, direction, &self.key, size));
+        let reader = uv_fs::ProgressReader::new(reader, |bytes| {
+            if let Some(progress) = progress.as_ref() {
+                progress
+                    .reporter
+                    .on_request_progress(progress.id, bytes as u64);
+            }
+        });
         let mut hashers = self
             .sha256
             .as_ref()
             .map(|_| Hasher::from(HashAlgorithm::Sha256));
         let mut hasher = uv_extract::hash::HashReader::new(reader, hashers.as_mut_slice());
-
-        let target = if let Some(reporter) = reporter {
-            let progress_key = reporter.on_request_start(direction, &self.key, size);
-            let mut reader = ProgressReader::new(&mut hasher, progress_key, reporter);
-            let (target, _) = uv_extract::stream::archive(&mut reader, ext, target, tar_backend)
-                .await
-                .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
-            reporter.on_request_complete(direction, progress_key);
-            target
-        } else {
-            let (target, _) = uv_extract::stream::archive(&mut hasher, ext, target, tar_backend)
-                .await
-                .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
-            target
-        };
+        let (target, _) = uv_extract::stream::archive(&mut hasher, ext, target, tar_backend)
+            .await
+            .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
         hasher.finish().await.map_err(Error::HashExhaustion)?;
 
         // Check the hash
@@ -779,6 +782,9 @@ impl ManagedPythonDownload {
             }
         }
 
+        if let Some(progress) = progress {
+            progress.complete();
+        }
         Ok(target)
     }
 
@@ -1099,42 +1105,42 @@ pub trait Reporter: Send + Sync {
         size: Option<u64>,
     ) -> usize;
     fn on_request_progress(&self, id: usize, inc: u64);
-    fn on_request_complete(&self, direction: Direction, id: usize);
+    fn on_request_complete(&self, id: usize);
+    fn on_request_failed(&self, id: usize);
 }
 
-/// An asynchronous reader that reports progress as bytes are read.
-struct ProgressReader<'a, R> {
-    reader: R,
-    index: usize,
+/// Finish every started request, including attempts abandoned by errors or cancellation.
+struct RequestGuard<'a> {
     reporter: &'a dyn Reporter,
+    id: usize,
+    completed: bool,
 }
 
-impl<'a, R> ProgressReader<'a, R> {
-    /// Create a new [`ProgressReader`] that wraps another reader.
-    fn new(reader: R, index: usize, reporter: &'a dyn Reporter) -> Self {
+impl<'a> RequestGuard<'a> {
+    fn new(
+        reporter: &'a dyn Reporter,
+        direction: Direction,
+        name: &PythonInstallationKey,
+        size: Option<u64>,
+    ) -> Self {
         Self {
-            reader,
-            index,
             reporter,
+            id: reporter.on_request_start(direction, name, size),
+            completed: false,
         }
+    }
+
+    fn complete(mut self) {
+        self.reporter.on_request_complete(self.id);
+        self.completed = true;
     }
 }
 
-impl<R> AsyncRead for ProgressReader<'_, R>
-where
-    R: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.as_mut().reader)
-            .poll_read(cx, buf)
-            .map_ok(|()| {
-                self.reporter
-                    .on_request_progress(self.index, buf.filled().len() as u64);
-            })
+impl Drop for RequestGuard<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.reporter.on_request_failed(self.id);
+        }
     }
 }
 
@@ -1184,6 +1190,9 @@ async fn read_url(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
     #[cfg(target_arch = "aarch64")]
     use uv_python_types::ArchRequest;
     use uv_python_types::VersionRequest;
@@ -1194,6 +1203,131 @@ mod tests {
     use uv_python_types::{LenientImplementationName, PythonInstallationKey};
 
     use super::*;
+
+    #[derive(Default)]
+    struct RequestReporter {
+        next_id: AtomicUsize,
+        bytes: AtomicU64,
+        events: Mutex<Vec<String>>,
+    }
+
+    impl Reporter for RequestReporter {
+        fn on_request_start(
+            &self,
+            direction: Direction,
+            _name: &PythonInstallationKey,
+            _size: Option<u64>,
+        ) -> usize {
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            self.events
+                .lock()
+                .expect("events lock")
+                .push(format!("{id}: {direction} started"));
+            id
+        }
+
+        fn on_request_progress(&self, _id: usize, inc: u64) {
+            self.bytes.fetch_add(inc, Ordering::Relaxed);
+        }
+
+        fn on_request_complete(&self, id: usize) {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push(format!("{id}: completed"));
+        }
+
+        fn on_request_failed(&self, id: usize) {
+            self.events
+                .lock()
+                .expect("events lock")
+                .push(format!("{id}: failed"));
+        }
+    }
+
+    /// A recovered body-read failure must terminate its request before a subsequent attempt starts.
+    #[tokio::test]
+    async fn failed_extraction_closes_request_before_next_attempt() -> anyhow::Result<()> {
+        let mut download = cpython_download_for_url("https://example.com/python.tar.gz");
+        download.sha256 = None;
+        let reporter = RequestReporter::default();
+        let filename = "python.tar.gz".to_owned();
+        let broken = futures::stream::once(futures::future::ready(Err::<Vec<u8>, _>(
+            io::Error::new(io::ErrorKind::ConnectionReset, "download interrupted"),
+        )))
+        .into_async_read()
+        .compat();
+        download
+            .extract_reader(
+                broken,
+                tempfile::tempdir()?,
+                &filename,
+                SourceDistExtension::TarGz,
+                None,
+                Some(&reporter),
+                Direction::Download,
+                TarBackend::default(),
+            )
+            .await
+            .expect_err("interrupted body must fail extraction");
+
+        download
+            .extract_reader(
+                include_bytes!("../../../test/links/basic_package-0.1.0.tar.gz").as_slice(),
+                tempfile::tempdir()?,
+                &filename,
+                SourceDistExtension::TarGz,
+                None,
+                Some(&reporter),
+                Direction::Download,
+                TarBackend::default(),
+            )
+            .await?;
+        insta::assert_debug_snapshot!(*reporter.events.lock().expect("events lock"), @r#"
+        [
+            "0: download started",
+            "0: failed",
+            "1: download started",
+            "1: completed",
+        ]
+        "#);
+        Ok(())
+    }
+
+    /// Hash verification drains and reports bytes after archive extraction is complete.
+    #[tokio::test]
+    async fn extraction_reports_hash_drain_bytes() -> anyhow::Result<()> {
+        let mut archive = include_bytes!("../../../test/links/basic_package-0.1.0.tar.gz").to_vec();
+        archive.resize(archive.len() + 256 * 1024, 0);
+        let mut hasher = Hasher::from(HashAlgorithm::Sha256);
+        hasher.update(&archive);
+        let HashDigest::Sha256(digest) = HashDigest::from(hasher) else {
+            unreachable!("SHA-256 hasher produces SHA-256 digest");
+        };
+        let mut download = cpython_download_for_url("https://example.com/python.tar.gz");
+        download.sha256 = Some(digest);
+        let reporter = RequestReporter::default();
+        download
+            .extract_reader(
+                archive.as_slice(),
+                tempfile::tempdir()?,
+                &"python.tar.gz".to_owned(),
+                SourceDistExtension::TarGz,
+                Some(archive.len() as u64),
+                Some(&reporter),
+                Direction::Download,
+                TarBackend::default(),
+            )
+            .await?;
+        assert_eq!(reporter.bytes.load(Ordering::Relaxed), archive.len() as u64);
+        insta::assert_debug_snapshot!(*reporter.events.lock().expect("events lock"), @r#"
+        [
+            "0: download started",
+            "0: completed",
+        ]
+        "#);
+        Ok(())
+    }
 
     #[test]
     fn test_download_error_debug() {

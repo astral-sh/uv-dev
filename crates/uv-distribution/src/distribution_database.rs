@@ -2,16 +2,14 @@ use std::cmp::Reverse;
 use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use futures::{FutureExt, TryStreamExt};
 use http_content_range::{ContentRange, ContentRangeBytes, ContentRangeUnbound};
 use rayon::in_place_scope;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
-use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Instrument, debug, info_span, instrument, warn};
@@ -48,6 +46,7 @@ use crate::error::PythonVersion;
 use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
 use crate::hash::http_hash_algorithms;
 use crate::metadata::{ArchiveMetadata, Metadata};
+use crate::reporter::DownloadGuard;
 use crate::source::SourceDistributionBuilder;
 use crate::{Error, FirstPartyPackages, LocalWheel, Reporter, RequiresDist};
 
@@ -799,22 +798,26 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 let progress_size_hint = progress_size_hint.or_else(|| content_length(&response));
 
-                let progress = self.reporter.as_ref().map(|reporter| {
-                    (
-                        reporter,
-                        reporter.on_download_start(dist.name(), progress_size_hint),
-                    )
-                });
+                let progress = self
+                    .reporter
+                    .as_deref()
+                    .map(|reporter| DownloadGuard::new(reporter, dist.name(), progress_size_hint));
 
                 let reader = response
                     .bytes_stream()
                     .map_err(|err| self.handle_response_errors(err))
                     .into_async_read();
 
-                // Create a hasher for each hash algorithm.
+                // Count every downloaded byte, including reads needed to finish the hash after
+                // extraction has reached the end of the archive contents.
+                let reader = uv_fs::ProgressReader::new(reader.compat(), |bytes| {
+                    if let Some(progress) = progress.as_ref() {
+                        progress.on_progress(bytes as u64);
+                    }
+                });
                 let algorithms = http_hash_algorithms(hashes);
                 let mut hashers = algorithms.into_iter().map(Hasher::from).collect::<Vec<_>>();
-                let mut hasher = uv_extract::hash::HashReader::new(reader.compat(), &mut hashers);
+                let mut hasher = uv_extract::hash::HashReader::new(reader, &mut hashers);
 
                 // Download and unzip the wheel to a temporary directory.
                 let extractor = WheelExtractor::new(
@@ -822,20 +825,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     self.content_addressed_cache,
                 )
                 .map_err(Error::CacheWrite)?;
-
-                let mut extracted = match progress {
-                    Some((reporter, progress)) => {
-                        let mut reader = ProgressReader::new(&mut hasher, progress, &**reporter);
-                        extractor
-                            .extract_streaming(&mut reader)
-                            .await
-                            .map_err(|err| Error::Extract(filename.to_string(), err))?
-                    }
-                    None => extractor
-                        .extract_streaming(&mut hasher)
-                        .await
-                        .map_err(|err| Error::Extract(filename.to_string(), err))?,
-                };
+                let mut extracted = extractor
+                    .extract_streaming(&mut hasher)
+                    .await
+                    .map_err(|err| Error::Extract(filename.to_string(), err))?;
                 // Exhaust the reader to compute the hashes.
                 hasher.finish().await.map_err(Error::HashExhaustion)?;
                 let actual_size = hasher.bytes_read();
@@ -860,8 +853,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     .persist_extracted_wheel(extracted, wheel_entry.path())
                     .await?;
 
-                if let Some((reporter, progress)) = progress {
-                    reporter.on_download_complete(dist.name(), progress);
+                if let Some(progress) = progress {
+                    progress.complete();
                 }
 
                 Ok(Archive::new(
@@ -1110,12 +1103,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let progress_size_hint = progress_size_hint.or_else(|| content_length(&response));
         let mut download_size = content_length(&response).or(expected_size);
 
-        let progress = self.reporter.as_ref().map(|reporter| {
-            (
-                reporter,
-                reporter.on_download_start(dist.name(), progress_size_hint),
-            )
-        });
+        let mut progress = self
+            .reporter
+            .as_deref()
+            .map(|reporter| DownloadGuard::new(reporter, dist.name(), progress_size_hint));
 
         let algorithms = http_hash_algorithms(hashes);
 
@@ -1170,6 +1161,15 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             let replaces_partial_download =
                 resumed_at.is_some() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT;
             if replaces_partial_download {
+                // A full replacement is a new attempt, not additional progress on discarded bytes.
+                drop(progress.take());
+                progress = self.reporter.as_deref().map(|reporter| {
+                    DownloadGuard::new(
+                        reporter,
+                        dist.name(),
+                        content_length(&response).or(progress_size_hint),
+                    )
+                });
                 writer
                     .get_mut()
                     .set_len(0)
@@ -1195,11 +1195,13 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             // Drain the response. This could be a partial response or a full one.
             // Note that the partial response here can take several forms: it can be an interrupted
             // request *or* it can be a `206 Partial Content`.
-            let copy_result = match progress {
-                Some((reporter, progress)) => {
+            let copy_result = match progress.as_ref() {
+                Some(progress) => {
                     // Wrap the reader in a progress reporter. This will report 100%
                     // progress once the download is complete, before the wheel is unzipped.
-                    let mut reader = ProgressReader::new(&mut hasher, progress, &**reporter);
+                    let mut reader = uv_fs::ProgressReader::new(&mut hasher, |bytes| {
+                        progress.on_progress(bytes as u64);
+                    });
 
                     tokio::io::copy(&mut reader, &mut writer)
                         .await
@@ -1369,8 +1371,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             .persist_extracted_wheel(extracted, wheel_entry.path())
             .await?;
 
-        if let Some((reporter, progress)) = progress {
-            reporter.on_download_complete(dist.name(), progress);
+        if let Some(progress) = progress {
+            progress.complete();
         }
 
         Ok(Archive::new(
@@ -1777,42 +1779,6 @@ fn content_range(
     }
 
     Some(range)
-}
-
-/// An asynchronous reader that reports progress as bytes are read.
-struct ProgressReader<'a, R> {
-    reader: R,
-    index: usize,
-    reporter: &'a dyn Reporter,
-}
-
-impl<'a, R> ProgressReader<'a, R> {
-    /// Create a new [`ProgressReader`] that wraps another reader.
-    fn new(reader: R, index: usize, reporter: &'a dyn Reporter) -> Self {
-        Self {
-            reader,
-            index,
-            reporter,
-        }
-    }
-}
-
-impl<R> AsyncRead for ProgressReader<'_, R>
-where
-    R: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.as_mut().reader)
-            .poll_read(cx, buf)
-            .map_ok(|()| {
-                self.reporter
-                    .on_download_progress(self.index, buf.filled().len() as u64);
-            })
-    }
 }
 
 /// A pointer to an archive in the cache, fetched from an HTTP archive.

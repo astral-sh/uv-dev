@@ -78,70 +78,73 @@ impl GitSource {
 
         // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes
         // it easier to short-circuit this in the cases where we do have the commit.
-        let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {
-            let git_remote = GitRemote::new(remote.clone().into_owned());
-            let maybe_db = git_remote.db_at(&db_path).ok();
+        let (db, actual_rev, maybe_task) =
+            || -> Result<(GitDatabase, GitOid, Option<CheckoutGuard<'_>>)> {
+                let git_remote = GitRemote::new(remote.clone().into_owned());
+                let maybe_db = git_remote.db_at(&db_path).ok();
 
-            // If we have a locked revision, and we have a pre-existing database which has that
-            // revision, then no update needs to happen.
-            // When requested, we also check if LFS artifacts have been fetched and validated.
-            if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {
-                if db.contains(rev) && (!lfs_requested || db.contains_lfs_artifacts(rev)) {
-                    debug!("Using existing Git source `{}`", self.git.url());
-                    return Ok((
-                        maybe_db
-                            .unwrap()
-                            .with_lfs_ready(lfs_requested.then_some(true)),
-                        rev,
-                        None,
-                    ));
+                // If we have a locked revision, and we have a pre-existing database which has that
+                // revision, then no update needs to happen.
+                // When requested, we also check if LFS artifacts have been fetched and validated.
+                if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {
+                    if db.contains(rev) && (!lfs_requested || db.contains_lfs_artifacts(rev)) {
+                        debug!("Using existing Git source `{}`", self.git.url());
+                        return Ok((
+                            maybe_db
+                                .unwrap()
+                                .with_lfs_ready(lfs_requested.then_some(true)),
+                            rev,
+                            None,
+                        ));
+                    }
                 }
-            }
 
-            // If the revision isn't locked, but it looks like it might be an exact commit hash,
-            // and we do have a pre-existing database, then check whether it is, in fact, a commit
-            // hash. If so, treat it like it's locked.
-            // When requested, we also check if LFS artifacts have been fetched and validated.
-            if let Some(db) = &maybe_db {
-                if let GitReference::BranchOrTagOrCommit(maybe_commit) = self.git.reference() {
-                    if let Ok(oid) = maybe_commit.parse::<GitOid>() {
-                        if db.contains(oid) && (!lfs_requested || db.contains_lfs_artifacts(oid)) {
-                            // This reference is an exact commit. Treat it like it's locked.
-                            debug!("Using existing Git source `{}`", self.git.url());
-                            return Ok((
-                                maybe_db
-                                    .unwrap()
-                                    .with_lfs_ready(lfs_requested.then_some(true)),
-                                oid,
-                                None,
-                            ));
+                // If the revision isn't locked, but it looks like it might be an exact commit hash,
+                // and we do have a pre-existing database, then check whether it is, in fact, a commit
+                // hash. If so, treat it like it's locked.
+                // When requested, we also check if LFS artifacts have been fetched and validated.
+                if let Some(db) = &maybe_db {
+                    if let GitReference::BranchOrTagOrCommit(maybe_commit) = self.git.reference() {
+                        if let Ok(oid) = maybe_commit.parse::<GitOid>() {
+                            if db.contains(oid)
+                                && (!lfs_requested || db.contains_lfs_artifacts(oid))
+                            {
+                                // This reference is an exact commit. Treat it like it's locked.
+                                debug!("Using existing Git source `{}`", self.git.url());
+                                return Ok((
+                                    maybe_db
+                                        .unwrap()
+                                        .with_lfs_ready(lfs_requested.then_some(true)),
+                                    oid,
+                                    None,
+                                ));
+                            }
                         }
                     }
                 }
-            }
 
-            // ... otherwise, we use this state to update the Git database. Note that we still check
-            // for being offline here, for example in the situation that we have a locked revision
-            // but the database doesn't have it.
-            debug!("Updating Git source `{}`", self.git.url());
+                // ... otherwise, we use this state to update the Git database. Note that we still check
+                // for being offline here, for example in the situation that we have a locked revision
+                // but the database doesn't have it.
+                debug!("Updating Git source `{}`", self.git.url());
 
-            // Report the checkout operation to the reporter.
-            let task = self.reporter.as_ref().map(|reporter| {
-                reporter.on_checkout_start(git_remote.url(), self.git.reference().as_rev())
-            });
+                // Report the checkout operation to the reporter.
+                let task = self.reporter.as_deref().map(|reporter| {
+                    CheckoutGuard::new(reporter, remote.as_ref(), self.git.reference().as_rev())
+                });
 
-            let (db, actual_rev) = git_remote.checkout(
-                &db_path,
-                maybe_db,
-                self.git.reference(),
-                self.git.precise(),
-                self.disable_ssl,
-                self.offline,
-                lfs_requested,
-            )?;
+                let (db, actual_rev) = git_remote.checkout(
+                    &db_path,
+                    maybe_db,
+                    self.git.reference(),
+                    self.git.precise(),
+                    self.disable_ssl,
+                    self.offline,
+                    lfs_requested,
+                )?;
 
-            Ok((db, actual_rev, task))
-        }()?;
+                Ok((db, actual_rev, task))
+            }()?;
 
         // Validate the resolved commit before checking out its contents.
         let git = self.git.clone().with_precise(actual_rev)?;
@@ -172,9 +175,7 @@ impl GitSource {
 
         // Report the checkout operation to the reporter.
         if let Some(task) = maybe_task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_checkout_complete(remote.as_ref(), actual_rev.as_str(), task);
-            }
+            task.complete(actual_rev.as_str());
         }
 
         Ok(Fetch {
@@ -214,4 +215,43 @@ pub trait Reporter: Send + Sync {
 
     /// Callback to invoke when a repository checkout completes.
     fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, index: usize);
+
+    /// Callback to invoke when a repository checkout fails or is abandoned.
+    fn on_checkout_failed(&self, _url: &DisplaySafeUrl, _rev: &str, _id: usize) {}
+}
+
+/// A checkout attempt that closes its operation on every exit path.
+struct CheckoutGuard<'a> {
+    reporter: &'a dyn Reporter,
+    url: &'a DisplaySafeUrl,
+    revision: &'a str,
+    id: usize,
+    completed: bool,
+}
+
+impl<'a> CheckoutGuard<'a> {
+    fn new(reporter: &'a dyn Reporter, url: &'a DisplaySafeUrl, revision: &'a str) -> Self {
+        Self {
+            reporter,
+            url,
+            revision,
+            id: reporter.on_checkout_start(url, revision),
+            completed: false,
+        }
+    }
+
+    fn complete(mut self, revision: &str) {
+        self.reporter
+            .on_checkout_complete(self.url, revision, self.id);
+        self.completed = true;
+    }
+}
+
+impl Drop for CheckoutGuard<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.reporter
+                .on_checkout_failed(self.url, self.revision, self.id);
+        }
+    }
 }

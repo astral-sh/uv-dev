@@ -939,10 +939,11 @@ impl<Reader: tokio::io::AsyncRead + Unpin, Callback: Fn(usize) + Unpin> tokio::i
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
         std::pin::Pin::new(&mut self.as_mut().reader)
             .poll_read(cx, buf)
             .map_ok(|()| {
-                (self.callback)(buf.filled().len());
+                (self.callback)(buf.filled().len() - before);
             })
     }
 }
@@ -1041,6 +1042,30 @@ mod tests {
     use std::assert_matches;
 
     use super::*;
+
+    #[cfg(feature = "tokio")]
+    #[test]
+    fn progress_reader_counts_only_new_bytes() {
+        use std::cell::Cell;
+        use std::pin::Pin;
+        use std::task::{Context, Poll, Waker};
+        use tokio::io::{AsyncRead, ReadBuf};
+
+        let reported = Cell::new(0);
+        let mut reader = ProgressReader::new(b"new".as_slice(), |bytes| {
+            reported.set(reported.get() + bytes);
+        });
+        let mut storage = [0; 8];
+        let mut buffer = ReadBuf::new(&mut storage);
+        buffer.put_slice(b"old");
+        let mut context = Context::from_waker(Waker::noop());
+        assert_matches!(
+            Pin::new(&mut reader).poll_read(&mut context, &mut buffer),
+            Poll::Ready(Ok(()))
+        );
+        assert_eq!(buffer.filled(), b"oldnew");
+        assert_eq!(reported.get(), 3);
+    }
 
     #[cfg(feature = "tokio")]
     #[test]

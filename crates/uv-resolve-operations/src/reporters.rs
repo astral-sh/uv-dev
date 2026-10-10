@@ -1,7 +1,11 @@
+use std::sync::Mutex;
 use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use uv_command_support::{Printer, progress::ProgressReporter};
+use uv_command_support::{
+    Printer,
+    progress::{JsonlProgressEvent, ProgressPhase, ProgressReporter, ProgressStatus},
+};
 use uv_distribution_types::BuildableSource;
 use uv_distribution_types::VersionOrUrlRef;
 use uv_normalize::PackageName;
@@ -11,12 +15,45 @@ use uv_redacted::DisplaySafeUrl;
 #[derive(Debug)]
 pub struct ResolverReporter {
     reporter: ProgressReporter,
+    state: Mutex<ResolverProgressState>,
+}
+
+#[derive(Debug, Default)]
+enum ResolverProgressState {
+    #[default]
+    Pending,
+    Started,
+    Finished,
 }
 
 impl ResolverReporter {
+    fn start(&self, state: &mut ResolverProgressState) -> bool {
+        match state {
+            ResolverProgressState::Finished => false,
+            ResolverProgressState::Started => true,
+            ResolverProgressState::Pending => {
+                self.reporter.emit_progress(&JsonlProgressEvent::new(
+                    ProgressPhase::Resolve,
+                    ProgressStatus::Started,
+                ));
+                *state = ResolverProgressState::Started;
+                true
+            }
+        }
+    }
+
     #[must_use]
     pub(super) fn with_length(self, length: u64) -> Self {
-        self.reporter.root.set_length(length);
+        {
+            let mut state = self.state.lock().unwrap();
+            if self.start(&mut state) {
+                self.reporter.root.set_length(length);
+                let mut event =
+                    JsonlProgressEvent::new(ProgressPhase::Resolve, ProgressStatus::Updated);
+                event.total = Some(length);
+                self.reporter.emit_progress(&event);
+            }
+        }
         self
     }
 }
@@ -33,13 +70,19 @@ impl From<Printer> for ResolverReporter {
         );
         root.set_message("Resolving dependencies...");
 
-        let reporter = ProgressReporter::new(root, multi_progress, printer);
-        Self { reporter }
+        Self {
+            reporter: ProgressReporter::new(root, multi_progress, printer),
+            state: Mutex::default(),
+        }
     }
 }
 
 impl uv_resolver::ResolverReporter for ResolverReporter {
     fn on_progress(&self, name: &PackageName, version_or_url: &VersionOrUrlRef) {
+        let mut state = self.state.lock().unwrap();
+        if !self.start(&mut state) {
+            return;
+        }
         match version_or_url {
             VersionOrUrlRef::Version(version) => {
                 self.reporter.root.set_message(format!("{name}=={version}"));
@@ -48,19 +91,48 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
                 self.reporter.root.set_message(format!("{name} @ {url}"));
             }
         }
+        if self.reporter.printer.emits_jsonl_progress() {
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Resolve, ProgressStatus::Updated);
+            event.name = Some(name.to_string());
+            match version_or_url {
+                VersionOrUrlRef::Version(version) => event.version = Some(version.to_string()),
+                VersionOrUrlRef::Url(url) => event.url = Some(url.to_string()),
+            }
+            self.reporter.emit_progress(&event);
+        }
     }
 
-    fn on_complete(&self) {
+    fn on_complete(&self, success: bool) {
+        let mut state = self.state.lock().unwrap();
+        if !self.start(&mut state) {
+            return;
+        }
+        *state = ResolverProgressState::Finished;
         self.reporter.root.set_message("");
+        self.reporter.emit_progress(&JsonlProgressEvent::new(
+            ProgressPhase::Resolve,
+            if success {
+                ProgressStatus::Completed
+            } else {
+                ProgressStatus::Failed
+            },
+        ));
         self.reporter.root.finish_and_clear();
     }
 
     fn on_build_start(&self, source: &BuildableSource) -> usize {
-        self.reporter.on_build_start(&source.color_display())
+        self.reporter
+            .on_build_start(source, &source.color_display())
     }
 
     fn on_build_complete(&self, source: &BuildableSource, id: usize) {
-        self.reporter.on_build_complete(&source.color_display(), id);
+        self.reporter
+            .on_build_complete(source, &source.color_display(), id);
+    }
+
+    fn on_build_failed(&self, source: &BuildableSource, id: usize) {
+        self.reporter.on_build_failed(source, id);
     }
 
     fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize {
@@ -69,6 +141,10 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
 
     fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
         self.reporter.on_checkout_complete(url, rev, id);
+    }
+
+    fn on_checkout_failed(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+        self.reporter.on_checkout_failed(url, rev, id);
     }
 
     fn on_download_start(&self, name: &PackageName, size: Option<u64>) -> usize {
@@ -81,16 +157,26 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
 
     fn on_download_complete(&self, _name: &PackageName, id: usize) {
         self.reporter.on_download_complete(id);
+    }
+
+    fn on_download_failed(&self, _name: &PackageName, id: usize) {
+        self.reporter.on_download_failed(id);
     }
 }
 
 impl uv_distribution::Reporter for ResolverReporter {
     fn on_build_start(&self, source: &BuildableSource) -> usize {
-        self.reporter.on_build_start(&source.color_display())
+        self.reporter
+            .on_build_start(source, &source.color_display())
     }
 
     fn on_build_complete(&self, source: &BuildableSource, id: usize) {
-        self.reporter.on_build_complete(&source.color_display(), id);
+        self.reporter
+            .on_build_complete(source, &source.color_display(), id);
+    }
+
+    fn on_build_failed(&self, source: &BuildableSource, id: usize) {
+        self.reporter.on_build_failed(source, id);
     }
 
     fn on_download_start(&self, name: &PackageName, size: Option<u64>) -> usize {
@@ -105,12 +191,20 @@ impl uv_distribution::Reporter for ResolverReporter {
         self.reporter.on_download_complete(id);
     }
 
+    fn on_download_failed(&self, _name: &PackageName, id: usize) {
+        self.reporter.on_download_failed(id);
+    }
+
     fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize {
         self.reporter.on_checkout_start(url, rev)
     }
 
     fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
         self.reporter.on_checkout_complete(url, rev, id);
+    }
+
+    fn on_checkout_failed(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+        self.reporter.on_checkout_failed(url, rev, id);
     }
 }
 
