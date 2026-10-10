@@ -91,7 +91,6 @@ pub async fn pip_tree(
         let capabilities = IndexCapabilities::default();
 
         let client_builder = client_builder.keyring(keyring_provider);
-        let latest_index_locations = index_locations.clone();
 
         // Initialize the registry client.
         let client = RegistryClientBuilder::new(
@@ -117,7 +116,6 @@ pub async fn pip_tree(
             capabilities: &capabilities,
             prerelease: &prerelease,
             exclude_newer: &exclude_newer,
-            index_locations: &latest_index_locations,
             tags: Some(tags),
             requires_python: Some(&requires_python),
         };
