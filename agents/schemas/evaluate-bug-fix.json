@@ -1,0 +1,91 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "needs_attention", "fail"]
+    },
+    "score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rubric": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "criterion": {
+            "type": "string",
+            "enum": [
+              "issue_understanding",
+              "correctness",
+              "regression_coverage",
+              "scope",
+              "maintainability"
+            ]
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["criterion", "score", "evidence"]
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "recommendation": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["severity", "summary", "evidence", "recommendation"]
+      }
+    },
+    "validation": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "verdict",
+    "score",
+    "summary",
+    "rubric",
+    "findings",
+    "validation"
+  ]
+}
