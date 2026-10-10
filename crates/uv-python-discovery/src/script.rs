@@ -124,13 +124,31 @@ pub enum ScriptInterpreter {
     Environment(PythonEnvironment),
 }
 
+/// The selected script environment and who owns its destination.
+pub enum ScriptEnvironmentSelection {
+    Cached(PathBuf),
+    Active(PathBuf),
+}
+
+impl ScriptEnvironmentSelection {
+    fn into_path(self) -> PathBuf {
+        match self {
+            Self::Cached(path) | Self::Active(path) => path,
+        }
+    }
+}
+
 impl ScriptInterpreter {
     /// Return the expected virtual environment path for the [`Pep723ItemRef`].
     ///
     /// If `--active` is set, the active virtual environment will be preferred.
     ///
     /// See: [`uv_workspace::Workspace::environment_selection`].
-    pub fn root(script: Pep723ItemRef<'_>, active: ActiveEnvironment, cache: &Cache) -> PathBuf {
+    pub fn environment_selection(
+        script: Pep723ItemRef<'_>,
+        active: ActiveEnvironment,
+        cache: &Cache,
+    ) -> ScriptEnvironmentSelection {
         /// Resolve the `VIRTUAL_ENV` variable, if any.
         fn from_virtual_env_variable() -> Option<PathBuf> {
             let value = std::env::var_os(EnvVars::VIRTUAL_ENV)?;
@@ -186,7 +204,7 @@ impl ScriptInterpreter {
                             from_virtual_env.user_display(),
                             cache_env.user_display()
                         );
-                        return from_virtual_env;
+                        return ScriptEnvironmentSelection::Active(from_virtual_env);
                     }
                     ActiveEnvironment::Ignore => {}
                     ActiveEnvironment::Warn => {
@@ -207,7 +225,7 @@ impl ScriptInterpreter {
         }
 
         // Otherwise, use the cache root.
-        cache_env
+        ScriptEnvironmentSelection::Cached(cache_env)
     }
 
     /// Discover an existing script environment without selecting or downloading an interpreter.
@@ -216,7 +234,7 @@ impl ScriptInterpreter {
         active: ActiveEnvironment,
         cache: &Cache,
     ) -> Option<PythonEnvironment> {
-        let root = Self::root(script, active, cache);
+        let root = Self::environment_selection(script, active, cache).into_path();
         match PythonEnvironment::from_root(&root, cache) {
             Ok(environment) => Some(environment),
             Err(uv_python_interpreter::PythonEnvironmentError::MissingEnvironment(_)) => None,

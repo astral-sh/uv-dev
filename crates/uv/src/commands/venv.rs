@@ -20,7 +20,7 @@ use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildRequires, IndexLocations, PackageConfigSettings,
     Requirement,
 };
-use uv_fs::Simplified;
+use uv_fs::{ClearNonVirtualenv, Simplified};
 use uv_install_wheel::LinkMode;
 use uv_normalize::DefaultGroups;
 use uv_preview::Preview;
@@ -243,16 +243,24 @@ pub(crate) async fn venv(
     };
 
     let on_existing = match on_existing {
-        OnExisting::Prompt | OnExisting::Remove(_) if centralized_workspace.is_some() => {
-            // Centralized environments are managed by uv, so replace them without prompting.
-            OnExisting::Remove(RemovalReason::ManagedEnvironment)
-        }
-        OnExisting::Prompt | OnExisting::Remove(_)
-            if is_centralized_environment_reference(&path, cache) =>
+        OnExisting::Prompt
+            if centralized_workspace.is_some()
+                || is_centralized_environment_reference(&path, cache) =>
         {
-            // Remove `.venv` without following it into the cache.
-            uv_fs::remove_virtualenv(&path).map_err(|err| VenvError::Creation(err.into()))?;
-            on_existing
+            // Centralized environments are managed by uv, so replace them without prompting.
+            OnExisting::Replace {
+                reason: RemovalReason::ManagedEnvironment,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            }
+        }
+        OnExisting::Clear { reason, .. }
+            if centralized_workspace.is_some()
+                || is_centralized_environment_reference(&path, cache) =>
+        {
+            OnExisting::Replace {
+                reason,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            }
         }
         OnExisting::Allow
             if fs_err::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file())
@@ -260,10 +268,16 @@ pub(crate) async fn venv(
         {
             // TODO(tk): Revisit after PEP 832.
             // Ignore uv-owned path files when creating a local environment.
-            uv_fs::remove_virtualenv(&path).map_err(|err| VenvError::Creation(err.into()))?;
-            on_existing
+            OnExisting::Replace {
+                reason: RemovalReason::ManagedEnvironment,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            }
         }
-        _ => on_existing,
+        OnExisting::Prompt
+        | OnExisting::Fail
+        | OnExisting::Allow
+        | OnExisting::Clear { .. }
+        | OnExisting::Replace { .. } => on_existing,
     };
 
     // Create the virtual environment.

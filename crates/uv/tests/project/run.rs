@@ -1,5 +1,8 @@
 #![expect(clippy::disallowed_types)]
 
+#[cfg(unix)]
+use fs_err::os::unix::fs::symlink;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
@@ -8,7 +11,7 @@ use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
-use uv_fs::copy_dir_all;
+use uv_fs::{ClearNonVirtualenv, copy_dir_all};
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
@@ -4692,20 +4695,337 @@ fn run_active_script_environment_non_virtualenv() -> Result<()> {
         .child("important.txt")
         .write_str("important data")?;
 
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--active")
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG)
+        .env(EnvVars::VIRTUAL_ENV, "foo"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Script virtual environment directory `[TEMP_DIR]/foo` cannot be used because it is not a virtual environment
+    ");
+
+    active_environment
+        .child("important.txt")
+        .assert("important data");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--active")
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG)
+        .env(EnvVars::VIRTUAL_ENV, "foo"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Script virtual environment directory `[TEMP_DIR]/foo` cannot be used because it is not a virtual environment
+    ");
+
+    active_environment
+        .child("important.txt")
+        .assert("important data");
+
+    // The marker must be a file, including when only planning a replacement.
+    active_environment.child("pyvenv.cfg").create_dir_all()?;
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--active")
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG)
+        .env(EnvVars::VIRTUAL_ENV, "foo"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Script virtual environment directory `[TEMP_DIR]/foo` cannot be used because it is not a virtual environment
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--dry-run")
+        .arg("--active")
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG)
+        .env(EnvVars::VIRTUAL_ENV, "foo"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Script virtual environment directory `[TEMP_DIR]/foo` cannot be used because it is not a virtual environment
+    ");
+
+    active_environment
+        .child("important.txt")
+        .assert("important data");
+    active_environment
+        .child("pyvenv.cfg")
+        .assert(predicate::path::is_dir());
+
+    let active_file = context.temp_dir.child("active-file");
+    active_file.write_str("important data")?;
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--active")
+        .arg("--python")
+        .arg(&context.python_versions[0].1)
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG)
+        .env(EnvVars::VIRTUAL_ENV, "active-file"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Script virtual environment directory `[TEMP_DIR]/active-file` cannot be used because it is not a virtual environment
+    ");
+    active_file.assert("important data");
+
+    let empty_environment = context.temp_dir.child("empty");
+    empty_environment.create_dir_all()?;
     context
         .run()
         .arg("--active")
         .arg("--script")
         .arg("main.py")
-        .env(EnvVars::VIRTUAL_ENV, "foo")
+        .env(EnvVars::VIRTUAL_ENV, "empty")
         .assert()
         .success();
+    empty_environment
+        .child("pyvenv.cfg")
+        .assert(predicate::path::is_file());
 
-    active_environment.assert(predicate::path::is_dir());
-    // Silently deleting user data outside a virtual environment is undesirable.
+    Ok(())
+}
+
+/// Script destination inspection failures retain their filesystem cause.
+#[test]
+#[cfg(unix)]
+fn run_active_script_environment_inspection_error() -> Result<()> {
+    let context =
+        uv_test::test_context!("3.12").with_filter((r"\(os error \d+\)", "(os error [ERRNO])"));
+    context.temp_dir.child("main.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    let active_environment = context.temp_dir.child("foo");
+    active_environment.create_dir_all()?;
     active_environment
         .child("important.txt")
+        .write_str("important data")?;
+    symlink("pyvenv.cfg", active_environment.child("pyvenv.cfg"))?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--active")
+        .arg("--python").arg(&context.python_versions[0].1)
+        .arg("--script").arg("main.py")
+        .env(EnvVars::VIRTUAL_ENV, "foo"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Script virtual environment directory `[TEMP_DIR]/foo` cannot be used because uv cannot determine if it is a virtual environment
+      cause: failed to query metadata of file `[TEMP_DIR]/foo/pyvenv.cfg`: Too many levels of symbolic links (os error [ERRNO])
+    ");
+    active_environment
+        .child("important.txt")
+        .assert("important data");
+    Ok(())
+}
+
+#[test]
+fn run_script_environment_cache_repair_missing_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("main.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        import sys
+
+        print(sys.prefix)
+        "#
+    })?;
+
+    let output = uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+
+    let environment = ChildPath::new(String::from_utf8(output.stdout)?.trim());
+    assert!(environment.path().starts_with(context.cache_dir.path()));
+
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
+    environment.create_dir_all()?;
+    environment
+        .child("stale.txt")
+        .write_str("stale cache data")?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+
+    environment
+        .child("pyvenv.cfg")
+        .assert(predicate::path::is_file());
+    environment
+        .child("stale.txt")
         .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn run_script_environment_cache_repair_directory_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("main.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        import sys
+
+        print(sys.prefix)
+        "#
+    })?;
+
+    let output = uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+
+    let environment = ChildPath::new(String::from_utf8(output.stdout)?.trim());
+    assert!(environment.path().starts_with(context.cache_dir.path()));
+
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
+    environment.create_dir_all()?;
+    environment
+        .child("stale.txt")
+        .write_str("stale cache data")?;
+    environment.child("pyvenv.cfg").create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+
+    environment
+        .child("pyvenv.cfg")
+        .assert(predicate::path::is_file());
+    environment
+        .child("stale.txt")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn run_script_environment_cache_repair_linked_entry() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("main.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        import sys
+
+        print(sys.prefix)
+        "#
+    })?;
+
+    let output = uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+
+    let environment = ChildPath::new(String::from_utf8(output.stdout)?.trim());
+    assert!(environment.path().starts_with(context.cache_dir.path()));
+
+    // Replacing the owned cache entry must not clear a directory outside the cache.
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
+    let target = context.temp_dir.child("target");
+    target.create_dir_all()?;
+    target.child("important.txt").write_str("important data")?;
+    uv_fs::create_symlink(target.path(), environment.path())?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+    target.child("important.txt").assert("important data");
+    target
+        .child("pyvenv.cfg")
+        .assert(predicate::path::missing());
+    assert!(fs_err::read_link(environment.path()).is_err());
+
+    Ok(())
+}
+
+#[test]
+fn run_script_environment_cache_repair_dangling_link() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("main.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        import sys
+
+        print(sys.prefix)
+        "#
+    })?;
+
+    let output = uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+
+    let environment = ChildPath::new(String::from_utf8(output.stdout)?.trim());
+    assert!(environment.path().starts_with(context.cache_dir.path()));
+
+    // A dangling link at the same owned entry can also be replaced.
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
+    let missing = context.temp_dir.child("missing");
+    missing.create_dir_all()?;
+    uv_fs::create_symlink(missing.path(), environment.path())?;
+    fs_err::remove_dir(missing.path())?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+    missing.assert(predicate::path::missing());
+    environment
+        .child("pyvenv.cfg")
+        .assert(predicate::path::is_file());
+    assert!(fs_err::read_link(environment.path()).is_err());
 
     Ok(())
 }
@@ -7809,7 +8129,7 @@ fn run_centralized_environment_no_sync_uses_incompatible_python() -> Result<()> 
 
     // Without the project link, discovery must reuse the cached environment before
     // rejecting the selected interpreter against the updated requirement.
-    uv_fs::remove_virtualenv(&context.temp_dir.join(".venv"))?;
+    uv_fs::remove_virtualenv(&context.temp_dir.join(".venv"), ClearNonVirtualenv::Allow)?;
     context
         .temp_dir
         .child("pyproject.toml")
@@ -7860,7 +8180,7 @@ fn run_centralized_environment_path_file() -> Result<()> {
 
     // Point the path file at an environment outside the centralized store.
     let environment = context.temp_dir.child(".venv");
-    uv_fs::remove_virtualenv(environment.path())?;
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Allow)?;
     let external = context.temp_dir.child("external");
     context
         .venv()

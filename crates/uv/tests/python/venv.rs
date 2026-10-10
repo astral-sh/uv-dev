@@ -1,21 +1,32 @@
+use std::assert_matches;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+#[cfg(unix)]
+use assert_cmd::Command as AssertCommand;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use predicates::prelude::*;
 use uv_cache::Cache;
 use uv_cache_key::cache_digest;
-use uv_fs::{LockedFile, LockedFileMode};
+use uv_fs::{ClearNonVirtualenv, LockedFile, LockedFileMode};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_static::EnvVars;
+use uv_virtualenv::{
+    CreatedVenv, CreationAction, CreationEvent, OnExisting, RemovalReason, UpgradePolicy,
+};
 
 #[cfg(unix)]
 use fs_err::os::unix::fs::symlink;
 #[cfg(unix)]
-use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+use std::{
+    ffi::OsStr,
+    os::unix::ffi::OsStrExt,
+    os::unix::fs::{FileTypeExt, PermissionsExt},
+    time::Duration,
+};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
@@ -173,6 +184,187 @@ fn create_venv_caches_upgradeable_interpreter() -> Result<()> {
     assert!(startup_marker.is_file());
     assert_eq!(cached, queried);
 
+    Ok(())
+}
+
+/// A read-only replacement decision must not authorize a later deletion.
+#[test]
+fn create_venv_rechecks_destination() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let _preview = uv_preview::test::with_features(&[]);
+    let cache = Cache::from_path(context.cache_dir.path());
+    let interpreter = Interpreter::query(&context.python_versions[0].1, &cache)?;
+    let directory = context.temp_dir.child("environment");
+    let on_existing = OnExisting::Replace {
+        reason: RemovalReason::ManagedEnvironment,
+        clear_non_virtualenv: ClearNonVirtualenv::Error,
+    };
+    let create = |events: &mut Vec<CreationEvent>| {
+        uv_virtualenv::create_venv_with_reporter(
+            directory.path(),
+            interpreter.clone(),
+            uv_virtualenv::Prompt::None,
+            false,
+            on_existing,
+            false,
+            uv_virtualenv::Seed::Disabled,
+            UpgradePolicy::Fixed,
+            |event| {
+                events.push(event);
+                Ok(())
+            },
+        )
+    };
+
+    assert_eq!(on_existing.check(directory.path())?, CreationAction::Create);
+    directory.create_dir_all()?;
+    assert_eq!(on_existing.check(directory.path())?, CreationAction::Create);
+    directory.child("pyvenv.cfg").touch()?;
+    assert_eq!(
+        on_existing.check(directory.path())?,
+        CreationAction::Replace
+    );
+
+    // The destination is no longer a virtual environment when creation begins.
+    fs_err::remove_file(directory.child("pyvenv.cfg"))?;
+    directory
+        .child("important.txt")
+        .write_str("important data")?;
+    let mut events = Vec::new();
+    assert_matches!(
+        create(&mut events),
+        Err(uv_virtualenv::Error::ClearNonVirtualenv { .. })
+    );
+    assert!(events.is_empty());
+    directory.child("important.txt").assert("important data");
+
+    // Likewise, an entry that disappears is reported as a creation, not a replacement.
+    directory.child("pyvenv.cfg").touch()?;
+    assert_eq!(
+        on_existing.check(directory.path())?,
+        CreationAction::Replace
+    );
+    uv_fs::remove_virtualenv(directory.path(), ClearNonVirtualenv::Error)?;
+    assert_matches!(create(&mut events)?, CreatedVenv::Created(_));
+    assert_eq!(events, [CreationEvent::Creating]);
+
+    directory.child("stale.txt").touch()?;
+    let mut events = Vec::new();
+    assert_matches!(create(&mut events)?, CreatedVenv::Replaced(_));
+    assert_eq!(events, [CreationEvent::Removed, CreationEvent::Creating]);
+    directory
+        .child("stale.txt")
+        .assert(predicate::path::missing());
+    directory
+        .child("pyvenv.cfg")
+        .assert(predicate::path::is_file());
+    Ok(())
+}
+
+#[test]
+fn check_venv_replacement_links() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let target = context.temp_dir.child("target");
+    target.create_dir_all()?;
+    let directory = context.temp_dir.child("environment");
+    uv_fs::create_symlink(target.path(), directory.path())?;
+    let on_existing = OnExisting::Replace {
+        reason: RemovalReason::ManagedEnvironment,
+        clear_non_virtualenv: ClearNonVirtualenv::Error,
+    };
+
+    assert_eq!(on_existing.check(directory.path())?, CreationAction::Create);
+    target.child("pyvenv.cfg").touch()?;
+    assert_eq!(
+        on_existing.check(directory.path())?,
+        CreationAction::Replace
+    );
+
+    fs_err::remove_file(target.child("pyvenv.cfg"))?;
+    target.child("important.txt").write_str("important data")?;
+    assert_matches!(
+        on_existing.check(directory.path()),
+        Err(uv_virtualenv::Error::ClearNonVirtualenv { .. })
+    );
+    target.child("important.txt").assert("important data");
+
+    fs_err::remove_file(target.child("important.txt"))?;
+    fs_err::remove_dir(target.path())?;
+    assert_matches!(
+        on_existing.check(directory.path()),
+        Err(uv_virtualenv::Error::ClearNonVirtualenv { .. })
+    );
+    assert_eq!(
+        OnExisting::Replace {
+            reason: RemovalReason::ManagedEnvironment,
+            clear_non_virtualenv: ClearNonVirtualenv::Allow,
+        }
+        .check(directory.path())?,
+        CreationAction::Replace
+    );
+    assert_link_target(&directory, &target);
+    Ok(())
+}
+
+/// Allowing existing contents does not require permission to enumerate the destination.
+#[test]
+#[cfg(unix)]
+fn check_venv_allow_existing_unreadable_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let directory = context.temp_dir.child("environment");
+    directory.create_dir_all()?;
+    let permissions = fs_err::metadata(directory.path())?.permissions();
+    fs_err::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o300))?;
+    let readable = fs_err::read_dir(directory.path()).is_ok();
+    let action = OnExisting::Allow.check(directory.path());
+    fs_err::set_permissions(directory.path(), permissions)?;
+
+    // Privileged users may bypass the mode bits and cannot exercise this fixture.
+    if readable {
+        return Ok(());
+    }
+    assert_eq!(action?, CreationAction::Create);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn check_venv_preserves_inspection_errors() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let directory = context.temp_dir.child("environment");
+    directory.create_dir_all()?;
+    directory
+        .child("important.txt")
+        .write_str("important data")?;
+    symlink("pyvenv.cfg", directory.child("pyvenv.cfg"))?;
+
+    for on_existing in [
+        OnExisting::Clear {
+            reason: RemovalReason::ManagedEnvironment,
+            clear_non_virtualenv: ClearNonVirtualenv::Error,
+        },
+        OnExisting::Replace {
+            reason: RemovalReason::ManagedEnvironment,
+            clear_non_virtualenv: ClearNonVirtualenv::Error,
+        },
+    ] {
+        assert_matches!(
+            on_existing.check(directory.path()),
+            Err(uv_virtualenv::Error::InspectExisting { .. })
+        );
+    }
+    directory.child("important.txt").assert("important data");
+
+    // Ownership permits repairing an entry even when the marker cannot be inspected.
+    assert_eq!(
+        OnExisting::Replace {
+            reason: RemovalReason::ManagedEnvironment,
+            clear_non_virtualenv: ClearNonVirtualenv::Allow,
+        }
+        .check(directory.path())?,
+        CreationAction::Replace
+    );
+    directory.child("important.txt").assert("important data");
     Ok(())
 }
 
@@ -652,7 +844,7 @@ fn create_centralized_project_environment_path_file() -> Result<()> {
     let marker = target.join("marker");
     fs_err::write(&marker, "")?;
 
-    uv_fs::remove_virtualenv(environment.path())?;
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Allow)?;
     environment.write_str(&target.to_string_lossy())?;
 
     // With the preview, `--allow-existing` selects the root for the requested interpreter.
@@ -671,7 +863,7 @@ fn create_centralized_project_environment_path_file() -> Result<()> {
     assert_ne!(target, fs_err::read_link(environment.path())?);
     assert!(marker.is_file());
 
-    uv_fs::remove_virtualenv(environment.path())?;
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
     environment.write_str(&target.to_string_lossy())?;
 
     // Without the preview, `--allow-existing` replaces the path file without clearing its target.
@@ -1714,6 +1906,54 @@ fn non_empty_dir_exists_clear_force() -> Result<()> {
 }
 
 #[test]
+fn non_empty_dir_with_marker_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let directory = context.temp_dir.child("not-a-virtualenv");
+    directory.child("pyvenv.cfg").create_dir_all()?;
+    directory.child("file").write_str("important data")?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg(directory.as_os_str())
+        .arg("--clear")
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: not-a-virtualenv
+    error: Failed to create virtual environment
+      cause: uv will not clear a directory that is not a virtual environment
+
+    hint: Use the `--force` flag to remove the existing directory anyway
+    ");
+
+    directory.child("file").assert("important data");
+    directory
+        .child("pyvenv.cfg")
+        .assert(predicates::path::is_dir());
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg(directory.as_os_str())
+        .arg("--clear")
+        .arg("--force")
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: not-a-virtualenv
+    Activate with: source not-a-virtualenv/[BIN]/activate
+    ");
+
+    directory.child("file").assert(predicates::path::missing());
+    directory
+        .child("pyvenv.cfg")
+        .assert(predicates::path::is_file());
+
+    Ok(())
+}
+
+#[test]
 fn non_empty_dir_exists_allow_existing() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
@@ -2567,4 +2807,100 @@ fn no_clear_conflicts_with_allow_existing() {
     For more information, try '--help'.
     "
     );
+}
+
+/// A FIFO is an invalid destination, not a file containing an environment path.
+#[cfg(unix)]
+#[test]
+fn create_venv_no_clear_rejects_fifo_without_reading() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .assert_command("import os; os.mkfifo('fifo')")
+        .success();
+
+    // A blocking FIFO read must fail this regression instead of hanging the suite.
+    AssertCommand::from_std(context.venv())
+        .args(["fifo", "--python", "3.12", "--no-clear"])
+        .timeout(Duration::from_secs(10))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Object already exists"));
+    assert!(
+        fs_err::symlink_metadata(context.temp_dir.child("fifo"))?
+            .file_type()
+            .is_fifo()
+    );
+    Ok(())
+}
+
+/// A FIFO is an invalid destination, not a file containing an environment path.
+#[cfg(unix)]
+#[test]
+fn create_venv_allow_existing_rejects_fifo_without_reading() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .assert_command("import os; os.mkfifo('fifo')")
+        .success();
+
+    // A blocking FIFO read must fail this regression instead of hanging the suite.
+    AssertCommand::from_std(context.venv())
+        .args(["fifo", "--python", "3.12", "--allow-existing"])
+        .timeout(Duration::from_secs(10))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Object already exists"));
+    assert!(
+        fs_err::symlink_metadata(context.temp_dir.child("fifo"))?
+            .file_type()
+            .is_fifo()
+    );
+    Ok(())
+}
+
+/// A FIFO is an invalid destination, not a file containing an environment path.
+#[cfg(unix)]
+#[test]
+fn create_venv_prompt_rejects_fifo_without_reading() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .assert_command("import os; os.mkfifo('fifo')")
+        .success();
+
+    // A blocking FIFO read must fail this regression instead of hanging the suite.
+    AssertCommand::from_std(context.venv())
+        .args(["fifo", "--python", "3.12"])
+        .timeout(Duration::from_secs(10))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Object already exists"));
+    assert!(
+        fs_err::symlink_metadata(context.temp_dir.child("fifo"))?
+            .file_type()
+            .is_fifo()
+    );
+    Ok(())
+}
+
+/// A FIFO is an invalid destination, not a file containing an environment path.
+#[cfg(unix)]
+#[test]
+fn create_venv_clear_rejects_fifo_without_reading() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .assert_command("import os; os.mkfifo('fifo')")
+        .success();
+
+    // A blocking FIFO read must fail this regression instead of hanging the suite.
+    AssertCommand::from_std(context.venv())
+        .args(["fifo", "--python", "3.12", "--clear"])
+        .timeout(Duration::from_secs(10))
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Object already exists"));
+    assert!(
+        fs_err::symlink_metadata(context.temp_dir.child("fifo"))?
+            .file_type()
+            .is_fifo()
+    );
+    Ok(())
 }
