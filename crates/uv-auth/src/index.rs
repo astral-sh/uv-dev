@@ -124,7 +124,16 @@ impl Indexes {
     }
 
     fn find_prefix_index(&self, url: &Url) -> Option<&Index> {
-        self.0.iter().find(|&index| index.is_prefix_for(url))
+        self.0
+            .iter()
+            .filter(|&index| index.is_prefix_for(url))
+            .max_by_key(|index| {
+                (
+                    index.root_url.path().trim_end_matches('/').len(),
+                    matches!(index.auth_policy, AuthPolicy::Never),
+                    matches!(index.auth_policy, AuthPolicy::Always),
+                )
+            })
     }
 }
 
@@ -166,5 +175,44 @@ mod tests {
                 "Should not match URL with partial path segment: {url}"
             );
         }
+    }
+
+    #[test]
+    fn test_index_path_prefix_prefers_most_specific_root() {
+        let indexes = Indexes::from_indexes([
+            index("https://example.com", AuthPolicy::Always),
+            index("https://example.com/public", AuthPolicy::Never),
+        ]);
+        let url = Url::parse("https://example.com/public/simple/anyio").unwrap();
+
+        assert_eq!(indexes.auth_policy_for(&url), AuthPolicy::Never);
+        assert_eq!(
+            indexes.index_for(&url).map(|index| index.root_url.path()),
+            Some("/public")
+        );
+    }
+
+    #[test]
+    fn test_index_path_prefix_prefers_never_for_equal_roots() {
+        let indexes = Indexes::from_indexes([
+            index("https://example.com/public", AuthPolicy::Auto),
+            index("https://example.com/public", AuthPolicy::Always),
+            index("https://example.com/public", AuthPolicy::Never),
+        ]);
+        let url = Url::parse("https://example.com/public/simple/anyio").unwrap();
+
+        assert_eq!(indexes.auth_policy_for(&url), AuthPolicy::Never);
+    }
+
+    #[test]
+    fn test_index_path_prefix_prefers_never_for_trailing_slash_roots() {
+        let indexes = Indexes::from_indexes([
+            index("https://example.com/public/", AuthPolicy::Auto),
+            index("https://example.com/public/", AuthPolicy::Always),
+            index("https://example.com/public", AuthPolicy::Never),
+        ]);
+        let url = Url::parse("https://example.com/public/simple/anyio").unwrap();
+
+        assert_eq!(indexes.auth_policy_for(&url), AuthPolicy::Never);
     }
 }
