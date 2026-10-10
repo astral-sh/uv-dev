@@ -171,32 +171,34 @@ impl Tags {
         implementation_version: (u8, u8),
         options: TagsOptions,
     ) -> Result<Self, TagsError> {
-        let mut variant = CPythonAbiVariants::default();
-        if options.gil_disabled {
-            if implementation_name != "cpython" {
-                return Err(TagsError::GilIsACPythonProblem(
-                    implementation_name.to_string(),
-                ));
+        // CPython-specific ABI errors take precedence over unrecognized implementation names.
+        let implementation = implementation_name.parse().map_err(|error| {
+            if options.gil_disabled {
+                TagsError::GilIsACPythonProblem(implementation_name.to_owned())
+            } else if options.debug_enabled {
+                TagsError::DebugIsACPythonProblem(implementation_name.to_owned())
+            } else {
+                error
             }
-            variant.insert(CPythonAbiVariants::Freethreading);
-        }
-        if options.debug_enabled {
-            if implementation_name != "cpython" {
-                return Err(TagsError::DebugIsACPythonProblem(
-                    implementation_name.to_string(),
-                ));
-            }
-            variant.insert(CPythonAbiVariants::Debug);
-        }
-        // Sufficiently correct assumption, pre-3.8 Pythons were generally built with pymalloc.
-        // https://docs.python.org/dev/whatsnew/3.8.html#build-and-c-api-changes
-        // > the m flag for pymalloc became useless (builds with and without pymalloc are ABI
-        // > compatible) and so has been removed.
-        if python_version <= (3, 7) && implementation_name == "cpython" {
-            variant.insert(CPythonAbiVariants::Pymalloc);
-        }
+        })?;
+        Self::from_implementation(
+            platform,
+            python_version,
+            implementation,
+            implementation_version,
+            options,
+        )
+    }
 
-        let implementation = Implementation::parse(implementation_name, variant)?;
+    /// Returns the compatible tags for a supported Python implementation, version, and platform.
+    fn from_implementation(
+        platform: Platform,
+        python_version: (u8, u8),
+        implementation: TagImplementation,
+        implementation_version: (u8, u8),
+        options: TagsOptions,
+    ) -> Result<Self, TagsError> {
+        let implementation = implementation.with_abi(python_version, options)?;
 
         // Determine the compatible tags for the current platform.
         let platform_tags = {
@@ -512,6 +514,78 @@ impl std::fmt::Display for Tags {
     }
 }
 
+/// A Python implementation supported by wheel-tag generation.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum TagImplementation {
+    CPython,
+    PyPy,
+    GraalPy,
+    Pyston,
+}
+
+impl FromStr for TagImplementation {
+    type Err = TagsError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "cpython" => Ok(Self::CPython),
+            "pypy" => Ok(Self::PyPy),
+            "graalpy" => Ok(Self::GraalPy),
+            "pyston" => Ok(Self::Pyston),
+            "python" | "ironpython" | "jython" => {
+                Err(TagsError::UnsupportedImplementation(name.to_owned()))
+            }
+            _ => Err(TagsError::UnknownImplementation(name.to_owned())),
+        }
+    }
+}
+
+impl TagImplementation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::CPython => "cpython",
+            Self::PyPy => "pypy",
+            Self::GraalPy => "graalpy",
+            Self::Pyston => "pyston",
+        }
+    }
+
+    fn with_abi(
+        self,
+        python_version: (u8, u8),
+        options: TagsOptions,
+    ) -> Result<Implementation, TagsError> {
+        if self != Self::CPython {
+            if options.gil_disabled {
+                return Err(TagsError::GilIsACPythonProblem(self.as_str().to_owned()));
+            }
+            if options.debug_enabled {
+                return Err(TagsError::DebugIsACPythonProblem(self.as_str().to_owned()));
+            }
+        }
+        Ok(match self {
+            Self::CPython => {
+                let mut variant = CPythonAbiVariants::default();
+                if options.gil_disabled {
+                    variant.insert(CPythonAbiVariants::Freethreading);
+                }
+                if options.debug_enabled {
+                    variant.insert(CPythonAbiVariants::Debug);
+                }
+                // Before Python 3.8, CPython builds generally used pymalloc. In Python 3.8,
+                // builds with and without pymalloc became ABI-compatible.
+                if python_version <= (3, 7) {
+                    variant.insert(CPythonAbiVariants::Pymalloc);
+                }
+                Implementation::CPython { variant }
+            }
+            Self::PyPy => Implementation::PyPy,
+            Self::GraalPy => Implementation::GraalPy,
+            Self::Pyston => Implementation::Pyston,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Implementation {
     CPython { variant: CPythonAbiVariants },
@@ -557,22 +631,6 @@ impl Implementation {
             Self::Pyston => AbiTag::Pyston {
                 implementation_version,
             },
-        }
-    }
-
-    fn parse(name: &str, variant: CPythonAbiVariants) -> Result<Self, TagsError> {
-        match name {
-            // Known and supported implementations.
-            "cpython" => Ok(Self::CPython { variant }),
-            "pypy" => Ok(Self::PyPy),
-            "graalpy" => Ok(Self::GraalPy),
-            "pyston" => Ok(Self::Pyston),
-            // Known but unsupported implementations.
-            "python" => Err(TagsError::UnsupportedImplementation(name.to_string())),
-            "ironpython" => Err(TagsError::UnsupportedImplementation(name.to_string())),
-            "jython" => Err(TagsError::UnsupportedImplementation(name.to_string())),
-            // Unknown implementations.
-            _ => Err(TagsError::UnknownImplementation(name.to_string())),
         }
     }
 }
@@ -1174,6 +1232,39 @@ mod tests {
     use insta::{assert_debug_snapshot, assert_snapshot};
 
     use super::*;
+
+    #[test]
+    fn implementation_error_precedence() {
+        let mut errors = Vec::new();
+        for name in ["jython", "custom"] {
+            for (gil_disabled, debug_enabled) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let result = Tags::from_env(
+                    Platform::new(Os::Windows, Arch::X86_64),
+                    (3, 14),
+                    name,
+                    (3, 14),
+                    TagsOptions {
+                        gil_disabled,
+                        debug_enabled,
+                        ..TagsOptions::default()
+                    },
+                );
+                errors.push(result.expect_err("unsupported implementation").to_string());
+            }
+        }
+        assert_snapshot!(errors.join("\n"), @"
+        Unsupported implementation: `jython`
+        Only CPython can be freethreading, not: jython
+        Only CPython can be debug-enabled, not: jython
+        Only CPython can be freethreading, not: jython
+        Unknown implementation: `custom`
+        Only CPython can be freethreading, not: custom
+        Only CPython can be debug-enabled, not: custom
+        Only CPython can be freethreading, not: custom
+        ");
+    }
 
     /// Check platform tag ordering.
     /// The list is displayed in decreasing priority.
@@ -1836,7 +1927,7 @@ mod tests {
     /// ```
     #[test]
     fn test_system_tags_manylinux() {
-        let tags = Tags::from_env(
+        let tags = Tags::from_implementation(
             Platform::new(
                 Os::Manylinux {
                     major: 2,
@@ -1845,7 +1936,7 @@ mod tests {
                 Arch::X86_64,
             ),
             (3, 9),
-            "cpython",
+            TagImplementation::CPython,
             (3, 9),
             TagsOptions {
                 manylinux_compatible: true,
@@ -2462,7 +2553,7 @@ mod tests {
 
     #[test]
     fn test_system_tags_macos() {
-        let tags = Tags::from_env(
+        let tags = Tags::from_implementation(
             Platform::new(
                 Os::Macos {
                     major: 14,
@@ -2471,7 +2562,7 @@ mod tests {
                 Arch::Aarch64,
             ),
             (3, 9),
-            "cpython",
+            TagImplementation::CPython,
             (3, 9),
             TagsOptions::default(),
         )
