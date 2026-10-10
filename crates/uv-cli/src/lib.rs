@@ -5821,9 +5821,9 @@ pub enum PythonCommand {
     /// Download and install Python versions.
     ///
     /// Supports CPython and PyPy. CPython distributions are downloaded from the Astral
-    /// `python-build-standalone` project. PyPy distributions are downloaded from `python.org`. The
-    /// available Python versions are bundled with each uv release. To install new Python versions,
-    /// you may need upgrade uv.
+    /// `python-build-standalone` project. PyPy distributions are downloaded from `python.org`.
+    /// Available Python versions are bundled with each uv release. Enable the
+    /// `remote-python-download-metadata` preview feature to fetch new CPython versions at runtime.
     ///
     /// Python versions are installed into the uv Python directory, which can be retrieved with `uv
     /// python dir`.
@@ -5951,7 +5951,10 @@ pub struct PythonListArgs {
     #[arg(long, value_enum, default_value_t = PythonListFormat::default())]
     output_format: PythonListFormat,
 
-    /// URL pointing to JSON of custom Python installations.
+    /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[arg(long, value_hint = ValueHint::Other)]
     python_downloads_json_url: Option<String>,
 }
@@ -6093,7 +6096,10 @@ pub struct PythonInstallArgs {
     #[arg(long, value_hint = ValueHint::Url)]
     pyodide_mirror: Option<String>,
 
-    /// URL pointing to JSON of custom Python installations.
+    /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[arg(long, value_hint = ValueHint::Other)]
     python_downloads_json_url: Option<String>,
 
@@ -6220,7 +6226,10 @@ pub struct PythonUpgradeArgs {
     #[arg(long, short)]
     reinstall: bool,
 
-    /// URL pointing to JSON of custom Python installations.
+    /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[arg(long, value_hint = ValueHint::Other)]
     python_downloads_json_url: Option<String>,
 
@@ -6317,7 +6326,10 @@ pub struct PythonFindArgs {
     #[arg(long)]
     pub resolve_links: bool,
 
-    /// URL pointing to JSON of custom Python installations.
+    /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[arg(long, value_hint = ValueHint::Other)]
     pub python_downloads_json_url: Option<String>,
 }
@@ -6374,7 +6386,10 @@ pub struct PythonPinArgs {
     #[arg(long, conflicts_with = "request", conflicts_with = "resolved")]
     rm: bool,
 
-    /// URL pointing to JSON of custom Python installations.
+    /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[arg(long, value_hint = ValueHint::Other)]
     python_downloads_json_url: Option<String>,
 }

@@ -123,8 +123,9 @@ present, uv will install all the Python versions listed in the file.
 
 !!! important
 
-    The available Python versions are frozen for each uv release. To install new Python versions,
-    you may need upgrade uv.
+    The available Python versions are frozen for each uv release. To fetch new CPython versions
+    without upgrading uv, enable the `remote-python-download-metadata` preview feature. If the
+    metadata cannot be fetched or parsed, uv falls back to its bundled versions.
 
 See the [storage documentation](../reference/storage.md#python-versions) for details about where
 installed Python versions are stored.

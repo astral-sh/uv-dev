@@ -66,6 +66,27 @@ impl Platform {
         Ok(Self { os, arch, libc })
     }
 
+    /// Parse a platform from a `cargo-dist` style triple string (e.g., `aarch64-apple-darwin`).
+    ///
+    /// See [`Self::as_cargo_dist_triple`] for the inverse operation.
+    pub fn from_cargo_dist_triple(triple: &str) -> Result<Self, Error> {
+        let parts: Vec<&str> = triple.split('-').collect();
+        if parts.len() < 3 {
+            return Err(Error::InvalidPlatformFormat(format!(
+                "expected at least 3 parts in cargo-dist triple, got {} in '{triple}'",
+                parts.len()
+            )));
+        }
+
+        let arch = Arch::from_cargo_dist(parts[0])?;
+        let os = Os::from_cargo_dist(parts[2])?;
+        let libc = parts
+            .get(3)
+            .map_or(Libc::None, |environment| Libc::from_cargo_dist(environment));
+
+        Ok(Self { os, arch, libc })
+    }
+
     /// Check if this platform supports running another platform.
     pub fn supports(&self, other: &Self) -> bool {
         // If platforms are exactly equal, they're compatible
@@ -137,6 +158,8 @@ impl Platform {
     }
 
     /// Convert this platform to a `cargo-dist` style triple string.
+    ///
+    /// See [`Self::from_cargo_dist_triple`] for the inverse operation.
     pub fn as_cargo_dist_triple(&self) -> String {
         use target_lexicon::{
             Architecture, ArmArchitecture, Environment, OperatingSystem, Riscv64Architecture,
@@ -496,6 +519,93 @@ mod tests {
                 expected,
                 "linux-{arch}-{libc}"
             );
+        }
+    }
+
+    #[test]
+    fn test_from_cargo_dist_triple() {
+        let platform = Platform::from_cargo_dist_triple("aarch64-apple-darwin").unwrap();
+        assert_eq!(platform.arch.to_string(), "aarch64");
+        assert_eq!(platform.os.to_string(), "macos");
+        assert_eq!(platform.libc.to_string(), "none");
+
+        let platform = Platform::from_cargo_dist_triple("x86_64-apple-darwin").unwrap();
+        assert_eq!(platform.arch.to_string(), "x86_64");
+        assert_eq!(platform.os.to_string(), "macos");
+        assert_eq!(platform.libc.to_string(), "none");
+
+        let platform = Platform::from_cargo_dist_triple("x86_64-unknown-linux-gnu").unwrap();
+        assert_eq!(platform.arch.to_string(), "x86_64");
+        assert_eq!(platform.os.to_string(), "linux");
+        assert_eq!(platform.libc.to_string(), "gnu");
+
+        let platform = Platform::from_cargo_dist_triple("aarch64-unknown-linux-gnu").unwrap();
+        assert_eq!(platform.arch.to_string(), "aarch64");
+        assert_eq!(platform.os.to_string(), "linux");
+        assert_eq!(platform.libc.to_string(), "gnu");
+
+        let platform = Platform::from_cargo_dist_triple("x86_64-unknown-linux-musl").unwrap();
+        assert_eq!(platform.arch.to_string(), "x86_64");
+        assert_eq!(platform.os.to_string(), "linux");
+        assert_eq!(platform.libc.to_string(), "musl");
+
+        let platform = Platform::from_cargo_dist_triple("x86_64-pc-windows-msvc").unwrap();
+        assert_eq!(platform.arch.to_string(), "x86_64");
+        assert_eq!(platform.os.to_string(), "windows");
+        assert_eq!(platform.libc.to_string(), "none");
+
+        let platform = Platform::from_cargo_dist_triple("aarch64-pc-windows-msvc").unwrap();
+        assert_eq!(platform.arch.to_string(), "aarch64");
+        assert_eq!(platform.os.to_string(), "windows");
+        assert_eq!(platform.libc.to_string(), "none");
+
+        let platform = Platform::from_cargo_dist_triple("x86_64_v3-unknown-linux-gnu").unwrap();
+        assert_eq!(platform.arch.to_string(), "x86_64_v3");
+        assert_eq!(platform.os.to_string(), "linux");
+        assert_eq!(platform.libc.to_string(), "gnu");
+
+        let platform = Platform::from_cargo_dist_triple("armv7-unknown-linux-gnueabihf").unwrap();
+        assert_eq!(platform.arch.to_string(), "armv7");
+        assert_eq!(platform.os.to_string(), "linux");
+        assert_eq!(platform.libc.to_string(), "gnueabihf");
+
+        let platform = Platform::from_cargo_dist_triple("ppc64le-unknown-linux-gnu").unwrap();
+        assert_eq!(platform.arch.to_string(), "powerpc64le");
+        assert_eq!(platform.os.to_string(), "linux");
+        assert_eq!(platform.libc.to_string(), "gnu");
+
+        let platform = Platform::from_cargo_dist_triple("riscv64gc-unknown-linux-gnu").unwrap();
+        assert_eq!(platform.arch.to_string(), "riscv64gc");
+        assert_eq!(platform.os.to_string(), "linux");
+        assert_eq!(platform.libc.to_string(), "gnu");
+    }
+
+    #[test]
+    fn test_from_cargo_dist_triple_errors() {
+        assert!(Platform::from_cargo_dist_triple("x86_64-unknown").is_err());
+        assert!(Platform::from_cargo_dist_triple("x86_64").is_err());
+        assert!(Platform::from_cargo_dist_triple("invalid_arch-unknown-linux-gnu").is_err());
+        assert!(Platform::from_cargo_dist_triple("x86_64-unknown-invalid_os-gnu").is_err());
+    }
+
+    #[test]
+    fn test_cargo_dist_triple_roundtrip() {
+        let platforms = [
+            Platform::from_parts("macos", "aarch64", "none").unwrap(),
+            Platform::from_parts("macos", "x86_64", "none").unwrap(),
+            Platform::from_parts("linux", "x86_64", "gnu").unwrap(),
+            Platform::from_parts("linux", "x86_64", "musl").unwrap(),
+            Platform::from_parts("linux", "aarch64", "gnu").unwrap(),
+            Platform::from_parts("linux", "riscv64gc", "gnu").unwrap(),
+            Platform::from_parts("linux", "armv7", "musleabi").unwrap(),
+            Platform::from_parts("linux", "armv7", "musleabihf").unwrap(),
+            Platform::from_parts("windows", "x86_64", "none").unwrap(),
+        ];
+
+        for original in platforms {
+            let triple = original.as_cargo_dist_triple();
+            let parsed = Platform::from_cargo_dist_triple(&triple).unwrap();
+            assert_eq!(original, parsed, "roundtrip failed for {triple}");
         }
     }
 }

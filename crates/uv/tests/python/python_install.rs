@@ -1,5 +1,6 @@
 #[cfg(windows)]
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use std::{env, path::Path, process::Command};
 
@@ -16,10 +17,17 @@ use tracing::debug;
 use uv_test::assert_link_target;
 use uv_test::{LATEST_PYTHON_3_12, assert_path_missing, uv_snapshot};
 
+use uv_cache::CacheBucket;
 use uv_fs::Simplified;
-use uv_python_managed::platform_key_from_env;
+use uv_platform::Platform;
+use uv_python_managed::{downloads::ManagedPythonDownloadList, platform_key_from_env};
+use uv_python_types::{PythonDownloadRequest, PythonRequest};
 use uv_static::EnvVars;
 use walkdir::WalkDir;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 #[test]
 fn python_install() {
@@ -4171,4 +4179,253 @@ fn python_install_compile_bytecode_pypy() {
      + pypy-3.11.16-[PLATFORM] (pypy3.11)
     Bytecode compiled [COUNT] files in [TIME]
     ");
+}
+
+#[test]
+fn python_install_with_ndjson_manifest() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_filtered_latest_python_versions()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+
+    let download_list = ManagedPythonDownloadList::new_only_embedded().unwrap();
+    let download_request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.14"))
+        .unwrap()
+        .fill()
+        .unwrap();
+    let download = download_list.find(&download_request).unwrap();
+
+    let version = if let Some(build) = download.build() {
+        format!("{}+{build}", download.key().version())
+    } else {
+        download.key().version().to_string()
+    };
+    let sha256 = download.sha256().unwrap().as_str();
+    let manifest = context.temp_dir.child("python-downloads.ndjson");
+    manifest
+        .write_str(&format!(
+            "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"install_only\"}}]}}\n",
+            download.url(),
+            Platform::from_env().unwrap().as_cargo_dist_triple(),
+            sha256,
+        ))
+        .unwrap();
+
+    uv_snapshot!(context.filters(), context
+        .python_install()
+        .arg("3.14")
+        .arg("--python-downloads-json-url")
+        .arg(manifest.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.[LATEST] in [TIME]
+     + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
+    ");
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.14", "--reinstall", "--python-downloads-json-url"])
+        .arg(manifest.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.[LATEST] in [TIME]
+     ~ cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
+    ");
+    // An implicit catalog can contain multiple builds of the same Python version.
+    let build = download
+        .build()
+        .expect("CPython download has a build identifier");
+    let artifact = serde_json::json!({
+        "url": download.url(),
+        "platform": Platform::from_env().unwrap().as_cargo_dist_triple(),
+        "sha256": sha256,
+        "variant": "install_only",
+    });
+    let newer = serde_json::json!({
+        "version": format!("{}+99999999", download.key().version()),
+        "artifacts": [artifact.clone()],
+    });
+    let requested = serde_json::json!({
+        "version": format!("{}+{build}", download.key().version()),
+        "artifacts": [artifact],
+    });
+    manifest
+        .write_str(&format!("{newer}\n{requested}\n"))
+        .unwrap();
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.14", "--reinstall"])
+        .env(EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL, manifest.path())
+        .env(EnvVars::UV_PREVIEW_FEATURES, "remote-python-download-metadata")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, build), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.[LATEST] in [TIME]
+     ~ cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
+    ");
+}
+
+#[cfg(unix)]
+#[test]
+fn python_install_with_debug_ndjson_manifest() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_filtered_latest_python_versions()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+
+    let download_list = ManagedPythonDownloadList::new_only_embedded().unwrap();
+    let download_request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.12d"))
+        .unwrap()
+        .fill()
+        .unwrap();
+    let download = download_list.find(&download_request).unwrap();
+
+    let version = if let Some(build) = download.build() {
+        format!("{}+{build}", download.key().version())
+    } else {
+        download.key().version().to_string()
+    };
+    let sha256 = download.sha256().unwrap().as_str();
+    let manifest = context.temp_dir.child("python-downloads.ndjson");
+    manifest
+        .write_str(&format!(
+            "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"debug+full\"}}]}}\n",
+            download.url(),
+            Platform::from_env().unwrap().as_cargo_dist_triple(),
+            sha256,
+        ))
+        .unwrap();
+
+    uv_snapshot!(context.filters(), context
+        .python_install()
+        .arg("3.12d")
+        .arg("--python-downloads-json-url")
+        .arg(manifest.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.12.[LATEST] in [TIME]
+     + cpython-3.12.[LATEST]+debug-[PLATFORM] (python3.12d)
+    ");
+}
+
+/// An implicit catalog without a matching version is fetched only once.
+#[tokio::test]
+async fn python_install_implicit_catalog_miss_uses_one_scan() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"version":"3.99.1","artifacts":[]}"#,
+            "application/x-ndjson",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.python_install().arg("3.99")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "remote-python-download-metadata")
+        .env(EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL, format!("{}/versions.ndjson", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No download found for request: cpython-3.99-[PLATFORM]
+    ");
+    Ok(())
+}
+
+/// A prerelease retained during the stable search avoids a second catalog request.
+#[tokio::test]
+async fn python_install_implicit_prerelease_uses_one_scan() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+    let server = MockServer::start().await;
+    let downloads = ManagedPythonDownloadList::new_only_embedded()?;
+    let request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.14.0rc3"))
+        .context("version request supports managed downloads")?
+        .fill()
+        .context("native CPython platform is supported")?;
+    let download = downloads.find(&request)?;
+    let metadata = serde_json::json!({
+        "version": download.key().version().to_string(),
+        "artifacts": [{
+            "url": download.url(),
+            "platform": Platform::from_env()?.as_cargo_dist_triple(),
+            "sha256": download.sha256().context("CPython fixture has a hash")?.as_str(),
+            "variant": "install_only",
+        }],
+    });
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(metadata.to_string(), "application/x-ndjson"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.python_install().arg("3.14")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "remote-python-download-metadata")
+        .env(EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL, format!("{}/versions.ndjson", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.0rc3 in [TIME]
+     + cpython-3.14.0rc3-[PLATFORM] (python3.14)
+    ");
+    Ok(())
+}
+
+/// Full-catalog fetches redact signed URLs when HEAD fails and GET still succeeds.
+#[tokio::test]
+async fn python_install_ndjson_head_failure_redacts_signed_url() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs();
+    let server = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(405))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"version":"3.99.1","artifacts":[]}"#,
+            "application/x-ndjson",
+        ))
+        .expect(2)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.python_install().args(["3.99", "--reinstall"])
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/versions.ndjson?X-Amz-Signature=secret-signature&safe=value", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No download found for request: cpython-3.99-[PLATFORM]
+    ");
+    let metadata_path = context
+        .cache_files(CacheBucket::Python)?
+        .into_iter()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "python-build-standalone.meta.json")
+        })
+        .context("cached catalog metadata exists")?;
+    let mut metadata: serde_json::Value = serde_json::from_str(&context.read(&metadata_path))?;
+    metadata["checked_at"] = serde_json::to_value(SystemTime::UNIX_EPOCH)?;
+    fs_err::write(&metadata_path, serde_json::to_vec(&metadata)?)?;
+    uv_snapshot!(context.filters(), context.python_install().args(["3.99", "--reinstall"])
+        .env(EnvVars::RUST_LOG, "uv_python_managed::downloads=debug")
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/versions.ndjson?X-Amz-Signature=secret-signature&safe=value", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    DEBUG Failed to validate Python downloads metadata with HEAD request: HTTP status client error (405 Method Not Allowed) for url (http://[LOCALHOST]/versions.ndjson?X-Amz-Signature=****&safe=value)
+    error: No download found for request: cpython-3.99-[PLATFORM]
+    ");
+    Ok(())
 }

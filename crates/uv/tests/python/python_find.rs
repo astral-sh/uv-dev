@@ -1517,6 +1517,45 @@ fn python_find_prerelease_version_specifiers() {
 
 #[test]
 #[cfg(feature = "test-python-managed")]
+fn python_find_prerelease_warning_with_ndjson_manifest() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_python_sources()
+        .with_managed_python_dirs()
+        .with_filtered_python_install_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+
+    context.python_install().arg("3.14.0rc3").assert().success();
+
+    let manifest = context.temp_dir.child("python-downloads.ndjson");
+    manifest
+        .write_str(
+            r#"{"version":"3.99.1","artifacts":[]}
+"#,
+        )
+        .unwrap();
+
+    uv_snapshot!(context.filters(), context
+        .python_find()
+        .env_remove(EnvVars::UV_PREVIEW)
+        .arg("--managed-python")
+        .arg(">=3.14")
+        .arg("--resolve-links")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "remote-python-download-metadata")
+        .env(
+            EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL,
+            manifest.path(),
+        ), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.14.0rc3-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+
+    ");
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
 fn python_find_prerelease_with_patch_request() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()

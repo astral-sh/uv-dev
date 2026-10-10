@@ -10,8 +10,15 @@ use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 #[cfg(unix)]
 use indoc::indoc;
 use insta::assert_snapshot;
+#[cfg(feature = "test-python-managed")]
+use uv_platform::Platform;
 use uv_platform::{Arch, Os};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
+#[cfg(feature = "test-python-managed")]
+use uv_python_managed::downloads::ManagedPythonDownloadList;
+#[cfg(feature = "test-python-managed")]
+use uv_python_types::{PythonDownloadRequest, PythonRequest};
+#[cfg(feature = "test-python-managed")]
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
@@ -783,6 +790,111 @@ fn python_pin_install() {
     ----- stdout -----
     Pinned `.python-version` to `3.12`
     ");
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_pin_with_ndjson_manifest() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_sources()
+        .with_filtered_latest_python_versions()
+        .with_filtered_python_keys()
+        .with_filtered_python_install_bin()
+        .with_filtered_python_names()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+
+    let download_list = ManagedPythonDownloadList::new_only_embedded().unwrap();
+    let download_request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.12"))
+        .unwrap()
+        .fill()
+        .unwrap();
+    let download = download_list.find(&download_request).unwrap();
+
+    let version = if let Some(build) = download.build() {
+        format!("{}+{build}", download.key().version())
+    } else {
+        download.key().version().to_string()
+    };
+    let sha256 = download.sha256().unwrap().as_str();
+    let manifest = context.temp_dir.child("python-downloads.ndjson");
+    manifest
+        .write_str(&format!(
+            "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"install_only\"}}]}}\n",
+            download.url(),
+            Platform::from_env().unwrap().as_cargo_dist_triple(),
+            sha256,
+        ))
+        .unwrap();
+
+    uv_snapshot!(context.filters(), context
+        .python_pin()
+        .arg("3.12")
+        .arg("--resolved")
+        .arg("--python-downloads-json-url")
+        .arg(manifest.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Pinned `.python-version` to `managed/cpython-3.12.[LATEST]-[PLATFORM]/[INSTALL-BIN]/[PYTHON]`
+
+    ");
+}
+
+#[tokio::test]
+#[cfg(feature = "test-python-managed")]
+async fn python_pin_custom_ndjson_url_does_not_fallback() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_sources()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+    let server = MockServer::start().await;
+
+    uv_snapshot!(context.filters(), context
+        .python_pin()
+        .arg("--resolved")
+        .arg("3.12")
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/versions.ndjson", server.uri()))
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Error while fetching remote python downloads NDJSON from 'http://[LOCALHOST]/versions.ndjson'
+      cause: Failed to download `http://[LOCALHOST]/versions.ndjson`
+      cause: HTTP status client error (404 Not Found) for url (http://[LOCALHOST]/versions.ndjson)
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "test-python-managed")]
+async fn python_pin_custom_ndjson_url_reports_parse_errors() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_sources()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{", "application/x-ndjson"))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .python_pin()
+        .arg("--resolved")
+        .arg("3.12")
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/versions.ndjson", server.uri()))
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to parse NDJSON line 1 at http://[LOCALHOST]/versions.ndjson
+      cause: EOF while parsing an object at line 1 column 1
+    ");
+
+    Ok(())
 }
 
 #[test]

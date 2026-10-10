@@ -504,7 +504,7 @@
       ]
     },
     "python-downloads-json-url": {
-      "description": "URL pointing to JSON of custom Python installations.",
+      "description": "URL pointing to JSON or NDJSON describing custom Python installations.\n\nThe URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are\nparsed as JSON.",
       "type": ["string", "null"]
     },
     "python-install-mirror": {
@@ -1904,7 +1904,8 @@
             "minimum-libc-version",
             "build-dependency-check",
             "build-lazy-imports",
-            "build-dependency-hashes"
+            "build-dependency-hashes",
+            "remote-python-download-metadata"
           ]
         },
         {
