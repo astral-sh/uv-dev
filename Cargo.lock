@@ -8099,6 +8099,7 @@ dependencies = [
  "uv-pep440",
  "uv-pep508",
  "uv-preview",
+ "uv-pypi-types",
  "uv-python-discovery",
  "uv-python-managed",
  "uv-python-types",
