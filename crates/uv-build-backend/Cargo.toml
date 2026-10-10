@@ -49,7 +49,14 @@ spdx = { workspace = true }
 tar-codec = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+# The standalone backend does not need the workspace CLI runtime features.
+tokio = { version = "1.40.0", default-features = false, features = [
+  "fs",
+  "io-util",
+  "rt",
+  "sync",
+  "time",
+] }
 toml = { workspace = true }
 tracing = { workspace = true }
 version-ranges = { workspace = true }
