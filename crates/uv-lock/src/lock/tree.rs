@@ -93,13 +93,16 @@ impl<'env> TreeDisplay<'env> {
         //   the list of workspace members for single-member workspaces with a `[project]` section,
         //   to avoid cluttering the lockfile.
         let members: BTreeSet<&PackageId> = if lock.members().is_empty() {
-            lock.root().into_iter().map(|package| &package.id).collect()
+            lock.root()
+                .into_iter()
+                .map(|package| package.id.as_ref())
+                .collect()
         } else {
             lock.packages
                 .iter()
                 .filter_map(|package| {
                     if lock.members().contains(&package.id.name) {
-                        Some(&package.id)
+                        Some(package.id.as_ref())
                     } else {
                         None
                     }
@@ -399,7 +402,7 @@ impl<'env> TreeDisplay<'env> {
                 .node_indices()
                 .filter(|index| match graph[*index] {
                     Node::Package(package_index) => {
-                        members.contains(&lock.package(package_index).id)
+                        members.contains(lock.package(package_index).id.as_ref())
                     }
                     Node::Root => true,
                 })

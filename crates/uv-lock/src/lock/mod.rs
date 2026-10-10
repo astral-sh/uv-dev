@@ -351,7 +351,7 @@ pub struct Lock {
     /// this map, and that every dependency for every package has an ID
     /// that exists in this map. That is, there are no dependencies that don't
     /// have a corresponding locked package entry in the same lockfile.
-    by_id: FxHashMap<PackageId, PackageIndex>,
+    by_id: FxHashMap<Arc<PackageId>, PackageIndex>,
     /// Workspace members indexed by name, including the implicit single-project root.
     workspace_members: BTreeMap<PackageName, PackageIndex>,
     /// The input requirements to the resolution.
@@ -589,7 +589,7 @@ impl<'a> LockedDependencyBuilder<'a> {
         dependencies: &mut Vec<Dependency>,
         expected: &ExpectedPackageDependencies<'_>,
         context: DependencyContext<'_>,
-        activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
+        activated_extras: &mut FxHashMap<Arc<PackageId>, BTreeMap<ExtraName, UniversalMarker>>,
     ) -> Result<bool, LockError> {
         let empty_requirements = BTreeSet::new();
         let requirements = match context {
@@ -599,7 +599,7 @@ impl<'a> LockedDependencyBuilder<'a> {
                 .get(group)
                 .unwrap_or(&empty_requirements),
         };
-        let mut edges: BTreeMap<(PackageId, BTreeSet<ExtraName>), UniversalMarker> =
+        let mut edges: BTreeMap<(Arc<PackageId>, BTreeSet<ExtraName>), UniversalMarker> =
             BTreeMap::new();
         let mut complete = true;
 
@@ -1308,7 +1308,7 @@ impl<'a> LockedDependencyBuilder<'a> {
         let actual_marker = context
             .dependencies(expected.package)
             .iter()
-            .filter(|dependency| dependency.package_id == *package_id)
+            .filter(|dependency| dependency.package_id.as_ref() == package_id)
             .fold(UniversalMarker::FALSE, |mut marker, dependency| {
                 marker.or(dependency.complexified_marker);
                 marker
@@ -1400,16 +1400,15 @@ impl<'a> LockedDependencyBuilder<'a> {
         }
 
         let existing = context.dependencies(expected.package);
-        if existing
-            .iter()
-            .any(|dependency| dependency.package_id == *package_id && dependency.extra.is_empty())
-        {
+        if existing.iter().any(|dependency| {
+            dependency.package_id.as_ref() == package_id && dependency.extra.is_empty()
+        }) {
             return false;
         }
 
         let mut covered = UniversalMarker::FALSE;
         for dependency in existing.iter().filter(|dependency| {
-            dependency.package_id == *package_id
+            dependency.package_id.as_ref() == package_id
                 && if is_group {
                     !dependency.extra.is_empty()
                 } else {
@@ -1460,7 +1459,7 @@ impl<'a> LockedDependencyBuilder<'a> {
             .dependencies(expected.package)
             .iter()
             .filter(|dependency| {
-                dependency.package_id == *package_id && dependency.extra.is_empty()
+                dependency.package_id.as_ref() == package_id && dependency.extra.is_empty()
             })
             .any(|dependency| {
                 let mut marker = dependency.complexified_marker;
@@ -1487,7 +1486,7 @@ impl<'a> LockedDependencyBuilder<'a> {
     fn add(
         &self,
         dependencies: &mut Vec<Dependency>,
-        package_id: PackageId,
+        package_id: Arc<PackageId>,
         extras: BTreeSet<ExtraName>,
         marker: UniversalMarker,
     ) {
@@ -2160,7 +2159,7 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
         context: DependencyContext<'_>,
         activation: UniversalMarker,
         conflicts: ConflictMarker,
-    ) -> BTreeMap<(PackageId, BTreeSet<ExtraName>), DependencyMarkers> {
+    ) -> BTreeMap<(Arc<PackageId>, BTreeSet<ExtraName>), DependencyMarkers> {
         let mut comparable: BTreeMap<_, DependencyMarkers> = BTreeMap::new();
         for dependency in dependencies {
             let mut forbidden_conflict = UniversalMarker::FALSE;
@@ -2563,7 +2562,7 @@ impl Lock {
             let id = package.id.clone();
             if let Some(locked_dist) = packages.insert(id, package) {
                 return Err(LockErrorKind::DuplicatePackage {
-                    id: locked_dist.id.clone(),
+                    id: locked_dist.id.as_ref().clone(),
                 }
                 .into());
             }
@@ -2680,7 +2679,7 @@ impl Lock {
             for [dep1, dep2] in package.dependencies.array_windows() {
                 if dep1 == dep2 {
                     return Err(LockErrorKind::DuplicateDependency {
-                        id: package.id.clone(),
+                        id: package.id.as_ref().clone(),
                         dependency: dep1.clone(),
                     }
                     .into());
@@ -2693,7 +2692,7 @@ impl Lock {
                 for [dep1, dep2] in dependencies.array_windows() {
                     if dep1 == dep2 {
                         return Err(LockErrorKind::DuplicateOptionalDependency {
-                            id: package.id.clone(),
+                            id: package.id.as_ref().clone(),
                             extra: extra.clone(),
                             dependency: dep1.clone(),
                         }
@@ -2708,7 +2707,7 @@ impl Lock {
                 for [dep1, dep2] in dependencies.array_windows() {
                     if dep1 == dep2 {
                         return Err(LockErrorKind::DuplicateDevDependency {
-                            id: package.id.clone(),
+                            id: package.id.as_ref().clone(),
                             group: group.clone(),
                             dependency: dep1.clone(),
                         }
@@ -2725,7 +2724,7 @@ impl Lock {
         for (index, dist) in packages.iter().enumerate() {
             if by_id.insert(dist.id.clone(), PackageIndex(index)).is_some() {
                 return Err(LockErrorKind::DuplicatePackage {
-                    id: dist.id.clone(),
+                    id: dist.id.as_ref().clone(),
                 }
                 .into());
             }
@@ -2777,14 +2776,15 @@ impl Lock {
                 .chain(dist.optional_dependencies.values_mut().flatten())
                 .chain(dist.dependency_groups.values_mut().flatten())
             {
-                let Some(&index) = by_id.get(&dependency.package_id) else {
+                let Some((id, &index)) = by_id.get_key_value(&dependency.package_id) else {
                     return Err(LockErrorKind::UnrecognizedDependency {
-                        id: dist.id.clone(),
+                        id: dist.id.as_ref().clone(),
                         dependency: dependency.clone(),
                     }
                     .into());
                 };
                 dependency.index = index;
+                dependency.package_id = Arc::clone(id);
             }
 
             // Also check that our sources are consistent with whether we have
@@ -2793,7 +2793,7 @@ impl Lock {
                 for wheel in &dist.wheels {
                     if requires_hash != wheel.hash.is_some() {
                         return Err(LockErrorKind::Hash {
-                            id: dist.id.clone(),
+                            id: dist.id.as_ref().clone(),
                             artifact_type: "wheel",
                             expected: requires_hash,
                         }
@@ -3929,7 +3929,7 @@ impl Lock {
         package_requires_python: Option<&VersionSpecifiers>,
         package_version: Option<&Version>,
         package: &'lock Package,
-        activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
+        activated_extras: &mut FxHashMap<Arc<PackageId>, BTreeMap<ExtraName, UniversalMarker>>,
         remotes: &mut Option<BTreeSet<UrlString>>,
         locals: &mut Option<BTreeSet<Box<Path>>>,
         root: &Path,
@@ -4068,7 +4068,7 @@ impl Lock {
     fn satisfied_no_metadata<'lock>(
         &self,
         package: &'lock Package,
-        activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
+        activated_extras: &mut FxHashMap<Arc<PackageId>, BTreeMap<ExtraName, UniversalMarker>>,
         missing_metadata: bool,
         expected: &ExpectedPackageDependencies<'_>,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
@@ -4224,7 +4224,7 @@ impl Lock {
     ) -> Result<SatisfiesResult<'_>, LockError> {
         let mut queue: VecDeque<PackageIndex> = VecDeque::new();
         let mut seen = FxHashSet::default();
-        let mut activated_extras: FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>> =
+        let mut activated_extras: FxHashMap<Arc<PackageId>, BTreeMap<ExtraName, UniversalMarker>> =
             FxHashMap::default();
         let mut validated_extras: FxHashMap<PackageIndex, BTreeMap<ExtraName, UniversalMarker>> =
             FxHashMap::default();
@@ -5194,7 +5194,7 @@ impl Lock {
         hasher: &HashStrategy,
         index: &DistributionMetadataIndex,
         database: &DistributionDatabase<'_, Context>,
-        source_tree_metadata: &mut FxHashMap<PackageId, Option<SourceTreeRequiresDist>>,
+        source_tree_metadata: &mut FxHashMap<Arc<PackageId>, Option<SourceTreeRequiresDist>>,
     ) -> Result<DependencySourceChanges<'lock>, LockError> {
         let mut changes = DependencySourceChanges::default();
         while let Some((package, extra, marker)) = reachability.package_queue.pop_front() {
@@ -5518,7 +5518,7 @@ impl Lock {
         hasher: &HashStrategy,
         index: &DistributionMetadataIndex,
         database: &DistributionDatabase<'_, Context>,
-        source_tree_metadata: &mut FxHashMap<PackageId, Option<SourceTreeRequiresDist>>,
+        source_tree_metadata: &mut FxHashMap<Arc<PackageId>, Option<SourceTreeRequiresDist>>,
     ) -> Result<DependencySources<'_>, LockError> {
         // Global URL overrides authorize sources and replace competing URL constraints.
         // Scoped overrides cannot grant this privilege, and excluded packages stay inactive.
@@ -5779,7 +5779,7 @@ impl Lock {
                 continue;
             };
 
-            if !visited_packages.insert(&package.id) {
+            if !visited_packages.insert(package.id.as_ref()) {
                 continue;
             }
             let (package_version, direct_requirements, dependency_groups) = if let Some(metadata) =
@@ -5952,7 +5952,7 @@ impl Lock {
             .get_or_build_wheel_metadata(&dist, metadata_hashes)
             .await
             .map_err(|err| LockErrorKind::Resolution {
-                id: package.id.clone(),
+                id: package.id.as_ref().clone(),
                 err,
             })?;
         let metadata = archive.metadata.clone();
@@ -5997,7 +5997,7 @@ impl Lock {
                     .requires_dist(&parent, &pyproject_toml)
                     .await
                     .map_err(|err| LockErrorKind::Resolution {
-                        id: package.id.clone(),
+                        id: package.id.as_ref().clone(),
                         err,
                     })?;
                 Ok(metadata.map(|metadata| SourceTreeRequiresDist {
@@ -6017,7 +6017,7 @@ impl Lock {
         root: &Path,
         package: &Package,
         database: &DistributionDatabase<'_, Context>,
-        cache: &mut FxHashMap<PackageId, Option<SourceTreeRequiresDist>>,
+        cache: &mut FxHashMap<Arc<PackageId>, Option<SourceTreeRequiresDist>>,
     ) -> Result<Option<SourceTreeRequiresDist>, LockError> {
         if let Some(metadata) = cache.get(&package.id) {
             return Ok(metadata.clone());
@@ -6519,17 +6519,32 @@ impl TryFrom<LockWire> for Lock {
         // there's only one source for a particular package name (the
         // overwhelmingly common case), we can omit some data (like source and
         // version) on dependency edges since it is strictly redundant.
-        let mut unambiguous_package_ids: FxHashMap<PackageName, PackageId> = FxHashMap::default();
+        // Share package identities with dependency edges as they are decoded. Wire identities
+        // remain owned until each package has passed its existing validation.
+        let package_ids: FxHashSet<Arc<PackageId>> = wire
+            .packages
+            .iter()
+            .map(|package| Arc::new(package.id.clone()))
+            .collect();
+        let mut unambiguous_package_ids: FxHashMap<PackageName, Arc<PackageId>> =
+            FxHashMap::default();
         let mut ambiguous = FxHashSet::default();
         for dist in &wire.packages {
             if ambiguous.contains(&dist.id.name) {
                 continue;
             }
             if let Some(id) = unambiguous_package_ids.remove(&dist.id.name) {
-                ambiguous.insert(id.name);
+                ambiguous.insert(id.name.clone());
                 continue;
             }
-            unambiguous_package_ids.insert(dist.id.name.clone(), dist.id.clone());
+            unambiguous_package_ids.insert(
+                dist.id.name.clone(),
+                Arc::clone(
+                    package_ids
+                        .get(&dist.id)
+                        .expect("package identity is indexed"),
+                ),
+            );
         }
 
         let fork_markers = wire
@@ -6555,6 +6570,7 @@ impl TryFrom<LockWire> for Lock {
                     environment,
                     default,
                     &unambiguous_package_ids,
+                    &package_ids,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -6614,7 +6630,8 @@ impl LockVersion {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Package {
-    id: PackageId,
+    /// Shared with lookup keys and incoming dependency edges.
+    id: Arc<PackageId>,
     sdist: Option<SourceDist>,
     wheels: Vec<Wheel>,
     /// If there are multiple versions or sources for the same package name, we add the markers of
@@ -6663,7 +6680,7 @@ impl Package {
             )?
         };
         Ok(Self {
-            id,
+            id: Arc::new(id),
             sdist,
             wheels,
             fork_markers,
@@ -6699,7 +6716,7 @@ impl Package {
                 continue;
             };
 
-            let package_id = PackageId::from_annotated_dist(distribution, root)?;
+            let package_id = Arc::new(PackageId::from_annotated_dist(distribution, root)?);
             let extras = distribution.kind.extra().into_iter().cloned().collect();
 
             // Preserve the distinction between an empty extra and an extra with dependencies.
@@ -6779,7 +6796,7 @@ impl Package {
                     Source::Git(url, git) => {
                         let Some(install_path) = git.path.as_ref() else {
                             return Err(LockErrorKind::InvalidWheelSource {
-                                id: self.id.clone(),
+                                id: self.id.as_ref().clone(),
                                 source_type: "Git",
                             }
                             .into());
@@ -6820,21 +6837,21 @@ impl Package {
                     }
                     Source::Directory(_) => {
                         return Err(LockErrorKind::InvalidWheelSource {
-                            id: self.id.clone(),
+                            id: self.id.as_ref().clone(),
                             source_type: "directory",
                         }
                         .into());
                     }
                     Source::Editable(_) => {
                         return Err(LockErrorKind::InvalidWheelSource {
-                            id: self.id.clone(),
+                            id: self.id.as_ref().clone(),
                             source_type: "editable",
                         }
                         .into());
                     }
                     Source::Virtual(_) => {
                         return Err(LockErrorKind::InvalidWheelSource {
-                            id: self.id.clone(),
+                            id: self.id.as_ref().clone(),
                             source_type: "virtual",
                         }
                         .into());
@@ -6865,30 +6882,30 @@ impl Package {
 
         match (no_binary, no_build) {
             (true, true) => Err(LockErrorKind::NoBinaryNoBuild {
-                id: self.id.clone(),
+                id: self.id.as_ref().clone(),
             }
             .into()),
             (true, false) if self.id.source.is_wheel() => Err(LockErrorKind::NoBinaryWheelOnly {
-                id: self.id.clone(),
+                id: self.id.as_ref().clone(),
             }
             .into()),
             (true, false) => Err(LockErrorKind::NoBinary {
-                id: self.id.clone(),
+                id: self.id.as_ref().clone(),
             }
             .into()),
             (false, true) => Err(LockErrorKind::NoBuild {
-                id: self.id.clone(),
+                id: self.id.as_ref().clone(),
             }
             .into()),
             (false, false) if self.id.source.is_wheel() => Err(LockError {
                 kind: Box::new(LockErrorKind::IncompatibleWheelOnly {
-                    id: self.id.clone(),
+                    id: self.id.as_ref().clone(),
                 }),
                 hint: self.tag_hint(tag_policy, markers),
             }),
             (false, false) => Err(LockError {
                 kind: Box::new(LockErrorKind::NeitherSourceDistNorWheel {
-                    id: self.id.clone(),
+                    id: self.id.as_ref().clone(),
                 }),
                 hint: self.tag_hint(tag_policy, markers),
             }),
@@ -6929,7 +6946,7 @@ impl Package {
                 // A direct path source can also be a wheel, so validate the extension.
                 let DistExtension::Source(ext) = DistExtension::from_path(path).map_err(|err| {
                     LockErrorKind::MissingExtension {
-                        id: self.id.clone(),
+                        id: self.id.as_ref().clone(),
                         err,
                     }
                 })?
@@ -6938,7 +6955,7 @@ impl Package {
                 };
                 if !ext.is_pep625_compliant() {
                     return Err(LockErrorKind::NotPep625Filename {
-                        id: self.id.clone(),
+                        id: self.id.as_ref().clone(),
                     }
                     .into());
                 }
@@ -7010,7 +7027,7 @@ impl Package {
                     // A direct path source can also be a wheel, so validate the extension.
                     let DistExtension::Source(ext) = DistExtension::from_path(install_path)
                         .map_err(|err| LockErrorKind::MissingExtension {
-                            id: self.id.clone(),
+                            id: self.id.as_ref().clone(),
                             err,
                         })?
                     else {
@@ -7053,7 +7070,7 @@ impl Package {
                 let DistExtension::Source(ext) =
                     DistExtension::from_path(url.base_str()).map_err(|err| {
                         LockErrorKind::MissingExtension {
-                            id: self.id.clone(),
+                            id: self.id.as_ref().clone(),
                             err,
                         }
                     })?
@@ -7062,7 +7079,7 @@ impl Package {
                 };
                 if !ext.is_pep625_compliant() {
                     return Err(LockErrorKind::NotPep625Filename {
-                        id: self.id.clone(),
+                        id: self.id.as_ref().clone(),
                     }
                     .into());
                 }
@@ -7101,11 +7118,11 @@ impl Package {
                 let filename = sdist
                     .filename()
                     .ok_or_else(|| LockErrorKind::MissingFilename {
-                        id: self.id.clone(),
+                        id: self.id.as_ref().clone(),
                     })?;
                 let ext = SourceDistExtension::from_path(filename.as_ref()).map_err(|err| {
                     LockErrorKind::MissingExtension {
-                        id: self.id.clone(),
+                        id: self.id.as_ref().clone(),
                         err,
                     }
                 })?;
@@ -7176,11 +7193,11 @@ impl Package {
                 let filename = sdist
                     .filename()
                     .ok_or_else(|| LockErrorKind::MissingFilename {
-                        id: self.id.clone(),
+                        id: self.id.as_ref().clone(),
                     })?;
                 let ext = SourceDistExtension::from_path(filename.as_ref()).map_err(|err| {
                     LockErrorKind::MissingExtension {
-                        id: self.id.clone(),
+                        id: self.id.as_ref().clone(),
                         err,
                     }
                 })?;
@@ -7492,7 +7509,8 @@ impl PackageWire {
         requires_python: &RequiresPython,
         environment: SimplifiedMarkerTree,
         default: UniversalMarker,
-        unambiguous_package_ids: &FxHashMap<PackageName, PackageId>,
+        unambiguous_package_ids: &FxHashMap<PackageName, Arc<PackageId>>,
+        package_ids: &FxHashSet<Arc<PackageId>>,
     ) -> Result<Package, LockError> {
         // Consistency check
         if !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK) {
@@ -7541,13 +7559,18 @@ impl PackageWire {
                         environment,
                         default,
                         unambiguous_package_ids,
+                        package_ids,
                     )
                 })
                 .collect()
         };
 
         Ok(Package {
-            id: self.id,
+            id: Arc::clone(
+                package_ids
+                    .get(&self.id)
+                    .expect("package identity is indexed"),
+            ),
             metadata: self.metadata,
             default_groups: self.default_groups,
             group_requires_python: self.group_requires_python,
@@ -7629,9 +7652,22 @@ struct PackageIdForDependency {
 impl PackageIdForDependency {
     fn unwire(
         self,
-        unambiguous_package_ids: &FxHashMap<PackageName, PackageId>,
-    ) -> Result<PackageId, LockError> {
+        unambiguous_package_ids: &FxHashMap<PackageName, Arc<PackageId>>,
+        package_ids: &FxHashSet<Arc<PackageId>>,
+    ) -> Result<Arc<PackageId>, LockError> {
         let unambiguous_package_id = unambiguous_package_ids.get(&self.name);
+        if let Some(package_id) = unambiguous_package_id
+            && self
+                .source
+                .as_ref()
+                .is_none_or(|source| source == &package_id.source)
+            && self
+                .version
+                .as_ref()
+                .is_none_or(|version| Some(version) == package_id.version.as_ref())
+        {
+            return Ok(Arc::clone(package_id));
+        }
         let source = self.source.map(Ok::<_, LockError>).unwrap_or_else(|| {
             let Some(package_id) = unambiguous_package_id else {
                 return Err(LockErrorKind::MissingDependencySource {
@@ -7659,11 +7695,15 @@ impl PackageIdForDependency {
                 }
             }
         };
-        Ok(PackageId {
+        let id = PackageId {
             name: self.name,
             version,
             source,
-        })
+        };
+        Ok(package_ids
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(id)))
     }
 }
 
@@ -9192,7 +9232,7 @@ struct PackageIndex(usize);
 /// A single dependency of a package in a lockfile.
 #[derive(Clone, Debug, Eq)]
 pub struct Dependency {
-    package_id: PackageId,
+    package_id: Arc<PackageId>,
     /// The target's position in [`Lock::packages`], initialized by [`Lock::new`].
     /// This cache is excluded from equality and ordering, since the position can differ between
     /// locks that contain the same dependency.
@@ -9228,7 +9268,7 @@ pub struct Dependency {
 impl Dependency {
     fn new(
         requires_python: &RequiresPython,
-        package_id: PackageId,
+        package_id: Arc<PackageId>,
         extra: BTreeSet<ExtraName>,
         simplified_marker: SimplifiedMarkerTree,
     ) -> Self {
@@ -9325,7 +9365,8 @@ impl DependencyWire {
         requires_python: &RequiresPython,
         environment: SimplifiedMarkerTree,
         default: UniversalMarker,
-        unambiguous_package_ids: &FxHashMap<PackageName, PackageId>,
+        unambiguous_package_ids: &FxHashMap<PackageName, Arc<PackageId>>,
+        package_ids: &FxHashSet<Arc<PackageId>>,
     ) -> Result<Dependency, LockError> {
         let (simplified_marker, complexified_marker) =
             if self.marker.as_simplified_marker_tree().is_true() {
@@ -9338,7 +9379,9 @@ impl DependencyWire {
                 (simplified_marker, complexified_marker)
             };
         Ok(Dependency {
-            package_id: self.package_id.unwire(unambiguous_package_ids)?,
+            package_id: self
+                .package_id
+                .unwire(unambiguous_package_ids, package_ids)?,
             index: PackageIndex(0),
             extra: self.extra,
             simplified_marker,
@@ -10844,6 +10887,131 @@ source = { registry = "https://example.com/simple" }
             .dependency_selection(Some(&project_name), &dependency_name, &marker_environment)
             .expect_err("ambiguous production selection");
         insta::assert_snapshot!(error, @"found multiple packages matching production dependency `ty` for `project`");
+    }
+
+    #[test]
+    fn lock_shares_target_identities_without_changing_dependency_equality()
+    -> Result<(), Box<dyn Error>> {
+        let data = r#"
+version = 1
+requires-python = ">=3.12"
+
+[[package]]
+name = "root"
+version = "1.0"
+source = { virtual = "." }
+dependencies = [{ name = "target" }]
+[package.optional-dependencies]
+feature = [{ name = "target", version = "1.0", source = { directory = "packages/target" } }]
+[package.dependency-groups]
+dev = [{ name = "target" }]
+
+[[package]]
+name = "target"
+version = "1.0"
+source = { directory = "packages/target" }
+"#;
+        let first = Lock::from_toml(data)?;
+        let second = Lock::from_toml(&format!(
+            "{data}\n[[package]]\nname = \"aaa\"\nversion = \"1.0\"\nsource = {{ virtual = \"aaa\" }}\n"
+        ))?;
+        for lock in [&first, &second] {
+            for package in &lock.packages {
+                let (key, _) = lock
+                    .by_id
+                    .get_key_value(&package.id)
+                    .expect("package indexed");
+                assert!(Arc::ptr_eq(&package.id, key));
+                for dependency in package
+                    .dependencies
+                    .iter()
+                    .chain(package.optional_dependencies.values().flatten())
+                    .chain(package.dependency_groups.values().flatten())
+                {
+                    assert!(Arc::ptr_eq(
+                        &dependency.package_id,
+                        &lock.package(dependency.index).id
+                    ));
+                }
+            }
+        }
+        let root: PackageName = "root".parse()?;
+        let first = &first.find_by_name(&root)?.expect("root").dependencies[0];
+        let second = &second.find_by_name(&root)?.expect("root").dependencies[0];
+        assert_ne!(first.index, second.index);
+        assert!(!Arc::ptr_eq(&first.package_id, &second.package_id));
+        assert_eq!(first, second);
+        assert_eq!(first.cmp(second), Ordering::Equal);
+        Ok(())
+    }
+
+    #[test]
+    fn lock_new_canonicalizes_independently_allocated_dependency_ids() -> Result<(), Box<dyn Error>>
+    {
+        let mut lock = Lock::from_toml(
+            r#"
+version = 1
+requires-python = ">=3.12"
+[[package]]
+name = "root"
+version = "1.0"
+source = { virtual = "." }
+dependencies = [{ name = "target" }]
+[package.optional-dependencies]
+feature = [{ name = "target" }]
+[package.dependency-groups]
+dev = [{ name = "target" }]
+[[package]]
+name = "target"
+version = "1.0"
+source = { directory = "packages/target" }
+"#,
+        )?;
+        // Fresh resolutions allocate edge identities before matching them to package entries.
+        for package in &mut lock.packages {
+            for dependency in package
+                .dependencies
+                .iter_mut()
+                .chain(package.optional_dependencies.values_mut().flatten())
+                .chain(package.dependency_groups.values_mut().flatten())
+            {
+                dependency.package_id = Arc::new(dependency.package_id.as_ref().clone());
+                let (target, _) = lock
+                    .by_id
+                    .get_key_value(&dependency.package_id)
+                    .expect("target indexed");
+                assert!(!Arc::ptr_eq(&dependency.package_id, target));
+            }
+        }
+        let lock = Lock::new(
+            lock.version,
+            lock.revision,
+            lock.packages,
+            lock.requires_python,
+            lock.options,
+            lock.manifest,
+            lock.conflicts,
+            lock.supported_environments,
+            lock.required_environments,
+            lock.fork_markers,
+        )?;
+        let mut dependencies = 0;
+        for package in &lock.packages {
+            for dependency in package
+                .dependencies
+                .iter()
+                .chain(package.optional_dependencies.values().flatten())
+                .chain(package.dependency_groups.values().flatten())
+            {
+                assert!(Arc::ptr_eq(
+                    &dependency.package_id,
+                    &lock.package(dependency.index).id
+                ));
+                dependencies += 1;
+            }
+        }
+        assert_eq!(dependencies, 3);
+        Ok(())
     }
 
     #[test]
