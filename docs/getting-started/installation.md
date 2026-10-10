@@ -205,6 +205,9 @@ To enable shell autocompletion for uv commands, run one of the following:
     if (!(Test-Path -Path $PROFILE)) {
       New-Item -ItemType File -Path $PROFILE -Force
     }
+    if ((Get-Content -Path $PROFILE -Raw) -match '[^\r\n]\z') {
+      Add-Content -Path $PROFILE -Value ''
+    }
     Add-Content -Path $PROFILE -Value '(& uv generate-shell-completion powershell) | Out-String | Invoke-Expression'
     ```
 
@@ -239,6 +242,9 @@ To enable shell autocompletion for uvx, run one of the following:
     ```powershell
     if (!(Test-Path -Path $PROFILE)) {
       New-Item -ItemType File -Path $PROFILE -Force
+    }
+    if ((Get-Content -Path $PROFILE -Raw) -match '[^\r\n]\z') {
+      Add-Content -Path $PROFILE -Value ''
     }
     Add-Content -Path $PROFILE -Value '(& uvx --generate-shell-completion powershell) | Out-String | Invoke-Expression'
     ```
