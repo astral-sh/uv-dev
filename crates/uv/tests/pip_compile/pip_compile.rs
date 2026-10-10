@@ -45,6 +45,72 @@ use uv_test::packse::scenario::{ArtifactMetadata, Package, PackageMetadata, Scen
 use uv_test::packse::{PackseServer, generate_wheel};
 use uv_test::{DEFAULT_PYTHON_VERSION, TestContext, download_to_disk, uv_snapshot};
 
+/// Interpreter metadata must remain isolated when the same executable changes Unix personality.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn compile_interpreter_cache_across_linux_personalities() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "personality-cache"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.machine-x86-64.versions."1.0.0"]
+        sdist = false
+        [packages.machine-i686.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(indoc! {r"
+        machine-x86-64; platform_machine == 'x86_64'
+        machine-i686; platform_machine == 'i686'
+    "})?;
+    let python = context.venv.join("bin/python");
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in").arg("--python").arg(&python)
+        .arg("--default-index").arg(server.index_url()).arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    machine-x86-64==1.0.0
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let mut linux32 = context.external_command("setarch");
+    linux32
+        .arg("linux32")
+        .arg(uv_test::get_bin!())
+        .args(["pip", "compile"]);
+    context.add_shared_options(&mut linux32, true);
+    uv_snapshot!(context.filters(), linux32
+        .arg("requirements.in").arg("--python").arg(&python)
+        .arg("--default-index").arg(server.index_url()).arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    machine-i686==1.0.0
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in").arg("--python").arg(&python)
+        .arg("--default-index").arg(server.index_url()).arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    machine-x86-64==1.0.0
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
 #[test]
 fn compile_requirements_in() -> Result<()> {
     let context = uv_test::test_context!("3.12");
