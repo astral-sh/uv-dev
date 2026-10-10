@@ -30,14 +30,14 @@ use uv_configuration::{
 };
 use uv_dispatch::UniversalState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{InstalledDistKind, NameRequirementSpecification};
+use uv_distribution_types::{InstalledDistKind, NameRequirementSpecification, Resolution};
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     EnvironmentError, EnvironmentSpecification, LinkErrorReporting, PreferenceLocation,
-    ProjectEnvironment, ProjectEnvironmentTarget, ScriptEnvironment, sync_from_lock,
-    update_environment,
+    ProjectEnvironment, ProjectEnvironmentTarget, ScriptEnvironment, sync_environment,
+    sync_from_lock, update_environment,
 };
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink, normalize_path};
@@ -74,7 +74,7 @@ use uv_settings::{
 };
 use uv_shell::WindowsRunnable;
 use uv_static::EnvVars;
-use uv_types::SourceTreeEditablePolicy;
+use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
@@ -467,6 +467,33 @@ pub async fn run(
 
                     match result {
                         Ok(shared_environment) => {
+                            // Shared dependencies live in the base; exact synchronization removes
+                            // distributions installed directly into the writable overlay.
+                            let environment = if matches!(modifications, Modifications::Exact) {
+                                sync_environment(
+                                    environment,
+                                    &Resolution::default(),
+                                    HashStrategy::default(),
+                                    Modifications::Exact,
+                                    unlocked_build_constraints.clone(),
+                                    (&settings).into(),
+                                    &client_builder,
+                                    &sync_state,
+                                    if show_resolution {
+                                        Box::new(DefaultInstallLogger)
+                                    } else {
+                                        Box::new(SummaryInstallLogger)
+                                    },
+                                    installer_metadata,
+                                    &concurrency,
+                                    &cache,
+                                    printer,
+                                    preview,
+                                )
+                                .await?
+                            } else {
+                                environment
+                            };
                             let shared_environment = PythonEnvironment::from(shared_environment);
                             let parent_site_packages =
                                 shared_environment.site_packages().next().context(
@@ -2212,6 +2239,7 @@ fn sync_shared_environment_files(
         && let Some(data) = previous
             .as_ref()
             .and_then(|previous| previous.data.as_ref())
+        && shared_data_is_present(environment.root(), data)?
     {
         data.clone()
     } else {
@@ -2264,6 +2292,21 @@ fn shared_data_path(root: &Path, relative: &Path) -> anyhow::Result<Option<PathB
         }
     }
     Ok(Some(root.join(relative)))
+}
+
+/// Check for removals that occurred without changing the overlay's installed distributions.
+fn shared_data_is_present(root: &Path, data: &BTreeMap<PathBuf, String>) -> anyhow::Result<bool> {
+    for relative in data.keys() {
+        let Some(path) = shared_data_path(root, relative)? else {
+            continue;
+        };
+        match fs_err::symlink_metadata(path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(true)
 }
 
 /// Materialize independent data files: overlay installs must not write through to the shared base.
