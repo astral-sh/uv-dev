@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use itertools::Itertools;
+
 use uv_distribution_types::{RequiresPython, SimplifiedMarkerTree};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
@@ -48,9 +50,10 @@ pub enum WorkspaceGroupSelectionError {
     #[error("The selected packages are not all reachable in workspace group `{0}`")]
     Target(GroupName),
     #[error(
-        "The selected packages are not covered by a single workspace group; add them to a group or select a narrower target"
+        "Workspace members are not reachable from any workspace group: {}",
+        .0.iter().map(|name| format!("`{name}`")).join(", ")
     )]
-    Uncovered,
+    Uncovered(Vec<PackageName>),
     #[error(
         "The lockfile contains multiple workspace contexts; select one with `--workspace-group`"
     )]
@@ -118,7 +121,9 @@ impl Lock {
             candidates.push(candidate);
         }
         if covered != *members {
-            return Err(WorkspaceGroupSelectionError::Uncovered);
+            return Err(WorkspaceGroupSelectionError::Uncovered(
+                members.difference(&covered).cloned().collect(),
+            ));
         }
         Self::merge_workspace_resolutions(candidates)?
             .ok_or(WorkspaceGroupSelectionError::Ambiguous)

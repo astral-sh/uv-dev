@@ -681,7 +681,24 @@ fn workspace_groups_ordinary_targeting() -> Result<()> {
     uv_snapshot!(context.filters(), context.export().args(["--offline", "--frozen", "--package", "unused"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: The selected packages are not covered by a single workspace group; add them to a group or select a narrower target
+    error: Workspace members are not reachable from any workspace group: `unused`
+    ");
+
+    context
+        .temp_dir
+        .child("members/unused-two/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "unused-two"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args(["--offline", "--all-packages"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Workspace members are not reachable from any workspace group: `unused`, `unused-two`
     ");
 
     // A frozen export only needs the selected graph and root lock metadata.
@@ -2098,7 +2115,7 @@ fn workspace_groups_include_transitive_extra_python() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         [project.optional-dependencies]
-        feature = ["leaf"]
+        feature = ["leaf; extra == 'feature'"]
         [tool.uv]
         package = false
     "#})?;
@@ -2289,8 +2306,9 @@ fn workspace_groups_include_recursive_self_extra_python() -> Result<()> {
         name = "app"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["app[feature]"]
+        dependencies = ["app[start]"]
         [project.optional-dependencies]
+        start = ["app[feature]; extra == 'start'"]
         feature = ["leaf"]
         [tool.uv]
         package = false
@@ -2870,7 +2888,7 @@ fn workspace_groups_reject_registry_package_as_member() -> Result<()> {
     ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: The selected packages are not covered by a single workspace group; add them to a group or select a narrower target
+    error: Workspace members are not reachable from any workspace group: `leaf`
     ");
     Ok(())
 }

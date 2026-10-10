@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::slice;
 use std::str::FromStr;
 
 use uv_configuration::{
@@ -312,8 +313,15 @@ impl Workspace {
                     DependencyModifierScope::Package(&name, version)
                 });
             for requirement in modifiers.apply(scope, &requirements) {
+                let marker = match extra.as_ref() {
+                    Some(extra) => requirement
+                        .marker
+                        .simplify_extras(slice::from_ref(extra))
+                        .simplify_not_extras_with(|candidate| candidate != extra),
+                    None => requirement.marker.simplify_not_extras_with(|_| true),
+                };
                 if requirement.name == name {
-                    let marker = active.and(requirement.marker);
+                    let marker = active.and(marker);
                     if !marker.is_false() {
                         pending.extend(
                             requirement
@@ -334,7 +342,7 @@ impl Workspace {
                 if uv_fs::normalize_path(install_path.as_ref()) != *target.root() {
                     continue;
                 }
-                let local = active.and(requirement.marker);
+                let local = active.and(marker);
                 if !local.is_false() {
                     pending.push((requirement.name.clone(), None, local));
                     pending.extend(

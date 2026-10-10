@@ -246,15 +246,20 @@ pub(crate) fn command_workspace_group(
     }
     let environments = if let Some(members) = members {
         let mut environments = MarkerTree::TRUE;
+        let mut uncovered = Vec::new();
         for member in members {
             let supported = groups
                 .iter()
                 .filter_map(|group| group.member_environments().get(member))
                 .fold(MarkerTree::FALSE, |supported, marker| supported.or(*marker));
             if supported.is_false() {
-                return Err(WorkspaceGroupSelectionError::Uncovered.into());
+                uncovered.push(member.clone());
+            } else {
+                environments = environments.and(supported);
             }
-            environments = environments.and(supported);
+        }
+        if !uncovered.is_empty() {
+            return Err(WorkspaceGroupSelectionError::Uncovered(uncovered).into());
         }
         environments
     } else {
