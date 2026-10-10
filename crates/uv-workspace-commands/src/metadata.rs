@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
@@ -16,7 +16,7 @@ use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
     ProjectInterpreter, ScriptEnvironment, discover_workspace_groups,
 };
-use uv_lock::{Lock, Metadata, Package};
+use uv_lock::{Lock, Metadata, Package, WorkspaceGroupSelectionError};
 use uv_lock_operations::{
     DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockTarget,
 };
@@ -127,13 +127,6 @@ pub async fn metadata(
         } else {
             None
         }
-    } else if let MetadataSource::Manifest(LockTarget::Workspace(workspace)) = &source {
-        Some(workspace.with_provisional_workspace_groups(
-            &workspace.workspace_groups_with_dependency_metadata(
-                &settings.sources,
-                &settings.dependency_metadata,
-            )?,
-        )?)
     } else {
         None
     };
@@ -253,7 +246,16 @@ pub async fn metadata(
     let mut export = metadata_for_target(install_target);
     let selected_target = sync
         .is_some()
-        .then(|| install_target.select_workspace_context())
+        .then(|| {
+            install_target
+                .select_workspace_context()
+                .map_err(|error| match error {
+                    WorkspaceGroupSelectionError::Ambiguous => anyhow!(
+                        "Cannot synchronize workspace metadata across incompatible contexts; configure a default workspace group"
+                    ),
+                    error => error.into(),
+                })
+        })
         .transpose()?;
     let environment_target = selected_target
         .as_ref()
@@ -349,31 +351,35 @@ pub async fn metadata(
                 tracing::warn!("Failed to acquire environment lock: {err}");
             })
             .ok();
+        export = export.with_environment(&environment);
         let selected_target = if let Some(target) = selected_target {
-            target
+            Some(target)
         } else {
-            install_target
-                .select_workspace_context()
-                .context("Failed to collect module owners")?
+            match install_target.select_workspace_context() {
+                Ok(target) => Some(target),
+                // Full-graph metadata can describe contexts that cannot share one installation.
+                Err(WorkspaceGroupSelectionError::Ambiguous) if sync.is_none() => None,
+                Err(error) => return Err(error).context("Failed to collect module owners"),
+            }
         };
-        let module_owners = collect_module_owners(
-            &selected_target,
-            &environment,
-            &settings,
-            &client_builder,
-            &state,
-            &concurrency,
-            cache,
-            workspace_cache,
-            preview,
-            &malware_settings,
-            sync,
-        )
-        .await
-        .context("Failed to collect module owners")?;
-        export = export
-            .with_environment(&environment)
-            .with_module_owners(module_owners);
+        if let Some(selected_target) = selected_target {
+            let module_owners = collect_module_owners(
+                &selected_target,
+                &environment,
+                &settings,
+                &client_builder,
+                &state,
+                &concurrency,
+                cache,
+                workspace_cache,
+                preview,
+                &malware_settings,
+                sync,
+            )
+            .await
+            .context("Failed to collect module owners")?;
+            export = export.with_module_owners(module_owners);
+        }
     }
 
     print_metadata(&export, printer)

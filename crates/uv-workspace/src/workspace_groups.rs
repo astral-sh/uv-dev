@@ -14,7 +14,9 @@ use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl};
 use uv_pypi_types::{LenientRequirement, SupportedEnvironments, VerbatimParsedUrl};
 
 use crate::pyproject::{Source, ToolUvSources, WorkspaceReference};
-use crate::{Workspace, WorkspaceError, WorkspaceErrorKind, WorkspaceMember};
+use crate::{
+    SourceOrigin, SourceSelection, Workspace, WorkspaceError, WorkspaceErrorKind, WorkspaceMember,
+};
 
 /// A named set of workspace resolution roots.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -537,25 +539,24 @@ impl Workspace {
         let sources = if no_sources.for_package(&requirement.name) {
             None
         } else {
-            member_sources
-                .and_then(|sources| sources.inner().get(&requirement.name))
-                .map(|sources| (sources, member_root))
-                .or_else(|| {
-                    self.sources()
-                        .get(&requirement.name)
-                        .map(|sources| (sources, self.install_path().as_path()))
-                })
+            SourceSelection::new(
+                &requirement.name,
+                requirement.marker,
+                member_sources.map(ToolUvSources::inner),
+                self.sources(),
+                extra,
+                None,
+            )
         };
         let mut remaining = requirement.marker;
         let mut local = MarkerTree::FALSE;
-        if let Some((sources, base)) = sources {
-            for source in sources.iter() {
-                if source.group().is_some()
-                    || source.extra().is_some_and(|name| extra != Some(name))
-                {
-                    continue;
-                }
-                remaining = remaining.and(source.marker().negate());
+        if let Some(sources) = sources {
+            remaining = sources.remaining_marker();
+            let base = match sources.origin() {
+                SourceOrigin::Project => member_root,
+                SourceOrigin::Workspace => self.install_path().as_path(),
+            };
+            for (source, marker) in sources.iter() {
                 let is_local = match source {
                     Source::Workspace {
                         workspace: WorkspaceReference::Bool(true),
@@ -573,7 +574,7 @@ impl Workspace {
                     } => false,
                 };
                 if is_local {
-                    local = local.or(requirement.marker.and(source.marker()));
+                    local = local.or(marker);
                 }
             }
         }

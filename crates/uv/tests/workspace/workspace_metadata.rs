@@ -3546,7 +3546,7 @@ fn workspace_metadata_grouped_sync_module_owners() -> Result<()> {
     Ok(())
 }
 
-/// An existing environment is matched against the selected frozen context without synchronization.
+/// Frozen module ownership uses locked group domains even after the manifest becomes incompatible.
 #[test]
 fn workspace_metadata_grouped_frozen_module_owners() -> Result<()> {
     let context = uv_test::test_context!("3.12")
@@ -3574,6 +3574,7 @@ fn workspace_metadata_grouped_frozen_module_owners() -> Result<()> {
         name = "main"
         members = ["app"]
         default = true
+        requires-python = ">=3.12,<3.13"
     "#})?;
     context
         .temp_dir
@@ -3588,6 +3589,21 @@ fn workspace_metadata_grouped_frozen_module_owners() -> Result<()> {
         package = false
     "#})?;
     context.sync().arg("--offline").assert().success();
+    let locked = context.read("uv.lock");
+    let environment = context.read(".venv/pyvenv.cfg");
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.13,<3.14"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    let manifest = context.read("app/pyproject.toml");
     uv_snapshot!(context.filters(), context.workspace_metadata().args(["--frozen", "--offline"]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -3608,7 +3624,7 @@ fn workspace_metadata_grouped_frozen_module_owners() -> Result<()> {
         "path": "[TEMP_DIR]/",
         "id": "workspace+[TEMP_DIR]/"
       },
-      "requires_python": ">=3.12",
+      "requires_python": "==3.12.*",
       "conflicts": {
         "sets": []
       },
@@ -3669,6 +3685,9 @@ fn workspace_metadata_grouped_frozen_module_owners() -> Result<()> {
     ----- stderr -----
     warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
     "#);
+    assert_eq!(context.read("uv.lock"), locked);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(context.read("app/pyproject.toml"), manifest);
     Ok(())
 }
 
@@ -3828,5 +3847,376 @@ fn workspace_metadata_grouped_sync_selects_python() -> Result<()> {
     Creating virtual environment at: .venv
     "#);
     context.assert_command("import sys; import leaf_module; assert sys.version_info[:2] == (3, 13); assert leaf_module.VALUE == 42").success();
+    Ok(())
+}
+
+/// Frozen synchronization takes its interpreter requirement from the selected locked context.
+#[test]
+fn workspace_metadata_grouped_frozen_sync_ignores_changed_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.13"
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    context.venv().args(["--python", "3.13"]).assert().success();
+    let locked = context.read("uv.lock");
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.13,<3.14"
+        [tool.uv]
+        package = false
+    "#})?;
+    let manifest = context.read("app/pyproject.toml");
+    uv_snapshot!(context.filters(), context.workspace_metadata().args(["--frozen", "--sync", "--offline"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": "==3.12.*",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "app",
+          "path": "[TEMP_DIR]/app",
+          "id": "app==0.1.0@virtual+[TEMP_DIR]/app"
+        }
+      ],
+      "resolution": {
+        "app==0.1.0@virtual+[TEMP_DIR]/app": {
+          "name": "app",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/app"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    "#);
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 12)")
+        .success();
+    assert_eq!(context.read("uv.lock"), locked);
+    assert_eq!(context.read("app/pyproject.toml"), manifest);
+    Ok(())
+}
+
+/// An existing environment does not make full-graph metadata require one installation context.
+#[test]
+fn workspace_metadata_ambiguous_context_keeps_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "0.1.0"
+        requires-python = ">=3.13,<3.14"
+        [tool.uv]
+        package = false
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let wheel = context.temp_dir.child("retained-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "retained",
+        "retained-0.1.0",
+        &[("retained.py", "VALUE = 42\n")],
+    )?;
+    context
+        .pip_install()
+        .arg("--offline")
+        .arg(wheel.path())
+        .assert()
+        .success();
+    let locked = context.read("uv.lock");
+    let environment = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.workspace_metadata().arg("--offline"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12,<3.14",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "legacy",
+          "path": "[TEMP_DIR]/legacy",
+          "id": "legacy==0.1.0@virtual+[TEMP_DIR]/legacy"
+        },
+        {
+          "name": "modern",
+          "path": "[TEMP_DIR]/modern",
+          "id": "modern==0.1.0@virtual+[TEMP_DIR]/modern"
+        }
+      ],
+      "resolution": {
+        "legacy==0.1.0@virtual+[TEMP_DIR]/legacy": {
+          "name": "legacy",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/legacy"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "modern==0.1.0@virtual+[TEMP_DIR]/modern": {
+          "name": "modern",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/modern"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Resolved 2 packages in [TIME]
+    "#);
+    context
+        .assert_command("import retained; assert retained.VALUE == 42")
+        .success();
+    assert_eq!(context.read("uv.lock"), locked);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    Ok(())
+}
+
+/// Manifest-free metadata retains an existing environment without choosing an ambiguous context.
+#[test]
+fn workspace_metadata_ambiguous_lockfile_context_keeps_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["legacy", "modern"]
+        [[tool.uv.workspace.groups]]
+        name = "legacy"
+        members = ["legacy"]
+        [[tool.uv.workspace.groups]]
+        name = "modern"
+        members = ["modern"]
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("modern/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "modern"
+        version = "0.1.0"
+        requires-python = ">=3.13,<3.14"
+        [tool.uv]
+        package = false
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let locked = context.read("uv.lock");
+    let environment = context.read(".venv/pyvenv.cfg");
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("legacy/pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("modern/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.workspace_metadata().args([
+        "--offline", "--frozen", "--preview-features", "frozen-lockfile",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12,<3.14",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "legacy",
+          "path": "[TEMP_DIR]/legacy",
+          "id": "legacy==0.1.0@virtual+[TEMP_DIR]/legacy"
+        },
+        {
+          "name": "modern",
+          "path": "[TEMP_DIR]/modern",
+          "id": "modern==0.1.0@virtual+[TEMP_DIR]/modern"
+        }
+      ],
+      "resolution": {
+        "legacy==0.1.0@virtual+[TEMP_DIR]/legacy": {
+          "name": "legacy",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/legacy"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "modern==0.1.0@virtual+[TEMP_DIR]/modern": {
+          "name": "modern",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/modern"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    "#);
+    uv_snapshot!(context.filters(), context.workspace_metadata().args([
+        "--offline", "--frozen", "--sync", "--preview-features", "frozen-lockfile",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    error: Cannot synchronize workspace metadata across incompatible contexts; configure a default workspace group
+    "#);
+    assert_eq!(context.read("uv.lock"), locked);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
     Ok(())
 }
