@@ -153,10 +153,13 @@ async fn do_uninstall(
     let mut errors = vec![];
     #[cfg(windows)]
     {
-        uv_python_managed::windows_registry::remove_registry_entry(
-            &matching_installations,
-            all,
-            &mut errors,
+        errors.extend(
+            uv_python_managed::windows_registry::remove_registry_entry(
+                &matching_installations,
+                all,
+            )
+            .into_iter()
+            .map(|(key, error)| (key, anyhow::Error::from(error))),
         );
         uv_python_managed::windows_registry::remove_orphan_registry_entries(
             &installed_installations,
