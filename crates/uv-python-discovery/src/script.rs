@@ -15,6 +15,7 @@ use uv_configuration::ActiveEnvironment;
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
 use uv_pep440::Version;
+use uv_preview::{Preview, PreviewFeature};
 use uv_python_interpreter::{Interpreter, PythonEnvironment, RequestedInterpreter};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
@@ -121,6 +122,37 @@ pub enum ScriptEnvironmentMode {
     Isolated,
     /// Dependencies are installed in a shared base with a separate writable overlay.
     Shared,
+}
+
+impl ScriptEnvironmentMode {
+    /// Select the environment layout used when running a script.
+    pub fn from_script(
+        script: Pep723ItemRef<'_>,
+        active: ActiveEnvironment,
+        preview: Preview,
+    ) -> Self {
+        let has_extra_build_dependencies = script
+            .metadata()
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.extra_build_dependencies.as_ref())
+            .is_some_and(|dependencies| !dependencies.is_empty());
+        let has_lockfile = match script {
+            Pep723ItemRef::Script(script) => script.lock_path().is_file(),
+            Pep723ItemRef::Stdin(_) | Pep723ItemRef::Remote(..) => false,
+        };
+        if preview.is_enabled(PreviewFeature::SharedScriptEnvironments)
+            && active != ActiveEnvironment::Prefer
+            && script.metadata().dependencies.is_some()
+            && !has_extra_build_dependencies
+            && !has_lockfile
+        {
+            Self::Shared
+        } else {
+            Self::Isolated
+        }
+    }
 }
 
 /// An interpreter suitable for a PEP 723 script.

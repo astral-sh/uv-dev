@@ -1976,6 +1976,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     globals.python_downloads,
                     config_discovery,
                     &cache,
+                    globals.preview,
                     printer,
                 )
                 .await
