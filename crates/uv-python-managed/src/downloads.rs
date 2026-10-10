@@ -52,6 +52,8 @@ use uv_python_types::{
     PythonVariant, PythonVersion,
 };
 
+use crate::managed::ManagedPythonInstallation;
+
 #[derive(Error, DebugNoInline)]
 pub enum Error {
     #[error(transparent)]
@@ -663,7 +665,13 @@ impl ManagedPythonDownload {
             }
         }
 
-        // Remove the target if it already exists.
+        // Finalize files in staging with their published paths before making the installation
+        // visible to concurrent interpreter discovery.
+        let installation =
+            ManagedPythonInstallation::new(extracted.clone(), self).map_err(io::Error::other)?;
+        installation.finalize(&path).map_err(io::Error::other)?;
+
+        // Replace the existing installation only after staging has been finalized successfully.
         if path.is_dir() {
             debug!("Removing existing directory: {}", path.user_display());
             fs_err::tokio::remove_dir_all(&path).await?;

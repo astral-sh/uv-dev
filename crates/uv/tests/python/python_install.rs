@@ -16,6 +16,13 @@ use tracing::debug;
 use uv_test::assert_link_target;
 use uv_test::{LATEST_PYTHON_3_12, assert_path_missing, uv_snapshot};
 
+#[cfg(unix)]
+use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use uv_platform::Platform;
+#[cfg(unix)]
+use uv_test::archive::write_tar_gz;
+
 use uv_fs::Simplified;
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
@@ -4171,4 +4178,72 @@ fn python_install_compile_bytecode_pypy() {
      + pypy-3.11.16-[PLATFORM] (pypy3.11)
     Bytecode compiled [COUNT] files in [TIME]
     ");
+}
+
+/// A verified archive with invalid sysconfig metadata must fail before its install directory appears.
+#[cfg(unix)]
+#[test]
+fn python_install_failed_finalization_is_not_published() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs()
+        .without_python_download_cache();
+    let archive = context.temp_dir.child("python.tar.gz");
+    write_tar_gz(
+        fs_err::File::create(archive.path())?,
+        &[
+            ("python/bin/python3.12", "inert executable"),
+            (
+                "python/lib/python3.12/_sysconfigdata__test.py",
+                "build_time_vars = {",
+            ),
+        ],
+    )?;
+    let digest = hex::encode(Sha256::digest(fs_err::read(archive.path())?));
+    let url = url::Url::from_file_path(archive.path())
+        .map_err(|()| anyhow::anyhow!("test archive must have an absolute path"))?;
+    let platform = Platform::from_env()?;
+    let key = format!("cpython-3.12.9-{}", platform_key_from_env()?);
+    let catalog = context.temp_dir.child("downloads.json");
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        (key.clone()): {
+            "name": "cpython",
+            "arch": { "family": platform.arch.family().to_string(), "variant": null },
+            "os": platform.os.to_string(),
+            "libc": platform.libc.to_string(),
+            "major": 3, "minor": 12, "patch": 9,
+            "url": url.as_str(), "sha256": digest,
+        }
+    }))?)?;
+    uv_snapshot!(context.filters(), context.python_install()
+        .arg("3.12.9")
+        .arg("--python-downloads-json-url").arg(catalog.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.12.9-[PLATFORM]
+      cause: `_sysconfigdata_` is missing a header comment
+    ");
+    context
+        .temp_dir
+        .child("managed")
+        .child(&key)
+        .assert(predicate::path::missing());
+    context
+        .bin_dir
+        .child("python3.12")
+        .assert(predicate::path::missing());
+
+    // A failed replacement also leaves the previous installation intact.
+    let installed = context.temp_dir.child("managed").child(&key);
+    installed.child("keep").write_str("installed")?;
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12.9", "--reinstall"])
+        .arg("--python-downloads-json-url").arg(catalog.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.12.9-[PLATFORM]
+      cause: `_sysconfigdata_` is missing a header comment
+    ");
+    assert_eq!(context.read(format!("managed/{key}/keep")), "installed");
+    Ok(())
 }

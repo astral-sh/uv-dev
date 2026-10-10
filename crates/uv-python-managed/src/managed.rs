@@ -510,8 +510,23 @@ impl ManagedPythonInstallation {
         PythonInstallationMinorVersionKey::ref_cast(&self.key)
     }
 
+    /// Finalize runtime files for the published destination of this installation.
+    ///
+    /// Files can still be in a staging directory. Dylib patch failures remain warnings because
+    /// the interpreter is usable without linking native extensions against its library.
+    pub fn finalize(&self, destination: &Path) -> Result<(), Error> {
+        self.ensure_externally_managed()?;
+        self.ensure_sysconfig_patched_at(destination)?;
+        self.ensure_canonical_executables()?;
+        self.ensure_build_file()?;
+        if let Err(error) = self.ensure_dylib_patched_at(destination) {
+            error.warn_user(self.key());
+        }
+        Ok(())
+    }
+
     /// Ensure the environment contains the canonical Python executable names.
-    pub fn ensure_canonical_executables(&self) -> Result<(), Error> {
+    fn ensure_canonical_executables(&self) -> Result<(), Error> {
         let python = self.executable(false);
 
         let canonical_names = &["python"];
@@ -558,7 +573,7 @@ impl ManagedPythonInstallation {
 
     /// Ensure the environment is marked as externally managed with the
     /// standard `EXTERNALLY-MANAGED` file.
-    pub fn ensure_externally_managed(&self) -> Result<(), Error> {
+    fn ensure_externally_managed(&self) -> Result<(), Error> {
         if self.key.os().is_emscripten() {
             // Emscripten's stdlib is a zip file so we can't put an
             // EXTERNALLY-MANAGED inside.
@@ -586,8 +601,8 @@ impl ManagedPythonInstallation {
         Ok(())
     }
 
-    /// Ensure that the `sysconfig` data is patched to match the installation path.
-    pub fn ensure_sysconfig_patched(&self) -> Result<(), Error> {
+    /// Patch files in this installation to refer to their final destination.
+    fn ensure_sysconfig_patched_at(&self, destination: &Path) -> Result<(), Error> {
         if cfg!(unix) && !self.key.os().is_windows() {
             if self.key.os().is_emscripten() {
                 // Emscripten's stdlib is a zip file so we can't update the
@@ -595,8 +610,9 @@ impl ManagedPythonInstallation {
                 return Ok(());
             }
             if self.implementation() == ImplementationName::CPython {
-                sysconfig::update_sysconfig(
+                sysconfig::update_sysconfig_at(
                     self.path(),
+                    destination,
                     self.key.major,
                     self.key.minor,
                     self.key.variant.lib_suffix(),
@@ -613,6 +629,11 @@ impl ManagedPythonInstallation {
     ///
     /// See <https://github.com/astral-sh/uv/issues/10598> for more information.
     pub fn ensure_dylib_patched(&self) -> Result<(), macos_dylib::Error> {
+        self.ensure_dylib_patched_at(self.path())
+    }
+
+    /// Patch the staged library using its final published install name.
+    fn ensure_dylib_patched_at(&self, destination: &Path) -> Result<(), macos_dylib::Error> {
         if cfg!(target_os = "macos") {
             if self.key().os().is_like_darwin() {
                 if self.implementation() == ImplementationName::CPython {
@@ -623,7 +644,11 @@ impl ManagedPythonInstallation {
                         self.key.variant().executable_suffix(),
                         std::env::consts::DLL_SUFFIX
                     ));
-                    macos_dylib::patch_dylib_install_name(dylib_path)?;
+                    let relative = dylib_path
+                        .strip_prefix(self.path())
+                        .map_err(io::Error::other)?;
+                    let install_name = destination.join(relative);
+                    macos_dylib::patch_dylib_install_name(dylib_path, &install_name)?;
                 }
             }
         }
@@ -631,7 +656,7 @@ impl ManagedPythonInstallation {
     }
 
     /// Ensure the build version is written to a BUILD file in the installation directory.
-    pub fn ensure_build_file(&self) -> Result<(), Error> {
+    fn ensure_build_file(&self) -> Result<(), Error> {
         if let Some(ref build) = self.build {
             let build_file = self.path.join("BUILD");
             fs::write(&build_file, build.as_ref())?;
@@ -1093,12 +1118,59 @@ impl From<&ManagedPythonInstallation> for PythonDownloadRequest {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    #[cfg(target_os = "macos")]
+    use std::process::Command;
     use std::str::FromStr;
     use uv_pep440::{Prerelease, PrereleaseKind};
     use uv_platform::Platform;
     use uv_python_types::{
         ImplementationName, LenientImplementationName, PythonInstallationKey, PythonVariant,
     };
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn staged_dylib_uses_published_install_name() -> anyhow::Result<()> {
+        let staging = tempfile::tempdir()?;
+        let destination = staging.path().join("published");
+        let dylib = staging.path().join("lib/libpython3.13.dylib");
+        fs_err::create_dir_all(staging.path().join("lib"))?;
+        let source = staging.path().join("library.c");
+        fs_err::write(&source, "int fixture(void) { return 0; }\n")?;
+        let output = Command::new("cc")
+            .args([
+                "-dynamiclib",
+                "-Wl,-install_name,/install/lib/libpython3.13.dylib",
+                "-o",
+            ])
+            .arg(&dylib)
+            .arg(&source)
+            .output()?;
+        assert!(output.status.success(), "cc failed: {output:?}");
+        let mut installation = create_test_installation(
+            ImplementationName::CPython,
+            3,
+            13,
+            1,
+            None,
+            PythonVariant::Default,
+            None,
+        );
+        installation.path = staging.path().to_path_buf();
+        installation.key = format!("cpython-3.13.1-{}", platform_key_from_env()?).parse()?;
+        installation.ensure_dylib_patched_at(&destination)?;
+        let output = Command::new("/usr/bin/otool")
+            .arg("-D")
+            .arg(&dylib)
+            .output()?;
+        assert!(output.status.success(), "otool failed: {output:?}");
+        let stdout = String::from_utf8(output.stdout)?;
+        assert_eq!(
+            stdout.lines().nth(1),
+            destination.join("lib/libpython3.13.dylib").to_str()
+        );
+        assert!(!destination.exists());
+        Ok(())
+    }
 
     fn create_test_installation(
         implementation: ImplementationName,

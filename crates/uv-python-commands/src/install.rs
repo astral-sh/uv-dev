@@ -616,14 +616,17 @@ async fn perform_install(
 
     let mut errors = vec![];
     let mut downloaded = Vec::with_capacity(downloads.len());
+    let mut not_finalized = Vec::new();
     let mut requests_by_new_installation = BTreeMap::new();
     while let Some((download, result)) = tasks.next().await {
         match result {
             Ok(download_result) => {
-                let path = match download_result {
-                    // We should only encounter already-available during concurrent installs
-                    DownloadResult::AlreadyAvailable(path) => path,
-                    DownloadResult::Fetched(path) => path,
+                // `Fetched` installations have completed `ManagedPythonInstallation::finalize`.
+                // `AlreadyAvailable` installations skipped the download path and still need
+                // finalization here. Minor-version links are selected after all downloads finish.
+                let (path, finalized_in_download) = match download_result {
+                    DownloadResult::AlreadyAvailable(path) => (path, false),
+                    DownloadResult::Fetched(path) => (path, true),
                 };
 
                 let installation = ManagedPythonInstallation::new(path, download)?;
@@ -645,6 +648,9 @@ async fn perform_install(
                 if changelog.existing.contains(installation.key()) {
                     changelog.uninstalled.insert(installation.key().clone());
                 }
+                if !finalized_in_download {
+                    not_finalized.push(installation.clone());
+                }
                 downloaded.push(installation.clone());
             }
             Err(err) => {
@@ -665,17 +671,15 @@ async fn perform_install(
 
     let installations: Vec<_> = downloaded.iter().chain(satisfied.iter().copied()).collect();
 
-    // Ensure that the installations are _complete_ for both downloaded installations and existing
-    // installations that match the request
-    for installation in &installations {
-        installation.ensure_externally_managed()?;
-        installation.ensure_sysconfig_patched()?;
-        installation.ensure_canonical_executables()?;
-        installation.ensure_build_file()?;
-        if let Err(e) = installation.ensure_dylib_patched() {
-            e.warn_user(installation);
-        }
+    // Finalize installations that were not already finalized during download.
+    // `Fetched` installations are finalized in `downloads.rs` before the rename;
+    // `AlreadyAvailable` and pre-existing (`satisfied`) installations still need
+    // finalization here.
+    for installation in not_finalized.iter().chain(satisfied.iter().copied()) {
+        installation.finalize(installation.path())?;
+    }
 
+    for installation in &installations {
         let upgradeable = (default || is_default_install)
             || requested_minor_versions.contains(&installation.key().version().python_version());
 
