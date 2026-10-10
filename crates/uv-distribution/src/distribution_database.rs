@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use futures::{FutureExt, TryStreamExt};
-use http_content_range::{ContentRange, ContentRangeBytes, ContentRangeUnbound};
 use rayon::in_place_scope;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
@@ -19,6 +18,7 @@ use url::Url;
 
 use uv_cache::{ArchiveFileId, ArchiveId, Cache, CacheBucket, CacheEntry, WheelCache};
 use uv_cache_info::{CacheInfo, Timestamp};
+use uv_client::headers::{ContentRange, ContentRangeBytes, ContentRangeUnbound};
 use uv_client::{
     CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, RegistryClient,
     RequestBuilder, RetryState,
