@@ -1,5 +1,32 @@
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
+use assert_fs::prelude::*;
 
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
+use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_test::uv_snapshot;
 
 /// Test that `cache size` returns 0 for an empty cache directory (raw output).
@@ -47,6 +74,131 @@ fn cache_size_with_packages_human() {
     ----- stdout -----
     [SIZE]KiB
     ");
+}
+
+/// Physical cache sizing should count copy-on-write clones within the cache only once.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
+#[test]
+fn cache_size_physical_cached_clones() -> Result<()> {
+    let Some(context) = uv_test::test_context!("3.12").with_cache_on_cow_fs()? else {
+        return Ok(());
+    };
+    context.clean().assert().success();
+
+    let original = context.cache_dir.child("original");
+    original.create_dir_all()?;
+    original
+        .child("original.bin")
+        .write_binary(&vec![42; 1024 * 1024])?;
+
+    let cloned = context.cache_dir.child("cloned");
+    let link_mode = link_dir(&original, &cloned, &LinkOptions::new(LinkMode::Clone))?;
+    assert_eq!(
+        link_mode,
+        LinkMode::Clone,
+        "the configured copy-on-write filesystem did not clone the cached file"
+    );
+
+    uv_snapshot!(context.filters(), context.cache_size().arg("--preview-features").arg("cache-size").arg("--human"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0MiB
+    ");
+
+    uv_snapshot!(context.filters(), context.cache_size().arg("--preview-features").arg("cache-size,cache-physical-space").arg("--human"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0MiB
+    ");
+
+    assert!(original.child("original.bin").is_file());
+    assert!(cloned.child("original.bin").is_file());
+
+    Ok(())
+}
+
+/// A clone retained outside the cache still contributes once to the cache's physical footprint.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
+#[test]
+fn cache_size_physical_external_clone() -> Result<()> {
+    let Some(context) = uv_test::test_context!("3.12").with_cache_on_cow_fs()? else {
+        return Ok(());
+    };
+    context.clean().assert().success();
+
+    let retained = context.cache_dir.path().with_file_name("retained");
+    fs_err::create_dir_all(&retained)?;
+    let original = retained.join("original.bin");
+    fs_err::write(&original, vec![42; 1024 * 1024])?;
+
+    let cloned = context.cache_dir.child("cloned");
+    let link_mode = link_dir(&retained, &cloned, &LinkOptions::new(LinkMode::Clone))?;
+    assert_eq!(
+        link_mode,
+        LinkMode::Clone,
+        "the configured copy-on-write filesystem did not clone the cached file"
+    );
+
+    uv_snapshot!(context.filters(), context.cache_size().arg("--preview-features").arg("cache-size,cache-physical-space").arg("--human"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0MiB
+    ");
+
+    assert!(original.is_file());
+
+    Ok(())
+}
+
+/// Physical cache sizing should count hardlinked files once, including links retained elsewhere.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
+#[test]
+fn cache_size_physical_hardlinked_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.clean().assert().success();
+    context.cache_dir.create_dir_all()?;
+
+    let original = context.cache_dir.child("original.bin");
+    original.write_binary(&vec![42; 1024 * 1024])?;
+    fs_err::OpenOptions::new()
+        .write(true)
+        .open(original.path())?
+        .sync_all()?;
+    let cached = context.cache_dir.child("hardlinked.bin");
+    fs_err::hard_link(&original, &cached)?;
+    let retained = context.cache_dir.path().with_file_name("retained.bin");
+    fs_err::hard_link(&original, &retained)?;
+
+    uv_snapshot!(context.filters(), context.cache_size().arg("--preview-features").arg("cache-size,cache-physical-space").arg("--human"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0MiB
+    ");
+
+    assert!(retained.is_file());
+
+    Ok(())
 }
 
 /// Explicit output formats override terminal detection.
@@ -113,4 +265,59 @@ fn cache_size_output_format_conflicts_with_human() {
 
     For more information, try '--help'.
     ");
+}
+
+/// Fresh allocations remain counted before the filesystem assigns final physical extents.
+#[cfg(all(
+    target_os = "linux",
+    not(any(target_arch = "sparc", target_arch = "sparc64"))
+))]
+#[test]
+fn cache_size_physical_fresh_allocation() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let context = uv_test::test_context!("3.12");
+    context.clean().assert().success();
+    let file = context.cache_dir.child("fresh.bin");
+    file.write_binary(&vec![42; 1024 * 1024])?;
+    let allocated = fs_err::metadata(file.path())?.blocks() * 512;
+    assert!(allocated > 0);
+    assert_eq!(uv_fs::physical_disk_usage(file.path())?, allocated);
+    uv_snapshot!(context.filters(), context.cache_size()
+        .args(["--preview-features", "cache-size,cache-physical-space", "--human"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0MiB
+    ");
+    Ok(())
+}
+
+/// Missing read permission does not hide the allocation metadata available to cache sizing.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
+#[test]
+fn cache_size_physical_unreadable_file() -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let context = uv_test::test_context!("3.12");
+    context.clean().assert().success();
+    let file = context.cache_dir.child("unreadable.bin");
+    file.write_binary(&vec![42; 1024 * 1024])?;
+    fs_err::set_permissions(file.path(), std::fs::Permissions::from_mode(0o0))?;
+    let error = fs_err::File::open(file.path()).expect_err("fixture must not be readable");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    let allocated = fs_err::metadata(file.path())?.blocks() * 512;
+    assert!(allocated > 0);
+    assert_eq!(uv_fs::physical_disk_usage(file.path())?, allocated);
+    uv_snapshot!(context.filters(), context.cache_size()
+        .args(["--preview-features", "cache-size,cache-physical-space", "--human"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0MiB
+    ");
+    Ok(())
 }
