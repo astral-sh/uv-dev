@@ -381,7 +381,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 // Download and unzip.
                 match self
                     .stream_wheel(
-                        wheel.url.raw().clone(),
+                        wheel.url.inner().clone(),
                         None,
                         &wheel.filename,
                         wheel.size,
@@ -420,7 +420,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                         // download the wheel directly.
                         let archive = self
                             .download_wheel(
-                                wheel.url.raw().clone(),
+                                wheel.url.inner().clone(),
                                 None,
                                 &wheel.filename,
                                 wheel.size,

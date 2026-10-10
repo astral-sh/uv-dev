@@ -93,7 +93,7 @@ impl IndexUrl {
 
     /// Return the raw URL for the index.
     pub fn url(&self) -> &DisplaySafeUrl {
-        self.inner().raw()
+        self.inner().inner()
     }
 
     /// Convert the index URL into a [`DisplaySafeUrl`].
@@ -232,7 +232,7 @@ impl From<VerbatimUrl> for IndexUrl {
     fn from(url: VerbatimUrl) -> Self {
         if url.scheme() == "file" {
             Self::Path(Arc::new(url))
-        } else if *url.raw() == *PYPI_URL {
+        } else if *url.inner() == *PYPI_URL {
             Self::Pypi(Arc::new(url))
         } else {
             Self::Url(Arc::new(url))
