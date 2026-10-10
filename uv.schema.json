@@ -1853,6 +1853,7 @@
       "anyOf": [
         {
           "enum": [
+            "self-management",
             "python-install-default",
             "json-output",
             "pylock",

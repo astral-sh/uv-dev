@@ -149,7 +149,7 @@ item = "with_retry_sync"
 kind = "function"
 level = "expect"
 target = "cfg(not(windows))"
-reason = "used by the Windows installer path"
+reason = "used by Windows file operations in uv-install-wheel and the self-installer"
 
 [[override]]
 lint = "hawk::dead_public"
@@ -225,22 +225,6 @@ item = "env_vars::EnvVars::PYTHONHOME"
 kind = "inherent_associated_constant"
 level = "expect"
 reason = "read by generated activation scripts"
-
-[[override]]
-lint = "hawk::dead_public"
-crate = "uv_static"
-item = "env_vars::EnvVars::UV_UNMANAGED_INSTALL"
-kind = "inherent_associated_constant"
-level = "expect"
-reason = "read by the standalone installer"
-
-[[override]]
-lint = "hawk::dead_public"
-crate = "uv_static"
-item = "env_vars::EnvVars::UV_NO_MODIFY_PATH"
-kind = "inherent_associated_constant"
-level = "expect"
-reason = "read by the standalone installer"
 
 [[override]]
 lint = "hawk::dead_public"

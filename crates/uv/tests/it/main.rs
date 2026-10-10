@@ -27,6 +27,8 @@ mod requirements;
 mod resource_limits;
 
 #[cfg(feature = "self-update")]
+mod self_install;
+#[cfg(feature = "self-update")]
 mod self_update;
 
 #[cfg(not(windows))]
