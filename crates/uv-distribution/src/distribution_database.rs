@@ -812,9 +812,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 // extraction has reached the end of the archive contents.
                 let reader = uv_fs::ProgressReader::new(reader.compat(), |bytes| {
                     if let Some(progress) = progress.as_ref() {
-                        progress
-                            .reporter
-                            .on_download_progress(progress.id, bytes as u64);
+                        progress.on_progress(bytes as u64);
                     }
                 });
                 let algorithms = http_hash_algorithms(hashes);
@@ -1202,9 +1200,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     // Wrap the reader in a progress reporter. This will report 100%
                     // progress once the download is complete, before the wheel is unzipped.
                     let mut reader = uv_fs::ProgressReader::new(&mut hasher, |bytes| {
-                        progress
-                            .reporter
-                            .on_download_progress(progress.id, bytes as u64);
+                        progress.on_progress(bytes as u64);
                     });
 
                     tokio::io::copy(&mut reader, &mut writer)
