@@ -18511,17 +18511,7 @@ async fn sync_malware_check_keyring_auth() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin.
-    context
-        .pip_install()
-        .arg(
-            context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = context.install_keyring_plugin();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -18577,7 +18567,7 @@ async fn sync_malware_check_keyring_auth() -> Result<()> {
                 server.uri()
             )
         )
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
