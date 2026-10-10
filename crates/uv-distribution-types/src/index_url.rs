@@ -17,7 +17,9 @@ use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
-use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Verbatim};
+use crate::{
+    ExcludeNewerOverride, Index, IndexFormat, IndexMetadataRef, IndexStatusCodeStrategy, Verbatim,
+};
 
 pub static PYPI_URL: LazyLock<DisplaySafeUrl> =
     LazyLock::new(|| DisplaySafeUrl::parse("https://pypi.org/simple").unwrap());
@@ -391,6 +393,31 @@ impl<'a> IndexLocations {
         self.flat_index.iter()
     }
 
+    /// Return whether the given URL is configured only as a flat index.
+    ///
+    /// Include source-scoped indexes, which can be defined by individual workspace members.
+    pub fn is_flat_index(
+        &'a self,
+        url: &IndexUrl,
+        source_indexes: impl IntoIterator<Item = IndexMetadataRef<'a>>,
+    ) -> bool {
+        let mut flat = false;
+        for index in self
+            .allowed_indexes()
+            .into_iter()
+            .map(IndexMetadataRef::from)
+            .chain(source_indexes.into_iter().filter(|_| !self.no_index))
+        {
+            if is_same_index(index.url, url) {
+                match index.format {
+                    IndexFormat::Flat => flat = true,
+                    IndexFormat::Simple => return false,
+                }
+            }
+        }
+        flat
+    }
+
     /// Return the `--no-index` flag.
     pub fn no_index(&self) -> bool {
         self.no_index
@@ -663,6 +690,67 @@ mod tests {
         assert!(is_disambiguated_path(
             "git+https://github.com/example/repo.git"
         ));
+    }
+
+    #[test]
+    fn shadowed_flat_index_does_not_exempt_cutoffs() -> Result<(), Box<dyn Error>> {
+        let simple = Index::from_str("shared=https://example.com/simple")?;
+        let url = simple.url().clone();
+        let mut shadowed = simple.clone();
+        shadowed.format = IndexFormat::Flat;
+        let locations = IndexLocations::new(vec![simple, shadowed], vec![], false);
+        assert!(!locations.is_flat_index(&url, []));
+        Ok(())
+    }
+
+    #[test]
+    fn implicit_pypi_default_prevents_flat_exemption() -> Result<(), Box<dyn Error>> {
+        let mut flat = Index::from_str("unused=https://pypi.org/simple")?;
+        flat.format = IndexFormat::Flat;
+        flat.explicit = true;
+        let url = flat.url().clone();
+        let locations = IndexLocations::new(vec![flat], vec![], false);
+        assert!(!locations.is_flat_index(&url, []));
+        Ok(())
+    }
+
+    #[test]
+    fn simple_index_with_find_links_does_not_exempt_cutoffs() -> Result<(), Box<dyn Error>> {
+        let simple = Index::from_str("https://example.com/packages")?;
+        let url = simple.url().clone();
+        let mut flat = simple.clone();
+        flat.format = IndexFormat::Flat;
+        let locations = IndexLocations::new(vec![simple], vec![flat.clone()], false);
+        assert!(!locations.is_flat_index(&url, []));
+        let locations = IndexLocations::new(vec![], vec![flat], true);
+        assert!(locations.is_flat_index(&url, []));
+        Ok(())
+    }
+
+    #[test]
+    fn no_index_ignores_source_definitions_for_flat_classification() -> Result<(), Box<dyn Error>> {
+        let simple = Index::from_str("source=https://example.com/packages")?;
+        let url = simple.url().clone();
+        let mut flat = simple.clone();
+        flat.format = IndexFormat::Flat;
+        let locations = IndexLocations::new(vec![simple.clone()], vec![flat.clone()], true);
+        assert!(locations.is_flat_index(&url, [(&simple).into()]));
+        let locations = IndexLocations::new(vec![], vec![], true);
+        assert!(!locations.is_flat_index(&url, [(&flat).into()]));
+        Ok(())
+    }
+
+    #[test]
+    fn superseded_simple_default_does_not_shadow_active_flat_index() -> Result<(), Box<dyn Error>> {
+        let mut flat = Index::from_str("flat=https://example.com/packages")?;
+        flat.format = IndexFormat::Flat;
+        flat.default = true;
+        let url = flat.url().clone();
+        let mut legacy = Index::from_str("https://example.com/packages")?;
+        legacy.default = true;
+        let locations = IndexLocations::new(vec![flat.clone(), legacy], vec![], false);
+        assert!(locations.is_flat_index(&url, [(&flat).into()]));
+        Ok(())
     }
 
     #[test]

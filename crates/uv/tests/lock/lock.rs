@@ -8017,9 +8017,6 @@ fn lock_unsupported_tag() -> Result<()> {
         revision = 2
         requires-python = ">=3.12.0"
 
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
         [[package]]
         name = "project"
         version = "0.1.0"
@@ -8054,14 +8051,14 @@ fn lock_unsupported_tag() -> Result<()> {
     "#)?;
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
 
     // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
@@ -12770,18 +12767,18 @@ fn lock_invalid_hash() -> Result<()> {
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737 }
+        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737, upload-time = "2023-05-27T11:12:46.688Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873 },
+            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873, upload-time = "2023-05-27T11:12:44.474Z" },
         ]
 
         [[package]]
         name = "idna"
         version = "3.6"
         source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:aecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426 }
+        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:aecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:d05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567 },
+            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:d05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
         ]
 
         [[package]]
@@ -12797,9 +12794,9 @@ fn lock_invalid_hash() -> Result<()> {
         name = "sniffio"
         version = "1.3.1"
         source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372 }
+        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235 },
+            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
         ]
         "#)?;
 
@@ -19745,8 +19742,112 @@ fn check_unformatted_lock() -> Result<()> {
     Ok(())
 }
 
-/// Checks that a later `exclude-newer` cutoff does not invalidate a lock until a refresh occurs,
-/// while a more restrictive cutoff still requires an update.
+/// A flat index can expose upload times while remaining exempt from cutoffs.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_exclude_newer_timestamped_flat_index() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "timestamped-flat-index"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-03-27T00:00:00Z" }
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let flat_index = MockServer::start().await;
+    Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{}" data-upload-time="2024-03-27T00:00:00Z">a-1.0.0-py3-none-any.whl</a>"#,
+                server.file_url("a-1.0.0-py3-none-any.whl"),
+            ),
+            "text/html",
+        ))
+        .mount(&flat_index)
+        .await;
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-26T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--no-index")
+        .arg("--find-links").arg(format!("{}/links", flat_index.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--locked", "--offline", "--no-cache", "--no-index"])
+        .arg("--find-links").arg(format!("{}/links", flat_index.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// Lock validation uses the same millisecond cutoff boundary as resolution.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_submillisecond_cutoff() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "submillisecond-cutoff"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00.122Z" }
+        [packages.a.versions."2.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00.123Z" }
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-01-02T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--index-url").arg(server.index_url())
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-01-01T00:00:00.123456Z"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolving despite existing lockfile because package `a` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2024-01-01T00:00:00.123456Z`
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
+/// Checks that changing `exclude-newer` does not invalidate a lock whose artifacts satisfy the
+/// cutoff until a refresh occurs.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
@@ -19782,13 +19883,9 @@ fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock()
         .env(EnvVars::UV_EXCLUDE_NEWER, "2024-03-24T00:00:00Z")
         .arg("--check"), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer timestamp from `2024-03-25T00:00:00Z` to `2024-03-24T00:00:00Z`
     Resolved 1 package in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock()
@@ -19830,7 +19927,7 @@ fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_check_allows_relaxed_exclude_newer_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-25T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-04-12T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -19839,61 +19936,61 @@ fn lock_check_allows_relaxed_exclude_newer_package() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.11"
-        dependencies = []
+        dependencies = ["idna"]
         "#,
     )?;
 
     uv_snapshot!(context.filters(), context.lock()
         .arg("--exclude-newer-package")
-        .arg("project=2024-03-25T00:00:00Z"), @"
+        .arg("idna=2024-04-12T00:00:00Z"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
-    // Exempting `project` from the cutoff relaxes the constraint, so the existing lockfile remains
+    // Exempting `idna` from the cutoff relaxes the constraint, so the existing lockfile remains
     // valid.
     uv_snapshot!(context.filters(), context.lock()
         .arg("--exclude-newer-package")
-        .arg("project=false")
+        .arg("idna=false")
         .arg("--check"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
-    // Exempting another package does not change the cutoff for `project`, so the existing lockfile
+    // Exempting another package does not change the cutoff for `idna`, so the existing lockfile
     // remains valid.
     uv_snapshot!(context.filters(), context.lock()
         .arg("--exclude-newer-package")
-        .arg("project=2024-03-25T00:00:00Z")
+        .arg("idna=2024-04-12T00:00:00Z")
         .arg("--exclude-newer-package")
         .arg("iniconfig=false")
         .arg("--check"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.lock()
-        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-03-26T00:00:00Z")
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-04-13T00:00:00Z")
         .arg("--exclude-newer-package")
-        .arg("project=2024-03-26T00:00:00Z")
+        .arg("idna=2024-04-13T00:00:00Z")
         .arg("--check"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.lock()
-        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-03-26T00:00:00Z")
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-04-13T00:00:00Z")
         .arg("--exclude-newer-package")
-        .arg("project=2024-03-24T00:00:00Z")
+        .arg("idna=2024-04-10T00:00:00Z")
         .arg("--check"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer timestamp from `2024-03-25T00:00:00Z` to `2024-03-24T00:00:00Z` for package `project`
-    Resolved 1 package in [TIME]
+    Resolving despite existing lockfile because package `idna` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2024-04-10T00:00:00Z`
+    Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
     hint: To update the lockfile, run `uv lock`.
@@ -25100,18 +25197,18 @@ fn lock_missing_metadata() -> Result<()> {
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737 }
+        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737, upload-time = "2023-05-27T11:12:46.688Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873 },
+            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873, upload-time = "2023-05-27T11:12:44.474Z" },
         ]
 
         [[package]]
         name = "idna"
         version = "3.6"
         source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426 }
+        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567 },
+            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
         ]
 
         [[package]]
@@ -25126,9 +25223,9 @@ fn lock_missing_metadata() -> Result<()> {
         name = "sniffio"
         version = "1.3.1"
         source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372 }
+        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235 },
+            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
         ]
     "#)?;
 
@@ -25252,9 +25349,9 @@ fn lock_dev_dependencies_alias() -> Result<()> {
         name = "iniconfig"
         version = "2.0.0"
         source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646 }
+        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892 },
+            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
         ]
     "#)?;
 
@@ -40926,6 +41023,31 @@ fn lock_omit_wheels_exclude_newer() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
+    // A more restrictive cutoff can still reuse the lock when every locked artifact satisfies it.
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--no-cache")
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-07-17T00:00:00Z"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // Moving the cutoff past a locked artifact requires updating the lockfile.
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-07-16T18:22:00Z"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolving despite existing lockfile because package `pillow-avif-plugin` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2024-07-16T18:22:00Z`
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
     Ok(())
 }
 
@@ -42178,7 +42300,8 @@ fn lock_exclude_newer_package_order() -> Result<()> {
     Ok(())
 }
 
-/// Test that stored exclude-newer-package settings remain relevant outside the final resolution.
+/// Test that stored exclude-newer-package settings do not invalidate a lock when the package is
+/// absent from the final resolution.
 #[test]
 fn lock_exclude_newer_package_absent() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -42224,66 +42347,26 @@ fn lock_exclude_newer_package_absent() -> Result<()> {
         "#);
     });
 
-    // A stored cutoff may have affected backtracking, so tightening it invalidates the lock.
+    // Tightening the cutoff for a package without locked artifacts does not invalidate the lock.
     uv_snapshot!(context.filters(), context
         .lock()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("--locked")
         .arg("--exclude-newer-package")
         .arg("idna=2022-04-04T12:00:00Z"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolving despite existing lockfile due to remove exclude newer exclusion (now `2022-04-04T12:00:00Z`) for package `idna`
-    Resolved 1 package in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
-    ");
-
-    // Removing a stored cutoff also invalidates the lock.
-    uv_snapshot!(context.filters(), context
-        .lock()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("--locked"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolving despite existing lockfile due to removal of exclude newer for package `idna`
-    Resolved 1 package in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
-    ");
-
-    // Recreate the lock with a global timestamp and a package-specific exemption.
-    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-    uv_snapshot!(context.filters(), context
-        .lock()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("--exclude-newer")
-        .arg("2022-04-04T12:00:00Z")
-        .arg("--exclude-newer-package")
-        .arg("idna=false"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
 
-    // Inverting the settings still invalidates the lock because the global setting is relevant.
+    // Removing a stored cutoff for a package without locked artifacts also reuses the lock.
     uv_snapshot!(context.filters(), context
         .lock()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("--locked")
-        .arg("--exclude-newer")
-        .arg("false")
-        .arg("--exclude-newer-package")
-        .arg("idna=2022-04-04T12:00:00Z"), @"
-    exit_code: 1 (failure)
+        .arg("--locked"), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to removal of global exclude newer
     Resolved 1 package in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -42699,6 +42782,74 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Test that lockfile validation uses the current index-specific `exclude-newer` value.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_validation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+
+        [tool.uv.sources]
+        idna = { index = "pypi" }
+
+        [[tool.uv.index]]
+        name = "pypi"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = "2024-04-12T00:00:00Z"
+        "#,
+    )?;
+
+    // idna 3.7 was uploaded on 2024-04-11.
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Setting `exclude-newer` on configured indexes is experimental and may change without warning. Pass `--preview-features index-exclude-newer` to disable this warning.
+    Resolved 2 packages in [TIME]
+    ");
+
+    // Moving the index cutoff before the locked artifact requires updating the lockfile.
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+
+        [tool.uv.sources]
+        idna = { index = "pypi" }
+
+        [[tool.uv.index]]
+        name = "pypi"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = "2024-04-10T00:00:00Z"
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Setting `exclude-newer` on configured indexes is experimental and may change without warning. Pass `--preview-features index-exclude-newer` to disable this warning.
+    Resolving despite existing lockfile because package `idna` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2024-04-10T00:00:00Z`
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -47760,7 +47911,7 @@ fn lock_resolution_inputs_refresh_new_exclusion() -> Result<()> {
     Ok(())
 }
 
-/// Retained settings consulted before backtracking still matter for packages absent from the lock.
+/// Retained dependency settings survive backtracking; upload cutoffs apply to locked artifacts.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_backtracking() -> Result<()> {
@@ -48085,7 +48236,7 @@ fn lock_resolution_inputs_backtracking() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
 
-    // Upload cutoffs consulted for packages absent from the final graph remain relevant.
+    // Upload cutoffs for packages absent from the final graph do not invalidate locked artifacts.
     pyproject.write_str(indoc! {r#"
         [project]
         name = "project"
@@ -48110,13 +48261,9 @@ fn lock_resolution_inputs_backtracking() -> Result<()> {
         .arg("--locked")
         .arg("--index-url")
         .arg(server.index_url()), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer timestamp from `2025-01-01T00:00:00Z` to `2024-03-25T00:00:00Z` for package `discarded`
     Resolved 2 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
     ");
 
     // An upgrade applies the previously ignored exclusion and selects the discarded branch.
@@ -48680,5 +48827,246 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
+    Ok(())
+}
+
+/// Member-scoped flat indexes remain exempt when the root configures a cutoff.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_exclude_newer_member_flat_index() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "member-flat-index"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let flat_index = MockServer::start().await;
+    Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{}">a-1.0.0-py3-none-any.whl</a>"#,
+                server.file_url("a-1.0.0-py3-none-any.whl")
+            ),
+            "text/html",
+        ))
+        .mount(&flat_index)
+        .await;
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-26T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+    "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv.sources]
+        a = {{ index = "member-flat" }}
+        [[tool.uv.index]]
+        name = "member-flat"
+        url = "{}/links"
+        format = "flat"
+        explicit = true
+    "#, flat_index.uri()})?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// Disabled source indexes cannot make an active find-links URL ambiguous.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_exclude_newer_no_index_keeps_find_links() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "no-index-flat-source"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let flat_index = MockServer::start().await;
+    Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{}">a-1.0.0-py3-none-any.whl</a>"#,
+                server.file_url("a-1.0.0-py3-none-any.whl")
+            ),
+            "text/html",
+        ))
+        .mount(&flat_index)
+        .await;
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-26T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [[tool.uv.index]]
+        name = "disabled"
+        url = "{}/links"
+        explicit = true
+    "#, flat_index.uri()})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index").arg("--find-links").arg(format!("{}/links", flat_index.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache", "--no-index", "--find-links"]).arg(format!("{}/links", flat_index.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// An inactive legacy Simple default cannot invalidate the active flat default.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_exclude_newer_active_flat_default() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "active-flat-default"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let flat_index = MockServer::start().await;
+    Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{}">a-1.0.0-py3-none-any.whl</a>"#,
+                server.file_url("a-1.0.0-py3-none-any.whl")
+            ),
+            "text/html",
+        ))
+        .mount(&flat_index)
+        .await;
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-26T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv]
+        index-url = "{index}/links"
+        [[tool.uv.index]]
+        name = "flat"
+        url = "{index}/links"
+        format = "flat"
+        default = true
+    "#, index = flat_index.uri()})?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// A path dependency outside the workspace can supply a timestamp-free flat index.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_exclude_newer_external_path_flat_index() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "external-path-flat-index"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let flat_index = MockServer::start().await;
+    Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{}">a-1.0.0-py3-none-any.whl</a>"#,
+                server.file_url("a-1.0.0-py3-none-any.whl")
+            ),
+            "text/html",
+        ))
+        .mount(&flat_index)
+        .await;
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-26T00:00:00Z");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv.sources]
+        child = { path = "../child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv.sources]
+        a = {{ index = "child-flat" }}
+        [[tool.uv.index]]
+        name = "child-flat"
+        url = "{}/links"
+        format = "flat"
+        explicit = true
+    "#, flat_index.uri()})?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(project.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 3 packages in [TIME]
+    ");
+    let lock = context.read("project/uv.lock");
+    uv_snapshot!(context.filters(), context.lock().current_dir(project.path())
+        .args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 3 packages in [TIME]
+    ");
+    assert_eq!(context.read("project/uv.lock"), lock);
     Ok(())
 }
