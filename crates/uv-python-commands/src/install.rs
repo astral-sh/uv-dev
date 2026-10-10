@@ -4,6 +4,7 @@ use std::fmt::Write;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::{Context, Error, Result};
 use futures::{StreamExt, join};
@@ -12,13 +13,13 @@ use itertools::Itertools;
 use owo_colors::{AnsiColors, OwoColorize};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
-use tracing::{debug, trace, warn};
+use tracing::{Span, debug, trace, warn};
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, PythonUpgrade, PythonUpgradeSource};
 use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
-use uv_fs::Simplified;
+use uv_fs::{LockedFile, Simplified};
 use uv_platform::{Arch, Libc};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -329,7 +330,7 @@ async fn perform_install(
     let installations = ManagedPythonInstallations::from_settings(install_dir.clone())?.init()?;
     let installations_dir = installations.root();
     let scratch_dir = installations.scratch();
-    let _lock = installations.lock().await?;
+    let lock = Arc::new(installations.lock().await?);
     let existing_installations: Vec<_> = installations
         .find_all()?
         .inspect(|installation| trace!("Found existing installation {}", installation.key()))
@@ -554,18 +555,18 @@ async fn perform_install(
         (satisfied, unsatisfied)
     };
 
+    // Overlapping requests can select the same directory; finalize and publish it only once.
+    let satisfied = satisfied
+        .into_iter()
+        .unique_by(|installation| installation.key())
+        .collect::<Vec<_>>();
+
     // For all satisfied installs, bytecode compile them now before any future
     // early return.
     if let Some(ref sender) = bytecode_compilation_sender {
-        satisfied
-            .iter()
-            .copied()
-            .cloned()
-            .try_for_each(|installation| {
-                sender
-                    .send(installation)
-                    .map_err(|err| anyhow::anyhow!(err))
-            })?;
+        for installation in &satisfied {
+            finalize_and_compile((**installation).clone(), lock.clone(), sender).await?;
+        }
     }
 
     // Check if Python downloads are banned
@@ -628,9 +629,7 @@ async fn perform_install(
 
                 let installation = ManagedPythonInstallation::new(path, download)?;
                 if let Some(ref sender) = bytecode_compilation_sender {
-                    sender
-                        .send(installation.clone())
-                        .map_err(|err| anyhow::anyhow!(err))?;
+                    finalize_and_compile(installation.clone(), lock.clone(), sender).await?;
                 }
                 changelog.installed.insert(installation.key().clone());
                 for request in &requests {
@@ -668,12 +667,9 @@ async fn perform_install(
     // Ensure that the installations are _complete_ for both downloaded installations and existing
     // installations that match the request
     for installation in &installations {
-        installation.ensure_externally_managed()?;
-        installation.ensure_sysconfig_patched()?;
-        installation.ensure_canonical_executables()?;
-        installation.ensure_build_file()?;
-        if let Err(e) = installation.ensure_dylib_patched() {
-            e.warn_user(installation);
+        // Bytecode compilation consumes finalized files, so those installations need no more writes.
+        if bytecode_compilation_sender.is_none() {
+            finalize_installation((**installation).clone(), lock.clone()).await?;
         }
 
         let upgradeable = (default || is_default_install)
@@ -1371,5 +1367,124 @@ fn matches_build(download_build: Option<&str>, installation_build: Option<&str>)
         (Some(_), None) => false,
         // Download doesn't have build info, assume matches
         (None, _) => true,
+    }
+}
+
+/// Publish installation files to the compiler only after all finalization writes complete.
+async fn finalize_and_compile(
+    installation: ManagedPythonInstallation,
+    lock: Arc<LockedFile>,
+    sender: &mpsc::UnboundedSender<ManagedPythonInstallation>,
+) -> Result<()> {
+    let installation = finalize_installation(installation, lock).await?;
+    sender
+        .send(installation)
+        .map_err(|error| anyhow::anyhow!(error))?;
+    Ok(())
+}
+
+/// Complete installation files while retaining the installation lock through cancellation.
+async fn finalize_installation(
+    installation: ManagedPythonInstallation,
+    lock: Arc<LockedFile>,
+) -> Result<ManagedPythonInstallation> {
+    let span = Span::current();
+    Ok(tokio::task::spawn_blocking(move || {
+        let _lock = lock;
+        let _entered = span.enter();
+        debug!("Finalizing Python installation {}", installation.key());
+        installation.ensure_externally_managed()?;
+        installation.ensure_sysconfig_patched()?;
+        installation.ensure_canonical_executables()?;
+        installation.ensure_build_file()?;
+        if let Err(error) = installation.ensure_dylib_patched() {
+            error.warn_user(&installation);
+        }
+        Ok::<_, uv_python_managed::Error>(installation)
+    })
+    .await??)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    use futures::FutureExt;
+    use tokio::runtime::Builder;
+    use tokio::sync::mpsc::{error::TryRecvError, unbounded_channel};
+    use tokio::sync::oneshot;
+    use uv_cache::Cache;
+    use uv_fs::{LockedFile, LockedFileMode};
+    use uv_python_managed::downloads::ManagedPythonDownloadList;
+    use uv_python_managed::{ManagedPythonInstallation, ManagedPythonInstallations};
+    use uv_python_types::PythonDownloadRequest;
+
+    use super::finalize_and_compile;
+
+    #[test]
+    fn cancelled_finalization_retains_lock_and_defers_compilation() -> anyhow::Result<()> {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()?;
+        let cache = Cache::temp()?;
+        let installations =
+            ManagedPythonInstallations::from_settings(Some(cache.root().join("python")))?.init()?;
+        let downloads = ManagedPythonDownloadList::new_only_embedded()?;
+        let download = downloads.find(&PythonDownloadRequest::default())?;
+        // This missing installation fails once the worker starts, releasing its owned lock.
+        let installation =
+            ManagedPythonInstallation::new(installations.root().join("missing"), download)?;
+        runtime.block_on(async {
+            let lock = Arc::new(installations.lock().await?);
+            let lock_path = installations.root().join(".lock");
+            let (sender, mut receiver) = unbounded_channel();
+            let (started, start) = oneshot::channel();
+            let (release, finish) = mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                let _ = started.send(());
+                finish.recv()
+            });
+            start.await?;
+            assert!(
+                finalize_and_compile(installation.clone(), lock, &sender)
+                    .now_or_never()
+                    .is_none()
+            );
+            assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+            assert!(
+                LockedFile::acquire_no_wait(
+                    &lock_path,
+                    LockedFileMode::Exclusive,
+                    "test installation"
+                )
+                .is_none()
+            );
+            tokio::task::yield_now().await;
+            release.send(())?;
+            blocker.await??;
+            let reacquired = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if let Some(lock) = LockedFile::acquire_no_wait(
+                        &lock_path,
+                        LockedFileMode::Exclusive,
+                        "test installation",
+                    ) {
+                        break lock;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+            assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+            assert!(
+                finalize_and_compile(installation, Arc::new(reacquired), &sender)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+            Ok(())
+        })
     }
 }
