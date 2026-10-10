@@ -612,7 +612,7 @@ async fn perform_install(
                     .await,
             )
         })
-        .buffer_unordered(concurrency.downloads);
+        .buffer_unordered(concurrency.downloads.get());
 
     let mut errors = vec![];
     let mut downloaded = Vec::with_capacity(downloads.len());

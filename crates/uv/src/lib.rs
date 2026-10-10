@@ -570,7 +570,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     anstream::ColorChoice::write_global(globals.color.into());
 
     // Don't initialize the rayon threadpool yet, this is too costly when we're doing a noop sync.
-    RAYON_PARALLELISM.store(globals.concurrency.installs, Ordering::Relaxed);
+    RAYON_PARALLELISM.store(globals.concurrency.installs.get(), Ordering::Relaxed);
 
     // Write out any resolved settings.
     macro_rules! show_settings {

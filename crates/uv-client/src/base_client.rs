@@ -1,6 +1,6 @@
 use std::env;
 use std::fmt::{Debug, Write};
-use std::num::ParseIntError;
+use std::num::{NonZeroUsize, ParseIntError};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTimeError};
 
@@ -140,12 +140,12 @@ pub struct BaseClientBuilder<'a> {
 
 #[derive(Debug)]
 struct CacheReadRuntime {
-    workers: usize,
+    workers: NonZeroUsize,
     runtime: OnceLock<tokio::runtime::Runtime>,
 }
 
 impl CacheReadRuntime {
-    fn new(workers: usize) -> Self {
+    fn new(workers: NonZeroUsize) -> Self {
         Self {
             workers,
             runtime: OnceLock::new(),
@@ -157,7 +157,7 @@ impl CacheReadRuntime {
             tokio::runtime::Builder::new_current_thread()
                 .thread_name("uv-cache-read")
                 .thread_stack_size(min_stack_size())
-                .max_blocking_threads(self.workers)
+                .max_blocking_threads(self.workers.get())
                 .build()
                 .expect("Failed building the cache-read Runtime")
         })
@@ -320,7 +320,7 @@ impl<'a> BaseClientBuilder<'a> {
 
     /// Set the number of workers available for reading cached HTTP responses.
     #[must_use]
-    pub fn cache_read_concurrency(mut self, workers: usize) -> Self {
+    pub fn cache_read_concurrency(mut self, workers: NonZeroUsize) -> Self {
         self.cache_read_runtime = Arc::new(CacheReadRuntime::new(workers));
         self
     }
@@ -1250,7 +1250,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_read_runtime_can_be_dropped_from_an_async_context() {
-        let runtime = CacheReadRuntime::new(1);
+        let runtime = CacheReadRuntime::new(NonZeroUsize::MIN);
         runtime.get().spawn_blocking(|| {}).await.unwrap();
         drop(runtime);
     }

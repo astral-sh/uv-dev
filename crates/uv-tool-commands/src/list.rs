@@ -166,7 +166,7 @@ pub async fn list(
                     Ok::<(&PackageName, Option<DistFilename>), anyhow::Error>((name, latest))
                 }
             })
-            .buffer_unordered(concurrency.downloads);
+            .buffer_unordered(concurrency.downloads.get());
 
         let mut map = FxHashMap::default();
         while let Some((name, version)) = fetches.next().await.transpose()? {
