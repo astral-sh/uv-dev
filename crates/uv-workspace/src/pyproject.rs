@@ -32,8 +32,8 @@ use uv_options_metadata::{OptionSet, OptionsMetadata, Visit};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::MarkerTree;
 use uv_pypi_types::{
-    ConflictError, Conflicts, DependencyGroups, SchemaConflicts, SupportedEnvironments,
-    VerbatimParsedUrl,
+    ConflictError, Conflicts, DependencyGroups, HashDigestInput, SchemaConflicts,
+    SupportedEnvironments, VerbatimParsedUrl,
 };
 use uv_redacted::DisplaySafeUrl;
 use uv_toml::deserialize_unique_map;
@@ -340,13 +340,19 @@ pub enum BuildConstraintDependency {
     /// A PEP 508 requirement and its archive hashes.
     WithHashes {
         requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
-        hashes: Vec<String>,
+        #[cfg_attr(feature = "schemars", schemars(with = "Vec<String>"))]
+        hashes: Vec<HashDigestInput>,
     },
 }
 
 impl BuildConstraintDependency {
     /// Return the requirement and any hashes attached to it.
-    pub fn into_parts(self) -> (uv_pep508::Requirement<VerbatimParsedUrl>, Vec<String>) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        uv_pep508::Requirement<VerbatimParsedUrl>,
+        Vec<HashDigestInput>,
+    ) {
         match self {
             Self::Requirement(requirement) => (requirement, Vec::new()),
             Self::WithHashes {
