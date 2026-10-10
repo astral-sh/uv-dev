@@ -1,13 +1,13 @@
 # Features
 
-uv provides essential features for Python development — from installing Python and hacking on simple
-scripts to working on large projects that support multiple Python versions and platforms.
+uv supports Python development tasks from installing Python and running scripts to managing large
+projects. Those projects can support multiple Python versions and platforms.
 
-uv's interface can be broken down into sections, which are usable independently or together.
+The uv interface has several groups of commands. You can use these groups separately or together.
 
 ## Python versions
 
-Installing and managing Python itself.
+Install and manage Python.
 
 - `uv python install`: Install Python versions.
 - `uv python list`: View available Python versions.
@@ -15,21 +15,21 @@ Installing and managing Python itself.
 - `uv python pin`: Pin the current project to use a specific Python version.
 - `uv python uninstall`: Uninstall a Python version.
 
-See the [guide on installing Python](../guides/install-python.md) to get started.
+Read the [guide on installing Python](../guides/install-python.md) to get started.
 
 ## Scripts
 
-Executing standalone Python scripts, e.g., `example.py`.
+Run standalone Python scripts, such as `example.py`.
 
 - `uv run`: Run a script.
 - `uv add --script`: Add a dependency to a script.
 - `uv remove --script`: Remove a dependency from a script.
 
-See the [guide on running scripts](../guides/scripts.md) to get started.
+Read the [guide on running scripts](../guides/scripts.md) to get started.
 
 ## Projects
 
-Creating and working on Python projects, i.e., with a `pyproject.toml`.
+Create and manage Python projects that contain a `pyproject.toml` file.
 
 - `uv init`: Create a new Python project.
 - `uv add`: Add a dependency to the project.
@@ -41,11 +41,11 @@ Creating and working on Python projects, i.e., with a `pyproject.toml`.
 - `uv build`: Build the project into distribution archives.
 - `uv publish`: Publish the project to a package index.
 
-See the [guide on projects](../guides/projects.md) to get started.
+Read the [guide on projects](../guides/projects.md) to get started.
 
 ## Tools
 
-Running and installing tools published to Python package indexes, e.g., `ruff` or `black`.
+Run and install tools from Python package indexes, such as `ruff` and `black`.
 
 - `uvx` / `uv tool run`: Run a tool in a temporary environment.
 - `uv tool install`: Install a tool user-wide.
@@ -53,21 +53,21 @@ Running and installing tools published to Python package indexes, e.g., `ruff` o
 - `uv tool list`: List installed tools.
 - `uv tool update-shell`: Update the shell to include tool executables.
 
-See the [guide on tools](../guides/tools.md) to get started.
+Read the [guide on tools](../guides/tools.md) to get started.
 
 ## The pip interface
 
-Manually managing environments and packages — intended to be used in legacy workflows or cases where
-the high-level commands do not provide enough control.
+Use the pip interface to manage environments and packages directly. It supports legacy workflows and
+cases that need more control.
 
-Creating virtual environments (replacing `venv` and `virtualenv`):
+Create virtual environments with a replacement for `venv` and `virtualenv`:
 
 - `uv venv`: Create a new virtual environment.
 
-See the documentation on [using environments](../pip/environments.md) for details.
+Read the documentation on [using environments](../pip/environments.md) for details.
 
-Managing packages in an environment (replacing [`pip`](https://github.com/pypa/pip) and
-[`pipdeptree`](https://github.com/tox-dev/pipdeptree)):
+Manage packages with replacements for [`pip`](https://github.com/pypa/pip) and
+[`pipdeptree`](https://github.com/tox-dev/pipdeptree):
 
 - `uv pip install`: Install packages into the current environment.
 - `uv pip show`: Show details about an installed package.
@@ -77,23 +77,24 @@ Managing packages in an environment (replacing [`pip`](https://github.com/pypa/p
 - `uv pip uninstall`: Uninstall packages.
 - `uv pip tree`: View the dependency tree for the environment.
 
-See the documentation on [managing packages](../pip/packages.md) for details.
+Read the documentation on [managing packages](../pip/packages.md) for details.
 
-Locking packages in an environment (replacing [`pip-tools`](https://github.com/jazzband/pip-tools)):
+Lock packages with a replacement for [`pip-tools`](https://github.com/jazzband/pip-tools):
 
 - `uv pip compile`: Compile requirements into a lockfile.
 - `uv pip sync`: Sync an environment with a lockfile.
 
-See the documentation on [locking environments](../pip/compile.md) for details.
+Read the documentation on [locking environments](../pip/compile.md) for details.
 
 !!! important
 
-    These commands do not exactly implement the interfaces and behavior of the tools they are based on. The further you stray from common workflows, the more likely you are to encounter differences. Consult the [pip-compatibility guide](../pip/compatibility.md) for details.
+    These commands do not exactly match the interfaces or behavior of the tools they replace. Less
+    common workflows are more likely to behave differently. Read the
+    [pip-compatibility guide](../pip/compatibility.md) for details.
 
 ## Utility
 
-Managing and inspecting uv's state, such as the cache, storage directories, or performing a
-self-update:
+Manage the uv cache and storage directories, inspect their locations, or update uv:
 
 - `uv cache clean`: Remove cache entries.
 - `uv cache prune`: Remove outdated cache entries and all centralized project environments.
@@ -104,6 +105,6 @@ self-update:
 
 ## Next steps
 
-Read the [guides](../guides/index.md) for an introduction to each feature, check out the
-[concept](../concepts/index.md) pages for in-depth details about uv's features, or learn how to
-[get help](./help.md) if you run into any problems.
+Read the [guides](../guides/index.md) for an introduction to each feature. See the
+[concept](../concepts/index.md) pages for detailed explanations. Learn how to [get help](./help.md)
+if you have problems.

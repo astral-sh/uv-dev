@@ -19,10 +19,10 @@ use uv_pep440::{Version, VersionParseError};
 use uv_pep508::{MarkerTree, Requirement, VersionOrUrl};
 use uv_workspace::pyproject::{DependencyType, Source};
 
-/// Raw and mutable representation of a `pyproject.toml`.
+/// A mutable `pyproject.toml` document.
 ///
-/// This is useful for operations that require editing an existing `pyproject.toml` while
-/// preserving comments and other structure, such as `uv add` and `uv remove`.
+/// Preserve comments and document structure when commands such as `uv add` or `uv remove` edit
+/// an existing `pyproject.toml`.
 pub struct PyProjectTomlMut {
     doc: DocumentMut,
     target: DependencyTarget,
@@ -73,9 +73,9 @@ pub enum Error {
 /// The result of editing an array in a TOML document.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ArrayEdit {
-    /// An existing entry (at the given index) was updated.
+    /// Updated an existing entry at the given index.
     Update(usize),
-    /// A new entry was added at the given index (typically, the end of the array).
+    /// Added an entry at the given index, usually at the end of the array.
     Add(usize),
 }
 
@@ -93,17 +93,17 @@ struct Comment {
     kind: CommentType,
 }
 
-/// Specifies whether dependencies are added to a script file or a `pyproject.toml` file.
+/// The file type that receives new dependencies.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DependencyTarget {
-    /// A PEP 723 script, with inline metadata.
+    /// A PEP 723 script with inline metadata.
     Script,
     /// A project with a `pyproject.toml`.
     PyProjectToml,
 }
 
 impl PyProjectTomlMut {
-    /// Initialize a [`PyProjectTomlMut`] from a [`str`].
+    /// Create a [`PyProjectTomlMut`] from a [`str`].
     pub fn from_toml(raw: &str, target: DependencyTarget) -> Result<Self, Error> {
         Ok(Self {
             doc: raw.parse().map_err(Box::new)?,
@@ -111,7 +111,7 @@ impl PyProjectTomlMut {
         })
     }
 
-    /// Adds a project to the workspace.
+    /// Add a project to the workspace.
     pub fn add_workspace(&mut self, path: impl AsRef<Path>) -> Result<(), Error> {
         // Get or create `tool.uv.workspace.members`.
         let members = self
@@ -141,10 +141,9 @@ impl PyProjectTomlMut {
         Ok(())
     }
 
-    /// Retrieves a mutable reference to the `project` [`Table`] of the TOML document, creating the
-    /// table if necessary.
+    /// Get the mutable `project` [`Table`]. Create the table if it does not exist.
     ///
-    /// For a script, this returns the root table.
+    /// For a script, return the root table.
     fn project(&mut self) -> Result<&mut Table, Error> {
         let doc = match self.target {
             DependencyTarget::Script => self.doc.as_table_mut(),
@@ -158,10 +157,9 @@ impl PyProjectTomlMut {
         Ok(doc)
     }
 
-    /// Retrieves an optional mutable reference to the `project` [`Table`], returning `None` if it
-    /// doesn't exist.
+    /// Get the mutable `project` [`Table`], or return `None` if it does not exist.
     ///
-    /// For a script, this returns the root table.
+    /// For a script, return the root table.
     fn project_mut(&mut self) -> Result<Option<&mut Table>, Error> {
         let doc = match self.target {
             DependencyTarget::Script => Some(self.doc.as_table_mut()),
@@ -174,9 +172,9 @@ impl PyProjectTomlMut {
         Ok(doc)
     }
 
-    /// Adds a dependency to `project.dependencies`.
+    /// Add a dependency to `project.dependencies`.
     ///
-    /// Returns `true` if the dependency was added, `false` if it was updated.
+    /// Return [`ArrayEdit::Add`] or [`ArrayEdit::Update`] for the affected dependency.
     pub fn add_dependency(
         &mut self,
         req: &Requirement,
@@ -200,9 +198,9 @@ impl PyProjectTomlMut {
         Ok(edit)
     }
 
-    /// Replaces every exact match for a dependency declaration without modifying its source.
+    /// Replace every exact dependency declaration match without modifying its source.
     ///
-    /// Returns the position of every dependency that was replaced.
+    /// Return the position of each replaced dependency.
     pub fn replace_dependency_declaration(
         &mut self,
         dependency_type: &DependencyType,
@@ -226,9 +224,9 @@ impl PyProjectTomlMut {
         Ok(edits)
     }
 
-    /// Removes every exact string match for a dependency declaration without modifying its source.
+    /// Remove every exact string match for a dependency declaration without modifying its source.
     ///
-    /// Returns the position of every dependency that was removed.
+    /// Return the position of each removed dependency.
     pub fn remove_dependency_declaration_text(
         &mut self,
         dependency_type: &DependencyType,
@@ -259,9 +257,9 @@ impl PyProjectTomlMut {
         Ok(edits)
     }
 
-    /// Adds a development dependency to `tool.uv.dev-dependencies`.
+    /// Add a development dependency to `tool.uv.dev-dependencies`.
     ///
-    /// Returns `true` if the dependency was added, `false` if it was updated.
+    /// Return [`ArrayEdit::Add`] or [`ArrayEdit::Update`] for the affected dependency.
     pub fn add_dev_dependency(
         &mut self,
         req: &Requirement,
@@ -311,7 +309,7 @@ impl PyProjectTomlMut {
             .as_array_of_tables_mut()
             .ok_or(Error::MalformedSources)?;
 
-        // If there's already an index with the same name or URL, update it (and move it to the top).
+        // Update an existing index with the same name or URL and move it to the top.
         let mut table = existing
             .iter()
             .find(|table| {
@@ -325,7 +323,7 @@ impl PyProjectTomlMut {
                     return true;
                 }
 
-                // If the index is the default, and there's another default index, reuse it.
+                // Reuse an existing default index if the new index is also the default.
                 if index.default
                     && table
                         .get("default")
@@ -334,7 +332,7 @@ impl PyProjectTomlMut {
                     return true;
                 }
 
-                // If there's another index with the same URL, reuse it.
+                // Reuse an index with the same URL.
                 if table
                     .get("url")
                     .and_then(|item| item.as_str())
@@ -348,7 +346,7 @@ impl PyProjectTomlMut {
             .cloned()
             .unwrap_or_default();
 
-        // If necessary, update the name.
+        // Update the name if necessary.
         if let Some(index) = index.name.as_deref()
             && table
                 .get("name")
@@ -382,7 +380,7 @@ impl PyProjectTomlMut {
         let index_location_changed = existing_url
             .is_none_or(|existing| !index_locations_equal(existing, &index.url, root_dir));
 
-        // If necessary, update the URL.
+        // Update the URL if necessary.
         if url_needs_update {
             let mut formatted = Formatted::new(url);
             if let Some(value) = table.get("url").and_then(Item::as_value) {
@@ -396,7 +394,7 @@ impl PyProjectTomlMut {
             table.insert("url", Value::String(formatted).into());
         }
 
-        // If necessary, update the default.
+        // Update the default setting if necessary.
         if index.default {
             if !table
                 .get("default")
@@ -416,7 +414,7 @@ impl PyProjectTomlMut {
             }
         }
 
-        // If the index location changed, sync the format to match the incoming index.
+        // If the index location changed, match the new index format.
         if index_location_changed {
             match index.format {
                 IndexFormat::Flat => {
@@ -438,7 +436,7 @@ impl PyProjectTomlMut {
                     }
                 }
                 IndexFormat::Simple => {
-                    // Remove the format key if it exists (Simple is the default).
+                    // Remove the format key because `Simple` is the default.
                     table.remove("format");
                 }
             }
@@ -456,7 +454,7 @@ impl PyProjectTomlMut {
                 return false;
             }
 
-            // If there's another default index, skip it.
+            // Skip another default index.
             if index.default
                 && table
                     .get("default")
@@ -465,7 +463,7 @@ impl PyProjectTomlMut {
                 return false;
             }
 
-            // If there's another index with the same URL, skip it.
+            // Skip another index with the same URL.
             if table
                 .get("url")
                 .and_then(|item| item.as_str())
@@ -477,7 +475,7 @@ impl PyProjectTomlMut {
             true
         });
 
-        // Set the position to the minimum, if it's not already the first element.
+        // Set the position to the minimum if the index is not already first.
         if let Some(min) = existing.iter().filter_map(Table::position).min() {
             table.set_position(Some(min));
 
@@ -498,9 +496,9 @@ impl PyProjectTomlMut {
         Ok(())
     }
 
-    /// Adds a dependency to `project.optional-dependencies`.
+    /// Add a dependency to `project.optional-dependencies`.
     ///
-    /// Returns `true` if the dependency was added, `false` if it was updated.
+    /// Return [`ArrayEdit::Add`] or [`ArrayEdit::Update`] for the affected dependency.
     pub fn add_optional_dependency(
         &mut self,
         group: &ExtraName,
@@ -525,7 +523,7 @@ impl PyProjectTomlMut {
             }
         });
 
-        // If the group doesn't exist, create it.
+        // Create the group if it does not exist.
         let group = match existing_group {
             Some(value) => value,
             None => optional_dependencies
@@ -537,10 +535,8 @@ impl PyProjectTomlMut {
 
         let added = add_dependency(req, group, source.is_some(), raw)?;
 
-        // If `project.optional-dependencies` is an inline table, reformat it.
-        //
-        // Reformatting can drop comments between keys, but you can't put comments
-        // between items in an inline table anyway.
+        // Reformat `project.optional-dependencies` if it is an inline table.
+        // Inline tables do not permit comments between items, so reformatting cannot remove any.
         if let Some(optional_dependencies) = self
             .project()?
             .get_mut("optional-dependencies")
@@ -556,7 +552,7 @@ impl PyProjectTomlMut {
         Ok(added)
     }
 
-    /// Ensure that an optional dependency group exists, creating an empty group if it doesn't.
+    /// Ensure an optional dependency group exists. Create an empty group if necessary.
     pub fn ensure_optional_dependency(&mut self, extra: &ExtraName) -> Result<(), Error> {
         // Get or create `project.optional-dependencies`.
         let optional_dependencies = self
@@ -571,15 +567,13 @@ impl PyProjectTomlMut {
             .iter()
             .any(|(key, _value)| ExtraName::from_str(key).is_ok_and(|e| e == *extra));
 
-        // If the extra doesn't exist, create it.
+        // Create the extra if it does not exist.
         if !extra_exists {
             optional_dependencies.insert(extra.as_ref(), Item::Value(Value::Array(Array::new())));
         }
 
-        // If `project.optional-dependencies` is an inline table, reformat it.
-        //
-        // Reformatting can drop comments between keys, but you can't put comments
-        // between items in an inline table anyway.
+        // Reformat `project.optional-dependencies` if it is an inline table.
+        // Inline tables do not permit comments between items, so reformatting cannot remove any.
         if let Some(optional_dependencies) = self
             .project()?
             .get_mut("optional-dependencies")
@@ -591,9 +585,9 @@ impl PyProjectTomlMut {
         Ok(())
     }
 
-    /// Adds a dependency to `dependency-groups`.
+    /// Add a dependency to `dependency-groups`.
     ///
-    /// Returns `true` if the dependency was added, `false` if it was updated.
+    /// Return [`ArrayEdit::Add`] or [`ArrayEdit::Update`] for the affected dependency.
     pub fn add_dependency_group_requirement(
         &mut self,
         group: &GroupName,
@@ -625,7 +619,7 @@ impl PyProjectTomlMut {
             }
         });
 
-        // If the group doesn't exist, create it.
+        // Create the group if it does not exist.
         let group = match existing_group {
             Some(value) => value,
             None => dependency_groups
@@ -637,16 +631,13 @@ impl PyProjectTomlMut {
 
         let added = add_dependency(req, group, source.is_some(), raw)?;
 
-        // To avoid churn in pyproject.toml, we only sort new group keys if the
-        // existing keys were sorted.
+        // Sort new group keys only if existing keys were sorted. This avoids unnecessary changes.
         if was_sorted {
             dependency_groups.sort_values();
         }
 
-        // If `dependency-groups` is an inline table, reformat it.
-        //
-        // Reformatting can drop comments between keys, but you can't put comments
-        // between items in an inline table anyway.
+        // Reformat `dependency-groups` if it is an inline table.
+        // Inline tables do not permit comments between items, so reformatting cannot remove any.
         if let Some(dependency_groups) = self
             .doc
             .get_mut("dependency-groups")
@@ -662,7 +653,7 @@ impl PyProjectTomlMut {
         Ok(added)
     }
 
-    /// Ensure that a dependency group exists, creating an empty group if it doesn't.
+    /// Ensure a dependency group exists. Create an empty group if necessary.
     pub fn ensure_dependency_group(&mut self, group: &GroupName) -> Result<(), Error> {
         // Get or create `dependency-groups`.
         let dependency_groups = self
@@ -684,21 +675,18 @@ impl PyProjectTomlMut {
             .iter()
             .any(|(key, _value)| GroupName::from_str(key).is_ok_and(|g| g == *group));
 
-        // If the group doesn't exist, create it.
+        // Create the group if it does not exist.
         if !group_exists {
             dependency_groups.insert(group.as_ref(), Item::Value(Value::Array(Array::new())));
 
-            // To avoid churn in pyproject.toml, we only sort new group keys if the
-            // existing keys were sorted.
+            // Sort new group keys only if existing keys were sorted.
             if was_sorted {
                 dependency_groups.sort_values();
             }
         }
 
-        // If `dependency-groups` is an inline table, reformat it.
-        //
-        // Reformatting can drop comments between keys, but you can't put comments
-        // between items in an inline table anyway.
+        // Reformat `dependency-groups` if it is an inline table.
+        // Inline tables do not permit comments between items, so reformatting cannot remove any.
         if let Some(dependency_groups) = self
             .doc
             .get_mut("dependency-groups")
@@ -794,7 +782,7 @@ impl PyProjectTomlMut {
             }
         });
 
-        // If the group doesn't exist, create it.
+        // Create the group if it does not exist.
         let group = optional_dependencies
             .entry(existing_key.as_deref().unwrap_or(group.as_ref()))
             .or_insert(Item::Value(Value::Array(Array::new())))
@@ -823,7 +811,7 @@ impl PyProjectTomlMut {
             }
         });
 
-        // If the group doesn't exist, create it.
+        // Create the group if it does not exist.
         let group = dependency_groups
             .entry(existing_key.as_deref().unwrap_or(group.as_ref()))
             .or_insert(Item::Value(Value::Array(Array::new())))
@@ -1257,16 +1245,16 @@ impl PyProjectTomlMut {
     }
 }
 
-/// Returns an implicit table.
+/// Return an implicit table.
 fn implicit() -> Item {
     let mut table = Table::new();
     table.set_implicit(true);
     Item::Table(table)
 }
 
-/// Adds a dependency to the given `deps` array.
+/// Add a dependency to the given `deps` array.
 ///
-/// Returns `true` if the dependency was added, `false` if it was updated.
+/// Return [`ArrayEdit::Add`] or [`ArrayEdit::Update`] for the affected dependency.
 fn add_dependency(
     req: &Requirement,
     deps: &mut Array,
@@ -1279,15 +1267,15 @@ fn add_dependency(
         [] => {
             #[derive(Debug, Copy, Clone)]
             enum Sort {
-                /// The list is sorted in a case-insensitive manner.
+                /// Sort the list without considering case.
                 CaseInsensitive,
-                /// The list is sorted naively in a case-insensitive manner.
+                /// Sort complete entries without considering case.
                 CaseInsensitiveNaive,
-                /// The list is sorted in a case-sensitive manner.
+                /// Sort the list while considering case.
                 CaseSensitive,
-                /// The list is sorted naively in a case-sensitive manner.
+                /// Sort complete entries while considering case.
                 CaseSensitiveNaive,
-                /// The list is unsorted.
+                /// Keep the existing unsorted order.
                 Unsorted,
             }
 
@@ -1299,20 +1287,17 @@ fn add_dependency(
                 items.into_iter().tuple_windows().all(|(a, b)| a <= b)
             }
 
-            // `deps` are either requirements (strings) or include groups (inline tables).
-            // Here we pull out just the requirements for determining the sort.
+            // Dependencies contain requirement strings and inline `include-group` tables.
+            // Use only requirement strings to determine the sort order.
             let reqs: Vec<_> = deps.iter().filter_map(Value::as_str).collect();
             let reqs_lowercase: Vec<_> = reqs.iter().copied().map(str::to_lowercase).collect();
 
-            // Determine if the dependency list is sorted prior to
-            // adding the new dependency; the new dependency list
-            // will be sorted only when the original list is sorted
-            // so that user's custom dependency ordering is preserved.
+            // Check whether the original dependency list is sorted. Sort the new list only when
+            // the original was sorted. This preserves a user's custom dependency order.
             //
-            // Any items which aren't strings are ignored, e.g.
-            // `{ include-group = "..." }` in dependency-groups.
+            // Ignore non-string items, such as `{ include-group = "..." }`.
             //
-            // We account for both case-sensitive and case-insensitive sorting.
+            // Check both case-sensitive and case-insensitive sort orders.
             let sort = if is_sorted(
                 reqs_lowercase
                     .iter()
@@ -1356,9 +1341,8 @@ fn add_dependency(
                 Sort::Unsorted => None,
             };
             let index = index.unwrap_or_else(|| {
-                // The dependency should be added to the end, ignoring any
-                // `include-group` items. This preserves the order for users who
-                // keep their `include-groups` at the bottom.
+                // Add the dependency after the last requirement. Keep `include-group` entries at
+                // the end when the user has placed them there.
                 deps.iter()
                     .enumerate()
                     .filter_map(|(i, dep)| if dep.is_str() { Some(i + 1) } else { None })
@@ -1370,11 +1354,10 @@ fn add_dependency(
 
             let decor = value.decor_mut();
 
-            // Ensure comments remain on the correct line, post-insertion
+            // Keep comments on the correct lines after insertion.
             match index {
                 val if val == deps.len() => {
-                    // If we're adding to the end of the list, treat trailing comments as leading comments
-                    // on the added dependency.
+                    // At the end of the list, attach trailing comments to the added dependency.
                     //
                     // For example, given:
                     // ```toml
@@ -1383,7 +1366,7 @@ fn add_dependency(
                     // ]
                     // ```
                     //
-                    // If we add `flask` to the end, we want to retain the comment on `anyio`:
+                    // After adding `flask`, keep the comment on `anyio`:
                     // ```toml
                     // dependencies = [
                     //     "anyio", # trailing comment
@@ -1394,10 +1377,10 @@ fn add_dependency(
                     deps.set_trailing("");
                 }
                 0 => {
-                    // If the dependency is prepended to a non-empty list, do nothing
+                    // Do nothing when prepending to a nonempty list.
                 }
                 val => {
-                    // Retain position of end-of-line comments when a dependency is inserted right below it.
+                    // Keep end-of-line comments in place when inserting a dependency below them.
                     //
                     // For example, given:
                     // ```toml
@@ -1407,7 +1390,7 @@ fn add_dependency(
                     // ]
                     // ```
                     //
-                    // If we add `pydantic` (between `anyio` and `flask`), we want to retain the comment on `anyio`:
+                    // After inserting `pydantic`, keep the comment on `anyio`:
                     // ```toml
                     // dependencies = [
                     //     "anyio", # end-of-line comment
@@ -1423,11 +1406,8 @@ fn add_dependency(
 
             deps.insert_formatted(index, value);
 
-            // `reformat_array_multiline` uses the indentation of the first dependency entry.
-            // Therefore, we retrieve the indentation of the first dependency entry and apply it to
-            // the new entry. Note that it is only necessary if the newly added dependency is going
-            // to be the first in the list _and_ the dependency list was not empty prior to adding
-            // the new dependency.
+            // `reformat_array_multiline` uses the first dependency's indentation.
+            // When prepending to a nonempty list, copy that indentation to the new first entry.
             if deps.len() > 1 && index == 0 {
                 let prefix = deps
                     .clone()
@@ -1438,9 +1418,8 @@ fn add_dependency(
                     .unwrap()
                     .clone();
 
-                // However, if the prefix includes a comment, we don't want to duplicate it.
-                // Depending on the location of the comment, we either want to leave it as-is, or
-                // attach it to the entry that's being moved to the next line.
+                // Do not duplicate comments in the prefix. Keep each comment in place or attach it
+                // to the entry that moves to the next line.
                 //
                 // For example, given:
                 // ```toml
@@ -1449,8 +1428,7 @@ fn add_dependency(
                 // ]
                 // ```
                 //
-                // If we add `anyio` to the beginning, we want to retain the comment on the open
-                // bracket:
+                // After adding `anyio` first, keep the comment on the opening bracket:
                 // ```toml
                 // dependencies = [ # comment
                 //     "anyio",
@@ -1458,7 +1436,7 @@ fn add_dependency(
                 // ]
                 // ```
                 //
-                // However, given:
+                // For a comment on its own line:
                 // ```toml
                 // dependencies = [
                 //     # comment
@@ -1466,9 +1444,7 @@ fn add_dependency(
                 // ]
                 // ```
                 //
-                // If we add `anyio` to the beginning, we want the comment to move down with the
-                // existing entry:
-                // entry:
+                // After adding `anyio` first, move the comment with the existing entry:
                 // ```toml
                 // dependencies = [
                 //     "anyio",
@@ -1476,12 +1452,11 @@ fn add_dependency(
                 //     "flask",
                 // ]
                 if let Some(prefix) = prefix.as_str() {
-                    // Treat anything before the first own-line comment as a prefix on the new
-                    // entry; anything after the first own-line comment is a prefix on the existing
-                    // entry.
+                    // Attach content before the first own-line comment to the new entry.
+                    // Attach that comment and later content to the existing entry.
                     //
-                    // This is equivalent to using the first and last line content as the prefix for
-                    // the new entry, and the rest as the prefix for the existing entry.
+                    // The new entry uses the first and last lines as its prefix. The existing entry
+                    // uses the remaining lines.
                     if let Some((first_line, rest)) = prefix.split_once(['\r', '\n']) {
                         // Determine the appropriate newline character.
                         let newline = {
@@ -1541,7 +1516,7 @@ fn update_requirement(old: &mut Requirement, new: &Requirement, has_source: bool
     extras.dedup();
     old.extras = extras.into_boxed_slice();
 
-    // Clear the requirement source if we are going to add to `tool.uv.sources`.
+    // Clear the requirement source before adding it to `tool.uv.sources`.
     if has_source {
         old.clear_url();
     }
@@ -1559,11 +1534,11 @@ fn update_requirement(old: &mut Requirement, new: &Requirement, has_source: bool
     }
 }
 
-/// Removes all occurrences of dependencies with the given name from the given `deps` array.
+/// Remove every dependency with the given name from the `deps` array.
 fn remove_dependency(name: &PackageName, deps: &mut Array) -> Vec<Requirement> {
-    // Remove in reverse to preserve indices. Before each removal, transfer the item's
-    // prefix (which may contain end-of-line comments belonging to the previous line) to
-    // the next item or array trailing so comments are not lost.
+    // Remove entries in reverse order to preserve their indices. Before each removal, move the
+    // entry's prefix to the next entry or the array's trailing content. This preserves
+    // end-of-line comments that belong to the previous entry.
     //
     // For example, in:
     // ```toml
@@ -1573,9 +1548,8 @@ fn remove_dependency(name: &PackageName, deps: &mut Array) -> Vec<Requirement> {
     // ]
     // ```
     //
-    // The comment `# essential comment` is stored by `toml_edit` in the prefix of
-    // `requests`. When `requests` is removed, we transfer it so it remains on the
-    // `numpy` line.
+    // `toml_edit` stores `# essential comment` in the prefix of `requests`.
+    // When removing `requests`, move the comment so it remains on the `numpy` line.
     let removed = find_dependencies(name, None, deps)
         .into_iter()
         .rev()
@@ -1599,16 +1573,16 @@ fn remove_dependency_at(index: usize, deps: &mut Array) -> Option<Requirement> {
         if let Some(next) = deps.get(index + 1)
             && let Some(existing) = next.decor().prefix().and_then(|s| s.as_str())
         {
-            // Transfer removed item's prefix to the next item's prefix.
+            // Add the removed entry's prefix to the next entry's prefix.
             let existing = existing.to_string();
             if let Some(next) = deps.get_mut(index + 1) {
                 next.decor_mut().set_prefix(format!("{prefix}{existing}"));
             }
         } else if let Some(next) = deps.get_mut(index + 1) {
-            // Next item exists but has no prefix; use ours directly.
+            // The next entry has no prefix. Use the removed entry's prefix.
             next.decor_mut().set_prefix(&prefix);
         } else if let Some(existing) = deps.trailing().as_str() {
-            // No next item; move comments to the array trailing.
+            // No next entry exists. Move comments to the array's trailing content.
             deps.set_trailing(format!("{prefix}{existing}"));
         } else {
             deps.set_trailing(&prefix);
@@ -1620,8 +1594,7 @@ fn remove_dependency_at(index: usize, deps: &mut Array) -> Option<Requirement> {
         .and_then(|req| Requirement::from_str(req).ok())
 }
 
-/// Returns a `Vec` containing the all dependencies with the given name, along with their positions
-/// in the array.
+/// Return every dependency with the given name and its position in the array.
 fn find_dependencies(
     name: &PackageName,
     marker: Option<&MarkerTree>,
@@ -1639,7 +1612,7 @@ fn find_dependencies(
     to_replace
 }
 
-/// Return whether two requirements have the same serialized fields, ignoring their parsed origin.
+/// Check whether two requirements have the same serialized fields, regardless of parsed origin.
 fn same_requirement_declaration(left: &Requirement, right: &Requirement) -> bool {
     left.name == right.name
         && left.extras == right.extras
@@ -1647,7 +1620,7 @@ fn same_requirement_declaration(left: &Requirement, right: &Requirement) -> bool
         && left.marker == right.marker
 }
 
-/// Returns the key in `tool.uv.sources` that matches the given package name.
+/// Return the `tool.uv.sources` key that matches the given package name.
 fn find_source(name: &PackageName, sources: &Table) -> Option<String> {
     for (key, _) in sources {
         if PackageName::from_str(key).is_ok_and(|ref key| key == name) {
@@ -1681,8 +1654,7 @@ fn try_parse_requirement(req: &str) -> Option<Requirement> {
     Requirement::from_str(req).ok()
 }
 
-/// Reformats a TOML array to multi line while trying to preserve all comments
-/// and move them around. This also formats the array to have a trailing comma.
+/// Format a TOML array across multiple lines. Preserve its comments and add a trailing comma.
 fn reformat_array_multiline(deps: &mut Array) {
     fn find_comments(s: Option<&RawString>) -> Box<dyn Iterator<Item = Comment> + '_> {
         let iter = s
@@ -1731,8 +1703,8 @@ fn reformat_array_multiline(deps: &mut Array) {
         Box::new(iter)
     }
 
-    // Without a trailing comma, `toml_edit` stores comments after the final item in its
-    // suffix. Once we add a trailing comma, those comments must follow the comma instead.
+    // Without a trailing comma, `toml_edit` stores final comments in the last entry's suffix.
+    // After adding a trailing comma, move those comments after the comma.
     if !deps.trailing_comma()
         && let Some(last) = deps.iter_mut().last()
         && let Some(suffix) = last.decor().suffix().and_then(RawString::as_str)
@@ -1746,7 +1718,7 @@ fn reformat_array_multiline(deps: &mut Array) {
 
     let mut indentation_prefix = None;
 
-    // Calculate the indentation prefix based on the indentation of the first dependency entry.
+    // Use the first dependency's indentation as the indentation prefix.
     if let Some(first_item) = deps.iter().next() {
         let decor_prefix = first_item
             .decor()
@@ -1813,10 +1785,10 @@ fn reformat_array_multiline(deps: &mut Array) {
 
 /// Split a requirement into the package name and its dependency specifiers.
 ///
-/// E.g., given `flask>=1.0`, this function returns `("flask", ">=1.0")`. But given
-/// `Flask>=1.0`, this function returns `("Flask", ">=1.0")`.
+/// For `flask>=1.0`, return `("flask", ">=1.0")`.
+/// For `Flask>=1.0`, preserve case and return `("Flask", ">=1.0")`.
 ///
-/// Extras are retained, such that `flask[dotenv]>=1.0` returns `("flask[dotenv]", ">=1.0")`.
+/// Keep extras: `flask[dotenv]>=1.0` returns `("flask[dotenv]", ">=1.0")`.
 fn split_specifiers(req: &str) -> (&str, &str) {
     let (name, specifiers) = req
         .find(['>', '<', '=', '~', '!', '@'])

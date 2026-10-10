@@ -1,19 +1,17 @@
 ---
 title: Using uv with pre-commit
 description:
-  A guide to using uv with pre-commit to automatically update lock files, export requirements, and
-  compile requirements files.
+  Use uv with pre-commit to update lockfiles, export requirements, and compile requirements files.
 ---
 
 # Using uv in pre-commit
 
-An official pre-commit hook is provided at
-[`astral-sh/uv-pre-commit`](https://github.com/astral-sh/uv-pre-commit).
+The [`astral-sh/uv-pre-commit`](https://github.com/astral-sh/uv-pre-commit) repository provides the
+official pre-commit hook.
 
-To use uv with pre-commit, add one of the following examples to the `repos` list in the
-`.pre-commit-config.yaml`.
+To use uv with pre-commit, add an example to the `repos` list in `.pre-commit-config.yaml`.
 
-To make sure your `uv.lock` file is up to date even if your `pyproject.toml` file was changed:
+Use `uv-lock` to update `uv.lock` when `pyproject.toml` changes:
 
 ```yaml title=".pre-commit-config.yaml"
 repos:
@@ -24,7 +22,7 @@ repos:
       - id: uv-lock
 ```
 
-To keep a `requirements.txt` file in sync with your `uv.lock` file:
+Use `uv-export` to keep `requirements.txt` synchronized with `uv.lock`:
 
 ```yaml title=".pre-commit-config.yaml"
 repos:
@@ -35,7 +33,7 @@ repos:
       - id: uv-export
 ```
 
-To compile requirements files:
+Use `pip-compile` to compile requirements files:
 
 ```yaml title=".pre-commit-config.yaml"
 repos:
@@ -48,7 +46,7 @@ repos:
         args: [requirements.in, -o, requirements.txt]
 ```
 
-To compile alternative requirements files, modify `args` and `files`:
+To compile other requirements files, change `args` and `files`:
 
 ```yaml title=".pre-commit-config.yaml"
 repos:
@@ -62,7 +60,7 @@ repos:
         files: ^requirements-dev\.(in|txt)$
 ```
 
-To run the hook over multiple files at the same time, add additional entries:
+To run the hook on multiple files, add more entries:
 
 ```yaml title=".pre-commit-config.yaml"
 repos:
