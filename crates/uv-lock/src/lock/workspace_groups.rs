@@ -143,11 +143,29 @@ impl Lock {
         &self.workspace_groups
     }
 
-    /// Attach group definitions only when each root exists in its projected package graph.
+    /// Attach unambiguous group definitions whose roots exist in their projected package graphs.
     pub(super) fn with_workspace_groups(
         mut self,
         groups: Vec<LockedWorkspaceGroup>,
     ) -> Result<Self, LockError> {
+        let mut names = BTreeSet::new();
+        let mut default = None;
+        for group in &groups {
+            if !names.insert(&group.definition.name) {
+                return Err(
+                    LockErrorKind::DuplicateWorkspaceGroup(group.definition.name.clone()).into(),
+                );
+            }
+            if group.definition.default
+                && let Some(previous) = default.replace(&group.definition.name)
+            {
+                return Err(LockErrorKind::MultipleDefaultWorkspaceGroups(
+                    previous.clone(),
+                    group.definition.name.clone(),
+                )
+                .into());
+            }
+        }
         self.workspace_groups = groups;
         for group in &self.workspace_groups {
             let selected = self.select_workspace_group(&group.definition.name)?;
@@ -1117,6 +1135,74 @@ resolution-markers = ["extra == 'workspace-next'"]
             Some("2.0.0")
         );
         Ok(())
+    }
+
+    #[test]
+    fn workspace_group_lock_rejects_duplicate_names() {
+        let error = Lock::from_toml(
+            r#"
+version = 2
+revision = 5
+requires-python = ">=3.12,<3.14"
+resolution-markers = ["extra == 'workspace-main'"]
+
+[[workspace-group]]
+name = "main"
+members = ["app"]
+effective-requires-python = "==3.12.*"
+
+[[workspace-group]]
+name = "main"
+members = ["app"]
+effective-requires-python = "==3.13.*"
+
+[manifest]
+members = ["app"]
+
+[[package]]
+name = "app"
+version = "1.0.0"
+source = { virtual = "." }
+resolution-markers = ["extra == 'workspace-main'"]
+"#,
+        )
+        .expect_err("group names must identify one locked context");
+        insta::assert_snapshot!(error.to_string(), @"Workspace group `main` is defined more than once");
+    }
+
+    #[test]
+    fn workspace_group_lock_rejects_multiple_defaults() {
+        let error = Lock::from_toml(
+            r#"
+version = 2
+revision = 5
+requires-python = ">=3.12,<3.14"
+resolution-markers = ["extra == 'workspace-main'", "extra == 'workspace-next'"]
+
+[[workspace-group]]
+name = "main"
+members = ["app"]
+effective-requires-python = "==3.12.*"
+default = true
+
+[[workspace-group]]
+name = "next"
+members = ["app"]
+effective-requires-python = "==3.13.*"
+default = true
+
+[manifest]
+members = ["app"]
+
+[[package]]
+name = "app"
+version = "1.0.0"
+source = { virtual = "." }
+resolution-markers = ["extra == 'workspace-main'", "extra == 'workspace-next'"]
+"#,
+        )
+        .expect_err("the default workspace group must be unique");
+        insta::assert_snapshot!(error.to_string(), @"Workspace groups `main` and `next` are both marked as default");
     }
 
     #[test]

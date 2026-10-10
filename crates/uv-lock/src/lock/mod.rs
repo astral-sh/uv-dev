@@ -10006,6 +10006,12 @@ enum LockErrorKind {
     /// A recorded member identity does not refer to a unique declared local workspace package.
     #[error("Invalid workspace member identity `{0}` in lockfile")]
     InvalidWorkspaceMemberIdentity(PackageId),
+    /// Group names must uniquely identify their lockfile context.
+    #[error("Workspace group `{0}` is defined more than once")]
+    DuplicateWorkspaceGroup(GroupName),
+    /// At most one workspace group can be selected by default.
+    #[error("Workspace groups `{0}` and `{1}` are both marked as default")]
+    MultipleDefaultWorkspaceGroups(GroupName, GroupName),
     /// A group root is absent from that group's projected graph.
     #[error("Workspace group `{group}` contains member `{name}` with no locked package")]
     MissingWorkspaceGroupRoot { group: GroupName, name: PackageName },
