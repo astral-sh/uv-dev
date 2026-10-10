@@ -800,7 +800,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     async fn url_build_requirements(
         &self,
         source: &BuildableSource<'_>,
-        url: &DisplaySafeUrl,
+        url: &SafeUrl,
         index: Option<&IndexUrl>,
         cache_shard: &CacheShard,
         subdirectory: Option<&Path>,
