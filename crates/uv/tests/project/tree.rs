@@ -7,6 +7,11 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::{assert_json_snapshot, assert_snapshot};
 use url::Url;
+#[cfg(feature = "test-universal")]
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 use uv_static::EnvVars;
 #[cfg(feature = "test-universal")]
@@ -1725,6 +1730,271 @@ fn frozen() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn outdated_filters_inactive_extra_context() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/x/"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&formatdoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = {{ virtual = "a" }}
+        dependencies = [{{ name = "p" }}]
+
+        [[package]]
+        name = "b"
+        version = "1.0.0"
+        source = {{ virtual = "b" }}
+        dependencies = [{{ name = "p", extra = ["feature"] }}]
+
+        [[package]]
+        name = "p"
+        version = "1.0.0"
+        source = {{ virtual = "p" }}
+        [package.optional-dependencies]
+        feature = [{{ name = "x" }}]
+
+        [[package]]
+        name = "root"
+        version = "1.0.0"
+        source = {{ virtual = "." }}
+        dependencies = [{{ name = "a" }}, {{ name = "b" }}]
+
+        [[package]]
+        name = "x"
+        version = "1.0.0"
+        source = {{ registry = "{url}/simple" }}
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--outdated"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--package", "a"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a v1.0.0
+    └── p v1.0.0
+    ");
+    assert_json_snapshot!(json_tree_package_names(context.tree()
+        .args(["--frozen", "--universal", "--outdated"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--package", "a"]))?, @r#"
+    [
+      "a",
+      "p"
+    ]
+    "#);
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--outdated"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--package", "b"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/x/
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/x/)
+    ");
+    server.verify().await;
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn outdated_filters_graph_and_keeps_index_identity() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/one/simple/foo/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"<a href="/foo-2.0.0-py3-none-any.whl">foo</a>"#,
+            "text/html",
+        ))
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/two/simple/foo/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"<a href="/foo-3.0.0-py3-none-any.whl">foo</a>"#,
+            "text/html",
+        ))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/one/simple/hidden/"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/one/simple/dev-only/"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["dev-only"]
+    "#})?;
+    let url = server.uri();
+    context.temp_dir.child("uv.lock").write_str(&formatdoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        resolution-markers = ["python_full_version < '3.13'", "python_full_version >= '3.13'"]
+
+        [[package]]
+        name = "dev-only"
+        version = "1.0.0"
+        source = {{ registry = "{url}/one/simple" }}
+
+        [[package]]
+        name = "foo"
+        version = "1.0.0"
+        source = {{ registry = "{url}/one/simple" }}
+        resolution-markers = ["python_full_version < '3.13'"]
+
+        [[package]]
+        name = "foo"
+        version = "1.0.0"
+        source = {{ registry = "{url}/two/simple" }}
+        resolution-markers = ["python_full_version >= '3.13'"]
+
+        [[package]]
+        name = "hidden"
+        version = "1.0.0"
+        source = {{ registry = "{url}/one/simple" }}
+
+        [[package]]
+        name = "project"
+        version = "1.0.0"
+        source = {{ virtual = "." }}
+        dependencies = [
+            {{ name = "foo", version = "1.0.0", source = {{ registry = "{url}/one/simple" }}, marker = "python_full_version < '3.13'" }},
+            {{ name = "foo", version = "1.0.0", source = {{ registry = "{url}/two/simple" }}, marker = "python_full_version >= '3.13'" }},
+            {{ name = "hidden" }},
+        ]
+
+        [package.dev-dependencies]
+        dev = [{{ name = "dev-only" }}]
+    "#})?;
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--outdated", "--no-default-groups"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--universal", "--package", "foo"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    foo v1.0.0 (latest: v2.0.0)
+    foo v1.0.0 (latest: v3.0.0)
+    ");
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--outdated", "--no-default-groups"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--python-version", "3.12", "--prune", "hidden"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v1.0.0
+    └── foo v1.0.0 (latest: v2.0.0)
+    ");
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--outdated", "--no-default-groups"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--universal", "--prune", "foo", "--prune", "hidden"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--outdated", "--no-default-groups"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--universal", "--package", "foo", "--preview-features", "json-output", "--format", "json"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "roots": [
+        {
+          "id": "foo==1.0.0@registry+http://[LOCALHOST]/one/simple"
+        },
+        {
+          "id": "foo==1.0.0@registry+http://[LOCALHOST]/two/simple"
+        }
+      ],
+      "inverted": false,
+      "resolution": {
+        "foo==1.0.0@registry+http://[LOCALHOST]/one/simple": {
+          "name": "foo",
+          "version": "1.0.0",
+          "source": {
+            "registry": {
+              "url": "http://[LOCALHOST]/one/simple"
+            }
+          },
+          "kind": "package",
+          "dependencies": [],
+          "latest_version": "2.0.0"
+        },
+        "foo==1.0.0@registry+http://[LOCALHOST]/two/simple": {
+          "name": "foo",
+          "version": "1.0.0",
+          "source": {
+            "registry": {
+              "url": "http://[LOCALHOST]/two/simple"
+            }
+          },
+          "kind": "package",
+          "dependencies": [],
+          "latest_version": "3.0.0"
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+    "#);
+    server.verify().await;
     Ok(())
 }
 

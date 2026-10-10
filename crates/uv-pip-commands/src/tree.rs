@@ -86,8 +86,30 @@ pub async fn pip_tree(
     let markers = environment.interpreter().to_resolver_marker_environment();
     let tags = environment.interpreter().tags()?;
 
-    // Determine the latest version for each package.
-    let latest = if outdated && !packages.is_empty() {
+    // Apply tree selection before looking up package versions.
+    let empty_latest = FxHashMap::default();
+    let tree = DisplayDependencyGraph::new(
+        depth.into(),
+        prune,
+        package,
+        no_dedupe,
+        invert,
+        show_version_specifiers,
+        &markers,
+        &packages,
+        &empty_latest,
+    );
+    let outdated_packages = if outdated {
+        tree.graph
+            .node_weights()
+            .map(|&metadata| &metadata.name)
+            .collect::<FxHashSet<_>>()
+    } else {
+        FxHashSet::default()
+    };
+
+    // Determine the latest version for each selected package.
+    let latest = if outdated && !outdated_packages.is_empty() {
         let capabilities = IndexCapabilities::default();
 
         let client_builder = client_builder.keyring(keyring_provider);
@@ -122,18 +144,19 @@ pub async fn pip_tree(
             requires_python: Some(&requires_python),
         };
 
-        let reporter = LatestVersionReporter::from(printer).with_length(packages.len() as u64);
+        let reporter =
+            LatestVersionReporter::from(printer).with_length(outdated_packages.len() as u64);
 
         // Fetch the latest version for each package.
-        let mut fetches = futures::stream::iter(&packages)
-            .map(async |(name, ..)| {
+        let mut fetches = futures::stream::iter(outdated_packages)
+            .map(async |name| {
                 let Some(filename) = client
                     .find_latest(name, None, &download_concurrency)
                     .await?
                 else {
                     return Ok(None);
                 };
-                Ok::<Option<_>, uv_client::Error>(Some((*name, filename.into_version())))
+                Ok::<Option<_>, uv_client::Error>(Some((name, filename.into_version())))
             })
             .buffer_unordered(concurrency.downloads);
 
@@ -153,19 +176,7 @@ pub async fn pip_tree(
     };
 
     // Render the tree.
-    let rendered_tree = DisplayDependencyGraph::new(
-        depth.into(),
-        prune,
-        package,
-        no_dedupe,
-        invert,
-        show_version_specifiers,
-        &markers,
-        &packages,
-        &latest,
-    )
-    .render()
-    .join("\n");
+    let rendered_tree = tree.with_latest(&latest).render().join("\n");
 
     if !rendered_tree.is_empty() {
         writeln!(printer.stdout(), "{rendered_tree}")?;
@@ -361,6 +372,12 @@ impl<'env> DisplayDependencyGraph<'env> {
             invert,
             show_version_specifiers,
         }
+    }
+
+    /// Attach the latest versions to the selected graph.
+    fn with_latest(mut self, latest: &'env FxHashMap<&'env PackageName, Version>) -> Self {
+        self.latest = latest;
+        self
     }
 
     /// Perform a depth-first traversal of the given distribution and its dependencies.
