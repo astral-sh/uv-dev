@@ -177,6 +177,13 @@ impl<E: Into<Self> + std::error::Error + 'static> From<CachedClientError<E>> for
     }
 }
 
+/// Whether the payload or HTTP cache policy was refreshed during a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheStatus {
+    Hit,
+    Updated,
+}
+
 #[derive(Debug, Clone)]
 pub enum CacheControl {
     /// Respect the `cache-control` header from the response.
@@ -277,7 +284,7 @@ impl CachedClient {
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
         response_callback: Callback,
-    ) -> Result<Payload::Target, CachedClientError<CallBackError>> {
+    ) -> Result<(Payload::Target, CacheStatus), CachedClientError<CallBackError>> {
         let start = Instant::now();
 
         if matches!(cache_control, CacheControl::AllowStale) {
@@ -285,7 +292,7 @@ impl CachedClient {
                 .read_and_decode_stale_cache::<Payload>(req, cache_entry)
                 .await;
             match cached {
-                Ok(Some(payload)) => return Ok(payload),
+                Ok(Some(payload)) => return Ok((payload, CacheStatus::Hit)),
                 Ok(None) => warn!(
                     "Cached response doesn't match current request for: {}",
                     DisplaySafeUrl::from_url(req.url().clone())
@@ -314,7 +321,8 @@ impl CachedClient {
                     response,
                     response_callback,
                 )
-                .await;
+                .await
+                .map(|payload| (payload, CacheStatus::Updated));
         }
 
         let fresh_req = req.try_clone().expect("HTTP request must be cloneable");
@@ -324,7 +332,7 @@ impl CachedClient {
         let cached_response = match cached {
             Some(CachedEntry::Fresh(payload)) => {
                 return match payload {
-                    Ok(payload) => Ok(payload),
+                    Ok(payload) => Ok((payload, CacheStatus::Hit)),
                     Err(err) => {
                         warn!(
                             "Broken fresh cache entry (for payload) at `{}`, removing: {err}",
@@ -337,6 +345,7 @@ impl CachedClient {
                             response_callback,
                         )
                         .await
+                        .map(|payload| (payload, CacheStatus::Updated))
                     }
                 };
             }
@@ -433,6 +442,7 @@ impl CachedClient {
                 }
             }
         }
+        .map(|payload| (payload, CacheStatus::Updated))
     }
 
     /// Make a request without checking whether the cache is fresh.
@@ -770,6 +780,24 @@ impl CachedClient {
         cache_control: CacheControl,
         response_callback: Callback,
     ) -> Result<Payload, CachedClientError<CallBackError>> {
+        self.get_serde_with_retry_and_status(req, cache_entry, cache_control, response_callback)
+            .await
+            .map(|(payload, _)| payload)
+    }
+
+    /// Fetch a serde payload and report whether its payload or cache policy was refreshed.
+    #[instrument(skip_all)]
+    pub(crate) async fn get_serde_with_retry_and_status<
+        Payload: Serialize + DeserializeOwned + Send + 'static,
+        CallBackError: std::error::Error + 'static,
+        Callback: AsyncFn(Response, &mut RetryState) -> Result<Payload, CallBackError>,
+    >(
+        &self,
+        req: Request,
+        cache_entry: &CacheEntry,
+        cache_control: CacheControl,
+        response_callback: Callback,
+    ) -> Result<(Payload, CacheStatus), CachedClientError<CallBackError>> {
         let payload = self
             .get_cacheable_with_retry(
                 req,
@@ -849,7 +877,7 @@ impl CachedClient {
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
         response_callback: Callback,
-    ) -> Result<Payload::Target, CachedClientError<CallBackError>> {
+    ) -> Result<(Payload::Target, CacheStatus), CachedClientError<CallBackError>> {
         let mut retry_state = RetryState::start(self.uncached().retry_policy(), req.url().clone());
         loop {
             let fresh_req = req.try_clone().expect("HTTP request must be cloneable");

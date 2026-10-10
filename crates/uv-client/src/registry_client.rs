@@ -40,7 +40,7 @@ use uv_small_str::SmallString;
 use uv_torch::TorchStrategy;
 
 use crate::base_client::{BaseClientBuilder, ClientBuildError, ExtraMiddleware, RedirectPolicy};
-use crate::cached_client::CacheControl;
+use crate::cached_client::{CacheControl, CacheStatus};
 use crate::flat_index::FlatIndexEntry;
 use crate::html::SimpleDetailHTML;
 use crate::packed::PackedArchiveRead;
@@ -706,7 +706,7 @@ impl RegistryClient {
             .boxed_local()
             .instrument(info_span!("parse_simple_api", package = %package_name))
         };
-        let simple = self
+        let (simple, _) = self
             .cached_client()
             .get_cacheable_with_retry(
                 simple_request,
@@ -893,7 +893,7 @@ impl RegistryClient {
                 ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
             })?;
 
-        let index = self
+        let (index, _) = self
             .cached_client()
             .get_cacheable_with_retry(
                 simple_request,
@@ -1232,11 +1232,16 @@ impl RegistryClient {
                 .map_err(|err| {
                     ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
                 })?;
-            let metadata = self
+            let (metadata, status) = self
                 .cached_client()
-                .get_serde_with_retry(req, &cache_entry, cache_control, response_callback)
+                .get_serde_with_retry_and_status(
+                    req,
+                    &cache_entry,
+                    cache_control,
+                    response_callback,
+                )
                 .await?;
-            packed.invalidate_stale().await?;
+            packed.invalidate_stale(status).await?;
             Ok(metadata)
         } else {
             // If we lack PEP 658 support, try using HTTP range requests to read only the
@@ -1352,7 +1357,7 @@ impl RegistryClient {
 
             let result = self
                 .cached_client()
-                .get_serde_with_retry(
+                .get_serde_with_retry_and_status(
                     req,
                     &cache_entry,
                     cache_control.clone(),
@@ -1362,8 +1367,8 @@ impl RegistryClient {
                 .map_err(crate::Error::from);
 
             match result {
-                Ok(metadata) => {
-                    packed.invalidate_stale().await?;
+                Ok((metadata, status)) => {
+                    packed.invalidate_stale(status).await?;
                     return Ok(metadata);
                 }
                 Err(err) => {
@@ -1422,12 +1427,12 @@ impl RegistryClient {
             .instrument(info_span!("read_metadata_stream", wheel = %filename))
         };
 
-        let metadata = self
+        let (metadata, status) = self
             .cached_client()
-            .get_serde_with_retry(req, &cache_entry, cache_control, read_metadata_stream)
+            .get_serde_with_retry_and_status(req, &cache_entry, cache_control, read_metadata_stream)
             .await
             .map_err(crate::Error::from)?;
-        packed.invalidate_stale().await?;
+        packed.invalidate_stale(status).await?;
         Ok(metadata)
     }
 
@@ -1458,7 +1463,10 @@ enum PackedWheelMetadata {
 }
 
 impl PackedWheelMetadata {
-    async fn invalidate_stale(self) -> Result<(), Error> {
+    async fn invalidate_stale(self, status: CacheStatus) -> Result<(), Error> {
+        if status == CacheStatus::Hit {
+            return Ok(());
+        }
         match self {
             Self::Stale { entry, revision } => entry.invalidate(&revision).await,
             Self::Found(_) | Self::Missing => Ok(()),

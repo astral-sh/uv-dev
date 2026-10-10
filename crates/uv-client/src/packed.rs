@@ -370,10 +370,10 @@ impl PackedArchiveEntry {
         algorithms.sort();
         algorithms.dedup();
         let mut hashers = algorithms.into_iter().map(Hasher::from).collect::<Vec<_>>();
-        let temporary = tempfile::NamedTempFile::new_in(self.entry.dir())?;
+        let temporary = uv_fs::tempfile_in(self.entry.dir())?;
         let mut output = fs_err::tokio::File::from_std(fs_err::File::from_parts(
-            temporary.reopen()?,
-            temporary.path(),
+            temporary.as_file().try_clone()?,
+            temporary.as_ref(),
         ));
         let mut reader = HashReader::new(input, &mut hashers);
         let size = tokio::io::copy(&mut reader, &mut output).await?;
