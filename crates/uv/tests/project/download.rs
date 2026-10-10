@@ -217,9 +217,15 @@ async fn download_packed_offline() -> Result<()> {
         fs_err::read(context.temp_dir.join("uv.lock"))?,
         original_lock
     );
-    assert!(!context.cache_dir.join("wheels-v6").exists());
-    assert!(!context.cache_dir.join("archive-v0").exists());
     let cache = Cache::from_path(context.cache_dir.path());
+    context
+        .cache_dir
+        .child(cache.bucket(CacheBucket::Wheels))
+        .assert(predicates::path::missing());
+    context
+        .cache_dir
+        .child(cache.bucket(CacheBucket::Archive))
+        .assert(predicates::path::missing());
     let index = IndexUrl::from(uv_pep508::VerbatimUrl::parse_url(format!("{url}/simple"))?);
     let packed = cache
         .bucket(CacheBucket::Packed)
