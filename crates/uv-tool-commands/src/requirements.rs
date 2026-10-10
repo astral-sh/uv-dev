@@ -11,9 +11,10 @@ use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
+use uv_pep508::VersionOrUrl;
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
-use uv_requirements::NamedRequirementsResolver;
+use uv_requirements::{NamedRequirementsResolver, infer_name_from_filename};
 use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::FlatIndex;
 use uv_settings::ResolverSettings;
@@ -52,6 +53,25 @@ pub(super) async fn resolve_names(
 
     // Short-circuit if there are no unnamed requirements.
     if unnamed.is_empty() {
+        return Ok(requirements);
+    }
+
+    // Complete archive filenames need no metadata or build dependencies. Keep mixed inputs
+    // together when any name needs resolution so their requirement order stays unchanged.
+    if let Some(names) = unnamed
+        .iter()
+        .map(infer_name_from_filename)
+        .collect::<Result<Option<Vec<_>>, uv_requirements::Error>>()?
+    {
+        requirements.extend(unnamed.into_iter().zip(names).map(|(requirement, name)| {
+            Requirement::from(uv_pep508::Requirement {
+                name,
+                extras: requirement.extras,
+                version_or_url: Some(VersionOrUrl::Url(requirement.url)),
+                marker: requirement.marker,
+                origin: requirement.origin,
+            })
+        }));
         return Ok(requirements);
     }
 

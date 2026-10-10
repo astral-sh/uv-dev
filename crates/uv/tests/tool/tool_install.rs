@@ -21,6 +21,8 @@ use sha2::{Digest, Sha256};
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
+use wiremock::matchers::path;
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::packse::{
     PackseServer, generate_wheel, generate_wheel_with_files, scenario::Scenario,
@@ -3562,6 +3564,110 @@ fn tool_install_unnamed_conflict() {
     ----- stderr -----
     error: Package name (`iniconfig`) provided with `--from` does not match install request (`black`)
     ");
+}
+
+/// Inferring a complete archive name does not need the configured flat index.
+#[tokio::test]
+async fn tool_install_unnamed_conflict_without_find_links() {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    Mock::given(path("/flat"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("different-name")
+        .arg("--from")
+        .arg(format!("{}/anyio-4.3.0-py3-none-any.whl", server.uri()))
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(format!("{}/flat", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package name (`anyio`) provided with `--from` does not match install request (`different-name`)
+    ");
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("different-name")
+        .arg("--from")
+        .arg(format!("{}/anyio-4.3.0.tar.gz", server.uri()))
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(format!("{}/flat", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package name (`anyio`) provided with `--from` does not match install request (`different-name`)
+    ");
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+/// An already-installed bare wheel URL can be checked without fetching the flat index again.
+#[tokio::test]
+async fn tool_install_unnamed_already_installed_without_find_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let (filename, wheel) = generate_wheel(
+        &"network-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["network-tool".to_string()],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    let wheel_url = url::Url::from_file_path(wheel_path.path()).unwrap();
+    let server = MockServer::start().await;
+    Mock::given(path("/flat"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .insert_header("cache-control", "no-store")
+                .set_body_string("<html></html>"),
+        )
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(wheel_url.as_str())
+        .arg("--no-preview")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(format!("{}/flat", server.uri()))
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + network-tool==1.0.0 (from file://[TEMP_DIR]/network_tool-1.0.0-py3-none-any.whl)
+    Installed 1 executable: network-tool
+    ");
+
+    server.reset().await;
+    Mock::given(path("/flat"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(wheel_url.as_str())
+        .arg("--no-preview")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(format!("{}/flat", server.uri()))
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    `network-tool @ file://[TEMP_DIR]/network_tool-1.0.0-py3-none-any.whl` is already installed
+    ");
+    assert!(server.received_requests().await.unwrap().is_empty());
+    Ok(())
 }
 
 /// Test installing a tool with a bare URL requirement using `--from`.
