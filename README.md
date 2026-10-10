@@ -6,8 +6,8 @@ Classification: bug
 
 ## Summary
 
-The reported SchemaStore omission is reproducible. SchemaStore's published `uv.json`
-and current source omit `malware-check` and `malware-check-url` from
+The reported SchemaStore omission was reproduced on October 10, 2026. The downloaded
+published `uv.json` and SchemaStore source omitted `malware-check` and `malware-check-url` from
 `AuditOptions.properties`. A targeted JSON Schema validation accepts invalid Boolean,
 URL-type, and URL-format values that uv's generated schema rejects. Both schemas
 accept the reporter's valid configuration, and installed uv 0.12.13 accepts it during
@@ -17,6 +17,11 @@ These settings shipped in uv 0.11.31 on July 21, 2026, through astral-sh/uv#2058
 The issue concerns publishing definitions for existing settings, including completion
 metadata and type constraints. It does not establish a runtime uv defect or a
 particular editor diagnostic.
+
+A maintainer linked SchemaStore/schemastore#6485, an open PR that refreshes the external
+schema and adds both missing properties. Its diff confirms coverage of this report;
+merge and publication are not yet established. The next step is to follow that PR and
+verify the published schema after the update lands.
 
 ## Classification
 
@@ -29,6 +34,8 @@ extension, or version was supplied.
 There is no evidence that these properties were previously published and then removed.
 Earlier SchemaStore refreshes predate their introduction, so this is not an established
 regression of those fixes. No additional runtime configuration feature is needed.
+SchemaStore/schemastore#6485 supplies a proposed fix following this report; its existence
+does not make the issue a duplicate or establish that the published schema is fixed.
 
 ## Reproduction
 
@@ -165,6 +172,7 @@ behavioral reproductions.
 
 ## Related
 
+- SchemaStore/schemastore#6485 — Update uv's JSON schema (open). Linked by maintainer charliermarsh on astral-sh/uv#22458. The PR refreshes `src/schemas/json/uv.json` from uv commit `44b2e5877ef752e360acc02c7d198ba71ddf948d`, the same commit used for the local-schema reproduction. Its diff adds both malware properties to `AuditOptions`, directly addressing the reported omission. Merge and publication remain pending verification.
 - astral-sh/uv#20587 — Add audit malware-check configuration settings (merged). Added both requested settings and their generated schema definitions, merged July 21, 2026, and included in uv 0.11.31. Confirms these are existing supported settings; it did not update SchemaStore's separate copy.
 - astral-sh/uv#20497 — Add a `malware-check` boolean setting as the configuration equivalent of the `UV_MALWARE_CHECK` environment variable (closed). Original request for file-based malware-check configuration, closed by astral-sh/uv#20587. That runtime capability is implemented; the new report concerns publishing its schema definitions.
 - astral-sh/uv#17173 — Update UV's JSON Schema on JSON Schema Store (0.9.18) (closed). Earlier SchemaStore lag caused editor validation errors for relative-time settings. A maintainer linked SchemaStore/schemastore#5232, merged December 18, 2025. This establishes the refresh workflow, but predates both malware settings and does not track their omission.
@@ -172,6 +180,12 @@ behavioral reproductions.
 
 ## Supporting evidence
 
+- The October 10, 2026 maintainer comment on astral-sh/uv#22458 links directly to
+  SchemaStore/schemastore#6485. Inspection of that PR found state `OPEN`, no merge
+  timestamp, and head commit `d954daa9978b1c4112377ed11dda1e2700a51799`.
+  The schema diff adds `malware-check` with type `["boolean", "null"]` and
+  `malware-check-url` with a `DisplaySafeUrl` reference or null. This confirms a
+  proposed schema fix, not deployment of the updated published schema.
 - `crates/uv-settings/src/settings.rs:3018` defines `AuditOptions` with
   `malware_check: Option<bool>` and `malware_check_url: Option<DisplaySafeUrl>`;
   serde maps names to kebab case.
@@ -204,11 +218,13 @@ astral-sh/uv#20497 and astral-sh/uv#20587 supply the focused request and impleme
 
 ## Recommended next step
 
-Refresh SchemaStore's `src/schemas/json/uv.json` from an appropriate released uv schema
-containing both fields. Verify that `AuditOptions` exposes their definitions and that
-invalid Boolean, URL-type, and URL-format values fail validation with URI checking
-enabled. The existing update script and historical upstream PRs document the workflow.
-No fix or publication was performed as part of this reproduction.
+Follow SchemaStore/schemastore#6485 through review and merge. After publication,
+fetch https://json.schemastore.org/uv.json again and rerun the retained schema comparison.
+Verify that `AuditOptions` exposes both definitions, the valid example still passes,
+and invalid Boolean, URL-type, and URL-format values fail validation with URI checking
+enabled. The linked PR already proposes the refresh; another refresh PR is unnecessary
+unless that proposal changes or fails to address the omission. Editor-specific completion
+remains untested. No fix or publication was performed as part of this reproduction.
 
 ## Draft response
 
