@@ -20,11 +20,245 @@ use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio_stream::wrappers::ReceiverStream;
-use wiremock::matchers::{any, method};
+use wiremock::matchers::{any, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_static::EnvVars;
 use uv_test::{TestContext, uv_snapshot};
+
+struct CachedWheelMetadataFixture {
+    _server: MockServer,
+    index: String,
+    generation: Arc<AtomicUsize>,
+    artifact_requests: Arc<AtomicUsize>,
+}
+
+impl CachedWheelMetadataFixture {
+    async fn new(
+        context: &TestContext,
+        algorithm: Option<uv_pypi_types::HashAlgorithm>,
+    ) -> Result<Self> {
+        const FILENAME: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
+        const METADATA: &str = "Metadata-Version: 2.3\nName: build-tag\nVersion: 1.0.0\n";
+        context
+            .temp_dir
+            .child("requirements.in")
+            .write_str("build-tag==1.0.0\n")?;
+        let original = fs_err::read(context.workspace_root.join("test/links").join(FILENAME))?;
+        let mut changed = original.clone();
+        let end = changed.len();
+        assert_eq!(&changed[end - 22..end - 18], b"PK\x05\x06");
+        assert_eq!(&changed[end - 2..], &[0, 0]);
+        changed[end - 2..].copy_from_slice(&1_u16.to_le_bytes());
+        changed.push(b'x');
+        let archives = Arc::new([original, changed]);
+        let generation = Arc::new(AtomicUsize::new(0));
+        let artifact_requests = Arc::new(AtomicUsize::new(0));
+        let server = MockServer::start().await;
+        let index_archives = archives.clone();
+        let index_generation = generation.clone();
+        Mock::given(method("GET"))
+            .and(path("/simple/build-tag/"))
+            .respond_with(move |_: &Request| {
+                let archive = &index_archives[index_generation.load(Ordering::SeqCst)];
+                let mut hashes = serde_json::Map::new();
+                if let Some(algorithm) = algorithm {
+                    let mut hasher = uv_extract::hash::Hasher::from(algorithm);
+                    hasher.update(archive);
+                    let digest = uv_pypi_types::HashDigest::from(hasher);
+                    hashes.insert(algorithm.to_string(), json!(digest.digest()));
+                }
+
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .set_body_raw(
+                        json!({
+                            "meta": {"api-version": "1.0"},
+                            "name": "build-tag",
+                            "files": [{
+                                "filename": FILENAME,
+                                "url": format!("/files/{FILENAME}"),
+                                "hashes": hashes,
+                                "size": archive.len(),
+                                "core-metadata": true,
+                                "upload-time": "2023-01-01T00:00:00Z"
+                            }]
+                        })
+                        .to_string(),
+                        "application/vnd.pypi.simple.v1+json",
+                    )
+            })
+            .mount(&server)
+            .await;
+        let download_requests = artifact_requests.clone();
+        let download_generation = generation.clone();
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{FILENAME}")))
+            .respond_with(move |_: &Request| {
+                download_requests.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .set_body_bytes(archives[download_generation.load(Ordering::SeqCst)].clone())
+            })
+            .mount(&server)
+            .await;
+        let metadata_requests = artifact_requests.clone();
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{FILENAME}.metadata")))
+            .respond_with(move |_: &Request| {
+                metadata_requests.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .set_body_string(METADATA)
+            })
+            .mount(&server)
+            .await;
+        let index = format!("{}/simple", server.uri());
+        Ok(Self {
+            _server: server,
+            index,
+            generation,
+            artifact_requests,
+        })
+    }
+}
+
+/// Verified SHA-256 archives supply metadata until refresh or an index hash change.
+#[tokio::test]
+async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let fixture =
+        CachedWheelMetadataFixture::new(&context, Some(uv_pypi_types::HashAlgorithm::Sha256))
+            .await?;
+    uv_snapshot!(context.filters(), context.pip_install().args(["--no-deps", "build-tag==1.0.0", "--default-index"]).arg(&fixture.index), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0
+    "#);
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 1);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--default-index"]).arg(&fixture.index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 1);
+    let before = fixture.artifact_requests.load(Ordering::SeqCst);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--refresh", "--default-index"]).arg(&fixture.index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert!(fixture.artifact_requests.load(Ordering::SeqCst) > before);
+    let before = fixture.artifact_requests.load(Ordering::SeqCst);
+    fixture.generation.store(1, Ordering::SeqCst);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--default-index"]).arg(&fixture.index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert!(fixture.artifact_requests.load(Ordering::SeqCst) > before);
+    Ok(())
+}
+
+/// MD5 identities cannot authorize metadata reuse from an installed wheel archive.
+#[tokio::test]
+async fn resolution_fetches_metadata_for_md5_cached_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let fixture =
+        CachedWheelMetadataFixture::new(&context, Some(uv_pypi_types::HashAlgorithm::Md5)).await?;
+    uv_snapshot!(context.filters(), context.pip_install().args(["--no-deps", "build-tag==1.0.0", "--default-index"]).arg(&fixture.index), @r#"
+exit_code: 0 (success)
+----- stderr -----
+Resolved 1 package in [TIME]
+Prepared 1 package in [TIME]
+Installed 1 package in [TIME]
+ + build-tag==1.0.0
+"#);
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 1);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--default-index"]).arg(&fixture.index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+/// An index without hashes requires metadata from the origin.
+#[tokio::test]
+async fn resolution_fetches_metadata_for_unhashed_cached_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let fixture = CachedWheelMetadataFixture::new(&context, None).await?;
+    uv_snapshot!(context.filters(), context.pip_install().args(["--no-deps", "build-tag==1.0.0", "--default-index"]).arg(&fixture.index), @r#"
+exit_code: 0 (success)
+----- stderr -----
+Resolved 1 package in [TIME]
+Prepared 1 package in [TIME]
+Installed 1 package in [TIME]
+ + build-tag==1.0.0
+"#);
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 1);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--default-index"]).arg(&fixture.index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+/// Configured file-cache policy requires revalidation even with a strong wheel identity.
+#[tokio::test]
+async fn resolution_fetches_metadata_for_configured_file_cache_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let fixture =
+        CachedWheelMetadataFixture::new(&context, Some(uv_pypi_types::HashAlgorithm::Sha256))
+            .await?;
+    let config = context.temp_dir.child("cache-control.toml");
+    config.write_str(&formatdoc! {r#"
+        [[index]]
+        url = "{index}"
+        default = true
+        cache-control = {{ files = "max-age=0" }}
+    "#, index = fixture.index})?;
+    uv_snapshot!(context.filters(), context.pip_install().args(["--no-deps", "build-tag==1.0.0", "--config-file"]).arg(config.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0
+    "#);
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 1);
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.in", "--no-header", "--no-annotate", "--config-file"]).arg(config.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-tag==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(fixture.artifact_requests.load(Ordering::SeqCst), 2);
+    Ok(())
+}
 
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
 ///

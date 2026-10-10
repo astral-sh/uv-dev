@@ -37,7 +37,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_preview::PreviewFeature;
-use uv_pypi_types::{HashDigest, HashDigests, PyProjectToml, ResolutionMetadata};
+use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, PyProjectToml, ResolutionMetadata};
 use uv_python_types::PythonVariant;
 use uv_redacted::DisplaySafeUrl;
 use uv_threads::initialize_rayon_once;
@@ -650,6 +650,13 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             return Ok(Metadata::from_dependency_metadata(metadata).into());
         }
 
+        if let Some(metadata) = self
+            .cached_registry_wheel_metadata(dist, hash_policy)
+            .await?
+        {
+            return Ok(ArchiveMetadata::from_metadata23(metadata));
+        }
+
         let result = self
             .client
             .managed(|client| {
@@ -686,6 +693,77 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             }
             Err(err) => Err(err.into()),
         }
+    }
+
+    /// Read metadata from a fully downloaded wheel identified by the current index hashes.
+    async fn cached_registry_wheel_metadata(
+        &self,
+        dist: &BuiltDist,
+        hashes: ArchiveHashPolicy<'_>,
+    ) -> Result<Option<ResolutionMetadata>, Error> {
+        let BuiltDist::Registry(wheels) = dist else {
+            return Ok(None);
+        };
+        let wheel = wheels.best_wheel();
+        if !wheel
+            .file
+            .url
+            .to_url()
+            .is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+            || !wheel
+                .file
+                .hashes
+                .iter()
+                .any(|hash| hash.algorithm() != HashAlgorithm::Md5)
+            || self
+                .build_context
+                .locations()
+                .artifact_cache_control_for(&wheel.index)
+                .is_some()
+        {
+            return Ok(None);
+        }
+
+        let cache = self.build_context.cache().clone();
+        let wheel = wheel.clone();
+        let cached = tokio::task::spawn_blocking(move || {
+            let pointer_entry = cache.entry(
+                CacheBucket::Wheels,
+                WheelCache::Index(&wheel.index).wheel_dir(wheel.name().as_ref()),
+                format!("{}.http", wheel.filename.cache_key()),
+            );
+            if !cache
+                .freshness(&pointer_entry, Some(wheel.name()), None)
+                .ok()?
+                .is_fresh()
+            {
+                return None;
+            }
+            let archive = HttpArchivePointer::read_from(&pointer_entry)
+                .ok()??
+                .into_archive();
+            // Matching digests from a complete download identify the current index artifact even
+            // when its HTTP response has expired. Partial ZIP metadata alone cannot establish this.
+            if archive.filename != wheel.filename
+                || !archive.exists(&cache)
+                || !archive.satisfies(ArchiveHashPolicy::All(wheel.file.hashes.as_slice()))
+                || (wheel.size_is_authoritative
+                    && wheel
+                        .file
+                        .size
+                        .is_some_and(|size| archive.size != Some(size)))
+            {
+                return None;
+            }
+            let metadata =
+                uv_metadata::read_flat_wheel_metadata(&wheel.filename, cache.archive(&archive.id))
+                    .ok()?;
+            Some((metadata, archive))
+        })
+        .await?;
+        Ok(cached.and_then(|(metadata, archive)| {
+            (archive.satisfies(hashes) && metadata.name == *dist.name()).then_some(metadata)
+        }))
     }
 
     /// Build the wheel metadata for a source distribution, or fetch it from the cache if possible.
