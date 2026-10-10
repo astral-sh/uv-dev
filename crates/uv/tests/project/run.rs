@@ -9,6 +9,8 @@ use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::Stdio;
 use uv_fs::copy_dir_all;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
@@ -9846,12 +9848,10 @@ fn run_pep723_shared_data_recovers_after_copy_failure() -> Result<()> {
     Ok(())
 }
 
-/// Recover ownership when the environment manifest cannot be persisted.
+/// Recover copied data after the final ownership manifest fails to commit.
 #[test]
 #[cfg(unix)]
 fn run_pep723_shared_data_recovers_after_manifest_failure() -> Result<()> {
-    use uv_test::ReadOnlyDirectoryGuard;
-
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
@@ -9974,20 +9974,119 @@ fn run_pep723_shared_data_recovers_after_manifest_failure() -> Result<()> {
             .read("script.py")
             .replace("shared-data==1.0.0", "shared-data==2.0.0"),
     )?;
-    let failed = {
-        let _readonly = ReadOnlyDirectoryGuard::new(overlay.to_path_buf())?;
-        uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r#"
+    let manifest_path = overlay.join(".uv-shared-entrypoints.json");
+    let committed_manifest = context.read(&manifest_path);
+    fs_err::remove_file(&manifest_path)?;
+    context
+        .python_command()
+        .args(["-c", "import os, sys; os.mkfifo(sys.argv[1])"])
+        .arg(&manifest_path)
+        .assert()
+        .success();
+
+    // The reader cannot finish loading the old manifest until the writer closes the FIFO. Replace
+    // its path with a directory before EOF so only the final ownership commit fails.
+    let mut writer = context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r"
+            import errno
+            import os
+            from pathlib import Path
+            import select
+            import sys
+            import time
+
+            manifest = Path(sys.argv[1])
+            contents = sys.argv[2].encode()
+            deadline = time.monotonic() + 30
+            try:
+                while True:
+                    if select.select([sys.stdin], [], [], 0)[0]:
+                        raise RuntimeError('Command exited before opening the manifest')
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError('Manifest reader did not open within 30 seconds')
+                    try:
+                        descriptor = os.open(manifest, os.O_WRONLY | os.O_NONBLOCK)
+                        break
+                    except OSError as error:
+                        if error.errno != errno.ENXIO:
+                            raise
+                        time.sleep(0.01)
+                os.set_blocking(descriptor, True)
+                with os.fdopen(descriptor, 'wb') as pipe:
+                    pipe.write(contents)
+                    pipe.flush()
+                    manifest.unlink()
+                    manifest.mkdir()
+            finally:
+                if manifest.is_fifo():
+                    # Wake a reader racing cancellation and prevent later opens from blocking.
+                    descriptor = os.open(manifest, os.O_RDWR | os.O_NONBLOCK)
+                    with os.fdopen(descriptor, 'wb', buffering=0) as pipe:
+                        try:
+                            pipe.write(contents)
+                        finally:
+                            manifest.unlink()
+                            manifest.write_bytes(contents)
+        "})
+        .arg(&manifest_path)
+        .arg(&committed_manifest)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    std::thread::scope(|scope| -> Result<()> {
+        // Closing stdin also cancels the bounded writer if the snapshot assertion panics.
+        let cancellation = writer.stdin.take().context("FIFO writer has no stdin")?;
+        let writer = scope.spawn(move || writer.wait_with_output());
+        uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
         exit_code: 2 (failure)
         ----- stderr -----
         Resolved 1 package in [TIME]
         Prepared 1 package in [TIME]
         Installed 1 package in [TIME]
          + shared-data==2.0.0
-        error: Permission denied (os error 13) at path "[CACHE_DIR]/environments-v2/shared-script-[HASH]/[TMP]"
-        "#)
-    };
-    let stderr = std::str::from_utf8(&failed.stderr)?;
-    assert!(stderr.contains(&format!("{}/.tmp", overlay.to_path_buf().display())));
+        error: failed to rename file from [CACHE_DIR]/environments-v2/shared-script-[HASH]/[TMP] to [CACHE_DIR]/environments-v2/shared-script-[HASH]/.uv-shared-entrypoints.json: Is a directory (os error 21)
+        ");
+        drop(cancellation);
+        writer
+            .join()
+            .map_err(|_| anyhow::anyhow!("Manifest FIFO writer panicked"))??
+            .assert()
+            .success();
+        Ok(())
+    })?;
+    ChildPath::new(&manifest_path).assert(predicate::path::is_dir());
+    fs_err::remove_dir(&manifest_path)?;
+    fs_err::write(&manifest_path, &committed_manifest)?;
+    assert_eq!(context.read(&manifest_path), committed_manifest);
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/value.txt")),
+        "two\n"
+    );
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/obsolete.txt")),
+        "version two only\n"
+    );
+    assert_eq!(
+        context.read(overlay.join("etc/jupyter/later.txt")),
+        "later two\n"
+    );
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/edited.txt")),
+        "local edit\n"
+    );
+    assert_eq!(
+        context.read(overlay.join("share/jupyter/unrelated.txt")),
+        "unrelated file\n"
+    );
+    let pending_path = overlay.join(".uv-shared-data.pending.json");
+    let pending: BTreeMap<String, String> = serde_json::from_str(&context.read(&pending_path))?;
+    assert_eq!(pending.len(), 3);
+    assert!(pending.contains_key("etc/jupyter/later.txt"));
+    assert!(pending.contains_key("share/jupyter/obsolete.txt"));
+    assert!(pending.contains_key("share/jupyter/value.txt"));
     uv_snapshot!(context.filters(), context.run().args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
     exit_code: 0 (success)
     ----- stdout -----
@@ -10000,6 +10099,7 @@ fn run_pep723_shared_data_recovers_after_manifest_failure() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+    ChildPath::new(&pending_path).assert(predicate::path::missing());
     script.write_str(
         &context
             .read("script.py")
