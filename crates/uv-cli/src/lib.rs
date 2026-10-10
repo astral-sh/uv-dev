@@ -7437,7 +7437,7 @@ pub struct PublishArgs {
     #[arg(default_value = "dist/*", value_hint = ValueHint::FilePath)]
     pub files: Vec<String>,
 
-    /// The name of an index in the configuration to use for publishing.
+    /// The name of an index in the configuration to use for publishing [env: `UV_PUBLISH_INDEX`=]
     ///
     /// The index must have a `publish-url` setting, for example:
     ///
@@ -7459,42 +7459,27 @@ pub struct PublishArgs {
     #[arg(
         long,
         verbatim_doc_comment,
-        env = EnvVars::UV_PUBLISH_INDEX,
         conflicts_with = "publish_url",
         conflicts_with = "check_url",
         value_hint = ValueHint::Other,
     )]
     pub index: Option<String>,
 
-    /// The username for the upload.
-    #[arg(
-        short,
-        long,
-        env = EnvVars::UV_PUBLISH_USERNAME,
-        hide_env_values = true,
-        value_hint = ValueHint::Other
-    )]
+    /// The username for the upload. [env: `UV_PUBLISH_USERNAME`=]
+    #[arg(short, long, value_hint = ValueHint::Other)]
     pub username: Option<String>,
 
-    /// The password for the upload.
-    #[arg(
-        short,
-        long,
-        env = EnvVars::UV_PUBLISH_PASSWORD,
-        hide_env_values = true,
-        value_hint = ValueHint::Other
-    )]
+    /// The password for the upload. [env: `UV_PUBLISH_PASSWORD`=]
+    #[arg(short, long, value_hint = ValueHint::Other)]
     pub password: Option<String>,
 
-    /// The token for the upload.
+    /// The token for the upload. [env: `UV_PUBLISH_TOKEN`=]
     ///
     /// Using a token is equivalent to passing `__token__` as `--username` and the token as
     /// `--password` password.
     #[arg(
         short,
         long,
-        env = EnvVars::UV_PUBLISH_TOKEN,
-        hide_env_values = true,
         conflicts_with = "username",
         conflicts_with = "password",
         value_hint = ValueHint::Other,
@@ -7519,16 +7504,16 @@ pub struct PublishArgs {
     #[arg(long, value_enum, env = EnvVars::UV_KEYRING_PROVIDER)]
     pub keyring_provider: Option<KeyringProviderType>,
 
-    /// The URL of the upload endpoint (not the index URL).
+    /// The URL of the upload endpoint (not the index URL). [env: `UV_PUBLISH_URL`=]
     ///
     /// Note that there are typically different URLs for index access (e.g., `https:://.../simple`)
     /// and index upload.
     ///
     /// Defaults to PyPI's publish URL (<https://upload.pypi.org/legacy/>).
-    #[arg(long, env = EnvVars::UV_PUBLISH_URL, hide_env_values = true)]
+    #[arg(long)]
     pub publish_url: Option<DisplaySafeUrl>,
 
-    /// Check an index URL for existing files to skip duplicate uploads.
+    /// Check an index URL for existing files to skip duplicate uploads. [env: `UV_PUBLISH_CHECK_URL`=]
     ///
     /// This option allows retrying publishing that failed after only some, but not all files have
     /// been uploaded, and handles errors due to parallel uploads of the same file.
@@ -7541,7 +7526,7 @@ pub struct PublishArgs {
     /// file succeeds even without `--check-url`, while most other indexes error.
     ///
     /// The index must provide one of the supported hashes (SHA-256, SHA-384, or SHA-512).
-    #[arg(long, env = EnvVars::UV_PUBLISH_CHECK_URL, hide_env_values = true)]
+    #[arg(long)]
     pub check_url: Option<IndexUrl>,
 
     #[arg(long, hide = true)]

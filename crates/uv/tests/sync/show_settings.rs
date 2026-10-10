@@ -567,6 +567,430 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
     windows,
     ignore = "Configuration tests are not yet supported on Windows"
 )]
+fn publish_modes_follow_source_precedence() {
+    let context = uv_test::test_context!("3.12");
+    let password = capture_uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--username", "publisher", "--password", "fake-password"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    PublishSettings {
+        files: [
+            "dist/*",
+        ],
+        username: Some(
+            "publisher",
+        ),
+        password: Some(
+            "****",
+        ),
+        index: None,
+        dry_run: false,
+        no_attestations: false,
+        publish_url: DisplaySafeUrl {
+            scheme: "https",
+            cannot_be_a_base: false,
+            username: "",
+            password: None,
+            host: Some(
+                Domain(
+                    "upload.pypi.org",
+                ),
+            ),
+            port: None,
+            path: "/legacy/",
+            query: None,
+            fragment: None,
+        },
+        trusted_publishing: Automatic,
+        keyring_provider: Disabled,
+        check_url: None,
+        index_locations: IndexLocations {
+            indexes: [],
+            flat_index: [],
+            no_index: false,
+        },
+    }
+    "#);
+    diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--username", "publisher", "--password", "fake-password"])
+        .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token"), @"");
+
+    diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--username", "publisher"])
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "fake-password")
+        .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token"), @"");
+
+    diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--password", "fake-password"])
+        .env(EnvVars::UV_PUBLISH_USERNAME, "publisher")
+        .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token"), @"");
+    diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_USERNAME, "publisher")
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "fake-password"), @"");
+
+    let token = diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--token", "fake-token"]), @r#"
+    ...
+             "dist/*",
+         ],
+         username: Some(
+    -        "publisher",
+    +        "__token__",
+         ),
+         password: Some(
+             "****",
+    ...
+    "#);
+    diff_uv_snapshot!(context.filters(), &token, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--token", "fake-token"])
+        .env(EnvVars::UV_PUBLISH_USERNAME, "ambient-user")
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "ambient-password"), @"");
+
+    diff_uv_snapshot!(context.filters(), &token, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token"), @"");
+
+    diff_uv_snapshot!(context.filters(), &token, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--token", ""])
+        .env(EnvVars::UV_PUBLISH_USERNAME, "ambient-user")
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "ambient-password"), @"");
+
+    diff_uv_snapshot!(context.filters(), &token, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_TOKEN, ""), @"");
+
+    let urls = diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--publish-url", "https://publish.example.org/legacy/", "--check-url", "https://check.example.org/simple/"]), @r#"
+    ...
+         files: [
+             "dist/*",
+         ],
+    -    username: Some(
+    -        "publisher",
+    -    ),
+    -    password: Some(
+    -        "****",
+    -    ),
+    +    username: None,
+    +    password: None,
+         index: None,
+         dry_run: false,
+         no_attestations: false,
+    ...
+             password: None,
+             host: Some(
+                 Domain(
+    -                "upload.pypi.org",
+    +                "publish.example.org",
+                 ),
+             ),
+             port: None,
+    ...
+         },
+         trusted_publishing: Automatic,
+         keyring_provider: Disabled,
+    -    check_url: None,
+    +    check_url: Some(
+    +        Url(
+    +            VerbatimUrl {
+    +                url: DisplaySafeUrl {
+    +                    scheme: "https",
+    +                    cannot_be_a_base: false,
+    +                    username: "",
+    +                    password: None,
+    +                    host: Some(
+    +                        Domain(
+    +                            "check.example.org",
+    +                        ),
+    +                    ),
+    +                    port: None,
+    +                    path: "/simple/",
+    +                    query: None,
+    +                    fragment: None,
+    +                },
+    +                given: Some(
+    +                    "https://check.example.org/simple/",
+    +                ),
+    +                expanded: false,
+    +                force_relative: false,
+    +            },
+    +        ),
+    +    ),
+         index_locations: IndexLocations {
+             indexes: [],
+             flat_index: [],
+    ...
+    "#);
+    diff_uv_snapshot!(context.filters(), &urls, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--publish-url", "https://publish.example.org/legacy/", "--check-url", "https://check.example.org/simple/"])
+        .env(EnvVars::UV_PUBLISH_INDEX, "ambient-index"), @"");
+
+    diff_uv_snapshot!(context.filters(), &urls, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--publish-url", "https://publish.example.org/legacy/"])
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/")
+        .env(EnvVars::UV_PUBLISH_INDEX, "ambient-index"), @"");
+
+    diff_uv_snapshot!(context.filters(), &urls, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--check-url", "https://check.example.org/simple/"])
+        .env(EnvVars::UV_PUBLISH_URL, "https://publish.example.org/legacy/")
+        .env(EnvVars::UV_PUBLISH_INDEX, "ambient-index"), @"");
+    diff_uv_snapshot!(context.filters(), &urls, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_URL, "https://publish.example.org/legacy/")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/"), @"");
+
+    let index = diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--index", "private"]), @r#"
+    ...
+         files: [
+             "dist/*",
+         ],
+    -    username: Some(
+    -        "publisher",
+    +    username: None,
+    +    password: None,
+    +    index: Some(
+    +        "private",
+         ),
+    -    password: Some(
+    -        "****",
+    -    ),
+    -    index: None,
+         dry_run: false,
+         no_attestations: false,
+         publish_url: DisplaySafeUrl {
+    ...
+    "#);
+    diff_uv_snapshot!(context.filters(), &index, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--index", "private"])
+        .env(EnvVars::UV_PUBLISH_URL, "invalid URL")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/"), @"");
+    diff_uv_snapshot!(context.filters(), &index, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_INDEX, "private"), @"");
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn publish_modes_reject_same_source_conflicts() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .args(["--show-settings", "--token", "fake-token", "--username", "publisher"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument '--token <TOKEN>' cannot be used with '--username <USERNAME>'
+
+    Usage: uv publish --cache-dir [CACHE_DIR] --token <TOKEN> [FILES]...
+
+    For more information, try '--help'.
+    ");
+    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .args(["--show-settings", "--index", "private", "--publish-url", "https://publish.example.org/legacy/"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument '--index <INDEX>' cannot be used with '--publish-url <PUBLISH_URL>'
+
+    Usage: uv publish --cache-dir [CACHE_DIR] --index <INDEX> [FILES]...
+
+    For more information, try '--help'.
+    ");
+    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token")
+        .env(EnvVars::UV_PUBLISH_USERNAME, "publisher"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `UV_PUBLISH_TOKEN` cannot be combined with `UV_PUBLISH_USERNAME` or `UV_PUBLISH_PASSWORD`
+    ");
+    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_INDEX, "private")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `UV_PUBLISH_INDEX` cannot be combined with `UV_PUBLISH_URL` or `UV_PUBLISH_CHECK_URL`
+    ");
+    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_URL, "invalid URL"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_URL`: expected a URL
+      cause: relative URL without a base
+    ");
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn publish_environment_url_errors_retain_redacted_causes() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), context.publish()
+        .env(EnvVars::UV_PUBLISH_URL, "https://user/name:fake-secret@publish.example.org/legacy/"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_URL`: expected a URL
+      cause: ambiguous user/pass authority in URL (not percent-encoded?): https:***@publish.example.org/legacy/
+    ");
+    uv_snapshot!(context.filters(), context.publish()
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://user/name:fake-secret@check.example.org/simple/"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
+      cause: ambiguous user/pass authority in URL (not percent-encoded?): https:***@check.example.org/simple/
+    ");
+    uv_snapshot!(context.filters(), context.publish()
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, format!("{}fake-private-check-url", "../".repeat(64))), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
+      cause: path could not be normalized
+      cause: invalid input parameter
+    ");
+}
+
+#[test]
+fn publish_environment_check_url_rejects_empty() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--check-url", ""]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid value '' for '--check-url <CHECK_URL>': path could not be converted to an absolute path:
+
+    For more information, try '--help'.
+    ");
+    uv_snapshot!(context.filters(), context.publish()
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, ""), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
+      cause: path could not be converted to an absolute path
+      cause: invalid input parameter
+    ");
+}
+
+#[test]
+fn publish_environment_check_url_rejects_empty_with_directory() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("nested").create_dir_all()?;
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--directory", "nested"])
+        .args(["--check-url", ""]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid value '' for '--check-url <CHECK_URL>': path could not be converted to an absolute path:
+
+    For more information, try '--help'.
+    ");
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--directory", "nested"])
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, ""), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
+      cause: path could not be converted to an absolute path
+      cause: invalid input parameter
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn publish_environment_check_url_keeps_invocation_directory() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("nested").create_dir_all()?;
+    let baseline = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.publish()).args(["--show-settings", "--check-url", "./simple"])
+    );
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .args(["--check-url", "./simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "./simple"), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .args(["--check-url", "./simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "./simple"), @"");
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
 fn pip_install_baseline() {
     let context = uv_test::test_context!("3.12");
 
@@ -5575,5 +5999,63 @@ fn no_cache_env_override() -> anyhow::Result<()> {
         .arg("requirements.in")
         .env(EnvVars::UV_NO_CACHE, "true"), @"");
 
+    Ok(())
+}
+
+/// CLI and environment check URLs resolve before changing the working directory.
+#[test]
+#[cfg(windows)]
+fn publish_environment_check_url_windows_drive_relative() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("nested").create_dir_all()?;
+    let baseline = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.publish()).args(["--show-settings", "--check-url", "C:simple"])
+    );
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .args(["--check-url", "C:simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "C:simple"), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .args(["--check-url", "C:simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "C:simple"), @"");
+    Ok(())
+}
+
+/// CLI and environment check URLs resolve before changing the working directory.
+#[test]
+#[cfg(windows)]
+fn publish_environment_check_url_windows_rooted() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("nested").create_dir_all()?;
+    let baseline = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.publish()).args(["--show-settings", "--check-url", "\\simple"])
+    );
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .args(["--check-url", "\\simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "\\simple"), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .args(["--check-url", "\\simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "\\simple"), @"");
     Ok(())
 }
