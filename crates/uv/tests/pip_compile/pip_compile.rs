@@ -21675,3 +21675,73 @@ fn include_build_dependencies_direct_url_constraint() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Build discovery uses a direct backend wheel already selected by runtime requirements.
+#[test]
+fn include_build_dependencies_selected_direct_url_backend() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (helper_filename, helper) = generate_wheel(
+        &PackageName::from_str("helper")?,
+        &Version::from_str("1.0.0")?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let helper_path = context.temp_dir.child(helper_filename);
+    helper_path.write_binary(&helper)?;
+    let helper_url = Url::from_file_path(helper_path.path())
+        .map_err(|()| anyhow!("invalid helper wheel path"))?;
+    let (backend_filename, backend) = generate_wheel(
+        &PackageName::from_str("backend")?,
+        &Version::from_str("1.0.0")?,
+        &[Requirement::from_str(&format!("helper @ {helper_url}"))?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let backend_path = context.temp_dir.child(backend_filename);
+    backend_path.write_binary(&backend)?;
+    let backend_url = Url::from_file_path(backend_path.path())
+        .map_err(|()| anyhow!("invalid backend wheel path"))?;
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = ["backend"]
+        build-backend = "custom"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("project/custom.py")
+        .write_str(indoc! {r"
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+    "})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("./project\nbackend @ {backend_url}\n"))?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies",
+        "--offline", "--no-index", "--no-header", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    backend @ file://[TEMP_DIR]/backend-1.0.0-py3-none-any.whl
+    helper @ file://[TEMP_DIR]/helper-1.0.0-py3-none-any.whl
+    ./project
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
