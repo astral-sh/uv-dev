@@ -396,9 +396,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 If you're using uv to manage your project, you can improve build times by moving your transitive
 dependency installation into its own layer via the `--no-install` options.
 
-`uv sync --no-install-project` will install the dependencies of the project but not the project
-itself. Since the project changes frequently, but its dependencies are generally static, this can be
-a big time saver.
+`uv sync --no-install-local` installs remote or indexed dependencies, but skips the project,
+workspace members, and other local path dependencies. Since local packages change frequently, but
+their dependencies are generally static, this can be a big time saver.
 
 ```dockerfile title="Dockerfile"
 # Install uv
@@ -411,7 +411,7 @@ WORKDIR /app
 # Install dependencies
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --no-install-project
+    uv sync --frozen --no-install-local
 
 # Copy the project into the image
 COPY . /app
@@ -424,6 +424,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 Note that only the `uv.lock` file is mounted for the first sync. The `pyproject.toml` and project
 _contents_ are copied into the image before the final `uv sync` command.
 
+If local dependencies' `pyproject.toml` files are unavailable in the initial layer, `--locked`
+cannot validate that the lockfile is up-to-date. Use `--frozen` for the initial sync instead, then
+retain `--locked` for the final sync after copying the source files.
+
 !!! tip
 
     If you want to remove additional, specific packages from the sync,
@@ -432,8 +436,8 @@ _contents_ are copied into the image before the final `uv sync` command.
 #### Intermediate layers in workspaces
 
 If you're using a [workspace](../../concepts/projects/workspaces.md), use the
-`--no-install-workspace` flag to exclude the project _and_ any workspace members from the initial
-sync:
+`--no-install-local` flag to exclude the project, all workspace members, and other local path
+dependencies from the initial sync:
 
 ```dockerfile title="Dockerfile"
 # Install uv
@@ -444,7 +448,7 @@ WORKDIR /app
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --no-install-workspace
+    uv sync --frozen --no-install-local
 
 COPY . /app
 
@@ -485,7 +489,7 @@ WORKDIR /app
 # Install dependencies
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --no-install-project --no-editable
+    uv sync --frozen --no-install-local --no-editable
 
 # Copy the project into the intermediate image
 COPY . /app
