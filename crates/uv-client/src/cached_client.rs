@@ -724,8 +724,7 @@ impl CachedClient {
     ///
     /// The callback shares the request's [`RetryState`]. It must use that state for any retries
     /// it performs and send subsequent requests through [`RetryState::send`].
-    #[instrument(skip_all)]
-    pub async fn get_serde_with_retry<
+    pub fn get_serde_with_retry<
         Payload: Serialize + DeserializeOwned + Send + 'static,
         CallBackError: std::error::Error + 'static,
         Callback: AsyncFn(Response, &mut RetryState) -> Result<Payload, CallBackError>,
@@ -735,26 +734,44 @@ impl CachedClient {
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
         response_callback: Callback,
-    ) -> Result<Payload, CachedClientError<CallBackError>> {
-        let payload = self
-            .get_cacheable_with_retry(
-                req,
-                cache_entry,
-                cache_control,
-                async |resp, retry_state| {
-                    let payload = response_callback(resp, retry_state).await?;
-                    Ok(SerdeCacheable { inner: payload })
-                },
-            )
-            .await?;
-        Ok(payload)
+    ) -> impl std::future::Future<Output = Result<Payload, CachedClientError<CallBackError>>> {
+        self.get_serde_with_retry_if(req, cache_entry, cache_control, response_callback, |_| true)
+            .instrument(info_span!("get_serde_with_retry"))
+    }
+
+    /// Perform a cached Serde request, retrying callback errors only when `retry_callback` permits.
+    ///
+    /// Request failures still use the ordinary retry policy. This lets callers switch to another
+    /// response-processing strategy instead of repeating work that the callback cannot resume.
+    pub fn get_serde_with_retry_if<
+        Payload: Serialize + DeserializeOwned + Send + 'static,
+        CallBackError: std::error::Error + 'static,
+        Callback: AsyncFn(Response, &mut RetryState) -> Result<Payload, CallBackError>,
+        RetryCallback: Fn(&CallBackError) -> bool,
+    >(
+        &self,
+        req: Request,
+        cache_entry: &CacheEntry,
+        cache_control: CacheControl,
+        response_callback: Callback,
+        retry_callback: RetryCallback,
+    ) -> impl std::future::Future<Output = Result<Payload, CachedClientError<CallBackError>>> {
+        self.get_cacheable_with_retry_if(
+            req,
+            cache_entry,
+            cache_control,
+            async move |resp, retry_state| {
+                let payload = response_callback(resp, retry_state).await?;
+                Ok(SerdeCacheable { inner: payload })
+            },
+            retry_callback,
+        )
     }
 
     /// Perform a [`CachedClient::get_cacheable`] request with a default retry strategy.
     ///
     /// See: <https://github.com/TrueLayer/reqwest-middleware/blob/8a494c165734e24c62823714843e1c9347027e8a/reqwest-retry/src/middleware.rs#L137>
-    #[instrument(skip_all)]
-    pub(crate) async fn get_cacheable_with_retry<
+    pub(crate) fn get_cacheable_with_retry<
         Payload: Cacheable + 'static,
         CallBackError: std::error::Error + 'static,
         Callback: AsyncFn(Response, &mut RetryState) -> Result<Payload, CallBackError>,
@@ -764,6 +781,26 @@ impl CachedClient {
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
         response_callback: Callback,
+    ) -> impl std::future::Future<Output = Result<Payload::Target, CachedClientError<CallBackError>>>
+    {
+        self.get_cacheable_with_retry_if(req, cache_entry, cache_control, response_callback, |_| {
+            true
+        })
+        .instrument(info_span!("get_cacheable_with_retry"))
+    }
+
+    async fn get_cacheable_with_retry_if<
+        Payload: Cacheable + 'static,
+        CallBackError: std::error::Error + 'static,
+        Callback: AsyncFn(Response, &mut RetryState) -> Result<Payload, CallBackError>,
+        RetryCallback: Fn(&CallBackError) -> bool,
+    >(
+        &self,
+        req: Request,
+        cache_entry: &CacheEntry,
+        cache_control: CacheControl,
+        response_callback: Callback,
+        retry_callback: RetryCallback,
     ) -> Result<Payload::Target, CachedClientError<CallBackError>> {
         let mut retry_state = RetryState::start(self.uncached().retry_policy(), req.url().clone());
         loop {
@@ -783,12 +820,18 @@ impl CachedClient {
 
             match result {
                 Ok(ok) => return Ok(ok),
-                Err(err)
-                    if let Some(backoff) = retry_state.should_retry(err.error(), err.retries()) =>
-                {
-                    retry_state.sleep_backoff(backoff).await;
+                Err(err) => {
+                    if let CachedClientError::Callback { err: callback, .. } = &err
+                        && !retry_callback(callback)
+                    {
+                        return Err(err.with_retries(retry_state.total_retries()));
+                    }
+                    if let Some(backoff) = retry_state.should_retry(err.error(), err.retries()) {
+                        retry_state.sleep_backoff(backoff).await;
+                    } else {
+                        return Err(err.with_retries(retry_state.total_retries()));
+                    }
                 }
-                Err(err) => return Err(err.with_retries(retry_state.total_retries())),
             }
         }
     }
@@ -809,6 +852,24 @@ impl CachedClient {
         cache_control: CacheControl,
         response_callback: Callback,
     ) -> Result<Payload, CachedClientError<CallBackError>> {
+        self.skip_cache_with_retry_if(req, cache_entry, cache_control, response_callback, |_| true)
+            .await
+    }
+
+    /// Perform an uncached request, retrying callback errors only when the predicate permits.
+    pub async fn skip_cache_with_retry_if<
+        Payload: Serialize + DeserializeOwned + Send + 'static,
+        CallBackError: std::error::Error + 'static,
+        Callback: AsyncFn(Response, &mut RetryState) -> Result<Payload, CallBackError>,
+        RetryCallback: Fn(&CallBackError) -> bool,
+    >(
+        &self,
+        req: Request,
+        cache_entry: &CacheEntry,
+        cache_control: CacheControl,
+        response_callback: Callback,
+        retry_callback: RetryCallback,
+    ) -> Result<Payload, CachedClientError<CallBackError>> {
         let mut retry_state = RetryState::start(self.uncached().retry_policy(), req.url().clone());
         loop {
             let fresh_req = req.try_clone().expect("HTTP request must be cloneable");
@@ -827,12 +888,18 @@ impl CachedClient {
 
             match result {
                 Ok(ok) => return Ok(ok),
-                Err(err)
-                    if let Some(backoff) = retry_state.should_retry(err.error(), err.retries()) =>
-                {
-                    retry_state.sleep_backoff(backoff).await;
+                Err(err) => {
+                    if let CachedClientError::Callback { err: callback, .. } = &err
+                        && !retry_callback(callback)
+                    {
+                        return Err(err.with_retries(retry_state.total_retries()));
+                    }
+                    if let Some(backoff) = retry_state.should_retry(err.error(), err.retries()) {
+                        retry_state.sleep_backoff(backoff).await;
+                    } else {
+                        return Err(err.with_retries(retry_state.total_retries()));
+                    }
                 }
-                Err(err) => return Err(err.with_retries(retry_state.total_retries())),
             }
         }
     }
