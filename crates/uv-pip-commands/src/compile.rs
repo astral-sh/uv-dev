@@ -22,8 +22,8 @@ use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ConfigSettings, DependencyMetadata, ExtraBuildVariables, HashCollection, Index, IndexLocations,
-    MinimumLibcVersion, NameRequirementSpecification, Origin, PackageConfigSettings, Requirement,
+    ConfigSettings, DependencyMetadata, ExtraBuildVariables, HashCollection, IndexLocations,
+    MinimumLibcVersion, NameRequirementSpecification, PackageConfigSettings, Requirement,
     RequiresPython, Verbatim,
 };
 use uv_fs::{CWD, Simplified};
@@ -56,6 +56,7 @@ use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
+use crate::indexes::combine_requirements_indexes;
 use uv_command_support::Printer;
 use uv_command_support::{ExitStatus, OutputWriter, UvError};
 use uv_python_discovery::PythonDownloadReporter;
@@ -424,19 +425,11 @@ pub async fn pip_compile(
         HashStrategy::default()
     };
 
-    // Incorporate any index locations from the provided sources.
-    let index_locations = index_locations.combine(
-        extra_index_urls
-            .into_iter()
-            .map(Index::from_extra_index_url)
-            .chain(index_url.map(Index::from_index_url))
-            .map(|index| index.with_origin(Origin::RequirementsTxt))
-            .collect(),
-        find_links
-            .into_iter()
-            .map(Index::from_find_links)
-            .map(|index| index.with_origin(Origin::RequirementsTxt))
-            .collect(),
+    let index_locations = combine_requirements_indexes(
+        index_locations,
+        index_url,
+        extra_index_urls,
+        find_links,
         no_index,
     );
 
