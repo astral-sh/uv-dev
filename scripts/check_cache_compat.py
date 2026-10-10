@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,9 @@ if sys.platform == "linux":
     ]
 
 
-def install_package(*, uv: str, package: str, flags: list[str]):
+def install_package(
+    *, uv: str, package: str, flags: list[str], installed_name: str | None = None
+):
     """Install a package"""
 
     logger.info(f"Installing the package {package!r} with {uv!r}.")
@@ -41,10 +44,11 @@ def install_package(*, uv: str, package: str, flags: list[str]):
         check=True,
     )
 
-    logger.info(f"Checking that `{package}` is available.")
-    code = subprocess.run([uv, "pip", "show", package], cwd=temp_dir, check=False)
+    package_name = installed_name or package
+    logger.info(f"Checking that `{package_name}` is available.")
+    code = subprocess.run([uv, "pip", "show", package_name], cwd=temp_dir, check=False)
     if code.returncode != 0:
-        raise RuntimeError(f"Could not show {package}.")
+        raise RuntimeError(f"Could not show {package_name}.")
 
 
 def clean_cache(*, uv: str):
@@ -52,6 +56,19 @@ def clean_cache(*, uv: str):
         [uv, "cache", "clean", "--cache-dir", os.path.join(temp_dir, "cache")],
         cwd=temp_dir,
         check=True,
+    )
+
+
+def check_local_wheel_cache(*, uv_current: str, uv_previous: str):
+    """Check that an older uv can read a wheel cached by the current uv."""
+
+    wheel = Path(__file__).resolve().parents[1] / "test/links/ok-1.0.0-py3-none-any.whl"
+    install_package(uv=uv_current, package=str(wheel), flags=[], installed_name="ok")
+    install_package(
+        uv=uv_previous,
+        package=str(wheel),
+        flags=["--reinstall"],
+        installed_name="ok",
     )
 
 
@@ -92,10 +109,32 @@ def check_cache_with_package(
 
     # Install with the previous uv to populate the cache
     # Use `--no-binary` to force a local build of the wheel
-    install_package(uv=uv_previous, package=package, flags=["--no-binary", package])
+    install_package(
+        uv=uv_previous,
+        package=package,
+        flags=["--reinstall", "--no-binary", package],
+    )
 
-    # Reinstall with the current uv
-    install_package(uv=uv_current, package=package, flags=["--reinstall"])
+    # Reinstall with the current uv from the source-built wheel cache.
+    install_package(
+        uv=uv_current,
+        package=package,
+        flags=["--reinstall", "--no-binary", package],
+    )
+
+    # Clear the cache and reverse the source-build direction to ensure previous releases can read
+    # wheel and source-distribution entries written by the current version.
+    clean_cache(uv=uv_current)
+    install_package(
+        uv=uv_current,
+        package=package,
+        flags=["--reinstall", "--no-binary", package],
+    )
+    install_package(
+        uv=uv_previous,
+        package=package,
+        flags=["--reinstall", "--no-binary", package],
+    )
 
 
 if __name__ == "__main__":
@@ -129,6 +168,9 @@ if __name__ == "__main__":
             cwd=temp_dir,
             check=False,
         )
+
+        logger.info("Testing local wheel cache compatibility.")
+        check_local_wheel_cache(uv_current=uv_current, uv_previous=uv_previous)
 
         for package in test_packages:
             logger.info(f"Testing with {package!r}.")
