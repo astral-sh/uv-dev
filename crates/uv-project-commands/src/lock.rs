@@ -8,13 +8,12 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, NoSources,
-};
+use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun};
 use uv_dispatch::UniversalState;
 use uv_distribution_types::RequiresPython;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
+    discover_workspace_groups,
 };
 use uv_git_types::GitOid;
 use uv_lock::{Lock, Package, WorkspaceGroupSelectionError, implicit_constraints_marker};
@@ -223,9 +222,8 @@ pub(crate) fn command_workspace_group(
     workspace: &Workspace,
     name: Option<&GroupName>,
     members: Option<&BTreeSet<PackageName>>,
-    no_sources: &NoSources,
+    groups: Vec<ResolvedWorkspaceGroup>,
 ) -> Result<Option<CommandWorkspaceSelection>, ProjectError> {
-    let groups = workspace.workspace_groups_with_sources(no_sources)?;
     if let Some(name) = name {
         return groups
             .into_iter()
@@ -250,8 +248,17 @@ pub(crate) fn command_workspace_group(
         for member in members {
             let supported = groups
                 .iter()
-                .filter_map(|group| group.member_environments().get(member))
-                .fold(MarkerTree::FALSE, |supported, marker| supported.or(*marker));
+                .filter_map(|group| {
+                    group
+                        .member_environments()
+                        .get(member)
+                        .copied()
+                        .or_else(|| {
+                            // No-sync commands can use a provisional domain without building metadata.
+                            (!group.pending_metadata().is_empty()).then_some(group.environments())
+                        })
+                })
+                .fold(MarkerTree::FALSE, MarkerTree::or);
             if supported.is_false() {
                 uncovered.push(member.clone());
             } else {
@@ -342,6 +349,9 @@ pub async fn lock(
         LockTarget::Workspace(workspace.workspace())
     };
 
+    // Share discovered metadata with the lock operation.
+    let state = UniversalState::default();
+
     // Determine the lock mode.
     let interpreter;
     let mode = if let Some(frozen_source) = frozen {
@@ -349,8 +359,27 @@ pub async fn lock(
     } else {
         interpreter = match target {
             LockTarget::Workspace(workspace) => {
-                let workspace_groups =
-                    workspace.workspace_groups_with_sources(&settings.sources)?;
+                let workspace_groups = discover_workspace_groups(
+                    workspace,
+                    project_dir,
+                    python.as_deref(),
+                    lock_check,
+                    &settings,
+                    &client_builder,
+                    &state,
+                    &BTreeSet::new(),
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    &install_mirrors,
+                    &concurrency,
+                    config_discovery,
+                    cache,
+                    workspace_cache,
+                    printer,
+                    preview,
+                )
+                .await?;
                 let grouped_workspace = (!workspace_groups.is_empty())
                     .then(|| workspace.with_workspace_groups(&workspace_groups));
                 let workspace = grouped_workspace.as_ref().unwrap_or(workspace);
@@ -407,9 +436,6 @@ pub async fn lock(
             LockMode::Write(&interpreter)
         }
     };
-
-    // Initialize any shared state.
-    let state = UniversalState::default();
 
     // Perform the lock operation.
     match Box::pin(

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
@@ -13,7 +14,7 @@ use uv_dispatch::UniversalState;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, ScriptEnvironment,
+    ProjectInterpreter, ScriptEnvironment, discover_workspace_groups,
 };
 use uv_lock::{Lock, Metadata, Package};
 use uv_lock_operations::{
@@ -97,6 +98,37 @@ pub async fn metadata(
     let groups = DependencyGroupsWithDefaults::none();
     let state = UniversalState::default();
 
+    let group_workspace = if frozen.is_none() {
+        if let MetadataSource::Manifest(LockTarget::Workspace(workspace)) = &source {
+            let groups = discover_workspace_groups(
+                workspace,
+                project_dir,
+                python.as_deref(),
+                lock_check,
+                &settings,
+                &client_builder,
+                &state,
+                &BTreeSet::new(),
+                python_preference,
+                python_arch,
+                python_downloads,
+                &install_mirrors,
+                &concurrency,
+                config_discovery,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            )
+            .await?;
+            (!groups.is_empty()).then(|| workspace.with_workspace_groups(&groups))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let resolved_lock;
     let lock: &Lock = match &source {
         MetadataSource::Lockfile(workspace) => workspace.lock(),
@@ -124,6 +156,7 @@ pub async fn metadata(
                     .await?
                     .into_interpreter(),
                     LockTarget::Workspace(workspace) => {
+                        let workspace = group_workspace.as_ref().unwrap_or(workspace);
                         let project_python = ProjectPythonRequest::from_request(
                             python.as_deref().map(PythonRequest::parse),
                             Some(workspace),
@@ -213,7 +246,7 @@ pub async fn metadata(
         Some(match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
                 ProjectEnvironment::get_or_init(
-                    ProjectEnvironmentTarget::from(*workspace),
+                    ProjectEnvironmentTarget::from(group_workspace.as_ref().unwrap_or(workspace)),
                     None,
                     &groups,
                     &settings.sources,

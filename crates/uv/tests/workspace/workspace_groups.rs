@@ -1,12 +1,18 @@
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
+use assert_fs::assert::PathAssert;
+use assert_fs::fixture::{FileWriteBin, FileWriteStr, PathChild, PathCreateDir};
 use indoc::{formatdoc, indoc};
+use predicates::prelude::predicate;
+use sha2::{Digest, Sha256};
+use url::Url;
+use uv_fs::PythonExt;
 use uv_pep508::MarkerTree;
-use uv_test::packse::PackseServer;
 use uv_test::packse::scenario::Scenario;
+use uv_test::packse::{PackseServer, generate_wheel_with_files};
 use uv_test::{TestContext, uv_snapshot};
 
 use super::workspace_metadata::write_wheel_with_metadata;
@@ -80,6 +86,263 @@ fn workspace(context: &TestContext) -> Result<()> {
             &[],
         )?;
     }
+    Ok(())
+}
+
+/// Dynamic group metadata verifies known build artifacts before importing them.
+#[test]
+fn workspace_groups_dynamic_metadata_verifies_build_artifacts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let sentinel = context.temp_dir.child("payload-executed");
+    let marker = sentinel.path().escape_for_python();
+    let (filename, trusted) = generate_wheel_with_files(
+        &"build-helper".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("build_helper/payload.py", "pass\n")],
+    );
+    let (_, replacement) = generate_wheel_with_files(
+        &"build-helper".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "build_helper/payload.py",
+            &formatdoc! {r#"
+            from pathlib import Path
+            Path({marker}).write_text("replacement")
+        "#},
+        )],
+    );
+    let trusted_digest = hex::encode(Sha256::digest(&trusted));
+    let replacement_digest = hex::encode(Sha256::digest(&replacement));
+    let context = context
+        .with_filter((trusted_digest.clone(), "[TRUSTED_HASH]"))
+        .with_filter((replacement_digest.clone(), "[REPLACEMENT_HASH]"));
+    let wheel = context.temp_dir.child("wheels").child(&filename);
+    wheel.write_binary(&trusted)?;
+    let wheel_url =
+        Url::from_file_path(wheel.path()).map_err(|()| anyhow!("wheel path must be absolute"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = ["build-helper @ {wheel_url}"]
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("backend.py")
+        .write_str(&formatdoc! {r#"
+        from pathlib import Path
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            import build_helper.payload
+            dist_info = Path(metadata_directory) / "app-1.0.0.dist-info"
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: app\n"
+                "Version: 1.0.0\n"
+                "Requires-Python: >=3.12\n"
+                "Requires-Dist: build-helper @ {wheel_url}\n"
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache", "--python", "3.12"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    sentinel.assert(predicate::path::missing());
+    wheel.write_binary(&replacement)?;
+
+    let unformatted = locked.replacen("version = ", "version=", 1);
+    assert_ne!(unformatted, locked);
+    context.temp_dir.child("uv.lock").write_str(&unformatted)?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-cache", "--python", "3.12", "--locked",
+        "--preview-features", "lockfile-format-check",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The lockfile at `uv.lock` has non-canonical formatting at line 1, but `--locked` was provided.
+
+    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
+    ");
+    sentinel.assert(predicate::path::missing());
+    context.temp_dir.child("uv.lock").write_str(&locked)?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache", "--python", "3.12", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `app @ file://[TEMP_DIR]/`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to read `build-helper @ file://[TEMP_DIR]/wheels/build_helper-1.0.0-py3-none-any.whl`
+      cause: Hash mismatch for `build-helper @ file://[TEMP_DIR]/wheels/build_helper-1.0.0-py3-none-any.whl`
+
+             Expected:
+               sha256:[TRUSTED_HASH]
+
+             Computed:
+               sha256:[REPLACEMENT_HASH]
+    ");
+    sentinel.assert(predicate::path::missing());
+    assert_eq!(context.read("uv.lock"), locked);
+
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache", "--python", "3.12"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `app @ file://[TEMP_DIR]/`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to read `build-helper @ file://[TEMP_DIR]/wheels/build_helper-1.0.0-py3-none-any.whl`
+      cause: Hash mismatch for `build-helper @ file://[TEMP_DIR]/wheels/build_helper-1.0.0-py3-none-any.whl`
+
+             Expected:
+               sha256:[TRUSTED_HASH]
+
+             Computed:
+               sha256:[REPLACEMENT_HASH]
+    ");
+    sentinel.assert(predicate::path::missing());
+    assert_eq!(context.read("uv.lock"), locked);
+
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--no-cache", "--python", "3.12", "--upgrade-package", "build-helper",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("payload-executed"), "replacement");
+    Ok(())
+}
+
+/// Metadata probes use current build constraints when the build helper is absent from the lock.
+#[test]
+fn workspace_groups_dynamic_metadata_uses_current_build_constraints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let sentinel = context.temp_dir.child("payload-executed");
+    let marker = sentinel.path().escape_for_python();
+    let (filename, trusted) = generate_wheel_with_files(
+        &"build-helper".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("build_helper/payload.py", "pass\n")],
+    );
+    let (_, replacement) = generate_wheel_with_files(
+        &"build-helper".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "build_helper/payload.py",
+            &formatdoc! {r#"
+            from pathlib import Path
+            Path({marker}).write_text("replacement")
+        "#},
+        )],
+    );
+    let trusted_digest = hex::encode(Sha256::digest(&trusted));
+    let replacement_digest = hex::encode(Sha256::digest(&replacement));
+    let context = context
+        .with_filter((trusted_digest.clone(), "[TRUSTED_HASH]"))
+        .with_filter((replacement_digest.clone(), "[REPLACEMENT_HASH]"));
+    let wheel = context.temp_dir.child("wheels").child(&filename);
+    wheel.write_binary(&trusted)?;
+    let wheel_url =
+        Url::from_file_path(wheel.path()).map_err(|()| anyhow!("wheel path must be absolute"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = ["build-helper @ {wheel_url}"]
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv]
+        build-constraint-dependencies = [
+            {{ requirement = "build-helper==1.0.0", hashes = ["sha256:{trusted_digest}"] }},
+        ]
+        [tool.uv.workspace]
+        members = []
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("backend.py")
+        .write_str(&formatdoc! {r#"
+        from pathlib import Path
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            import build_helper.payload
+            dist_info = Path(metadata_directory) / "app-1.0.0.dist-info"
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: app\n"
+                "Version: 1.0.0\n"
+                "Requires-Python: >=3.12\n"
+
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache", "--python", "3.12"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    sentinel.assert(predicate::path::missing());
+    wheel.write_binary(&replacement)?;
+    let pyproject = context.read("pyproject.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&pyproject.replace(&trusted_digest, &replacement_digest))?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache", "--python", "3.12"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(context.read("payload-executed"), "replacement");
     Ok(())
 }
 
@@ -2999,5 +3262,558 @@ fn workspace_groups_locked_dry_run_uses_selected_context() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(existing, context.read("uv.lock"));
+    Ok(())
+}
+
+/// A dynamic version does not remove the package scope of a version-independent exclusion.
+#[test]
+fn workspace_groups_dynamic_version_name_scoped_exclusion() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        requires-python = ">=3.12,<3.13"
+        dependencies = ["leaf"]
+        dynamic = ["version"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv]
+        exclude-dependencies = [{ package = { name = "app" }, dependencies = ["leaf"] }]
+        [tool.uv.workspace]
+        members = ["leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = pathlib.Path(metadata_directory, "app-1.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: app\n"
+                "Version: 1.0.0\n"
+                "Requires-Python: >=3.12,<3.13\n"
+                "Requires-Dist: leaf\n"
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    insta::assert_snapshot!(lock["workspace-group"][0]["effective-requires-python"].as_str().expect("group records its Python domain"), @"==3.12.*");
+    Ok(())
+}
+
+/// A version-specific exclusion is selected from actual backend metadata before validating the domain.
+#[test]
+fn workspace_groups_dynamic_version_exact_scoped_exclusion() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        requires-python = ">=3.12,<3.13"
+        dependencies = ["leaf"]
+        dynamic = ["version"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv]
+        exclude-dependencies = [{ package = { name = "app", version = "1.0.0" }, dependencies = ["leaf"] }]
+        [tool.uv.workspace]
+        members = ["leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = pathlib.Path(metadata_directory, "app-1.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: app\n"
+                "Version: 1.0.0\n"
+                "Requires-Python: >=3.12,<3.13\n"
+                "Requires-Dist: leaf\n"
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    insta::assert_snapshot!(lock["workspace-group"][0]["effective-requires-python"].as_str().expect("group records its Python domain"), @"==3.12.*");
+    Ok(())
+}
+
+/// An exact version scope can restore an edge hidden by a versionless exclusion before environment creation.
+#[test]
+fn workspace_groups_dynamic_version_reselects_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+        dynamic = ["version"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv]
+        exclude-dependencies = [
+            { package = { name = "app" }, dependencies = ["leaf"] },
+            { package = { name = "app", version = "2.0.0" }, dependencies = [] },
+        ]
+        [tool.uv.workspace]
+        members = ["leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = pathlib.Path(metadata_directory, "app-2.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: app\n"
+                "Version: 2.0.0\n"
+                "Requires-Python: >=3.12\n"
+                "Requires-Dist: leaf\n"
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--no-index", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    insta::assert_snapshot!(lock["workspace-group"][0]["effective-requires-python"].as_str().expect("group records its Python domain"), @">=3.13");
+    Ok(())
+}
+
+/// Dynamic dependency metadata can raise the inferred domain before a project environment is created.
+#[test]
+fn workspace_groups_dynamic_dependencies_reselect_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        requires-python = ">=3.12"
+        version = "2.0.0"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv.workspace]
+        members = ["leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = pathlib.Path(metadata_directory, "app-2.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: app\n"
+                "Version: 2.0.0\n"
+                "Requires-Python: >=3.12\n"
+                "Requires-Dist: leaf\n"
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--no-index", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.tree().args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    app v2.0.0
+    └── leaf v0.1.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    insta::assert_snapshot!(lock["workspace-group"][0]["effective-requires-python"].as_str().expect("group records its Python domain"), @">=3.13");
+    Ok(())
+}
+
+/// Metadata can reveal another dynamic member whose backend needs a different interpreter.
+#[test]
+fn workspace_groups_dynamic_dependencies_refine_new_members() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv.workspace]
+        members = ["child", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        child = { workspace = true }
+        leaf = { workspace = true }
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = pathlib.Path(metadata_directory, "app-1.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: app\n"
+                "Version: 1.0.0\n"
+                "Requires-Python: >=3.12\n"
+                "Requires-Dist: child\n"
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/backend.py")
+        .write_str(indoc! {r#"
+        import pathlib
+        import sys
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            assert sys.version_info[:2] == (3, 13)
+            dist_info = pathlib.Path(metadata_directory, "child-1.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: child\n"
+                "Version: 1.0.0\n"
+                "Requires-Python: >=3.13\n"
+                "Requires-Dist: leaf\n"
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--no-index", "--no-install-workspace", "--no-install-package", "child",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Resolved 3 packages in [TIME]
+    Checked in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    insta::assert_snapshot!(lock["workspace-group"][0]["effective-requires-python"].as_str().expect("group records its Python domain"), @">=3.13");
+    Ok(())
+}
+
+/// An explicit interpreter selects the command's group, while other groups can build metadata.
+#[test]
+fn workspace_groups_dynamic_metadata_uses_group_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["main", "future"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["main"]
+        default = true
+        [[tool.uv.workspace.groups]]
+        name = "future"
+        members = ["future"]
+    "#})?;
+    context
+        .temp_dir
+        .child("main/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "main"
+        version = "1.0.0"
+        requires-python = ">=3.12,<3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("future/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "future"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context
+        .temp_dir
+        .child("future/backend.py")
+        .write_str(indoc! {r#"
+        import pathlib
+        import sys
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            assert sys.version_info[:2] == (3, 13)
+            dist_info = pathlib.Path(metadata_directory, "future-1.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: future\n"
+                "Version: 1.0.0\n"
+                "Requires-Python: >=3.13\n"
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--no-index", "--python", "3.12", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--no-index", "--python", "3.12", "--workspace-group", "future",
+        "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from workspace member `future`'s `project.requires-python`).
+    ");
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 12)")
+        .success();
+    Ok(())
+}
+
+/// A conditional dynamic member builds metadata within its own reachable Python domain.
+#[test]
+fn workspace_groups_dynamic_metadata_uses_member_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["child; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+        [tool.uv.workspace]
+        members = ["child"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/backend.py")
+        .write_str(indoc! {r#"
+        import pathlib
+        import sys
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            assert sys.version_info[:2] == (3, 13)
+            dist_info = pathlib.Path(metadata_directory, "child-1.0.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: child\n"
+                "Version: 1.0.0\n"
+                "Requires-Python: >=3.13\n"
+            )
+            return dist_info.name
+
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--no-index", "--python", "3.12",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    insta::assert_snapshot!(lock["workspace-group"][0]["effective-requires-python"].as_str().expect("group records its Python domain"), @">=3.12");
     Ok(())
 }

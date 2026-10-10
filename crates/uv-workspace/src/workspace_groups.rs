@@ -9,7 +9,7 @@ use uv_configuration::{
 };
 use uv_distribution_types::{Requirement, RequirementSource, RequiresPython};
 use uv_normalize::{ExtraName, GroupName, PackageName};
-use uv_pep440::VersionSpecifiers;
+use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl};
 use uv_pypi_types::{LenientRequirement, SupportedEnvironments, VerbatimParsedUrl};
 
@@ -34,6 +34,14 @@ pub struct WorkspaceGroup {
     pub default: bool,
 }
 
+/// Metadata needed to refine dependency reachability for a dynamic workspace member.
+#[derive(Debug, Clone)]
+pub struct WorkspaceGroupMemberMetadata {
+    pub version: Version,
+    pub requires_dist: Box<[Requirement]>,
+    pub requires_python: Option<VersionSpecifiers>,
+}
+
 /// A validated workspace group and its effective Python requirement.
 #[derive(Debug, Clone)]
 pub struct ResolvedWorkspaceGroup {
@@ -43,6 +51,8 @@ pub struct ResolvedWorkspaceGroup {
     environments: MarkerTree,
     /// The environments in which each local member is reachable from these roots.
     member_environments: BTreeMap<PackageName, MarkerTree>,
+    /// Dynamic metadata needed before outgoing dependency edges can determine a final domain.
+    pending_metadata: BTreeSet<PackageName>,
 }
 
 impl ResolvedWorkspaceGroup {
@@ -60,6 +70,11 @@ impl ResolvedWorkspaceGroup {
 
     pub fn member_environments(&self) -> &BTreeMap<PackageName, MarkerTree> {
         &self.member_environments
+    }
+
+    /// Dynamic metadata needed to refine this group's provisional Python domain.
+    pub fn pending_metadata(&self) -> &BTreeSet<PackageName> {
+        &self.pending_metadata
     }
 
     /// Consume the validated group for storage or command selection.
@@ -97,6 +112,15 @@ impl Workspace {
     pub fn workspace_groups_with_sources(
         &self,
         no_sources: &NoSources,
+    ) -> Result<Vec<ResolvedWorkspaceGroup>, WorkspaceError> {
+        self.workspace_groups_with_metadata(no_sources, &BTreeMap::new())
+    }
+
+    /// Refine group reachability using full metadata for dynamic workspace members.
+    pub fn workspace_groups_with_metadata(
+        &self,
+        no_sources: &NoSources,
+        metadata: &BTreeMap<PackageName, WorkspaceGroupMemberMetadata>,
     ) -> Result<Vec<ResolvedWorkspaceGroup>, WorkspaceError> {
         let Some(definitions) = self
             .pyproject_toml()
@@ -188,14 +212,23 @@ impl Workspace {
                     .into());
                 }
             }
-            let member_environments =
-                self.reachable_workspace_members(definition, no_sources, &modifiers)?;
+            let mut pending_metadata = BTreeSet::new();
+            let member_environments = self.reachable_workspace_members(
+                definition,
+                no_sources,
+                &modifiers,
+                metadata,
+                &mut pending_metadata,
+            )?;
             for (name, active) in &member_environments {
-                if let Some(requires_python) = self
+                let declared = self
                     .packages()
                     .get(name)
-                    .and_then(|member| member.project().requires_python.as_ref())
-                {
+                    .and_then(|member| member.project().requires_python.as_ref());
+                let built = metadata
+                    .get(name)
+                    .and_then(|metadata| metadata.requires_python.as_ref());
+                for requires_python in declared.into_iter().chain(built) {
                     let compatible = RequiresPython::from_specifiers(requires_python.clone())
                         .to_exact_marker_tree();
                     environments = environments.and(active.implies(compatible));
@@ -216,10 +249,16 @@ impl Workspace {
                         definition.name.clone(),
                     ))
                 })?;
+            pending_metadata.retain(|name| {
+                member_environments
+                    .get(name)
+                    .is_some_and(|active| !active.and(environments).is_false())
+            });
             groups.push(ResolvedWorkspaceGroup {
                 definition: definition.clone(),
                 requires_python,
                 environments,
+                pending_metadata,
                 member_environments: member_environments
                     .into_iter()
                     .map(|(name, marker)| (name, marker.and(environments)))
@@ -235,6 +274,8 @@ impl Workspace {
         group: &WorkspaceGroup,
         no_sources: &NoSources,
         modifiers: &DependencyModifiers,
+        metadata: &BTreeMap<PackageName, WorkspaceGroupMemberMetadata>,
+        pending_metadata: &mut BTreeSet<PackageName>,
     ) -> Result<BTreeMap<PackageName, MarkerTree>, WorkspaceError> {
         let mut reached = BTreeMap::<PackageName, MarkerTree>::new();
         let mut processed = BTreeMap::new();
@@ -260,64 +301,98 @@ impl Workspace {
             let Some(member) = self.packages().get(&name) else {
                 continue;
             };
-            let member_sources = member
-                .pyproject_toml()
-                .tool
-                .as_ref()
-                .and_then(|tool| tool.uv.as_ref())
-                .and_then(|uv| uv.sources.as_ref());
-            let dependencies = if let Some(extra) = &extra {
-                member
-                    .project()
-                    .optional_dependencies
-                    .as_ref()
-                    .and_then(|dependencies| dependencies.get(extra))
-            } else {
-                member.project().dependencies.as_ref()
-            };
-            let requirements = dependencies
-                .into_iter()
-                .flatten()
-                .map(|dependency| {
-                    LenientRequirement::<VerbatimParsedUrl>::from_str(dependency)
-                        .map(Pep508Requirement::from)
-                        .map(Requirement::from)
-                        .map_err(|error| {
-                            WorkspaceError::from(
-                                WorkspaceErrorKind::InvalidWorkspaceGroupDependency(
-                                    group.name.clone(),
-                                    name.clone(),
-                                    Box::new(error),
-                                ),
-                            )
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let requirements = requirements
-                .into_iter()
-                .flat_map(|requirement| {
-                    self.lower_workspace_sources(
-                        requirement,
-                        member_sources,
-                        member.root(),
-                        extra.as_ref(),
-                        no_sources,
-                    )
-                })
-                .collect::<Vec<_>>();
-            let scope = member
+            let built = metadata.get(&name);
+            let version = member
                 .project()
                 .version
                 .as_ref()
-                .map_or(DependencyModifierScope::Global, |version| {
-                    DependencyModifierScope::Package(&name, version)
-                });
+                .or_else(|| built.map(|metadata| &metadata.version));
+            let dynamic = member.project().dynamic.as_deref().unwrap_or_default();
+            if built.is_none()
+                && ((version.is_none() && modifiers.has_versioned_package(&name))
+                    || dynamic.iter().any(|field| {
+                        field == "dependencies"
+                            || field == "requires-python"
+                            || (extra.is_some() && field == "optional-dependencies")
+                    }))
+            {
+                // Unknown metadata can add or remove local edges. Keep the current domain
+                // provisional until the backend determines the effective dependencies.
+                pending_metadata.insert(name.clone());
+                continue;
+            }
+            let requirements = if let Some(metadata) = built {
+                metadata.requires_dist.to_vec()
+            } else {
+                let member_sources = member
+                    .pyproject_toml()
+                    .tool
+                    .as_ref()
+                    .and_then(|tool| tool.uv.as_ref())
+                    .and_then(|uv| uv.sources.as_ref());
+                let dependencies = if let Some(extra) = &extra {
+                    member
+                        .project()
+                        .optional_dependencies
+                        .as_ref()
+                        .and_then(|dependencies| dependencies.get(extra))
+                } else {
+                    member.project().dependencies.as_ref()
+                };
+                let requirements = dependencies
+                    .into_iter()
+                    .flatten()
+                    .map(|dependency| {
+                        LenientRequirement::<VerbatimParsedUrl>::from_str(dependency)
+                            .map(Pep508Requirement::from)
+                            .map(Requirement::from)
+                            .map_err(|error| {
+                                WorkspaceError::from(
+                                    WorkspaceErrorKind::InvalidWorkspaceGroupDependency(
+                                        group.name.clone(),
+                                        name.clone(),
+                                        Box::new(error),
+                                    ),
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                requirements
+                    .into_iter()
+                    .flat_map(|requirement| {
+                        self.lower_workspace_sources(
+                            requirement,
+                            member_sources,
+                            member.root(),
+                            extra.as_ref(),
+                            no_sources,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let scope = version.map_or(
+                DependencyModifierScope::UnknownPackageVersion(&name),
+                |version| DependencyModifierScope::Package(&name, version),
+            );
             for requirement in modifiers.apply(scope, &requirements) {
                 let marker = match extra.as_ref() {
-                    Some(extra) => requirement
-                        .marker
-                        .simplify_extras(slice::from_ref(extra))
-                        .simplify_not_extras_with(|candidate| candidate != extra),
+                    Some(extra) => {
+                        let marker = requirement
+                            .marker
+                            .simplify_extras(slice::from_ref(extra))
+                            .simplify_not_extras_with(|candidate| candidate != extra);
+                        if built.is_some() {
+                            // Built metadata combines production and optional dependencies.
+                            marker.and(
+                                requirement
+                                    .marker
+                                    .simplify_not_extras_with(|_| true)
+                                    .negate(),
+                            )
+                        } else {
+                            marker
+                        }
+                    }
                     None => requirement.marker.simplify_not_extras_with(|_| true),
                 };
                 if requirement.name == name {
@@ -531,6 +606,7 @@ mod tests {
             },
             requires_python: RequiresPython::from_specifiers(">=3.12".parse()?),
             environments: original,
+            pending_metadata: BTreeSet::new(),
             member_environments: BTreeMap::from([(member.clone(), active)]),
         };
         let narrowed: MarkerTree = "python_full_version >= '3.13'".parse()?;

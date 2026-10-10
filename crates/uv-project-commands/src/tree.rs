@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 
@@ -17,6 +18,7 @@ use uv_distribution_types::IndexCapabilities;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
+    discover_workspace_groups,
 };
 use uv_lock::{PackageMap, TreeDisplay, TreeJsonTarget};
 use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
@@ -125,6 +127,38 @@ pub async fn tree(
             .resolve_groups(&groups, workspace.lock().root().map(uv_lock::Package::name))?,
     };
 
+    let state = UniversalState::default();
+    let group_workspace = if frozen.is_none() {
+        if let TreeSource::Manifest(LockTarget::Workspace(workspace)) = source {
+            let groups = discover_workspace_groups(
+                workspace,
+                project_dir,
+                python.as_deref(),
+                lock_check,
+                &settings,
+                client_builder,
+                &state,
+                &BTreeSet::new(),
+                python_preference,
+                python_arch,
+                python_downloads,
+                &install_mirrors,
+                &concurrency,
+                config_discovery,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            )
+            .await?;
+            (!groups.is_empty()).then(|| workspace.with_workspace_groups(&groups))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Find an interpreter for the project, unless `--frozen` and `--universal` are both set.
     let interpreter = if frozen.is_some() && universal {
         None
@@ -147,6 +181,7 @@ pub async fn tree(
             .await?
             .into_interpreter(),
             TreeSource::Manifest(LockTarget::Workspace(workspace)) => {
+                let workspace = group_workspace.as_ref().unwrap_or(workspace);
                 let project_python = ProjectPythonRequest::from_request(
                     python.as_deref().map(PythonRequest::parse),
                     Some(workspace),
@@ -231,7 +266,6 @@ pub async fn tree(
             } else {
                 LockMode::Write(interpreter.as_ref().unwrap())
             };
-            let state = UniversalState::default();
             resolved_lock = match Box::pin(
                 LockOperation::new(
                     mode,

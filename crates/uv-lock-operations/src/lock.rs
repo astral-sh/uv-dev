@@ -1,19 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use rustc_hash::FxHashSet;
 use tracing::debug;
 
 use uv_cache::{Cache, Refresh};
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::BaseClientBuilder;
 use uv_command_support::Printer;
 use uv_configuration::{
-    Concurrency, ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
+    Concurrency, ExtrasSpecification, NoSources, Override, PackageOverride, Reinstall,
 };
-use uv_dispatch::{BuildDispatch, UniversalState};
-use uv_distribution::{DistributionDatabase, FirstPartyPackages, LoweredExtraBuildDependencies};
+use uv_dispatch::UniversalState;
+use uv_distribution::{DistributionDatabase, FirstPartyPackages};
 use uv_distribution_types::{
-    HashCollection, NameRequirementSpecification, RequiresPython, ResolutionRecorder,
+    NameRequirementSpecification, RequiresPython, ResolutionRecorder,
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
@@ -21,20 +20,20 @@ use uv_lock::{GroupMetadata, Lock, Package, ResolverManifest};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
-use uv_python_interpreter::{Interpreter, PythonEnvironment};
-use uv_requirements::{ExtrasResolver, script_extra_build_requires};
+use uv_python_interpreter::Interpreter;
+use uv_requirements::{ExtrasResolver, cached_requirement_metadata, resolve_requirement_metadata};
 use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
 use uv_resolve_operations::loggers::{ResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::reporters::ResolverReporter;
-use uv_resolver::{
-    FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment, UniversalMarker,
-};
+use uv_resolver::{OptionsBuilder, PythonRequirement, ResolverEnvironment, UniversalMarker};
 use uv_settings::{LockedSource, ResolverSettings};
-use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
-use uv_workspace::{ResolvedWorkspaceGroup, Workspace, WorkspaceCache};
+use uv_workspace::{
+    ResolvedWorkspaceGroup, Workspace, WorkspaceCache, WorkspaceGroupMemberMetadata,
+};
 
+use crate::build_context::PreparedBuildContext;
 use crate::lock_target::find_lock_format_error;
 use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
 
@@ -155,6 +154,110 @@ impl<'env> LockOperation<'env> {
     pub fn with_lockfile_contents_check(mut self, enabled: bool) -> Self {
         self.check_lockfile_contents = enabled;
         self
+    }
+
+    /// Build pending workspace metadata without changing the lockfile or project environment.
+    pub async fn resolve_workspace_group_metadata(
+        &self,
+        workspace: &Workspace,
+        group: &ResolvedWorkspaceGroup,
+        member: &PackageName,
+    ) -> Result<(), LockError> {
+        let interpreter = match self.mode {
+            LockMode::Write(interpreter)
+            | LockMode::DryRun(interpreter)
+            | LockMode::Locked(interpreter, _) => interpreter,
+            LockMode::Frozen(_) => return Ok(()),
+        };
+        let scoped = workspace.with_workspace_groups(std::slice::from_ref(group));
+        let target = LockTarget::Workspace(&scoped);
+        let existing = match target.read_with_contents().await {
+            Ok(Some((existing, contents))) => {
+                if let LockMode::Locked(_, source) = self.mode
+                    && self.preview.is_enabled(PreviewFeature::LockfileFormatCheck)
+                    && let Some(line) = find_lock_format_error(&contents)
+                {
+                    return Err(LockError::LockFormat(target.lock_filename(), line, source));
+                }
+                Some(existing)
+            }
+            Ok(None) => None,
+            Err(LockError::Lock(_)) if !matches!(self.mode, LockMode::Locked(..)) => None,
+            Err(error) => return Err(error),
+        };
+        if existing.is_none()
+            && let LockMode::Locked(_, source) = self.mode
+        {
+            return Err(LockError::MissingLockfile(
+                source.into(),
+                target.lock_filename(),
+            ));
+        }
+        let client = PreparedBuildContext::build_client(
+            target,
+            interpreter,
+            self.settings,
+            self.client_builder,
+            self.cache,
+        )?;
+        let build_constraints = target
+            .lower_build_constraints(
+                &self.settings.index_locations,
+                &self.settings.sources,
+                self.cache,
+                self.workspace_cache,
+                self.client_builder.credentials_cache(),
+            )
+            .await?;
+        let prepared = PreparedBuildContext::new(
+            client,
+            target,
+            interpreter,
+            existing.as_ref(),
+            self.mode,
+            build_constraints,
+            self.settings,
+            self.cache,
+            self.workspace_cache,
+        )
+        .await?;
+        let dispatch = prepared.build_dispatch(
+            interpreter,
+            self.settings,
+            self.state,
+            self.concurrency,
+            self.cache,
+            self.workspace_cache,
+            self.preview,
+        );
+        let dispatch = dispatch.fork(&prepared.probe_build_hasher);
+        let first_party = FirstPartyPackages::from_workspace(&scoped, &self.first_party_exclusions);
+        let database = DistributionDatabase::new(
+            &prepared.client,
+            &dispatch,
+            self.concurrency.downloads_semaphore.clone(),
+        )
+        .with_first_party_packages(&first_party);
+        let requirement = workspace
+            .members_requirements()
+            .find(|requirement| requirement.name == *member)
+            .ok_or_else(|| {
+                uv_workspace::WorkspaceError::from(
+                    uv_workspace::WorkspaceErrorKind::UnknownWorkspaceGroupMember(
+                        group.definition().name.clone(),
+                        member.clone(),
+                    ),
+                )
+            })?;
+        resolve_requirement_metadata(
+            &requirement,
+            &prepared.hasher,
+            self.state.index(),
+            &database,
+        )
+        .await
+        .map_err(ResolveError::from)?;
+        Ok(())
     }
 
     /// Perform a [`LockOperation`].
@@ -280,6 +383,37 @@ impl<'env> LockOperation<'env> {
     }
 }
 
+/// Refine workspace groups with metadata already collected during interpreter discovery.
+pub fn workspace_groups_with_cached_metadata(
+    workspace: &Workspace,
+    no_sources: &NoSources,
+    state: &UniversalState,
+) -> Result<Vec<ResolvedWorkspaceGroup>, LockError> {
+    let groups = workspace.workspace_groups_with_sources(no_sources)?;
+    if groups
+        .iter()
+        .all(|group| group.pending_metadata().is_empty())
+    {
+        return Ok(groups);
+    }
+    let mut metadata = BTreeMap::new();
+    for requirement in workspace.members_requirements() {
+        if let Some(built) =
+            cached_requirement_metadata(&requirement, state.index()).map_err(ResolveError::from)?
+        {
+            metadata.insert(
+                requirement.name,
+                WorkspaceGroupMemberMetadata {
+                    version: built.version,
+                    requires_dist: built.requires_dist,
+                    requires_python: built.requires_python,
+                },
+            );
+        }
+    }
+    Ok(workspace.workspace_groups_with_metadata(no_sources, &metadata)?)
+}
+
 /// Resolve named root sets together, splitting a failed shared solve into smaller contexts.
 async fn do_lock_workspace_groups(
     workspace: &Workspace,
@@ -302,6 +436,29 @@ async fn do_lock_workspace_groups(
     preview: Preview,
 ) -> Result<LockResult, LockError> {
     let start = std::time::Instant::now();
+    while let Some((group, member)) = groups.iter().find_map(|group| {
+        group
+            .pending_metadata()
+            .first()
+            .map(|member| (group, member))
+    }) {
+        LockOperation::new(
+            mode,
+            settings,
+            client_builder,
+            state,
+            Box::new(SummaryResolveLogger),
+            concurrency,
+            cache,
+            workspace_cache,
+            printer,
+            preview,
+        )
+        .with_first_party_exclusions(first_party_exclusions.clone())
+        .resolve_workspace_group_metadata(workspace, group, member)
+        .await?;
+        groups = workspace_groups_with_cached_metadata(workspace, &settings.sources, state)?;
+    }
     for group in &mut groups {
         if group.requires_python().specifiers().is_empty() {
             let default =
@@ -504,7 +661,7 @@ async fn do_lock(
     if let LockTarget::Workspace(workspace) = target
         && !workspace.is_workspace_group_resolution()
     {
-        let groups = workspace.workspace_groups_with_sources(&settings.sources)?;
+        let groups = workspace_groups_with_cached_metadata(workspace, &settings.sources, state)?;
         if !groups.is_empty() {
             return Box::pin(do_lock_workspace_groups(
                 workspace,
@@ -535,19 +692,19 @@ async fn do_lock(
     let ResolverSettings {
         index_locations,
         index_strategy,
-        keyring_provider,
+        keyring_provider: _,
         resolution,
         prerelease,
         fork_strategy,
         dependency_metadata,
-        config_setting,
-        config_settings_package,
-        build_isolation,
-        build_hash_checking,
-        extra_build_dependencies,
-        extra_build_variables,
+        config_setting: _,
+        config_settings_package: _,
+        build_isolation: _,
+        build_hash_checking: _,
+        extra_build_dependencies: _,
+        extra_build_variables: _,
         exclude_newer,
-        link_mode,
+        link_mode: _,
         upgrade,
         build_options,
         sources,
@@ -555,6 +712,9 @@ async fn do_lock(
         cuda_driver_version: _,
         amd_gpu_architecture: _,
     } = settings;
+
+    let client =
+        PreparedBuildContext::build_client(target, interpreter, settings, client_builder, cache)?;
 
     // Collect the requirements, etc.
     let members = target.members();
@@ -830,40 +990,6 @@ async fn do_lock(
     let python_requirement =
         PythonRequirement::from_requires_python(interpreter, requires_python.clone());
 
-    // Initialize the client.
-    let client_builder = client_builder.clone().keyring(*keyring_provider);
-
-    for index in target.indexes() {
-        if let Some(credentials) = index.credentials()? {
-            if let Some(root_url) = index.root_url() {
-                client_builder.store_credentials(&root_url, credentials.clone());
-            }
-            client_builder.store_credentials(index.raw_url(), credentials);
-        }
-    }
-
-    // Initialize the registry client.
-    let client = RegistryClientBuilder::new(client_builder, cache.clone())
-        .index_locations(index_locations.clone())
-        .index_strategy(*index_strategy)
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
-
-    // Determine whether to enable build isolation.
-    let environment;
-    let build_isolation = match build_isolation {
-        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-        uv_configuration::BuildIsolation::Shared => {
-            environment = PythonEnvironment::from_interpreter(interpreter.clone());
-            BuildIsolation::Shared(&environment)
-        }
-        uv_configuration::BuildIsolation::SharedPackage(packages) => {
-            environment = PythonEnvironment::from_interpreter(interpreter.clone());
-            BuildIsolation::SharedPackage(&environment, packages)
-        }
-    };
-
     let lock_supported_environments = environments.cloned().unwrap_or_default();
     let lock_required_environments = required_environments.cloned().unwrap_or_default();
     let artifact_environments = SupportedEnvironments::from_markers(
@@ -884,116 +1010,29 @@ async fn do_lock(
         .artifact_environments(artifact_environments.clone())
         .minimum_libc_version(minimum_libc_version)
         .build();
-    // Checking an existing lockfile may build metadata and install build dependencies. Verify any
-    // artifacts recorded in that lockfile, including for an ordinary unlocked command.
-    let (locked_hasher, locked_build_hasher) = if let Some(existing_lock) = existing_lock.as_ref() {
-        let locked_hasher =
-            existing_lock.hash_strategy(target.install_path(), &FxHashSet::default())?;
-        let build_hasher = HashStrategy::from_constraints(
-            &existing_lock.build_constraints(target.install_path()),
-            Some(&interpreter.to_resolver_marker_environment()),
-            *build_hash_checking,
-        )?;
-        let locked_build_hasher = locked_hasher
-            .clone()
-            .with_constraint_hashes(&build_hasher)?;
-        (locked_hasher, locked_build_hasher)
-    } else {
-        (HashStrategy::default(), HashStrategy::default())
-    };
-    // Re-resolving an outdated lock does not authorize replacing known artifacts. Only an
-    // explicit unlocked upgrade releases the selected packages' hashes.
-    let hash_upgrade = match mode {
-        LockMode::Locked(..) => &Upgrade::default(),
-        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => upgrade,
-    };
-    let resolution_hasher = if hash_upgrade.is_none() {
-        locked_hasher.clone()
-    } else if let Some(existing_lock) = existing_lock.as_ref() {
-        // An explicit upgrade allows replacing the selected packages' files, so do not require
-        // them to match the hashes recorded in the lockfile.
-        let upgrade_packages = existing_lock.upgrade_packages(hash_upgrade);
-        existing_lock.hash_strategy(target.install_path(), &upgrade_packages)?
-    } else {
-        HashStrategy::default()
-    };
-    let hasher = HashStrategy::collect(HashCollection::Url)
-        .with_verification(resolution_hasher.verification().clone());
-
-    let build_hasher = HashStrategy::from_constraints(
-        &build_constraints,
-        Some(&interpreter.to_resolver_marker_environment()),
-        *build_hash_checking,
-    )?;
-    // Explicit build constraints apply even when fresh resolution can replace lockfile hashes.
-    let resolution_build_hasher = match mode {
-        LockMode::Locked(..) => locked_hasher.with_constraint_hashes(&build_hasher)?,
-        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => build_hasher,
-    };
-
-    // TODO(charlie): These are all default values. We should consider whether we want to make them
-    // optional on the downstream APIs.
-    let extras = ExtrasSpecification::default();
-    let groups = BTreeMap::new();
-
-    // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
-
-    // Lower the extra build dependencies.
-    let extra_build_requires = match &target {
-        LockTarget::Workspace(workspace) => {
-            LoweredExtraBuildDependencies::from_workspace(
-                extra_build_dependencies.clone(),
-                workspace,
-                index_locations,
-                sources,
-                cache,
-                workspace_cache,
-                client.credentials_cache(),
-            )
-            .await?
-        }
-        LockTarget::Script(script) => {
-            // Try to get extra build dependencies from the script metadata
-            script_extra_build_requires(
-                (*script).into(),
-                sources,
-                index_locations,
-                cache,
-                workspace_cache,
-                client.credentials_cache(),
-            )
-            .await?
-        }
-    }
-    .into_inner();
-
-    // Create a build dispatch for fresh resolution.
-    let build_dispatch = BuildDispatch::new(
-        &client,
-        cache,
-        &build_constraints,
+    let prepared = PreparedBuildContext::new(
+        client,
+        target,
         interpreter,
-        index_locations,
-        &flat_index,
-        dependency_metadata,
-        state.fork().into_inner(),
-        *index_strategy,
-        config_setting,
-        config_settings_package,
-        build_isolation,
-        &extra_build_requires,
-        extra_build_variables,
-        *link_mode,
-        build_options,
-        &resolution_build_hasher,
-        exclude_newer.clone(),
-        sources.clone(),
-        SourceTreeEditablePolicy::Project,
-        workspace_cache.clone(),
-        concurrency.clone(),
+        existing_lock.as_ref(),
+        mode,
+        build_constraints,
+        settings,
+        cache,
+        workspace_cache,
+    )
+    .await?;
+    let build_dispatch = prepared.build_dispatch(
+        interpreter,
+        settings,
+        state,
+        concurrency,
+        cache,
+        workspace_cache,
         preview,
     );
+    let extras = ExtrasSpecification::default();
+    let groups = BTreeMap::new();
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
@@ -1014,9 +1053,9 @@ async fn do_lock(
         } else {
             packages
         };
-        let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
+        let validation_build_dispatch = build_dispatch.fork(&prepared.locked_build_hasher);
         let database = DistributionDatabase::new(
-            &client,
+            &prepared.client,
             &validation_build_dispatch,
             concurrency.downloads_semaphore.clone(),
         )
@@ -1034,7 +1073,7 @@ async fn do_lock(
             &constraints,
             &overrides,
             &excludes,
-            &build_constraints,
+            &prepared.build_constraints,
             &conflicts,
             environments,
             required_environments,
@@ -1045,7 +1084,7 @@ async fn do_lock(
             upgrade,
             refresh,
             &options,
-            &hasher,
+            &prepared.hasher,
             state.index(),
             &database,
             preview,
@@ -1102,7 +1141,7 @@ async fn do_lock(
                 None
             };
             let database = DistributionDatabase::new(
-                &client,
+                &prepared.client,
                 &build_dispatch,
                 concurrency.downloads_semaphore.clone(),
             )
@@ -1160,11 +1199,12 @@ async fn do_lock(
             );
 
             // Expand the available extras for each workspace member.
-            let member_requirements = ExtrasResolver::new(&hasher, state.index(), database)
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(target.members_requirements())
-                .await
-                .map_err(ResolveError::from)?;
+            let member_requirements =
+                ExtrasResolver::new(&prepared.hasher, state.index(), database)
+                    .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                    .resolve(target.members_requirements())
+                    .await
+                    .map_err(ResolveError::from)?;
             let workspace_members = member_requirements
                 .iter()
                 .map(|requirement| (requirement.name.clone(), requirement.source.clone()))
@@ -1201,7 +1241,7 @@ async fn do_lock(
                 &groups,
                 preferences,
                 None,
-                &hasher,
+                &prepared.hasher,
                 &Reinstall::default(),
                 upgrade,
                 None,
@@ -1209,8 +1249,8 @@ async fn do_lock(
                 python_requirement,
                 interpreter.markers(),
                 conflicts.clone(),
-                &client,
-                &flat_index,
+                &prepared.client,
+                &prepared.flat_index,
                 state.index(),
                 &build_dispatch,
                 concurrency,
@@ -1233,7 +1273,7 @@ async fn do_lock(
                 constraints,
                 overrides,
                 excludes.clone(),
-                build_constraints.specifications().cloned(),
+                prepared.build_constraints.specifications().cloned(),
                 dependency_groups,
                 dependency_metadata.values().cloned(),
             )

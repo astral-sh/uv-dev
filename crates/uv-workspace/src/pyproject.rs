@@ -228,6 +228,9 @@ pub struct Project {
     pub name: PackageName,
     /// The version of the project
     pub(crate) version: Option<Version>,
+    /// Metadata fields supplied by the build backend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) dynamic: Option<Vec<String>>,
     /// The Python versions this project is compatible with.
     pub(crate) requires_python: Option<VersionSpecifiers>,
     /// The dependencies of the project.
@@ -277,6 +280,7 @@ impl TryFrom<ProjectWire> for Project {
         Ok(Self {
             name,
             version: value.version,
+            dynamic: value.dynamic,
             requires_python: value.requires_python,
             dependencies: value.dependencies,
             optional_dependencies: value.optional_dependencies,

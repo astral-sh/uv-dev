@@ -154,6 +154,13 @@ impl Excludes {
         self.scoped.contains_key(package)
     }
 
+    /// Return whether any exclusion for this package is version-specific.
+    pub(crate) fn has_versioned_package(&self, package: &PackageName) -> bool {
+        self.scoped
+            .get(package)
+            .is_some_and(|entries| entries.iter().any(|entry| entry.version.is_some()))
+    }
+
     /// Check if a dependency is excluded from a specific package version.
     pub(crate) fn contains_for(
         &self,
@@ -161,7 +168,7 @@ impl Excludes {
         version: &Version,
         dependency: &PackageName,
     ) -> bool {
-        self.contains_for_package(Some((package, version)), dependency)
+        self.contains_for_package(Some((package, Some(version))), dependency)
     }
 
     /// Check if a dependency is always excluded from a package scope.
@@ -203,7 +210,7 @@ impl Excludes {
     /// Check if a dependency is excluded with optional package-version context.
     pub(crate) fn contains_for_package(
         &self,
-        package: Option<(&PackageName, &Version)>,
+        package: Option<(&PackageName, Option<&Version>)>,
         dependency: &PackageName,
     ) -> bool {
         self.contains(dependency)
@@ -214,7 +221,7 @@ impl Excludes {
                 self.scoped.get(package).is_some_and(|entries| {
                     entries
                         .iter()
-                        .find(|entry| entry.version.as_ref() == Some(version))
+                        .find(|entry| entry.version.as_ref() == version)
                         .or_else(|| entries.iter().find(|entry| entry.version.is_none()))
                         .is_some_and(|entry| entry.excludes.contains(dependency))
                 })

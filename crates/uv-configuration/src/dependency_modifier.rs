@@ -20,6 +20,8 @@ pub enum DependencyModifierScope<'a> {
     Global,
     /// Apply global and package-scoped overrides and exclusions to regular package metadata.
     Package(&'a PackageName, &'a Version),
+    /// Apply global and version-independent package rules before a dynamic version is known.
+    UnknownPackageVersion(&'a PackageName),
     /// Apply global modifiers and package-scoped exclusions to a dependency group.
     DependencyGroup(&'a PackageName, &'a Version),
 }
@@ -43,6 +45,12 @@ impl DependencyModifiers {
     /// Return whether any modifiers are scoped to this package.
     pub fn has_scoped_package(&self, package: &PackageName) -> bool {
         self.overrides.has_scoped_package(package) || self.excludes.has_scoped_package(package)
+    }
+
+    /// Return whether applying this package's scoped rules requires its exact version.
+    pub fn has_versioned_package(&self, package: &PackageName) -> bool {
+        self.overrides.has_versioned_package(package)
+            || self.excludes.has_versioned_package(package)
     }
 
     /// Return all global override requirements that are not excluded.
@@ -108,11 +116,15 @@ impl DependencyModifiers {
     {
         let (overrides, excludes) = match scope {
             DependencyModifierScope::Global => (None, None),
-            DependencyModifierScope::Package(package, version) => {
-                (Some((package, version)), Some((package, version)))
+            DependencyModifierScope::Package(package, version) => (
+                Some((package, Some(version))),
+                Some((package, Some(version))),
+            ),
+            DependencyModifierScope::UnknownPackageVersion(package) => {
+                (Some((package, None)), Some((package, None)))
             }
             DependencyModifierScope::DependencyGroup(package, version) => {
-                (None, Some((package, version)))
+                (None, Some((package, Some(version))))
             }
         };
         self.overrides

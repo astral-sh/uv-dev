@@ -24,6 +24,7 @@ use uv_distribution_types::Verbatim;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, detect_conflicts,
+    discover_workspace_groups,
 };
 use uv_fs::CWD;
 use uv_lock::{Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
@@ -272,6 +273,7 @@ pub async fn export(
         }
     };
 
+    let state = UniversalState::default();
     let mut selection_members = match &source {
         ExportSource::Manifest(ExportTarget::Project(project)) => {
             workspace_selection_members(project, &package, all_packages)
@@ -312,7 +314,27 @@ pub async fn export(
                     project.workspace(),
                     workspace_group.as_ref(),
                     batch.is_none().then_some(&selection_members),
-                    &settings.sources,
+                    discover_workspace_groups(
+                        project.workspace(),
+                        project_dir,
+                        python.as_deref(),
+                        lock_check,
+                        &settings,
+                        &client_builder,
+                        &state,
+                        &BTreeSet::new(),
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        &concurrency,
+                        config_discovery,
+                        cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .await?,
                 )
             }
             .map_err(UvError::from)?
@@ -431,9 +453,6 @@ pub async fn export(
             } else {
                 LockMode::Write(interpreter.as_ref().unwrap())
             };
-
-            // Initialize any shared state.
-            let state = UniversalState::default();
 
             match Box::pin(
                 LockOperation::new(

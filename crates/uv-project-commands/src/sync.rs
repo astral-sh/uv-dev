@@ -22,8 +22,8 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     EnvironmentError, EnvironmentUpdate, LinkErrorReporting, ProjectEnvironment,
-    ProjectEnvironmentTarget, ScriptEnvironment, detect_conflicts, sync_from_lock,
-    update_environment,
+    ProjectEnvironmentTarget, ScriptEnvironment, detect_conflicts, discover_workspace_groups,
+    sync_from_lock, update_environment,
 };
 use uv_fs::{PortablePathBuf, Simplified};
 use uv_install_operations::Changelog;
@@ -179,6 +179,8 @@ pub async fn sync(
         None
     };
 
+    let state = UniversalState::default();
+
     let mut selection_members = match &target {
         SyncTarget::Manifest(SyncManifest::Project(project)) => {
             workspace_selection_members(project, &package, all_packages)
@@ -204,11 +206,54 @@ pub async fn sync(
                     Some(&selection_members),
                 )
             } else {
+                let initial = command_workspace_group(
+                    project.workspace(),
+                    workspace_group.as_ref(),
+                    Some(&selection_members),
+                    project
+                        .workspace()
+                        .workspace_groups_with_sources(&settings.resolver.sources)?,
+                )
+                .map_err(UvError::from)?;
+                let probe_packages = initial
+                    .as_ref()
+                    .filter(|group| group.name.is_some() && package.is_empty() && !all_packages)
+                    .map(|group| group.members.iter().cloned().collect::<Vec<_>>());
+                let first_party_exclusions = PackageSelection::from_args(
+                    all_packages,
+                    probe_packages.as_deref().unwrap_or(&package),
+                    project.project_name(),
+                )
+                .first_party_exclusions(
+                    project.workspace(),
+                    project.project_name(),
+                    &install_options,
+                );
                 command_workspace_group(
                     project.workspace(),
                     workspace_group.as_ref(),
                     Some(&selection_members),
-                    &settings.resolver.sources,
+                    discover_workspace_groups(
+                        project.workspace(),
+                        project_dir,
+                        python.as_deref(),
+                        lock_check,
+                        &settings.resolver,
+                        &client_builder,
+                        &state,
+                        &first_party_exclusions,
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        &concurrency,
+                        config_discovery,
+                        cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .await?,
                 )
             }
             .map_err(UvError::from)?
@@ -523,9 +568,6 @@ pub async fn sync(
         }
     }
 
-    // Initialize any shared state.
-    let state = UniversalState::default();
-
     // Determine the lock mode.
     let mode = if let Some(frozen_source) = frozen {
         LockMode::Frozen(frozen_source.into())
@@ -560,7 +602,6 @@ pub async fn sync(
                         &install_options,
                     )
             });
-
             let outcome = if let Some(lock) = selected_frozen_lock.as_ref() {
                 Outcome::Frozen(lock)
             } else {

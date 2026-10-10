@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::env::VarError;
 use std::ffi::OsString;
 use std::fmt::Write;
@@ -34,8 +35,8 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     EnvironmentError, EnvironmentSpecification, LinkErrorReporting, PreferenceLocation,
-    ProjectEnvironment, ProjectEnvironmentTarget, ScriptEnvironment, sync_from_lock,
-    update_environment,
+    ProjectEnvironment, ProjectEnvironmentTarget, ScriptEnvironment, discover_workspace_groups,
+    sync_from_lock, update_environment,
 };
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
@@ -674,7 +675,33 @@ pub async fn run(
                     project.workspace(),
                     workspace_group.as_ref(),
                     Some(&selection_members),
-                    &settings.resolver.sources,
+                    if no_sync {
+                        project
+                            .workspace()
+                            .workspace_groups_with_sources(&settings.resolver.sources)?
+                    } else {
+                        discover_workspace_groups(
+                            project.workspace(),
+                            project_dir,
+                            python.as_deref(),
+                            lock_check,
+                            &settings.resolver,
+                            &client_builder,
+                            &lock_state,
+                            &BTreeSet::new(),
+                            python_preference,
+                            python_arch,
+                            python_downloads,
+                            &install_mirrors,
+                            &concurrency,
+                            config_discovery,
+                            &cache,
+                            workspace_cache,
+                            printer,
+                            preview,
+                        )
+                        .await?
+                    },
                 )
                 .map_err(UvError::from)?
             };

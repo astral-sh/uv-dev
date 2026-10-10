@@ -1,5 +1,6 @@
 pub use crate::extras::*;
 pub use crate::lookahead::*;
+pub use crate::metadata::{cached_requirement_metadata, resolve_requirement_metadata};
 pub use crate::script::{
     ScriptRequirementsError, script_extra_build_requires, script_specification,
 };
@@ -13,6 +14,7 @@ use uv_distribution_types::{Dist, DistErrorKind, Requirement, RequirementSource}
 
 mod extras;
 mod lookahead;
+mod metadata;
 mod script;
 mod source_tree;
 mod sources;

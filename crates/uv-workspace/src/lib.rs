@@ -4,7 +4,9 @@ pub use workspace::{
     RequiresPythonSources, VirtualProject, Workspace, WorkspaceCache, WorkspaceError,
     WorkspaceErrorKind, WorkspaceMember,
 };
-pub use workspace_groups::{ResolvedWorkspaceGroup, WorkspaceGroup, WorkspaceResolution};
+pub use workspace_groups::{
+    ResolvedWorkspaceGroup, WorkspaceGroup, WorkspaceGroupMemberMetadata, WorkspaceResolution,
+};
 
 pub mod dependency_groups;
 pub mod pyproject;
