@@ -766,9 +766,9 @@ impl NoSolutionError {
         &self.cached().0
     }
 
-    /// Return the computed PubGrub hints.
-    fn pubgrub_hints(&self) -> &IndexSet<PubGrubHint> {
-        &self.cached().1
+    /// Return structured hints explaining why dependency resolution failed.
+    pub fn resolution_hints(&self) -> impl Iterator<Item = &PubGrubHint> {
+        self.cached().1.iter()
     }
 
     /// Compute the reduced derivation tree, formatted report string, and hints.
@@ -905,10 +905,7 @@ impl std::error::Error for NoSolutionError {}
 
 impl uv_errors::Hinted for NoSolutionError {
     fn hints(&self) -> uv_errors::Hints<'_> {
-        self.pubgrub_hints()
-            .iter()
-            .map(ToString::to_string)
-            .collect()
+        self.resolution_hints().map(ToString::to_string).collect()
     }
 }
 

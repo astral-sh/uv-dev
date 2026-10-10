@@ -1,3 +1,4 @@
+use crate::lock_report::LockAction;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::ops::Deref;
@@ -886,36 +887,6 @@ impl SyncAction {
     }
 }
 
-/// Represents the action taken during a lock.
-#[derive(Serialize, Debug)]
-#[serde(rename_all = "snake_case")]
-enum LockAction {
-    /// The lockfile was used without checking.
-    Use,
-    /// The lockfile was checked and required no updates.
-    Check,
-    /// The lockfile was updated.
-    Update,
-    /// A new lockfile was created.
-    Create,
-}
-
-impl LockAction {
-    fn message(&self, dry_run: bool) -> Option<&'static str> {
-        let message = if dry_run {
-            match self {
-                Self::Use => return None,
-                Self::Check => "Found up-to-date",
-                Self::Update => "Would update",
-                Self::Create => "Would create",
-            }
-        } else {
-            return None;
-        };
-        Some(message)
-    }
-}
-
 #[derive(Serialize, Debug)]
 struct EnvironmentReport {
     /// The path to the environment.
@@ -1029,19 +1000,7 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome<'_>)> for LockReport {
         Self {
             path: target.lock_path().deref().into(),
             action: match outcome {
-                Outcome::Success(result) => {
-                    match result {
-                        LockResult::Unchanged(..) => match mode {
-                            // When `--frozen` is used, we don't check the lockfile.
-                            LockMode::Frozen(_) => LockAction::Use,
-                            LockMode::DryRun(_) | LockMode::Locked(_, _) | LockMode::Write(_) => {
-                                LockAction::Check
-                            }
-                        },
-                        LockResult::Changed(None, ..) => LockAction::Create,
-                        LockResult::Changed(Some(_), ..) => LockAction::Update,
-                    }
-                }
+                Outcome::Success(result) => LockAction::from_result(mode, result),
                 Outcome::Frozen(_) => LockAction::Use,
                 // TODO(zanieb): We don't have a way to report the outcome of the lock yet
                 Outcome::LockMismatch(..) => LockAction::Check,
