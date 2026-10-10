@@ -42,7 +42,7 @@ use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
-use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockError, LockMode, LockOperation, LockResult, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
@@ -237,37 +237,40 @@ pub async fn run(
                 })
                 .ok();
 
-            // Determine the lock mode.
-            let mode = if let Some(frozen_source) = frozen {
-                LockMode::Frozen(frozen_source.into())
-            } else if let LockCheck::Enabled(lock_check) = lock_check {
-                LockMode::Locked(environment.interpreter(), lock_check)
-            } else {
-                LockMode::Write(environment.interpreter())
-            };
-
             // Generate a lockfile.
-            let lock = match Box::pin(
-                LockOperation::new(
-                    mode,
-                    &settings.resolver,
-                    &client_builder,
-                    &lock_state,
-                    if show_resolution {
-                        Box::new(DefaultResolveLogger)
-                    } else {
-                        Box::new(SummaryResolveLogger)
-                    },
-                    &concurrency,
-                    &cache,
-                    workspace_cache,
-                    printer,
-                    preview,
+            let lock_result = if let Some(frozen_source) = frozen {
+                target
+                    .read_frozen(frozen_source.into())
+                    .await
+                    .map(LockResult::Unchanged)
+            } else {
+                let mode = if let LockCheck::Enabled(lock_check) = lock_check {
+                    LockMode::Locked(environment.interpreter(), lock_check)
+                } else {
+                    LockMode::Write(environment.interpreter())
+                };
+                Box::pin(
+                    LockOperation::new(
+                        mode,
+                        &settings.resolver,
+                        &client_builder,
+                        &lock_state,
+                        if show_resolution {
+                            Box::new(DefaultResolveLogger)
+                        } else {
+                            Box::new(SummaryResolveLogger)
+                        },
+                        &concurrency,
+                        &cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .execute(target),
                 )
-                .execute(target),
-            )
-            .await
-            {
+                .await
+            };
+            let lock = match lock_result {
                 Ok(result) => result.into_lock(),
                 Err(LockError::Resolve(err)) => {
                     return Err(UvError::from(err.with_resolution_context("script")).into());
@@ -751,38 +754,41 @@ pub async fn run(
                     })
                     .ok();
 
-                // Determine the lock mode.
-                let mode = if let Some(frozen_source) = frozen {
-                    LockMode::Frozen(frozen_source.into())
-                } else if let LockCheck::Enabled(lock_check) = lock_check {
-                    LockMode::Locked(venv.interpreter(), lock_check)
-                } else if isolated {
-                    LockMode::DryRun(venv.interpreter())
+                let lock_result = if let Some(frozen_source) = frozen {
+                    LockTarget::Workspace(project.workspace())
+                        .read_frozen(frozen_source.into())
+                        .await
+                        .map(LockResult::Unchanged)
                 } else {
-                    LockMode::Write(venv.interpreter())
-                };
-
-                let result = match Box::pin(
-                    LockOperation::new(
-                        mode,
-                        &settings.resolver,
-                        &client_builder,
-                        &lock_state,
-                        if show_resolution {
-                            Box::new(DefaultResolveLogger)
-                        } else {
-                            Box::new(SummaryResolveLogger)
-                        },
-                        &concurrency,
-                        &cache,
-                        workspace_cache,
-                        printer,
-                        preview,
+                    let mode = if let LockCheck::Enabled(lock_check) = lock_check {
+                        LockMode::Locked(venv.interpreter(), lock_check)
+                    } else if isolated {
+                        LockMode::DryRun(venv.interpreter())
+                    } else {
+                        LockMode::Write(venv.interpreter())
+                    };
+                    Box::pin(
+                        LockOperation::new(
+                            mode,
+                            &settings.resolver,
+                            &client_builder,
+                            &lock_state,
+                            if show_resolution {
+                                Box::new(DefaultResolveLogger)
+                            } else {
+                                Box::new(SummaryResolveLogger)
+                            },
+                            &concurrency,
+                            &cache,
+                            workspace_cache,
+                            printer,
+                            preview,
+                        )
+                        .execute(project.workspace().into()),
                     )
-                    .execute(project.workspace().into()),
-                )
-                .await
-                {
+                    .await
+                };
+                let result = match lock_result {
                     Ok(result) => result,
                     Err(err) => return Err(UvError::from(err).into()),
                 };

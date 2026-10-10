@@ -96,12 +96,17 @@ pub async fn lock(
         LockTarget::Workspace(workspace.workspace())
     };
 
-    // Determine the lock mode.
-    let interpreter;
-    let mode = if let Some(frozen_source) = frozen {
-        LockMode::Frozen(frozen_source.into())
+    // Initialize any shared state.
+    let state = UniversalState::default();
+
+    // Perform the lock operation.
+    let lock_result = if let Some(frozen_source) = frozen {
+        target
+            .read_frozen(frozen_source.into())
+            .await
+            .map(LockResult::Unchanged)
     } else {
-        interpreter = match target {
+        let interpreter = match target {
             LockTarget::Workspace(workspace) => {
                 // Don't enable any groups' requires-python for interpreter discovery
                 let groups = DependencyGroupsWithDefaults::none();
@@ -147,41 +152,36 @@ pub async fn lock(
             .into_interpreter(),
         };
 
-        if let LockCheck::Enabled(lock_check) = lock_check {
+        let mode = if let LockCheck::Enabled(lock_check) = lock_check {
             LockMode::Locked(&interpreter, lock_check)
         } else if dry_run.enabled() {
             LockMode::DryRun(&interpreter)
         } else {
             LockMode::Write(&interpreter)
-        }
+        };
+        Box::pin(
+            LockOperation::new(
+                mode,
+                &settings,
+                &client_builder,
+                &state,
+                Box::new(DefaultResolveLogger),
+                &concurrency,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            )
+            .with_refresh(&refresh)
+            .with_lockfile_contents_check(
+                matches!(&refresh, Refresh::All(..))
+                    && preview.is_enabled(PreviewFeature::LockfileFormatCheck),
+            )
+            .execute(target),
+        )
+        .await
     };
-
-    // Initialize any shared state.
-    let state = UniversalState::default();
-
-    // Perform the lock operation.
-    match Box::pin(
-        LockOperation::new(
-            mode,
-            &settings,
-            &client_builder,
-            &state,
-            Box::new(DefaultResolveLogger),
-            &concurrency,
-            cache,
-            workspace_cache,
-            printer,
-            preview,
-        )
-        .with_refresh(&refresh)
-        .with_lockfile_contents_check(
-            matches!(&refresh, Refresh::All(..))
-                && preview.is_enabled(PreviewFeature::LockfileFormatCheck),
-        )
-        .execute(target),
-    )
-    .await
-    {
+    match lock_result {
         Ok(lock) => {
             if let Some(frozen_source) = frozen {
                 warn_user!(

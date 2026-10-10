@@ -420,9 +420,7 @@ pub async fn sync(
     let state = UniversalState::default();
 
     // Determine the lock mode.
-    let mode = if let Some(frozen_source) = frozen {
-        LockMode::Frozen(frozen_source.into())
-    } else if let LockCheck::Enabled(lock_check) = lock_check {
+    let mode = if let LockCheck::Enabled(lock_check) = lock_check {
         LockMode::Locked(environment.interpreter(), lock_check)
     } else if dry_run.enabled() {
         LockMode::DryRun(environment.interpreter())
@@ -452,8 +450,8 @@ pub async fn sync(
                     )
             });
 
-            let result = if let Some(lock) = frozen_lock {
-                Ok(LockResult::Unchanged(lock))
+            let result = if let Some(lock) = frozen_lock.as_ref() {
+                Ok(Outcome::Frozen(lock))
             } else {
                 Box::pin(
                     LockOperation::new(
@@ -472,9 +470,10 @@ pub async fn sync(
                     .execute(lock_target),
                 )
                 .await
+                .map(Outcome::Success)
             };
             let outcome = match result {
-                Ok(result) => Outcome::Success(result),
+                Ok(outcome) => outcome,
                 Err(LockError::Resolve(err)) => return Err(UvError::from(*err).into()),
                 Err(err @ LockError::LockFormat(..)) => return Err(UvError::user(err).into()),
                 Err(LockError::LockMismatch(prev, cur, lock_source)) => {
@@ -1029,24 +1028,16 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome<'_>)> for LockReport {
         Self {
             path: target.lock_path().deref().into(),
             action: match outcome {
-                Outcome::Success(result) => {
-                    match result {
-                        LockResult::Unchanged(..) => match mode {
-                            // When `--frozen` is used, we don't check the lockfile.
-                            LockMode::Frozen(_) => LockAction::Use,
-                            LockMode::DryRun(_) | LockMode::Locked(_, _) | LockMode::Write(_) => {
-                                LockAction::Check
-                            }
-                        },
-                        LockResult::Changed(None, ..) => LockAction::Create,
-                        LockResult::Changed(Some(_), ..) => LockAction::Update,
-                    }
-                }
+                Outcome::Success(result) => match result {
+                    LockResult::Unchanged(..) => LockAction::Check,
+                    LockResult::Changed(None, ..) => LockAction::Create,
+                    LockResult::Changed(Some(_), ..) => LockAction::Update,
+                },
                 Outcome::Frozen(_) => LockAction::Use,
                 // TODO(zanieb): We don't have a way to report the outcome of the lock yet
                 Outcome::LockMismatch(..) => LockAction::Check,
             },
-            dry_run: matches!(mode, LockMode::DryRun(_)),
+            dry_run: matches!(mode, LockMode::DryRun(_)) && !matches!(outcome, Outcome::Frozen(_)),
         }
     }
 }
