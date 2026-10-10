@@ -13,7 +13,7 @@ use uv_settings::{ToolOptions, ToolOptionsWire};
 
 /// A tool entry.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(try_from = "ToolWire", into = "ToolWire")]
+#[serde(try_from = "ToolWire")]
 pub struct Tool {
     /// The requirements requested by the user during installation.
     ///
@@ -63,25 +63,6 @@ enum RequirementWire {
     /// A PEP 508-compatible requirement. We no longer write these, but there might be receipts out
     /// there that still use them.
     Deprecated(uv_pep508::Requirement<VerbatimParsedUrl>),
-}
-
-impl From<Tool> for ToolWire {
-    fn from(tool: Tool) -> Self {
-        Self {
-            requirements: tool
-                .requirements
-                .into_iter()
-                .map(RequirementWire::Requirement)
-                .collect(),
-            constraints: tool.constraints,
-            overrides: tool.overrides,
-            excludes: tool.excludes,
-            build_constraint_dependencies: tool.build_constraints,
-            python: tool.python,
-            entrypoints: tool.entrypoints,
-            options: tool.options.into(),
-        }
-    }
 }
 
 impl TryFrom<ToolWire> for Tool {
