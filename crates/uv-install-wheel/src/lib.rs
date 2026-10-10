@@ -98,9 +98,9 @@ impl Error {
     /// Return whether this is an expected user-facing failure.
     pub fn is_user_failure(&self) -> bool {
         match self {
+            Self::RecordCsv(error) => !error.is_io_error(),
             Self::InvalidWheel(_)
             | Self::RecordFile { .. }
-            | Self::RecordCsv(_)
             | Self::NonUtf8WheelPath(..)
             | Self::UnsupportedWindowsArch(_)
             | Self::DirectUrlJson(_)
@@ -118,5 +118,36 @@ impl Error {
             | Self::LauncherError(_)
             | Self::Copy(_) => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, read_record, wheel};
+
+    #[test]
+    fn record_csv_io_failure_is_unexpected() -> Result<(), Box<dyn std::error::Error>> {
+        let site_packages = assert_fs::TempDir::new()?;
+        let error = wheel::write_record(site_packages.path(), "missing", Vec::new())
+            .expect_err("a missing destination directory prevents RECORD creation");
+        let Error::RecordCsv(source) = &error else {
+            return Err("expected a CSV I/O error".into());
+        };
+        assert!(source.is_io_error());
+        assert!(!error.is_user_failure());
+        Ok(())
+    }
+
+    #[test]
+    fn record_csv_format_failure_is_user_failure() -> Result<(), Box<dyn std::error::Error>> {
+        let error = read_record(b"example.py,,invalid-size\n".as_slice())
+            .err()
+            .expect("the RECORD size must be an integer");
+        let Error::RecordCsv(source) = &error else {
+            return Err("expected a CSV format error".into());
+        };
+        assert!(!source.is_io_error());
+        assert!(error.is_user_failure());
+        Ok(())
     }
 }
