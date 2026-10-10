@@ -84,7 +84,9 @@ fn python_install() {
     ");
 
     // Similarly, when a requested version is already installed
-    uv_snapshot!(context.filters(), context.python_install().arg("3.15"), @"
+    uv_snapshot!(context.filters(), context.python_install().args([
+        "3.15", "--offline", "--preview-features", "remote-python-download-metadata",
+    ]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Python 3.15 is already installed
@@ -2273,7 +2275,7 @@ fn python_install_relative_broken_link() -> anyhow::Result<()> {
     assert!(context.temp_dir.child("unmanaged-python").try_exists()?);
 
     uv_snapshot!(context.filters(), context.python_install()
-        .args(["--no-config", "--offline", "3.13.1"]), @"
+        .args(["--no-config", "--offline", "3.13.1", "--preview-features", "remote-python-download-metadata"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Installed Python 3.13.1 in [TIME]
@@ -3586,7 +3588,7 @@ fn python_install_pyodide() {
 }
 
 #[test]
-fn python_install_build_version() {
+fn python_install_build_version() -> anyhow::Result<()> {
     use uv_python_managed::platform_key_from_env;
 
     let context = uv_test::test_context_with_versions!(&[])
@@ -3614,6 +3616,15 @@ fn python_install_build_version() {
     let build_file_path = cpython_dir.join("BUILD");
     let build_content = context.read(&build_file_path);
     assert_eq!(build_content, "20240814");
+
+    // Matching explicit builds remain reusable without a remote catalog.
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12", "--offline", "--preview-features", "remote-python-download-metadata"])
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "20240814"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Python 3.12 is already installed
+    ");
 
     // We should find the build
     uv_snapshot!(context.filters(), context.python_find()
@@ -3650,6 +3661,18 @@ fn python_install_build_version() {
     ----- stderr -----
     error: No download found for request: cpython-3.12.10-[PLATFORM]
     ");
+    // An available requested build replaces a different build of the same Python version.
+    cpython_dir.child("BUILD").write_str("20200101")?;
+    uv_snapshot!(context.filters(), context.python_install()
+        .arg("3.12")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "20240814"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.12.5 in [TIME]
+     ~ cpython-3.12.5-[PLATFORM]
+    ");
+    assert_eq!(context.read(build_file_path), "20240814");
+    Ok(())
 }
 
 #[test]

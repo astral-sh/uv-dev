@@ -1695,3 +1695,24 @@ fn python_find_project_requires_python_minor_range() {
     [TEMP_DIR]/child/python3.12
     "#);
 }
+
+/// An optional remote upgrade warning cannot prevent offline use of an installed interpreter.
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_find_prerelease_without_remote_metadata_offline() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_python_sources()
+        .with_managed_python_dirs()
+        .with_filtered_python_install_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context.python_install().arg("3.14.0rc3").assert().success();
+    uv_snapshot!(context.filters(), context.python_find().args([
+        "3.14", "--resolve-links", "--offline", "--preview-features", "remote-python-download-metadata",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.14.0rc3-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+}

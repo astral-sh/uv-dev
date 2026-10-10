@@ -354,6 +354,12 @@ mod tests {
         those scripts, although arbitrary binaries and nonstandard scripts are not guaranteed to be
         relocatable. Use `uv venv --no-relocatable` to opt out.
 
+        ### `remote-python-download-metadata` {#remote-python-download-metadata}
+
+        Fetches available CPython downloads from the remote Python release metadata.
+        Enable it explicitly with `--preview-features remote-python-download-metadata`;
+        `--preview` alone does not enable this feature.
+
         ### `resolution-inputs` {#resolution-inputs}
 
         uv omits redundant runtime constraints and unused overrides, exclusions, dependency

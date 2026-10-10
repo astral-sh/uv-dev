@@ -19817,7 +19817,7 @@ async fn compile_missing_python_download_error_warning() {
         .arg("requirements.in"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: A managed Python download is available for Python 3.10, but an error occurred when attempting to download it.
+    warning: An error occurred when attempting a managed Python download for Python 3.10.
       cause: Failed to download `https://github.com/astral-sh/python-build-standalone/releases/download/[FILE-PATH]`
       cause: error sending request for url (https://github.com/astral-sh/python-build-standalone/releases/download/[FILE-PATH]
       cause: client error (Connect)
@@ -19856,7 +19856,7 @@ async fn compile_missing_python_download_error_warning() {
         .arg("requirements.in"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: A managed Python download is available for Python 3.10, but an error occurred when attempting to download it.
+    warning: An error occurred when attempting a managed Python download for Python 3.10.
       cause: Failed to download `https://github.com/astral-sh/python-build-standalone/releases/download/[FILE-PATH]`
       cause: error sending request for url (https://github.com/astral-sh/python-build-standalone/releases/download/[FILE-PATH]
       cause: client error (Connect)
@@ -19878,7 +19878,7 @@ async fn compile_missing_python_download_error_warning() {
         .arg("requirements.in"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: A managed Python download is available for Python 3.10.19, but an error occurred when attempting to download it.
+    warning: An error occurred when attempting a managed Python download for Python 3.10.19.
       cause: Failed to download `https://github.com/astral-sh/python-build-standalone/releases/download/[FILE-PATH]`
       cause: error sending request for url (https://github.com/astral-sh/python-build-standalone/releases/download/[FILE-PATH]
       cause: client error (Connect)
@@ -20028,5 +20028,57 @@ fn overrides_preserve_alternative_optional_extras() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
+    Ok(())
+}
+
+/// Failure to load remote download metadata still permits an installed build interpreter fallback.
+#[cfg(feature = "test-python-managed")]
+#[tokio::test]
+async fn compile_missing_python_remote_metadata_error_warning() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .without_python_download_cache()
+        .with_managed_python_dirs();
+    let metadata = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/github/versions/main/v1/python-build-standalone.ndjson",
+        ))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&metadata)
+        .await;
+    let scenario = toml::from_str(indoc! {r#"
+        name = "remote-python-metadata-fallback"
+        [root]
+        requires = ["iniconfig==2.0.0"]
+        [expected]
+        satisfiable = true
+        [packages.iniconfig.versions."2.0.0"]
+        requires_python = ">=3.8"
+        sdist = false
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("iniconfig==2.0.0")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--python-version", "3.10", "--no-header", "--no-annotate", "--preview-features", "remote-python-download-metadata"])
+        .arg("--index-url").arg(index.index_url())
+        .env("UV_ASTRAL_MIRROR_URL", metadata.uri())
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==2.0.0
+
+    ----- stderr -----
+    warning: An error occurred when attempting a managed Python download for Python 3.10.
+      cause: Error while fetching remote python downloads NDJSON from 'http://[LOCALHOST]/github/versions/main/v1/python-build-standalone.ndjson'
+      cause: Failed to fetch: http://[LOCALHOST]/github/versions/main/v1/python-build-standalone.ndjson
+      cause: HTTP status server error (503 Service Unavailable) for url (http://[LOCALHOST]/github/versions/main/v1/python-build-standalone.ndjson)
+    warning: The requested Python version 3.10 is not available; 3.12.[X] will be used to build dependencies instead.
+    Resolved 1 package in [TIME]
+    ");
+    metadata.verify().await;
     Ok(())
 }

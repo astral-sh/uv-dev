@@ -1505,6 +1505,21 @@ fn create_venv_with_invalid_amd_gpu_architecture() {
     ");
 }
 
+/// Unavailable remote catalog metadata cannot replace the missing-interpreter error offline.
+#[test]
+fn create_venv_offline_without_catalog_metadata() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_managed_python_dirs()
+        .with_filtered_python_sources();
+    uv_snapshot!(context.filters(), context.venv()
+        .args(["--offline", "--preview-features", "remote-python-download-metadata"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found in [PYTHON SOURCES]
+    ");
+    context.venv.assert(predicate::path::missing());
+}
+
 #[test]
 fn create_venv_unknown_python_minor() {
     let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();

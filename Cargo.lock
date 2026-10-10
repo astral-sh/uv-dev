@@ -7722,6 +7722,7 @@ dependencies = [
  "uv-macros",
  "uv-pep440",
  "uv-platform",
+ "uv-preview",
  "uv-pypi-types",
  "uv-python-interpreter",
  "uv-python-types",
@@ -7732,6 +7733,7 @@ dependencies = [
  "uv-warnings",
  "windows",
  "windows-registry",
+ "wiremock",
  "zstd 0.13.3",
 ]
 

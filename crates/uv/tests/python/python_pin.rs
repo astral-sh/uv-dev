@@ -890,3 +890,58 @@ fn python_pin_rm_versions() -> Result<()> {
 
     Ok(())
 }
+
+/// Reading a local pin does not require uncached remote metadata for optional warnings.
+#[test]
+fn python_pin_show_remote_metadata_offline() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+    "#,
+    )?;
+    context
+        .temp_dir
+        .child(PYTHON_VERSION_FILENAME)
+        .write_str("3.12\n")?;
+    uv_snapshot!(context.filters(), context.python_pin().args([
+        "--offline", "--preview-features", "remote-python-download-metadata",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12
+    ");
+    Ok(())
+}
+
+/// A missing remote catalog does not suppress compatibility checks against the pin itself.
+#[test]
+fn python_pin_show_incompatible_remote_metadata_offline() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#,
+    )?;
+    context
+        .temp_dir
+        .child(PYTHON_VERSION_FILENAME)
+        .write_str("cpython@3.11\n")?;
+    uv_snapshot!(context.filters(), context.python_pin().args([
+        "--offline", "--preview-features", "remote-python-download-metadata",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython@3.11
+
+    ----- stderr -----
+    warning: The pinned Python version `cpython@3.11` is incompatible with the project `requires-python` value of `>=3.12`.
+    ");
+    Ok(())
+}

@@ -134,6 +134,11 @@ pub fn is_enabled(flag: PreviewFeature) -> bool {
     get().is_enabled(flag)
 }
 
+/// Check whether a feature was selected individually instead of by enabling all previews.
+pub fn is_enabled_explicitly(flag: PreviewFeature) -> bool {
+    get().is_enabled_explicitly(flag)
+}
+
 /// Functions for unit tests, do not use from normal code!
 #[cfg(feature = "testing")]
 pub mod test {
@@ -460,6 +465,10 @@ pub enum PreviewFeature {
     /// project resolution, and installation. See [project build dependency
     /// hashes](./projects/build.md#project-build-dependency-hashes) for configuration and exceptions.
     BuildDependencyHashes,
+    /// Fetches available CPython downloads from the remote Python release metadata.
+    /// Enable it explicitly with `--preview-features remote-python-download-metadata`;
+    /// `--preview` alone does not enable this feature.
+    RemotePythonDownloadMetadata,
 }
 
 impl Display for PreviewFeature {
@@ -551,27 +560,46 @@ impl schemars::JsonSchema for MaybePreviewFeature {
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub struct Preview {
     flags: BitFlags<PreviewFeature>,
+    explicit_flags: BitFlags<PreviewFeature>,
 }
 
 impl Debug for Preview {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let flags: Vec<_> = self.flags.iter().collect();
-        f.debug_struct("Preview").field("flags", &flags).finish()
+        let mut debug = f.debug_struct("Preview");
+        debug.field("flags", &flags);
+        if self.explicit_flags != self.flags {
+            let explicit_flags: Vec<_> = self.explicit_flags.iter().collect();
+            debug.field("explicit_flags", &explicit_flags);
+        }
+        debug.finish()
     }
 }
 
 impl Preview {
     #[cfg(any(test, feature = "testing"))]
     fn new(flags: &[PreviewFeature]) -> Self {
+        let flags = flags.iter().copied().fold(BitFlags::empty(), BitOr::bitor);
         Self {
-            flags: flags.iter().copied().fold(BitFlags::empty(), BitOr::bitor),
+            flags,
+            explicit_flags: flags,
         }
     }
 
     pub fn all() -> Self {
-        Self {
-            flags: BitFlags::all(),
-        }
+        Self::default().with_all_features()
+    }
+
+    /// Enable every preview feature while retaining individually selected features.
+    #[must_use]
+    pub fn with_all_features(mut self) -> Self {
+        self.flags = BitFlags::all();
+        self
+    }
+
+    /// Check whether this feature was named explicitly in the configuration.
+    fn is_enabled_explicitly(&self, flag: PreviewFeature) -> bool {
+        self.explicit_flags.contains(flag)
     }
 
     /// Check if a single feature is enabled.
@@ -604,7 +632,10 @@ impl Preview {
             }
         }
 
-        Self { flags }
+        Self {
+            flags,
+            explicit_flags: flags,
+        }
     }
 }
 
@@ -711,8 +742,10 @@ mod tests {
                 test::with_features(&[PreviewFeature::Pylock, PreviewFeature::WorkspaceMetadata]);
             assert!(!is_enabled(PreviewFeature::InitProjectFlag));
             assert!(is_enabled(PreviewFeature::Pylock));
+            assert!(is_enabled_explicitly(PreviewFeature::Pylock));
             assert!(is_enabled(PreviewFeature::WorkspaceMetadata));
             assert!(!is_enabled(PreviewFeature::AuthHelper));
+            assert!(!is_enabled_explicitly(PreviewFeature::AuthHelper));
         }
         {
             let _guard =
@@ -722,6 +755,31 @@ mod tests {
             assert!(!is_enabled(PreviewFeature::WorkspaceMetadata));
             assert!(is_enabled(PreviewFeature::AuthHelper));
         }
+    }
+
+    #[test]
+    fn test_all_named_preview_features_are_explicit() {
+        let features = PreviewFeature::metadata()
+            .iter()
+            .map(|(feature, _, _)| *feature)
+            .collect::<Vec<_>>();
+        let _guard = test::with_features(&features);
+
+        assert!(is_enabled(PreviewFeature::RemotePythonDownloadMetadata));
+        assert!(is_enabled_explicitly(
+            PreviewFeature::RemotePythonDownloadMetadata
+        ));
+    }
+
+    #[test]
+    fn test_enable_all_preserves_explicit_features() -> Result<(), EmptyPreviewFeatureNameError> {
+        let feature = PreviewFeature::RemotePythonDownloadMetadata;
+        assert!(!Preview::all().is_enabled_explicitly(feature));
+        let preview = Preview::from_str("remote-python-download-metadata")?.with_all_features();
+        assert!(preview.all_enabled());
+        assert!(preview.is_enabled_explicitly(feature));
+        assert!(!preview.is_enabled_explicitly(PreviewFeature::Pylock));
+        Ok(())
     }
 
     #[test]
