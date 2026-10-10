@@ -285,7 +285,11 @@ pub async fn list(
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            writeln!(printer.stdout(), "{}", serde_json::to_string(&data)?)?;
+            writeln!(
+                printer.stdout_important(),
+                "{}",
+                serde_json::to_string(&data)?
+            )?;
         }
         PythonListFormat::Text => {
             // Compute the width of the first column.
