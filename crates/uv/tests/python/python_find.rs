@@ -1831,3 +1831,50 @@ fn python_find_project_requires_python_minor_range() {
     [TEMP_DIR]/child/python3.12
     "#);
 }
+
+/// Script-configured non-isolated builds use the ordinary script environment for discovery.
+#[test]
+fn python_find_script_shared_no_build_isolation() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # [tool.uv]
+        # no-build-isolation = true
+        # ///
+    "#})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "--build-isolation",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--preview-features", "shared-script-environments", "--script", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]
+    ");
+    Ok(())
+}

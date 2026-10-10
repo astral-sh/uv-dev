@@ -143,7 +143,7 @@ pub async fn find_script(
     printer: Printer,
 ) -> Result<ExitStatus> {
     let interpreter = match ScriptInterpreter::discover(
-        ScriptEnvironmentMode::from_script(script, ActiveEnvironment::Ignore, preview),
+        ScriptEnvironmentMode::from_script(script, ActiveEnvironment::Ignore, None, preview),
         script,
         None,
         client_builder,

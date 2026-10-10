@@ -3433,3 +3433,72 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
 
     Ok(())
 }
+
+/// Read-only metadata follows the script's non-isolated build policy even if a shared overlay exists.
+#[test]
+fn workspace_metadata_shared_script_no_build_isolation() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # [tool.uv]
+        # no-build-isolation-package = ["example"]
+        # ///
+    "#})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "--build-isolation",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    let output = context
+        .workspace_metadata()
+        .args([
+            "--preview-features",
+            "workspace-metadata,shared-script-environments",
+            "--offline",
+            "--no-index",
+            "--script",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"], @r#"
+        {
+          "python": {
+            "implementation": "cpython",
+            "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
+            "version": "3.12.[X]"
+          },
+          "root": "[CACHE_DIR]/environments-v2/script-[HASH]"
+        }
+        "#);
+    });
+    context
+        .temp_dir
+        .child("script.py.lock")
+        .assert(predicates::path::missing());
+    Ok(())
+}

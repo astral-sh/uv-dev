@@ -9639,3 +9639,404 @@ fn run_pep723_shared_data_preserves_local_edits() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Copied shared launchers must execute the overlay interpreter when its path contains spaces.
+#[test]
+#[cfg(unix)]
+fn run_pep723_shared_entrypoints_with_spaces() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cache = context.temp_dir.child("cache with spaces");
+    let context = context.with_cache_dir(cache.path());
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"shared-cli".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "shared_cli/cli.py",
+                indoc! {r"
+                def main():
+                    import overlay_value
+                    print(overlay_value.VALUE)
+            "},
+            ),
+            (
+                "shared_cli-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nuv-shared-command = shared_cli.cli:main\n",
+            ),
+        ],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-cli==1.0.0"]
+        # ///
+        from pathlib import Path
+        import subprocess
+        import sysconfig
+        import sys
+        Path("script-python").write_text(sys.executable)
+        Path("entrypoint-path").write_text(str(Path(sysconfig.get_path("scripts")) / "uv-shared-command"))
+        Path("manifest-path").write_text(str(Path(sys.prefix) / ".uv-shared-entrypoints.json"))
+        Path(sysconfig.get_path("purelib"), "overlay_value.py").write_text("VALUE = 'overlay'\n")
+        subprocess.run([str(Path(sysconfig.get_path("scripts")) / "uv-shared-command")], check=True)
+        subprocess.run(["uv-shared-command"], check=True)
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    overlay
+    overlay
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-cli==1.0.0
+    ");
+    // Legacy manifests contain launchers whose absolute shebang cannot address a spaced path.
+    let entrypoint = context.read("entrypoint-path");
+    let launcher = context.read(&entrypoint);
+    let (_, body) = launcher
+        .split_once("\n' '''\n")
+        .context("Expected a shell wrapper")?;
+    fs_err::write(
+        &entrypoint,
+        format!("#!{}\n{body}", context.read("script-python")),
+    )?;
+    let manifest_path = context.read("manifest-path");
+    let mut manifest: serde_json::Value = serde_json::from_str(&context.read(&manifest_path))?;
+    manifest
+        .as_object_mut()
+        .context("Expected a manifest object")?
+        .remove("version");
+    fs_err::write(manifest_path, serde_json::to_vec(&manifest)?)?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    overlay
+    overlay
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// A long overlay path needs a shell wrapper even when it contains no spaces.
+#[test]
+#[cfg(unix)]
+fn run_pep723_shared_entrypoints_with_long_paths() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cache = context
+        .temp_dir
+        .child("a".repeat(160))
+        .child("b".repeat(160))
+        .child("c".repeat(160));
+    let context = context.with_cache_dir(cache.path());
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"shared-cli".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "shared_cli/cli.py",
+                indoc! {r"
+                def main():
+                    import overlay_value
+                    print(overlay_value.VALUE)
+            "},
+            ),
+            (
+                "shared_cli-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nuv-shared-command = shared_cli.cli:main\n",
+            ),
+        ],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["shared-cli==1.0.0"]
+        # ///
+        from pathlib import Path
+        import subprocess
+        import sysconfig
+        Path(sysconfig.get_path("purelib"), "overlay_value.py").write_text("VALUE = 'overlay'\n")
+        subprocess.run([str(Path(sysconfig.get_path("scripts")) / "uv-shared-command")], check=True)
+        subprocess.run(["uv-shared-command"], check=True)
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--find-links", "wheels", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    overlay
+    overlay
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-cli==1.0.0
+    ");
+    Ok(())
+}
+
+/// Non-isolated script builds use dependencies installed in the script environment.
+#[test]
+fn run_pep723_shared_no_build_isolation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (backend_name, backend) = generate_wheel_with_files(
+        &"fixture-backend".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "fixture_backend/backend.py",
+            indoc! {r#"
+            from pathlib import Path
+            import shutil
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                name = "example-1.0.0-py3-none-any.whl"
+                shutil.copyfile(name, Path(wheel_directory) / name)
+                return name
+        "#},
+        )],
+    );
+    wheels.child(backend_name).write_binary(&backend)?;
+    let source = context.temp_dir.child("example");
+    source.create_dir_all()?;
+    source.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1.0.0"
+        [build-system]
+        requires = []
+        build-backend = "fixture_backend.backend"
+    "#})?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("example/value.py", "VALUE = 'built'\n")],
+    );
+    source.child(filename).write_binary(&wheel)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # [tool.uv.sources]
+        # example = { path = "example" }
+        # ///
+        from pathlib import Path
+        import sys
+        Path("script-python").write_text(sys.executable)
+    "#})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "--no-build-isolation",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    context
+        .pip_install()
+        .args([
+            "--no-index",
+            "--offline",
+            "--find-links",
+            "wheels",
+            "fixture-backend",
+        ])
+        .arg("--python")
+        .arg(context.read("script-python"))
+        .assert()
+        .success();
+    script.write_str(&format!(
+        "{}\nfrom example.value import VALUE\nprint(VALUE)\n",
+        context
+            .read("script.py")
+            .replace("dependencies = []", "dependencies = [\"example\"]")
+    ))?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--no-build-isolation", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    built
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0 (from file://[TEMP_DIR]/example)
+    ");
+    Ok(())
+}
+
+/// A per-package script build policy retains the environment containing its build backend.
+#[test]
+fn run_pep723_shared_no_build_isolation_package() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (backend_name, backend) = generate_wheel_with_files(
+        &"fixture-backend".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "fixture_backend/backend.py",
+            indoc! {r#"
+            from pathlib import Path
+            import shutil
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                name = "example-1.0.0-py3-none-any.whl"
+                shutil.copyfile(name, Path(wheel_directory) / name)
+                return name
+        "#},
+        )],
+    );
+    wheels.child(backend_name).write_binary(&backend)?;
+    let source = context.temp_dir.child("example");
+    source.create_dir_all()?;
+    source.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1.0.0"
+        [build-system]
+        requires = []
+        build-backend = "fixture_backend.backend"
+    "#})?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("example/value.py", "VALUE = 'built'\n")],
+    );
+    source.child(filename).write_binary(&wheel)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # [tool.uv]
+        # no-build-isolation-package = ["example"]
+        # [tool.uv.sources]
+        # example = { path = "example" }
+        # ///
+        from pathlib import Path
+        import sys
+        Path("script-python").write_text(sys.executable)
+    "#})?;
+    context
+        .run()
+        .args([
+            "--preview-features",
+            "shared-script-environments",
+            "--offline",
+            "--no-index",
+            "script.py",
+        ])
+        .assert()
+        .success();
+    context
+        .pip_install()
+        .args([
+            "--no-index",
+            "--offline",
+            "--find-links",
+            "wheels",
+            "fixture-backend",
+        ])
+        .arg("--python")
+        .arg(context.read("script-python"))
+        .assert()
+        .success();
+    script.write_str(&format!(
+        "{}\nfrom example.value import VALUE\nprint(VALUE)\n",
+        context
+            .read("script.py")
+            .replace("dependencies = []", "dependencies = [\"example\"]")
+    ))?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    built
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0 (from file://[TEMP_DIR]/example)
+    ");
+    Ok(())
+}
+
+/// An explicit build-isolation override can enable sharing despite the script's default policy.
+#[test]
+fn run_pep723_shared_build_isolation_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # [tool.uv]
+        # no-build-isolation = true
+        # ///
+        from pathlib import Path
+        import sys
+        print(Path(sys.prefix, ".uv-shared-entrypoints.json").is_file())
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    False
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "shared-script-environments", "--offline", "--no-index", "--build-isolation", "script.py"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    True
+
+    ----- stderr -----
+    Resolved in [TIME]
+    Checked in [TIME]
+    ");
+    Ok(())
+}

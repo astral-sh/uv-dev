@@ -42,6 +42,8 @@ use uv_environment_operations::{
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink, normalize_path};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
+#[cfg(unix)]
+use uv_install_wheel::format_shebang;
 use uv_install_wheel::read_record;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
@@ -408,8 +410,12 @@ pub async fn run(
                 )
                 .await?
                 .into_inner();
-                let environment_mode =
-                    ScriptEnvironmentMode::from_script((&script).into(), active, preview);
+                let environment_mode = ScriptEnvironmentMode::from_script(
+                    (&script).into(),
+                    active,
+                    Some(&settings.resolver.build_isolation),
+                    preview,
+                );
                 let environment = ScriptEnvironment::get_or_init(
                     environment_mode,
                     (&script).into(),
@@ -2169,8 +2175,12 @@ fn copy_environment_entrypoints(
     Ok(copied)
 }
 
+const SHARED_ENVIRONMENT_FILES_VERSION: u8 = 1;
+
 #[derive(PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct SharedEnvironmentFiles {
+    #[serde(default)]
+    version: u8,
     source: PathBuf,
     names: Vec<PathBuf>,
     #[serde(default)]
@@ -2224,6 +2234,10 @@ fn sync_shared_environment_files(
     let source_changed = previous
         .as_ref()
         .is_none_or(|previous| previous.source != shared.sys_prefix());
+    let entrypoints_changed = source_changed
+        || previous
+            .as_ref()
+            .is_none_or(|previous| previous.version != SHARED_ENVIRONMENT_FILES_VERSION);
     let owned_files = installed_environment_files(environment)?;
     let owned_data = owned_files
         .iter()
@@ -2241,7 +2255,7 @@ fn sync_shared_environment_files(
         if owned_files.contains(normalize_path(&path).as_ref()) {
             continue;
         }
-        if source_changed {
+        if entrypoints_changed {
             match fs_err::remove_file(&path) {
                 Ok(()) => {}
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -2279,6 +2293,7 @@ fn sync_shared_environment_files(
         )?
     };
     let copied = SharedEnvironmentFiles {
+        version: SHARED_ENVIRONMENT_FILES_VERSION,
         source: shared.sys_prefix().to_path_buf(),
         names: retained,
         data: Some(data),
@@ -2465,14 +2480,25 @@ fn copy_entrypoint(
 ' '''
 "#,
         )
-        // Or, an absolute path shebang
+        // Or, an absolute path shebang, including a shell wrapper for long or spaced paths.
         .or_else(|| contents.strip_prefix(&format!("#!{}\n", previous_executable.display())))
+        .or_else(|| {
+            contents.strip_prefix(&format!(
+                "{}\n",
+                format_shebang(previous_executable, "posix", false)
+            ))
+        })
         // If the previous executable ends with `python3`, check for a shebang with `python` too
         .or_else(|| {
             previous_executable
                 .to_str()
                 .and_then(|path| path.strip_suffix("3"))
-                .and_then(|path| contents.strip_prefix(&format!("#!{path}\n")))
+                .and_then(|path| {
+                    contents.strip_prefix(&format!("#!{path}\n")).or_else(|| {
+                        contents
+                            .strip_prefix(&format!("{}\n", format_shebang(path, "posix", false)))
+                    })
+                })
         })
     else {
         // If it's not a Python shebang, we'll skip it
@@ -2483,7 +2509,10 @@ fn copy_entrypoint(
         return Ok(false);
     };
 
-    let contents = format!("#!{}\n{}", python_executable.display(), contents);
+    let contents = format!(
+        "{}\n{contents}",
+        format_shebang(python_executable, "posix", false)
+    );
     let mode = fs_err::metadata(source)?.permissions().mode();
     let mut file = fs_err::OpenOptions::new()
         .create_new(true)

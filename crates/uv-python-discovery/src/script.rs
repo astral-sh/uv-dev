@@ -11,7 +11,7 @@ use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
 use uv_client::BaseClientBuilder;
 use uv_command_support::Printer;
-use uv_configuration::ActiveEnvironment;
+use uv_configuration::{ActiveEnvironment, BuildIsolation};
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
 use uv_pep440::Version;
@@ -126,16 +126,43 @@ pub enum ScriptEnvironmentMode {
 
 impl ScriptEnvironmentMode {
     /// Select the environment layout used when running a script.
+    ///
+    /// Resolved build isolation takes precedence over the script configuration. Discovery commands
+    /// without resolver settings use the script configuration directly.
     pub fn from_script(
         script: Pep723ItemRef<'_>,
         active: ActiveEnvironment,
+        build_isolation: Option<&BuildIsolation>,
         preview: Preview,
     ) -> Self {
-        let has_extra_build_dependencies = script
+        let options = script
             .metadata()
             .tool
             .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|tool| tool.uv.as_ref());
+        let script_build_isolation;
+        let build_isolation = if let Some(build_isolation) = build_isolation {
+            build_isolation
+        } else {
+            script_build_isolation = options
+                .and_then(|uv| {
+                    BuildIsolation::from_args(
+                        uv.top_level.no_build_isolation,
+                        uv.top_level
+                            .no_build_isolation_package
+                            .clone()
+                            .unwrap_or_default(),
+                    )
+                })
+                .unwrap_or_default();
+            &script_build_isolation
+        };
+        let builds_are_isolated = match build_isolation {
+            BuildIsolation::Isolate => true,
+            BuildIsolation::Shared => false,
+            BuildIsolation::SharedPackage(packages) => packages.is_empty(),
+        };
+        let has_extra_build_dependencies = options
             .and_then(|uv| uv.extra_build_dependencies.as_ref())
             .is_some_and(|dependencies| !dependencies.is_empty());
         let has_lockfile = match script {
@@ -146,6 +173,7 @@ impl ScriptEnvironmentMode {
             && active != ActiveEnvironment::Prefer
             && script.metadata().dependencies.is_some()
             && !has_extra_build_dependencies
+            && builds_are_isolated
             && !has_lockfile
         {
             Self::Shared
