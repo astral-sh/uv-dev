@@ -328,7 +328,13 @@ async fn do_lock(
     } = settings;
 
     // Collect the requirements, etc.
-    let members = target.members();
+    let resolution_roots = target.resolution_roots();
+    let workspace_member_names = match target {
+        LockTarget::Workspace(workspace) => workspace
+            .resolution_roots()
+            .map(|_| workspace.packages().keys().cloned().collect()),
+        LockTarget::Script(_) => None,
+    };
     let packages = target.packages();
     let required_members = target.required_members();
     let workspace_default_groups = match target {
@@ -774,12 +780,13 @@ async fn do_lock(
             &validation_build_dispatch,
             concurrency.downloads_semaphore.clone(),
         )
-        .with_first_party_packages(&first_party_packages);
+        .with_first_party_packages(Some(&first_party_packages));
         match Box::pin(ValidatedLock::validate(
             existing_lock,
             target.install_path(),
             packages,
-            &members,
+            &resolution_roots,
+            workspace_member_names.as_ref(),
             required_members,
             &requirements,
             &dependency_groups,
@@ -861,7 +868,7 @@ async fn do_lock(
                 concurrency.downloads_semaphore.clone(),
             )
             .with_recorder(recorder.clone())
-            .with_first_party_packages(&first_party_packages);
+            .with_first_party_packages(Some(&first_party_packages));
 
             // Determine whether we can reuse the existing package versions.
             let versions_lock = existing_lock.as_ref().and_then(|lock| match &lock {
@@ -913,20 +920,23 @@ async fn do_lock(
                     }),
             );
 
-            // Expand the available extras for each workspace member.
-            let member_requirements = ExtrasResolver::new(&hasher, state.index(), database)
+            // Every workspace member retains its local source, even when it is only a transitive
+            // dependency of a resolution root.
+            let workspace_members = target
+                .members_requirements()
+                .map(|requirement| (requirement.name, requirement.source))
+                .collect();
+
+            // Expand the available extras only for workspace resolution roots.
+            let root_requirements = ExtrasResolver::new(&hasher, state.index(), database)
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(target.members_requirements())
+                .resolve(target.resolution_root_requirements())
                 .await
                 .map_err(ResolveError::from)?;
-            let workspace_members = member_requirements
-                .iter()
-                .map(|requirement| (requirement.name.clone(), requirement.source.clone()))
-                .collect();
 
             // Resolve the requirements.
             let (resolution, _) = uv_resolve_operations::resolve(
-                member_requirements
+                root_requirements
                     .into_iter()
                     .chain(target.group_requirements())
                     .chain(requirements.iter().cloned())
@@ -950,6 +960,7 @@ async fn do_lock(
                 // The root is always null in workspaces, it "depends on" the projects
                 None,
                 workspace_members,
+                Some(&first_party_packages),
                 &extras,
                 &groups,
                 preferences,
@@ -981,7 +992,7 @@ async fn do_lock(
             uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
             let manifest = ResolverManifest::new(
-                members,
+                resolution_roots,
                 requirements,
                 constraints,
                 overrides,
@@ -990,6 +1001,7 @@ async fn do_lock(
                 dependency_groups,
                 dependency_metadata.values().cloned(),
             )
+            .with_workspace_members(workspace_member_names)
             .relative_to(target.install_path())?;
 
             let previous = existing_lock.map(ValidatedLock::into_lock);

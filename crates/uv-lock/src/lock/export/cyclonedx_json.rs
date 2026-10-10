@@ -16,7 +16,7 @@ use percent_encoding::{AsciiSet, CONTROLS, percent_encode};
 use rustc_hash::FxHashSet;
 
 use uv_configuration::{
-    DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults, InstallOptions,
+    DependencyGroupsWithDefaults, ExportFormat, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_fs::PortablePath;
 use uv_normalize::PackageName;
@@ -328,6 +328,7 @@ pub fn from_lock<'lock>(
     // Extract the packages from the lock file.
     let ExportableRequirements(mut nodes) = ExportableRequirements::from_lock(
         target,
+        ExportFormat::CycloneDX1_5,
         prune,
         extras,
         groups,
@@ -371,7 +372,11 @@ pub fn from_lock<'lock>(
     let workspace_member_ids = nodes
         .iter()
         .filter_map(|node| {
-            if target.lock().members().contains(&node.package.id.name) {
+            if target
+                .lock()
+                .workspace_members()
+                .contains(&node.package.id.name)
+            {
                 Some(&node.package.id)
             } else {
                 None

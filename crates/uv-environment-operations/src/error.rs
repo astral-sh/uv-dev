@@ -25,8 +25,26 @@ pub enum EnvironmentError {
     #[error("Group `{0}` is not defined in any project's `dependency-groups` table")]
     MissingGroupProjects(GroupName),
 
+    #[error("Group `{group}` for workspace member `{package}` was not resolved")]
+    UnresolvedWorkspaceGroup {
+        package: PackageName,
+        group: GroupName,
+    },
+
     #[error("PEP 723 scripts do not support dependency groups, but group `{0}` was specified")]
     MissingGroupScript(GroupName),
+
+    #[error("Dependencies for workspace member `{0}` were not resolved for this selection")]
+    UnresolvedWorkspacePackage(PackageName),
+
+    #[error("Extra `{extra}` for workspace member `{package}` was not resolved for this selection")]
+    UnresolvedWorkspaceExtra {
+        package: PackageName,
+        extra: ExtraName,
+    },
+
+    #[error("Python requirement for workspace member `{0}` is missing from the lockfile")]
+    MissingWorkspaceMemberPython(PackageName),
 
     #[error("Extra `{0}` is not defined in the `optional-dependencies` table for `{1}`")]
     MissingExtraProject(ExtraName, PackageName),
@@ -212,6 +230,10 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::MissingGroupProject(..)
             | EnvironmentError::MissingGroupProjects(..)
             | EnvironmentError::MissingGroupScript(..)
+            | EnvironmentError::UnresolvedWorkspacePackage(..)
+            | EnvironmentError::UnresolvedWorkspaceGroup { .. }
+            | EnvironmentError::UnresolvedWorkspaceExtra { .. }
+            | EnvironmentError::MissingWorkspaceMemberPython(..)
             | EnvironmentError::MissingExtraProject(..)
             | EnvironmentError::MissingExtraProjects(..)
             | EnvironmentError::MissingExtraScript(..)
@@ -255,6 +277,16 @@ impl From<EnvironmentError> for UvError {
 impl uv_errors::Hinted for EnvironmentError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
+            Self::UnresolvedWorkspacePackage(package) => format!(
+                "Add `{package}` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependencies."
+            ).into(),
+            Self::UnresolvedWorkspaceExtra { package, .. } => format!(
+                "Add `{package}` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies."
+            ).into(),
+            Self::MissingWorkspaceMemberPython(_) => "Run `uv lock` to record the selected workspace member's Python requirement.".into(),
+            Self::UnresolvedWorkspaceGroup { package, .. } => format!(
+                "Add `{package}` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependency groups."
+            ).into(),
             Self::Lock(error) => error.hints(),
             Self::Python(error) => error.hints(),
             Self::PythonSelection(error) => error.hints(),
