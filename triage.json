@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13829,
+        "title": "`[tool.uv.sources]` should warn if it has no effect on any platform",
+        "url": "https://github.com/astral-sh/uv/issues/13829",
+        "state": "open",
+        "reason": "Requests diagnostics for ineffective dependency configuration, including absent dependencies and disjoint markers. Maintainer comments require considering all workspace members. Closely related validation design, but it concerns sources rather than unused constraints, build constraints, or overrides."
+      },
+      {
+        "kind": "issue",
+        "number": 18792,
+        "title": "Prune stale `exclude-newer-package` entries on `uv lock`",
+        "url": "https://github.com/astral-sh/uv/issues/18792",
+        "state": "open",
+        "reason": "Describes temporary dependency workarounds accumulating as dead configuration and requests detection or removal during locking. Its trigger is an expired cooldown exception, and its requested action is pruning; this report requests errors for constraint or override entries after dependencies disappear."
+      },
+      {
+        "kind": "issue",
+        "number": 15006,
+        "title": "Feature request: `pyproject.toml` formatting and validation",
+        "url": "https://github.com/astral-sh/uv/issues/15006",
+        "state": "open",
+        "reason": "Requests configuration validation, including tool-specific semantics, through a possible check interface. Maintainers describe it as unlikely in the near term and mention Ruff's existing TOML validation. It does not specifically request resolution-aware detection of unused dependency policies."
+      },
+      {
+        "kind": "issue",
+        "number": 16314,
+        "title": "`ruff check` equivalent to `uv format` for `ruff format`",
+        "url": "https://github.com/astral-sh/uv/issues/16314",
+        "state": "open",
+        "reason": "Tracks Ruff lint integration. A maintainer closed astral-sh/uv#21392 into this discussion while expressing a preference for combining Ruff and ty through uv check. Relevant to the proposed lint interface, but it does not define an unused-constraint rule."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Separately searched constraint-dependencies, build-constraint-dependencies, override-dependencies, and require-use-dependencies; expanded to unused, stale, obsolete, orphan, redundant, warnings, no effect, pruning, configuration validation, and uv check/Ruff integration. Fix-oriented PR searches covered the setting names, unused constraints/overrides, pruning, resolution-inputs, and astral-sh/uv#13829. Inspected candidate bodies and comments and followed discussion chains to astral-sh/uv#13829 and astral-sh/uv#16314. Ruled out astral-sh/uv#13904 (source-code usage analysis), astral-sh/uv#19261 (constraints ignored depending on working directory), astral-sh/uv#12276 (invalid manually edited lockfiles), and astral-sh/uv#18921 (cooldown bypass implementation). No matching implementation or regression fix was found. Some supplemental queries were rate-limited; subsequent explicit PR status searches succeeded."
+  },
+  "type": "enhancement",
+  "type_reason": "The report requests new opt-in validation for stale configuration. Constraints and unscoped overrides intentionally do not require their packages to be present, and existing tests accept constraints left after dependency removal. No incorrect resolution or regression is reported. The related discussions address different settings or broader lint infrastructure, so none establishes a duplicate.",
+  "summary": "No duplicate found. The closest discussions cover ineffective sources, stale cooldown exceptions, pyproject.toml validation, and Ruff integration.",
+  "draft_response": "Your proposed opt-in error or lint would be new functionality: constraints and overrides currently allow entries for packages that are not otherwise required. Related requests cover ineffective sources in astral-sh/uv#13829 and stale cooldown exceptions in astral-sh/uv#18792, but neither covers these settings.\n\nThe next step is to define “unused” across workspace members, environment markers, resolver backtracking, and build dependencies before choosing a flag or lint interface. Absence from the final runtime lockfile alone is insufficient: a setting can still affect resolution. `uv check` currently runs ty; broader lint integration is discussed in astral-sh/uv#16314."
+}
