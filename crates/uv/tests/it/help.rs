@@ -1,6 +1,31 @@
+use anyhow::Result;
+
 use uv_static::EnvVars;
 
 use uv_test::uv_snapshot;
+
+#[test]
+fn sync_system_suggests_project_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    fs_err::write(context.temp_dir.path().join("uv.toml"), "invalid = [")?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["--offline", "--no-python-downloads", "--config-file", "uv.toml", "sync", "--no-index", "--system"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: unexpected argument '--system' found
+
+      tip: set `UV_PROJECT_ENVIRONMENT` to the target environment path instead
+
+    Usage: uv sync [OPTIONS]
+
+    For more information, try '--help'.
+    ");
+
+    assert!(!context.temp_dir.path().join(".venv").exists());
+    assert!(!context.temp_dir.path().join("uv.lock").exists());
+    Ok(())
+}
 
 #[test]
 fn cert_is_limited_to_pip() {
