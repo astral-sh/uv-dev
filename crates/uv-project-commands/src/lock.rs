@@ -44,13 +44,19 @@ use crate::{ProjectError, ScriptPath};
 
 pub(crate) fn select_workspace_group_result(
     result: LockResult,
+    selected_lock: Option<Lock>,
     name: Option<&GroupName>,
     members: &BTreeSet<PackageName>,
 ) -> Result<LockResult, ProjectError> {
-    Ok(match result {
-        LockResult::Unchanged(lock) => {
-            LockResult::Unchanged(select_workspace_group_lock(lock, name, members)?)
+    let select_current = |lock| {
+        if let Some(selected_lock) = selected_lock {
+            Ok(selected_lock)
+        } else {
+            select_workspace_group_lock(lock, name, members)
         }
+    };
+    Ok(match result {
+        LockResult::Unchanged(lock) => LockResult::Unchanged(select_current(lock)?),
         LockResult::Changed(previous, lock) => {
             let previous = match previous {
                 Some(previous) if !previous.workspace_groups().is_empty() => {
@@ -58,7 +64,7 @@ pub(crate) fn select_workspace_group_result(
                 }
                 previous => previous,
             };
-            LockResult::Changed(previous, select_workspace_group_lock(lock, name, members)?)
+            LockResult::Changed(previous, select_current(lock)?)
         }
     })
 }
@@ -230,7 +236,7 @@ impl CommandWorkspaceSelection {
         }
     }
 
-    /// Reuse the graph projected while deriving a frozen selection's Python domain.
+    /// Reuse the graph projected while deriving a selection's Python domain.
     pub(crate) fn take_selected_lock(&mut self) -> Option<Lock> {
         match self {
             Self::Pending(_) => None,
@@ -258,7 +264,7 @@ impl PendingCommandWorkspaceSelection {
         );
         Ok(FinalizedCommandWorkspaceSelection {
             scope: self.scope,
-            selected_lock: None,
+            selected_lock: Some(Box::new(selected)),
         })
     }
 }

@@ -1489,8 +1489,11 @@ async fn lock_and_sync(
         active,
     }) = pending_environment
     {
-        let finalized = selection.finalize(&lock)?;
+        let mut finalized = selection.finalize(&lock)?;
         let workspace = finalized.environment_workspace(project.workspace());
+        if let Some(selected_lock) = finalized.take_selected_lock() {
+            lock = selected_lock;
+        }
         Some(
             ProjectEnvironment::get_or_init(
                 ProjectEnvironmentTarget::from(&workspace),

@@ -774,6 +774,7 @@ pub async fn run(
             let extras = extras.with_defaults(default_extras);
 
             let mut resolved_before_environment = None;
+            let mut projected_resolved_lock = None;
             let group_workspace = match workspace_group {
                 Some(selection) if no_sync => {
                     Some(selection.provisional_workspace(project.workspace(), &selection_members))
@@ -836,7 +837,8 @@ pub async fn run(
                     )
                     .await
                     .map_err(UvError::from)?;
-                    let finalized = selection.finalize(result.lock())?;
+                    let mut finalized = selection.finalize(result.lock())?;
+                    projected_resolved_lock = finalized.take_selected_lock();
                     resolved_before_environment = Some(result);
                     Some(finalized.environment_workspace(project.workspace()))
                 }
@@ -993,6 +995,7 @@ pub async fn run(
                 } else if let Some(result) = resolved_before_environment.take() {
                     select_workspace_group_result(
                         result,
+                        projected_resolved_lock.take(),
                         selected_workspace_group.as_ref(),
                         &selection_members,
                     )?
@@ -1020,6 +1023,7 @@ pub async fn run(
                     {
                         Ok(result) => select_workspace_group_result(
                             result,
+                            None,
                             selected_workspace_group.as_ref(),
                             &selection_members,
                         )?,

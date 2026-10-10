@@ -357,6 +357,7 @@ pub async fn sync(
     // Pending member domains can only expose a provisional interpreter probe. Complete the
     // selection before constructing the workspace used to create or replace an environment.
     let mut resolved_before_environment = None;
+    let mut projected_resolved_lock = None;
     let group_workspace = if let SyncTarget::Manifest(SyncManifest::Project(project)) = &target {
         let finalized = match workspace_group.take() {
             Some(CommandWorkspaceSelection::Pending(selection)) => {
@@ -422,14 +423,16 @@ pub async fn sync(
                 .await;
                 let finalized = match result {
                     Ok(result) => {
-                        let finalized = selection.finalize(result.lock())?;
+                        let mut finalized = selection.finalize(result.lock())?;
+                        projected_resolved_lock = finalized.take_selected_lock();
                         resolved_before_environment = Some(Ok(result));
                         finalized
                     }
                     Err(LockError::LockMismatch(previous, current, source))
                         if dry_run.enabled() =>
                     {
-                        let finalized = selection.finalize(&current)?;
+                        let mut finalized = selection.finalize(&current)?;
+                        projected_resolved_lock = finalized.take_selected_lock();
                         resolved_before_environment =
                             Some(Err(LockError::LockMismatch(previous, current, source)));
                         finalized
@@ -730,6 +733,7 @@ pub async fn sync(
                 match result {
                     Ok(result) => Outcome::Success(select_workspace_group_result(
                         result,
+                        projected_resolved_lock.take(),
                         selected_workspace_group.as_ref(),
                         &selection_members,
                     )?),
@@ -738,15 +742,16 @@ pub async fn sync(
                     Err(LockError::LockMismatch(prev, cur, lock_source)) => {
                         if dry_run.enabled() {
                             // A dry run continues with the new resolution but exits unsuccessfully.
-                            Outcome::LockMismatch(
-                                prev,
-                                Box::new(select_workspace_group_lock(
+                            let current = if let Some(lock) = projected_resolved_lock.take() {
+                                lock
+                            } else {
+                                select_workspace_group_lock(
                                     *cur,
                                     selected_workspace_group.as_ref(),
                                     &selection_members,
-                                )?),
-                                lock_source,
-                            )
+                                )?
+                            };
+                            Outcome::LockMismatch(prev, Box::new(current), lock_source)
                         } else {
                             return Err(UvError::user(LockError::LockMismatch(
                                 prev,

@@ -4663,6 +4663,107 @@ fn workspace_groups_fallback_sync_dry_run_preserves_environment() -> Result<()> 
     Ok(())
 }
 
+/// A pending member keeps the stale-lock failure and preview while reusing its selected graph.
+#[test]
+fn workspace_groups_fallback_sync_locked_dry_run_preserves_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = ">=3.12,<3.14"
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["leaf; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = ["leaf-dep"]
+        [tool.uv]
+        package = false
+    "#})?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/leaf_dep-1.0.0-py3-none-any.whl"),
+        "leaf-dep",
+        "1.0.0",
+        "leaf_dep-1.0.0",
+        "",
+        &[("leaf_dep.py", "VALUE = 'installed'\n")],
+    )?;
+    write_wheel_with_metadata(
+        &context
+            .temp_dir
+            .child("wheels/fresh-1.0.0-py3-none-any.whl"),
+        "fresh",
+        "1.0.0",
+        "fresh-1.0.0",
+        "",
+        &[],
+    )?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--python", "3.12"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 3 packages in [TIME]
+    "#);
+    let locked = context.read("uv.lock");
+    context.temp_dir.child("leaf/pyproject.toml").write_str(
+        &context.read("leaf/pyproject.toml").replace(
+            "dependencies = [\"leaf-dep\"]",
+            "dependencies = [\"leaf-dep\", \"fresh\"]",
+        ),
+    )?;
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let environment = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--locked", "--dry-run", "--workspace-group", "main", "--package", "leaf", "--python", "3.13"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Would replace project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + fresh==1.0.0
+     + leaf-dep==1.0.0
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    "#);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), environment);
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
 /// A named member uses its own activation domain for frozen and manifest-free discovery.
 #[test]
 fn workspace_groups_named_member_python() -> Result<()> {
@@ -6398,6 +6499,57 @@ fn workspace_groups_tree_includes_each_context() -> Result<()> {
     ├── future v1.0.0
     └── leaf v1.0.0
     ");
+    Ok(())
+}
+
+/// Frozen universal trees use the locked graph without validating current group Python bounds.
+#[test]
+fn workspace_groups_frozen_universal_tree_ignores_changed_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        requires-python = "==3.12.*"
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    let locked = context.read("uv.lock");
+    context.temp_dir.child("app/pyproject.toml").write_str(
+        &context
+            .read("app/pyproject.toml")
+            .replace(">=3.12", ">=3.13"),
+    )?;
+
+    fs_err::remove_dir_all(&context.venv)?;
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--offline", "--frozen", "--universal", "--python"])
+        .arg(context.temp_dir.child("missing-python").path()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    app v0.1.0
+    "#);
+    assert_eq!(context.read("uv.lock"), locked);
+    context.venv.assert(predicate::path::missing());
     Ok(())
 }
 

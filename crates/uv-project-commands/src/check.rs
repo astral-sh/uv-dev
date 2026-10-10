@@ -249,6 +249,7 @@ pub async fn check(
         Vec::new(),
     );
     let mut resolved_before_environment = None;
+    let mut projected_resolved_lock = None;
     let mut selected_workspace_members = None;
     let discovery_workspace = if let Some(project) = &project {
         let workspace = project.workspace();
@@ -365,7 +366,8 @@ pub async fn check(
                 )
                 .await
                 .map_err(UvError::from)?;
-                let finalized = selection.finalize(result.lock())?;
+                let mut finalized = selection.finalize(result.lock())?;
+                projected_resolved_lock = finalized.take_selected_lock();
                 resolved_before_environment = Some(result);
                 Some(finalized)
             }
@@ -786,8 +788,11 @@ pub async fn check(
             }
         };
 
-        let target = InstallTarget::from_project(project, result.lock(), selection)
-            .select_workspace_context()?;
+        let lock = projected_resolved_lock
+            .as_ref()
+            .unwrap_or_else(|| result.lock());
+        let target =
+            InstallTarget::from_project(project, lock, selection).select_workspace_context()?;
         let lock = target.lock();
         let install_target = target.as_target();
 

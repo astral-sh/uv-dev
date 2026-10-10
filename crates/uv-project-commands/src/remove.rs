@@ -381,7 +381,7 @@ pub async fn remove(
     };
 
     // Lock and sync the environment, if necessary.
-    let lock = match Box::pin(
+    let mut lock = match Box::pin(
         LockOperation::new(
             mode,
             &settings.resolver,
@@ -409,8 +409,11 @@ pub async fn remove(
     };
 
     if let Some(selection) = pending_selection {
-        let finalized = selection.finalize(&lock)?;
+        let mut finalized = selection.finalize(&lock)?;
         let workspace = finalized.environment_workspace(project.workspace());
+        if let Some(selected_lock) = finalized.take_selected_lock() {
+            lock = selected_lock;
+        }
         drop(environment_lock);
         python_target = PythonTarget::Environment(
             ProjectEnvironment::get_or_init(
