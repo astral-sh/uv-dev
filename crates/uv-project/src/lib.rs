@@ -2087,7 +2087,7 @@ pub async fn resolve_names(
     printer: Printer,
     preview: Preview,
     lfs: GitLfsSetting,
-) -> Result<Vec<Requirement>, uv_requirements::Error> {
+) -> Result<Vec<Requirement>, ProjectError> {
     // Partition the requirements into named and unnamed requirements.
     let (mut requirements, unnamed): (Vec<_>, Vec<_>) = requirements
         .into_iter()
@@ -2153,8 +2153,7 @@ pub async fn resolve_names(
         .torch_backend(torch_backend.clone())
         .markers(interpreter.markers())
         .platform(interpreter.platform())
-        .build()
-        .map_err(std::io::Error::other)?;
+        .build()?;
 
     // Determine whether to enable build isolation.
     let environment;
@@ -2173,14 +2172,16 @@ pub async fn resolve_names(
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.
     let hasher = HashStrategy::default();
+    // Hash-policy and flat-index failures use requirement-level exit-status classification.
     let build_hasher = HashStrategy::from_constraints(
         build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
         *build_hash_checking,
-    )?;
+    )
+    .map_err(uv_requirements::Error::from)?;
     let flat_index = FlatIndex::load(&client, cache, index_locations)
         .await
-        .map_err(Box::new)?;
+        .map_err(|err| uv_requirements::Error::FlatIndex(Box::new(err)))?;
 
     // Lower the extra build dependencies, if any.
     let extra_build_requires =
@@ -3130,7 +3131,67 @@ impl From<ProjectError> for uv_cli_error::UvError {
             ProjectError::Requirements(error) => {
                 Self::from(uv_operations::error::Error::Requirements(error))
             }
-            error => Self::unexpected(error.into()),
+            error @ (ProjectError::UnsupportedLockVersion(..)
+            | ProjectError::UnparsableLockVersion(..)
+            | ProjectError::LockSerialization(..)
+            | ProjectError::LockedPythonIncompatibility(..)
+            | ProjectError::LockedPlatformIncompatibility(..)
+            | ProjectError::Conflict(..)
+            | ProjectError::RequestedPythonProjectIncompatibility(..)
+            | ProjectError::DotPythonVersionProjectIncompatibility { .. }
+            | ProjectError::RequiresPythonProjectIncompatibility(..)
+            | ProjectError::RequestedPythonScriptIncompatibility(..)
+            | ProjectError::DotPythonVersionScriptIncompatibility(..)
+            | ProjectError::RequiresPythonScriptIncompatibility(..)
+            | ProjectError::MissingGroupProject(..)
+            | ProjectError::MissingGroupProjects(..)
+            | ProjectError::MissingGroupScript(..)
+            | ProjectError::MissingExtraProject(..)
+            | ProjectError::MissingExtraProjects(..)
+            | ProjectError::MissingExtraScript(..)
+            | ProjectError::OverlappingMarkers(..)
+            | ProjectError::DisjointEnvironment(..)
+            | ProjectError::DisjointRequiresPython(..)
+            | ProjectError::DisjointLockedRequiresPython { .. }
+            | ProjectError::EmptyEnvironment
+            | ProjectError::InvalidProjectEnvironmentDir(..)
+            | ProjectError::UvLockParse(..)
+            | ProjectError::PyprojectTomlParse(..)
+            | ProjectError::PyprojectTomlUpdate
+            | ProjectError::Pep723ScriptTomlParse(..)
+            | ProjectError::MalwareFound
+            | ProjectError::Osv(..)
+            | ProjectError::NoSitePackages
+            | ProjectError::InvalidParentEnvironmentPath
+            | ProjectError::DroppedEnvironment
+            | ProjectError::DependencyGroup(..)
+            | ProjectError::Client(..)
+            | ProjectError::ClientBuild(..)
+            | ProjectError::Credentials(..)
+            | ProjectError::IndexCredentials(..)
+            | ProjectError::IndexUrl(..)
+            | ProjectError::Python(..)
+            | ProjectError::PythonEnvironment(..)
+            | ProjectError::Virtualenv(..)
+            | ProjectError::HashStrategy(..)
+            | ProjectError::Tags(..)
+            | ProjectError::FlatIndex(..)
+            | ProjectError::Lock(..)
+            | ProjectError::Interpreter(..)
+            | ProjectError::Tool(..)
+            | ProjectError::Name(..)
+            | ProjectError::Metadata(..)
+            | ProjectError::Lowering(..)
+            | ProjectError::Workspace(..)
+            | ProjectError::DefaultGroups(..)
+            | ProjectError::PyprojectMut(..)
+            | ProjectError::ExtraBuildRequires(..)
+            | ProjectError::Fmt(..)
+            | ProjectError::CacheInfo(..)
+            | ProjectError::Io(..)
+            | ProjectError::RetryParsing(..)
+            | ProjectError::Accelerator(..)
+            | ProjectError::Anyhow(..)) => Self::unexpected(error.into()),
         }
     }
 }
