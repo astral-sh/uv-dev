@@ -875,6 +875,14 @@ async fn do_lock(
             let activation = if let Some(lock) = versions_lock
                 && !lock_required_environments.as_markers().is_empty()
             {
+                let refresh_locked_packages = refresh.is_some_and(|refresh| match refresh {
+                    Refresh::None(_) => false,
+                    Refresh::All(_) => true,
+                    Refresh::Packages(refreshed_packages, ..) => lock
+                        .packages()
+                        .iter()
+                        .any(|package| refreshed_packages.contains(package.name())),
+                });
                 Some(
                     lock.package_reachability(
                         target.install_path(),
@@ -888,6 +896,10 @@ async fn do_lock(
                         &excludes,
                         dependency_metadata,
                         index_locations,
+                        &options.exclude_newer,
+                        &options.prerelease,
+                        &conflicts,
+                        refresh_locked_packages,
                         &database,
                     )
                     .await?,

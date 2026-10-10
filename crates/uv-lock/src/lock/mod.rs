@@ -3982,11 +3982,11 @@ impl Lock {
             .collect()
     }
 
-    /// Whether current root declarations retain the activation recorded in this lockfile.
+    /// Whether current resolution inputs retain the activation recorded in this lockfile.
     ///
-    /// Changed declarations make old edge markers unreliable. Until resolution refreshes those
-    /// edges, wheel preference checks must conservatively consider every required environment.
-    async fn root_activation_is_current<Context: BuildContext>(
+    /// Changed declarations or release policies make old edge markers unreliable. Until resolution
+    /// refreshes those edges, wheel preference checks conservatively consider every environment.
+    async fn activation_inputs_are_current<Context: BuildContext>(
         &self,
         root: &Path,
         requires_python: &RequiresPython,
@@ -3999,9 +3999,22 @@ impl Lock {
         excludes: &[ExcludeDependency],
         dependency_metadata: &DependencyMetadata,
         index_locations: &IndexLocations,
+        exclude_newer: &ExcludeNewer,
+        prerelease: &Prerelease,
+        conflicts: &Conflicts,
         modifiers: &DependencyModifiers,
         database: &DistributionDatabase<'_, Context>,
     ) -> Result<bool, LockError> {
+        if self.prerelease() != prerelease || self.conflicts() != conflicts {
+            return Ok(false);
+        }
+        if self
+            .exclude_newer()
+            .compare(&self.filter_exclude_newer(exclude_newer.clone()))
+            .is_some_and(|change| !change.is_relative_timestamp_change())
+        {
+            return Ok(false);
+        }
         // Non-workspace mutable metadata is refreshed later during resolution. Its stored
         // dependency markers cannot establish inactivity before that refresh.
         if self.packages.iter().any(|package| {
@@ -4175,7 +4188,8 @@ impl Lock {
 
     /// Calculate package activation within the current resolution scope.
     ///
-    /// Unverified mutable metadata or changed root inputs make package-specific activation unknown.
+    /// Refreshed releases, unverified mutable metadata, or changed resolution inputs make
+    /// package-specific activation unknown.
     pub async fn package_reachability<'lock, Context: BuildContext>(
         &'lock self,
         root: &Path,
@@ -4189,6 +4203,10 @@ impl Lock {
         excludes: &[ExcludeDependency],
         dependency_metadata: &DependencyMetadata,
         index_locations: &IndexLocations,
+        exclude_newer: &ExcludeNewer,
+        prerelease: &Prerelease,
+        conflicts: &Conflicts,
+        refresh_locked_packages: bool,
         database: &DistributionDatabase<'_, Context>,
     ) -> Result<Vec<(&'lock Package, MarkerTree)>, LockError> {
         let current_scope = requires_python.complexify_markers(
@@ -4203,23 +4221,27 @@ impl Lock {
                 .map_err(LockErrorKind::InvalidScopedOverride)?,
             Excludes::from_entries(self.manifest.excludes.iter().cloned()),
         );
-        if !self
-            .root_activation_is_current(
-                root,
-                requires_python,
-                supported_environments,
-                packages,
-                requirements,
-                constraints,
-                dependency_groups,
-                overrides,
-                excludes,
-                dependency_metadata,
-                index_locations,
-                &modifiers,
-                database,
-            )
-            .await?
+        if refresh_locked_packages
+            || !self
+                .activation_inputs_are_current(
+                    root,
+                    requires_python,
+                    supported_environments,
+                    packages,
+                    requirements,
+                    constraints,
+                    dependency_groups,
+                    overrides,
+                    excludes,
+                    dependency_metadata,
+                    index_locations,
+                    exclude_newer,
+                    prerelease,
+                    conflicts,
+                    &modifiers,
+                    database,
+                )
+                .await?
         {
             return Ok(self
                 .packages
