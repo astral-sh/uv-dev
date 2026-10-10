@@ -2047,6 +2047,19 @@ fn allow_incompatibilities() -> Result<()> {
     "
     );
 
+    // Installing an unrelated package must not surface the existing incompatibility.
+    uv_snapshot!(context.pip_install()
+        .arg("idna==3.6")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + idna==3.6
+    "
+    );
+
     Ok(())
 }
 

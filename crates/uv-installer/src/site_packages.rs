@@ -743,6 +743,26 @@ pub enum SitePackagesDiagnostic {
     },
 }
 
+impl SitePackagesDiagnostic {
+    /// Return the package names involved in this diagnostic.
+    pub fn package_names(&self) -> impl Iterator<Item = &PackageName> {
+        let (package, dependency) = match self {
+            Self::IncompatibleDependency {
+                package,
+                requirement,
+                ..
+            } => (package, Some(&requirement.name)),
+            Self::MetadataUnavailable { package, .. }
+            | Self::TagsUnavailable { package, .. }
+            | Self::IncompatiblePythonVersion { package, .. }
+            | Self::IncompatiblePlatform { package }
+            | Self::MissingDependency { package, .. }
+            | Self::DuplicatePackage { package, .. } => (package, None),
+        };
+        once(package).chain(dependency)
+    }
+}
+
 impl Diagnostic for SitePackagesDiagnostic {
     /// Convert the diagnostic into a user-facing message.
     fn message(&self) -> String {
@@ -792,19 +812,7 @@ impl Diagnostic for SitePackagesDiagnostic {
 
     /// Returns `true` if the [`PackageName`] is involved in this diagnostic.
     fn includes(&self, name: &PackageName) -> bool {
-        match self {
-            Self::MetadataUnavailable { package, .. } => name == package,
-            Self::TagsUnavailable { package, .. } => name == package,
-            Self::IncompatiblePythonVersion { package, .. } => name == package,
-            Self::IncompatiblePlatform { package } => name == package,
-            Self::MissingDependency { package, .. } => name == package,
-            Self::IncompatibleDependency {
-                package,
-                requirement,
-                ..
-            } => name == package || &requirement.name == name,
-            Self::DuplicatePackage { package, .. } => name == package,
-        }
+        self.package_names().any(|package| package == name)
     }
 }
 
