@@ -62,7 +62,7 @@ pub(crate) async fn cache_prune(
     summary += uv_distribution::prune(&cache)
         .with_context(|| format!("Failed to prune cache at: {}", cache.root().user_display()))?;
 
-    summary += uv_client::prune_packed_archives(&cache).with_context(|| {
+    summary += uv_client::prune_packed_archives(&cache, ci).with_context(|| {
         format!(
             "Failed to prune packed cache at: {}",
             cache.root().user_display()

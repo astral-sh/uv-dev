@@ -1145,6 +1145,92 @@ async fn download_source_shards() -> Result<()> {
     Ok(())
 }
 
+/// CI caches keep source archives and built wheels while dropping prefetched pre-built wheels.
+#[tokio::test]
+async fn download_ci_prune() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = wheel("original")?;
+    let sdist = source_archive(&wheel)?;
+    let wheel_hash = digest(&wheel);
+    let sdist_hash = digest(&sdist);
+    let url = server.uri();
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ registry = "{url}/simple" }}
+        sdist = {{ url = "{url}/basic_package-0.1.0.tar.gz", hash = "sha256:{sdist_hash}" }}
+        wheels = [{{ url = "{url}/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:{wheel_hash}" }}]
+    "#},
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(wheel),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0.tar.gz"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(sdist.clone()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 2 distributions (2 total)
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--frozen", "--offline", "--no-binary-package", "basic-package"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+    context.prune().arg("--ci").assert().success();
+    let index = IndexUrl::from(uv_pep508::VerbatimUrl::parse_url(format!("{url}/simple"))?);
+    let cache = Cache::from_path(context.cache_dir.path());
+    let shard = cache
+        .bucket(CacheBucket::Packed)
+        .join(WheelCache::Index(&index).wheel_dir("basic-package"));
+    context
+        .cache_dir
+        .child(shard.join("0.1.0-py3-none-any.whl.http"))
+        .assert(predicates::path::missing());
+    context
+        .cache_dir
+        .child(shard.join(&wheel_hash))
+        .assert(predicates::path::missing());
+    assert_eq!(fs_err::read(shard.join(&sdist_hash))?, sdist);
+    context
+        .cache_dir
+        .child(shard.join("0.1.0.tar.gz.http"))
+        .assert(predicates::path::is_file());
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--frozen", "--offline", "--reinstall", "--no-build", "--no-binary-package", "basic-package"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ basic-package==0.1.0
+    ");
+    server.verify().await;
+    Ok(())
+}
+
 /// Revalidation uses the saved `ETag`, including after packed bytes produce a prepared wheel.
 #[tokio::test]
 async fn download_preserves_http_policy() -> Result<()> {

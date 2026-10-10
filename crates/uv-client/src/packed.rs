@@ -1,4 +1,5 @@
 use std::io::SeekFrom;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
@@ -588,8 +589,10 @@ impl PackedArchiveEntry {
 }
 
 /// Remove packed payloads no longer referenced by any pointer in their source shard.
+///
+/// CI pruning also removes downloaded wheel pointers, retaining source archives.
 /// The caller must hold the cache's exclusive lock.
-pub fn prune_packed_archives(cache: &Cache) -> Result<uv_cache::Removal> {
+pub fn prune_packed_archives(cache: &Cache, ci: bool) -> Result<uv_cache::Removal> {
     let mut summary = cache.removal();
     let root = cache.bucket(CacheBucket::Packed);
     if !root.try_exists()? {
@@ -608,6 +611,19 @@ pub fn prune_packed_archives(cache: &Cache) -> Result<uv_cache::Removal> {
                 continue;
             }
             let extension = path.extension().and_then(std::ffi::OsStr::to_str);
+            if ci
+                && matches!(extension, Some("http" | "rev"))
+                && path.file_stem().is_some_and(|name| {
+                    Path::new(name)
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("whl"))
+                })
+            {
+                // CI caches retain sources and their built wheels, which live in the source
+                // bucket. Downloaded wheel pointers must not keep their packed payloads alive.
+                summary += cache.remove_path(&path)?;
+                continue;
+            }
             let metadata = match extension {
                 Some("http") => fs_err::read(&path)
                     .map_err(anyhow::Error::from)
