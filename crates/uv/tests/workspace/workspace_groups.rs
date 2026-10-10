@@ -4996,3 +4996,266 @@ fn workspace_groups_dynamic_metadata_uses_member_python() -> Result<()> {
     insta::assert_snapshot!(lock["workspace-group"][0]["effective-requires-python"].as_str().expect("group records its Python domain"), @">=3.12");
     Ok(())
 }
+
+/// Configured source metadata replaces declarations before group reachability is inferred.
+#[test]
+fn workspace_groups_configured_metadata_removes_local_edge() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+        [[tool.uv.dependency-metadata]]
+        name = "app"
+        version = "0.1.0"
+        requires-dist = []
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    insta::assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 2
+    revision = 5
+    requires-python = "==3.12.*"
+    resolution-markers = [
+        "extra == 'workspace-main'",
+    ]
+
+    [[workspace-group]]
+    name = "main"
+    members = [
+        "app",
+    ]
+    effective-requires-python = "==3.12.*"
+    environment = "python_full_version == '3.12.*'"
+    default = true
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [manifest]
+    members = [
+        "app",
+    ]
+    workspace-members = [
+        "app",
+    ]
+
+    [[manifest.dependency-metadata]]
+    name = "app"
+    version = "0.1.0"
+
+    [[package]]
+    name = "app"
+    version = "0.1.0"
+    source = { virtual = "app" }
+    resolution-markers = [
+        "extra == 'workspace-main'",
+    ]
+    "#);
+    Ok(())
+}
+
+/// Configured direct local dependencies participate in the completed group's Python domain.
+#[test]
+fn workspace_groups_configured_metadata_adds_local_edge() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    let leaf_url = Url::from_directory_path(context.temp_dir.child("leaf"))
+        .map_err(|()| anyhow!("failed to form the local fixture URL"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [[tool.uv.dependency-metadata]]
+        name = "app"
+        version = "0.1.0"
+        requires-dist = ["leaf @ {leaf_url}"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Resolved 2 packages in [TIME]
+    "#);
+    insta::with_settings!({filters => context.filters()}, {
+        insta::assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 2
+    revision = 5
+    requires-python = ">=3.13"
+    resolution-markers = [
+        "extra == 'workspace-main'",
+    ]
+
+    [[workspace-group]]
+    name = "main"
+    members = [
+        "app",
+    ]
+    effective-requires-python = ">=3.13"
+    environment = "python_full_version >= '3.13'"
+    default = true
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [manifest]
+    members = [
+        "app",
+    ]
+    workspace-members = [
+        "app",
+        "leaf",
+    ]
+
+    [[manifest.dependency-metadata]]
+    name = "app"
+    version = "0.1.0"
+    requires-dist = ["leaf @ file://[TEMP_DIR]/leaf"]
+
+    [[package]]
+    name = "app"
+    version = "0.1.0"
+    source = { virtual = "app" }
+    resolution-markers = [
+        "extra == 'workspace-main'",
+    ]
+    dependencies = [
+        { name = "leaf", marker = "extra == 'workspace-main'" },
+    ]
+
+    [package.metadata]
+    requires-dist = [{ name = "leaf", directory = "[TEMP_DIR]/leaf" }]
+
+    [[package]]
+    name = "leaf"
+    version = "0.1.0"
+    source = { directory = "[TEMP_DIR]/leaf" }
+    resolution-markers = [
+        "extra == 'workspace-main'",
+    ]
+    "#);
+    });
+    Ok(())
+}
+
+/// Local-source metadata lookup does not choose among configured versions from the manifest.
+#[test]
+fn workspace_groups_configured_metadata_does_not_guess_source_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["app", "leaf"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+        [tool.uv.sources]
+        leaf = { workspace = true }
+        [[tool.uv.dependency-metadata]]
+        name = "app"
+        version = "0.1.0"
+        requires-dist = []
+        [[tool.uv.dependency-metadata]]
+        name = "app"
+        version = "0.2.0"
+        requires-dist = []
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+        dependencies = ["leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Workspace group `main` has incompatible `requires-python` declarations
+    "#);
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    Ok(())
+}

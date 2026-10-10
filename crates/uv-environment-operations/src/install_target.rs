@@ -437,7 +437,7 @@ impl<'lock> InstallTarget<'lock> {
     }
 
     /// Use a projected lock while retaining the installation target.
-    pub(crate) fn with_lock<'selected>(self, lock: &'selected Lock) -> InstallTarget<'selected>
+    pub fn with_lock<'selected>(self, lock: &'selected Lock) -> InstallTarget<'selected>
     where
         'lock: 'selected,
     {

@@ -561,7 +561,7 @@ async fn build_package(
             let workspace = workspace
                 .with_provisional_workspace_groups(
                     &workspace
-                        .workspace_groups_with_sources(&sources)
+                        .workspace_groups_with_dependency_metadata(&sources, dependency_metadata)
                         .map_err(PythonSelectionError::from)?,
                 )
                 .map_err(PythonSelectionError::from)?;

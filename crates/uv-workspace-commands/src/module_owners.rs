@@ -45,6 +45,8 @@ pub(super) async fn collect_module_owners(
     malware_settings: &MalwareCheckSettings,
     sync: Option<Modifications>,
 ) -> Result<BTreeMap<ModuleName, Vec<String>>> {
+    let selected_lock = target.select_workspace_context()?;
+    let target = target.with_lock(&selected_lock);
     let (extras, groups) = target_selection(target);
     let package_ids = selected_package_ids(target, venv, &extras, &groups, settings)?;
     if package_ids.is_none() && !matches!(sync, Some(Modifications::Exact)) {

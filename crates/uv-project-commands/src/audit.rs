@@ -136,7 +136,10 @@ pub async fn audit(
             LockTarget::Workspace(workspace) => {
                 let scoped = if frozen.is_some() {
                     workspace.with_provisional_workspace_groups(
-                        &workspace.workspace_groups_with_sources(&settings.sources)?,
+                        &workspace.workspace_groups_with_dependency_metadata(
+                            &settings.sources,
+                            &settings.dependency_metadata,
+                        )?,
                     )?
                 } else {
                     workspace.with_workspace_groups(

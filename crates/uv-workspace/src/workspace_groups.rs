@@ -7,7 +7,7 @@ use uv_configuration::{
     DependencyModifierScope, DependencyModifiers, Excludes, NoSources, Override, Overrides,
     PackageOverride,
 };
-use uv_distribution_types::{Requirement, RequirementSource, RequiresPython};
+use uv_distribution_types::{DependencyMetadata, Requirement, RequirementSource, RequiresPython};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl};
@@ -171,13 +171,23 @@ impl Workspace {
         &self,
         no_sources: &NoSources,
     ) -> Result<Vec<ProvisionalWorkspaceGroup>, WorkspaceError> {
-        self.workspace_groups_with_metadata(no_sources, &BTreeMap::new())
+        self.workspace_groups_with_dependency_metadata(no_sources, &DependencyMetadata::default())
     }
 
-    /// Refine group reachability using full metadata for dynamic workspace members.
+    /// Resolve groups with the configured metadata used by the current operation.
+    pub fn workspace_groups_with_dependency_metadata(
+        &self,
+        no_sources: &NoSources,
+        dependency_metadata: &DependencyMetadata,
+    ) -> Result<Vec<ProvisionalWorkspaceGroup>, WorkspaceError> {
+        self.workspace_groups_with_metadata(no_sources, dependency_metadata, &BTreeMap::new())
+    }
+
+    /// Refine group reachability using configured and built metadata for workspace members.
     pub fn workspace_groups_with_metadata(
         &self,
         no_sources: &NoSources,
+        dependency_metadata: &DependencyMetadata,
         metadata: &BTreeMap<PackageName, WorkspaceGroupMemberMetadata>,
     ) -> Result<Vec<ProvisionalWorkspaceGroup>, WorkspaceError> {
         let Some(definitions) = self
@@ -190,6 +200,23 @@ impl Workspace {
         else {
             return Ok(Vec::new());
         };
+        let mut metadata = metadata.clone();
+        for name in self.packages().keys() {
+            // Local source distributions have no known version at the metadata lookup boundary.
+            // Configured metadata takes precedence over both cached builds and declarations.
+            if let Some(configured) = dependency_metadata.get(name, None) {
+                metadata.insert(
+                    name.clone(),
+                    WorkspaceGroupMemberMetadata {
+                        version: configured.version,
+                        requires_dist: Box::into_iter(configured.requires_dist)
+                            .map(Requirement::from)
+                            .collect(),
+                        requires_python: configured.requires_python,
+                    },
+                );
+            }
+        }
         let overrides = self
             .overrides()
             .into_iter()
@@ -275,7 +302,7 @@ impl Workspace {
                 definition,
                 no_sources,
                 &modifiers,
-                metadata,
+                &metadata,
                 &mut pending_metadata,
             )?;
             for (name, active) in &member_environments {
@@ -366,11 +393,9 @@ impl Workspace {
                 continue;
             };
             let built = metadata.get(&name);
-            let version = member
-                .project()
-                .version
-                .as_ref()
-                .or_else(|| built.map(|metadata| &metadata.version));
+            let version = built
+                .map(|metadata| &metadata.version)
+                .or(member.project().version.as_ref());
             let dynamic = member.project().dynamic.as_deref().unwrap_or_default();
             if built.is_none()
                 && ((version.is_none() && modifiers.has_versioned_package(&name))

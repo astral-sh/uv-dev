@@ -205,7 +205,10 @@ pub async fn upgrade(
     let provisional_workspace = project.workspace().with_provisional_workspace_groups(
         &project
             .workspace()
-            .workspace_groups_with_sources(&settings.sources)?,
+            .workspace_groups_with_dependency_metadata(
+                &settings.sources,
+                &settings.dependency_metadata,
+            )?,
     )?;
     // Locking defaults a missing `requires-python` to the discovered interpreter's minor version.
     // Use that same bound when deciding whether selected declarations and sources can apply.

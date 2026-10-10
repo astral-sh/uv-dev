@@ -12,7 +12,7 @@ use uv_configuration::{
 use uv_dispatch::UniversalState;
 use uv_distribution::{DistributionDatabase, FirstPartyPackages};
 use uv_distribution_types::{
-    NameRequirementSpecification, RequiresPython, ResolutionRecorder,
+    DependencyMetadata, NameRequirementSpecification, RequiresPython, ResolutionRecorder,
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
@@ -387,9 +387,11 @@ impl<'env> LockOperation<'env> {
 pub fn workspace_groups_with_cached_metadata(
     workspace: &Workspace,
     no_sources: &NoSources,
+    dependency_metadata: &DependencyMetadata,
     state: &UniversalState,
 ) -> Result<Vec<ProvisionalWorkspaceGroup>, LockError> {
-    let groups = workspace.workspace_groups_with_sources(no_sources)?;
+    let groups =
+        workspace.workspace_groups_with_dependency_metadata(no_sources, dependency_metadata)?;
     if groups
         .iter()
         .all(|group| group.pending_metadata().is_empty())
@@ -411,7 +413,7 @@ pub fn workspace_groups_with_cached_metadata(
             );
         }
     }
-    Ok(workspace.workspace_groups_with_metadata(no_sources, &metadata)?)
+    Ok(workspace.workspace_groups_with_metadata(no_sources, dependency_metadata, &metadata)?)
 }
 
 /// Resolve named root sets together, splitting a failed shared solve into smaller contexts.
@@ -457,7 +459,12 @@ async fn do_lock_workspace_groups(
         .with_first_party_exclusions(first_party_exclusions.clone())
         .resolve_workspace_group_metadata(workspace, group, member)
         .await?;
-        groups = workspace_groups_with_cached_metadata(workspace, &settings.sources, state)?;
+        groups = workspace_groups_with_cached_metadata(
+            workspace,
+            &settings.sources,
+            &settings.dependency_metadata,
+            state,
+        )?;
     }
     let mut groups = groups
         .into_iter()
@@ -665,7 +672,12 @@ async fn do_lock(
     if let LockTarget::Workspace(workspace) = target
         && !workspace.is_workspace_group_resolution()
     {
-        let groups = workspace_groups_with_cached_metadata(workspace, &settings.sources, state)?;
+        let groups = workspace_groups_with_cached_metadata(
+            workspace,
+            &settings.sources,
+            &settings.dependency_metadata,
+            state,
+        )?;
         if !groups.is_empty() {
             return Box::pin(do_lock_workspace_groups(
                 workspace,

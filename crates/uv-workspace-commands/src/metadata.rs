@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -129,7 +130,10 @@ pub async fn metadata(
         }
     } else if let MetadataSource::Manifest(LockTarget::Workspace(workspace)) = &source {
         Some(workspace.with_provisional_workspace_groups(
-            &workspace.workspace_groups_with_sources(&settings.sources)?,
+            &workspace.workspace_groups_with_dependency_metadata(
+                &settings.sources,
+                &settings.dependency_metadata,
+            )?,
         )?)
     } else {
         None
@@ -248,12 +252,18 @@ pub async fn metadata(
         },
     };
     let mut export = metadata_for_target(install_target);
+    let selected_lock = if sync.is_some() {
+        install_target.select_workspace_context()?
+    } else {
+        Cow::Borrowed(lock)
+    };
+    let environment_target = install_target.with_lock(&selected_lock);
     let environment = if sync.is_some() {
         Some(match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(group_workspace.as_ref().unwrap_or(workspace)),
-                    None,
+                    (!lock.workspace_groups().is_empty()).then_some(environment_target),
                     &groups,
                     &settings.sources,
                     python.as_deref().map(PythonRequest::parse),
@@ -295,7 +305,7 @@ pub async fn metadata(
                     root: workspace.root(),
                     lock,
                 },
-                Some(install_target),
+                Some(environment_target),
                 &groups,
                 &settings.sources,
                 python.as_deref().map(PythonRequest::parse),
@@ -338,7 +348,7 @@ pub async fn metadata(
             })
             .ok();
         let module_owners = collect_module_owners(
-            install_target,
+            environment_target,
             &environment,
             &settings,
             &client_builder,

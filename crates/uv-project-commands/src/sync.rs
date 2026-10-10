@@ -212,7 +212,10 @@ pub async fn sync(
                     Some(&selection_members),
                     &project
                         .workspace()
-                        .workspace_groups_with_sources(&settings.resolver.sources)?,
+                        .workspace_groups_with_dependency_metadata(
+                            &settings.resolver.sources,
+                            &settings.resolver.dependency_metadata,
+                        )?,
                 )
                 .map_err(UvError::from)?;
                 let probe_packages = initial

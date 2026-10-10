@@ -42,7 +42,12 @@ pub async fn discover_workspace_groups(
     printer: Printer,
     preview: Preview,
 ) -> anyhow::Result<Vec<ResolvedWorkspaceGroup>> {
-    let mut groups = workspace_groups_with_cached_metadata(workspace, &settings.sources, state)?;
+    let mut groups = workspace_groups_with_cached_metadata(
+        workspace,
+        &settings.sources,
+        &settings.dependency_metadata,
+        state,
+    )?;
     while let Some((group, member)) = groups.iter().find_map(|group| {
         group
             .pending_metadata()
@@ -131,7 +136,12 @@ pub async fn discover_workspace_groups(
         )
         .await
         .map_err(UvError::from)?;
-        groups = workspace_groups_with_cached_metadata(workspace, &settings.sources, state)?;
+        groups = workspace_groups_with_cached_metadata(
+            workspace,
+            &settings.sources,
+            &settings.dependency_metadata,
+            state,
+        )?;
     }
     Ok(groups
         .into_iter()

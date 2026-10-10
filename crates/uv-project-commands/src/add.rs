@@ -316,7 +316,10 @@ pub async fn add(
         // interpreter read-only until the updated manifests have completed metadata discovery.
         let provisional_groups = project
             .workspace()
-            .workspace_groups_with_sources(&settings.resolver.sources)?;
+            .workspace_groups_with_dependency_metadata(
+                &settings.resolver.sources,
+                &settings.resolver.dependency_metadata,
+            )?;
         let discovery_workspace = project
             .workspace()
             .with_provisional_workspace_groups(&provisional_groups)?;
@@ -805,7 +808,10 @@ pub async fn add(
     let refined_python_target = if let EditTarget::Project(project) = &target
         && !project
             .workspace()
-            .workspace_groups_with_sources(&settings.resolver.sources)?
+            .workspace_groups_with_dependency_metadata(
+                &settings.resolver.sources,
+                &settings.resolver.dependency_metadata,
+            )?
             .is_empty()
     {
         drop(_lock);
