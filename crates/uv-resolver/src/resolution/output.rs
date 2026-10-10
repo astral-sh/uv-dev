@@ -88,10 +88,7 @@ impl<'a> ResolutionGraphBuilder<'a> {
         let mut node_indices = Vec::with_capacity(resolution.nodes.len());
         // Add every package to the graph.
         for (package, version) in resolution.nodes {
-            let node = ResolutionNode {
-                package,
-                version,
-            };
+            let node = ResolutionNode { package, version };
             let selected = SelectedDistribution::new(
                 &node.package,
                 node.version.clone(),

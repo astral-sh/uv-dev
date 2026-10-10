@@ -511,12 +511,21 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                     .try_universal_markers()
                                     .unwrap_or(UniversalMarker::TRUE);
                                 for (package, version) in &resolution.nodes {
+                                    let preference_ids = if package.url.is_none() {
+                                        resolution
+                                            .pins
+                                            .dist_and_id(&package.name, version)
+                                            .map_or(&[][..], |(_, _, ids)| ids)
+                                    } else {
+                                        &[]
+                                    };
                                     preferences.insert(
                                         package.name.clone(),
                                         package.index.clone(),
                                         marker,
                                         version.clone(),
                                         PreferenceSource::Resolver,
+                                        preference_ids,
                                     );
                                 }
                             }
@@ -4197,29 +4206,27 @@ fn find_environments_inner(
     state: &State<UvDependencyProvider>,
     current_only: bool,
 ) -> MarkerTree {
-    let is_active =
-        |dependency: &Dependency<'_, PubGrubPackage, Range<Version>>| {
-            if !current_only {
-                return true;
-            }
-            let Some(Term::Positive(current_parent)) = state
-                .partial_solution
-                .term_intersection_for_package(dependency.dependent)
-            else {
-                return false;
-            };
-            let Some(Term::Positive(current_child)) =
-                state
-                    .partial_solution
-                    .term_intersection_for_package(dependency.dependency)
-            else {
-                return false;
-            };
-            current_parent.subset_of(dependency.dependent_versions)
-                && dependency
-                    .dependency_versions
-                    .is_some_and(|range| !current_child.is_disjoint(range))
+    let is_active = |dependency: &Dependency<'_, PubGrubPackage, Range<Version>>| {
+        if !current_only {
+            return true;
+        }
+        let Some(Term::Positive(current_parent)) = state
+            .partial_solution
+            .term_intersection_for_package(dependency.dependent)
+        else {
+            return false;
         };
+        let Some(Term::Positive(current_child)) = state
+            .partial_solution
+            .term_intersection_for_package(dependency.dependency)
+        else {
+            return false;
+        };
+        current_parent.subset_of(dependency.dependent_versions)
+            && dependency
+                .dependency_versions
+                .is_some_and(|range| !current_child.is_disjoint(range))
+    };
     let package = &state.package_store[id];
     if package.is_root() {
         return MarkerTree::TRUE;
