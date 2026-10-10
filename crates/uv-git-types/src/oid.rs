@@ -112,7 +112,21 @@ impl<'de> serde::Deserialize<'de> for GitOid {
 mod tests {
     use std::str::FromStr;
 
+    use serde::Deserialize;
+    use serde::de::value::{
+        BorrowedBytesDeserializer, BorrowedStrDeserializer, Error, StrDeserializer,
+        StringDeserializer, U64Deserializer,
+    };
+
     use super::{GitOid, OidParseError};
+
+    fn deserialize_strings(input: &str) -> [Result<GitOid, Error>; 3] {
+        [
+            GitOid::deserialize(StrDeserializer::new(input)),
+            GitOid::deserialize(BorrowedStrDeserializer::new(input)),
+            GitOid::deserialize(StringDeserializer::new(input.to_owned())),
+        ]
+    }
 
     #[test]
     fn git_oid() {
@@ -131,6 +145,59 @@ mod tests {
         assert_eq!(
             GitOid::from_str(&str::repeat("x", 40)),
             Err(OidParseError::NotHex)
+        );
+    }
+
+    #[test]
+    fn git_oid_deserialize_preserves_spelling() {
+        for input in [
+            "4a23745badf5bf5ef7928f1e346e9986bd696d82",
+            "4A23745BADF5BF5EF7928F1E346E9986BD696D82",
+        ] {
+            for oid in deserialize_strings(input) {
+                let oid = oid.unwrap();
+                assert_eq!(oid, input.parse::<GitOid>().unwrap());
+                assert_eq!(oid.as_str(), input);
+                assert_eq!(oid.as_short_str(), &input[..16]);
+                assert_eq!(oid.as_tiny_str(), &input[..8]);
+                assert_eq!(oid.to_string(), input);
+                assert_eq!(format!("{oid:?}"), format!("GitOid({input:?})"));
+            }
+        }
+    }
+
+    #[test]
+    fn git_oid_deserialize_rejects_invalid_oids() {
+        for (input, expected) in [
+            (String::new(), OidParseError::Empty),
+            ("a".repeat(16), OidParseError::WrongLength),
+            ("a".repeat(39), OidParseError::WrongLength),
+            ("a".repeat(41), OidParseError::WrongLength),
+            ("a".repeat(64), OidParseError::WrongLength),
+            ("g".repeat(40), OidParseError::NotHex),
+            ("é".repeat(20), OidParseError::NotHex),
+        ] {
+            for result in deserialize_strings(&input) {
+                assert_eq!(result.unwrap_err().to_string(), expected.to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn git_oid_deserialize_requires_a_string() {
+        let error = GitOid::deserialize(U64Deserializer::<Error>::new(42)).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid type: integer `42`, expected a string"
+        );
+
+        let error = GitOid::deserialize(BorrowedBytesDeserializer::<Error>::new(
+            b"4a23745badf5bf5ef7928f1e346e9986bd696d82",
+        ))
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid type: byte array, expected a string"
         );
     }
 }
