@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTimeError};
 use std::{env, io};
 use uv_python_types::{PythonDownloadRequest, PythonDownloadRequestError};
 
-use futures::{StreamExt, TryStreamExt};
+use futures::{AsyncBufReadExt, TryStreamExt};
 use indexmap::{IndexMap, map::Entry};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
@@ -795,24 +795,25 @@ async fn fetch_ndjson_from_url(
     let source = url.to_string();
     let response_callback = async |response: Response, _: &mut RetryState| {
         let start = Instant::now();
-        let mut stream = response.bytes_stream();
+        let mut reader = response
+            .bytes_stream()
+            .map_err(io::Error::other)
+            .into_async_read();
         let mut buffer = Vec::new();
         let mut versions = Vec::new();
         let mut line_number = 1;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|err| Error::from_reqwest(url.clone(), err, None, start))?;
-            buffer.extend_from_slice(&chunk);
-            while let Some(newline) = buffer.iter().position(|&byte| byte == b'\n') {
-                if let Some(version) = parse_ndjson_line(&source, line_number, &buffer[..newline])?
-                {
-                    versions.push(version);
-                }
-                buffer.drain(..=newline);
-                line_number += 1;
+        while reader.read_until(b'\n', &mut buffer).await.map_err(|err| {
+            match err.downcast::<reqwest::Error>() {
+                Ok(err) => Error::from_reqwest(url.clone(), err, None, start),
+                Err(err) => Error::Io(err),
             }
-        }
-        if let Some(version) = parse_ndjson_line(&source, line_number, &buffer)? {
-            versions.push(version);
+        })? != 0
+        {
+            if let Some(version) = parse_ndjson_line(&source, line_number, &buffer)? {
+                versions.push(version);
+            }
+            buffer.clear();
+            line_number += 1;
         }
         Ok::<_, Error>(versions)
     };
