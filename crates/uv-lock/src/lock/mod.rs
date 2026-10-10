@@ -42,7 +42,7 @@ use uv_distribution_types::{
     MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
     PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
     Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId,
+    SourceDist as DistributionSourceDist, StaticMetadata, ToUrlError, UrlString, VersionId,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -2509,6 +2509,29 @@ impl Lock {
             }
         }
 
+        // Keep metadata paths relative when the selected distribution was requested with a
+        // relative path. Build backends can emit an absolute `file://` URL for the same source.
+        let relative_sources = resolution
+            .base_dists()
+            .filter_map(|(_, dist)| match &dist.dist {
+                ResolvedDist::Installable {
+                    dist: distribution, ..
+                } => match distribution.as_ref() {
+                    Dist::Source(DistributionSourceDist::Directory(directory))
+                        if directory.url.prefers_relative() =>
+                    {
+                        Some((
+                            &directory.name,
+                            directory.install_path.as_ref(),
+                            dist.marker.pep508(),
+                        ))
+                    }
+                    _ => None,
+                },
+                ResolvedDist::Installed { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
         // Lock all base packages.
         for (node_index, dist) in resolution.base_dists() {
             // If there are multiple distributions for the same package, include the markers of all
@@ -2528,14 +2551,20 @@ impl Lock {
                 vec![]
             };
 
-            let mut package =
-                Package::from_annotated_dist(dist, fork_markers, root, index_locations)?;
+            let mut package = Package::from_annotated_dist(
+                dist,
+                fork_markers,
+                root,
+                index_locations,
+                &relative_sources,
+            )?;
             // Git declarations can introduce direct sources needed by offline freshness checks.
             if metadata_free
                 && matches!(package.id.source, Source::Git(..))
                 && let Some(metadata) = dist.metadata.as_ref()
             {
-                package.metadata = PackageMetadata::from_distribution(metadata, root)?;
+                package.metadata =
+                    PackageMetadata::from_distribution(metadata, root, &relative_sources)?;
             }
             let mut wheel_marker = dist.marker;
             if let Some(supported_environments_marker) = supported_environments_marker {
@@ -6647,6 +6676,7 @@ impl Package {
         fork_markers: Vec<UniversalMarker>,
         root: &Path,
         index_locations: &IndexLocations,
+        relative_sources: &[(&PackageName, &Path, MarkerTree)],
     ) -> Result<Self, LockError> {
         let id = PackageId::from_annotated_dist(annotated_dist, root)?;
         let sdist = SourceDist::from_annotated_dist(&id, annotated_dist, index_locations)?;
@@ -6660,6 +6690,7 @@ impl Package {
                     .as_ref()
                     .expect("metadata is present"),
                 root,
+                relative_sources,
             )?
         };
         Ok(Self {
@@ -7395,6 +7426,32 @@ impl Package {
     }
 }
 
+/// Relativize a metadata requirement against the lock root, preserving the selected source's
+/// original relative-path intent when a build backend emitted an absolute file URL.
+fn relative_metadata_requirement(
+    mut requirement: Requirement,
+    root: &Path,
+    relative_sources: &[(&PackageName, &Path, MarkerTree)],
+) -> Result<Requirement, LockError> {
+    if let RequirementSource::Directory {
+        install_path, url, ..
+    } = &mut requirement.source
+        && relative_sources.iter().any(|(name, path, marker)| {
+            *name == &requirement.name
+                && *path == install_path.as_ref()
+                && !marker.is_disjoint(requirement.marker)
+        })
+    {
+        *url = VerbatimUrl::from_normalized_path(install_path.as_ref())
+            .map_err(LockErrorKind::RequirementVerbatimUrl)?;
+    }
+
+    requirement
+        .relative_to(root)
+        .map_err(LockErrorKind::RequirementRelativePath)
+        .map_err(LockError::from)
+}
+
 /// Attempts to construct a `VerbatimUrl` from the given normalized `Path`.
 fn verbatim_url(path: &Path, id: &PackageId) -> Result<VerbatimUrl, LockError> {
     let url =
@@ -7449,18 +7506,21 @@ struct PackageMetadata {
 }
 
 impl PackageMetadata {
-    fn from_distribution(metadata: &DistributionMetadata, root: &Path) -> Result<Self, LockError> {
+    fn from_distribution(
+        metadata: &DistributionMetadata,
+        root: &Path,
+        relative_sources: &[(&PackageName, &Path, MarkerTree)],
+    ) -> Result<Self, LockError> {
         let normalize = uv_preview::is_enabled(PreviewFeature::LockfileNormalization);
         let requires_dist = metadata
             .requires_dist
             .iter()
             .cloned()
-            .map(|requirement| requirement.relative_to(root))
+            .map(|requirement| relative_metadata_requirement(requirement, root, relative_sources))
             .collect::<Result<Vec<_>, _>>()
             .map(|requirements| {
                 normalize_collection::<_, NormalizedRequirements>(requirements, normalize)
-            })
-            .map_err(LockErrorKind::RequirementRelativePath)?;
+            })?;
         let dependency_groups = metadata
             .dependency_groups
             .iter()
@@ -7468,12 +7528,13 @@ impl PackageMetadata {
                 let requirements = requirements
                     .iter()
                     .cloned()
-                    .map(|requirement| requirement.relative_to(root))
+                    .map(|requirement| {
+                        relative_metadata_requirement(requirement, root, relative_sources)
+                    })
                     .collect::<Result<Vec<_>, _>>()
                     .map(|requirements| {
                         normalize_collection::<_, NormalizedRequirements>(requirements, normalize)
-                    })
-                    .map_err(LockErrorKind::RequirementRelativePath)?;
+                    })?;
                 Ok::<_, LockError>((group.clone(), requirements))
             })
             .collect::<Result<_, _>>()?;
