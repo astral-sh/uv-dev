@@ -399,13 +399,6 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
-    /// Write the lockfile to disk.
-    pub(crate) async fn commit(self, lock: &Lock) -> Result<(), LockError> {
-        let encoded = lock.to_toml()?;
-        fs_err::tokio::write(self.lock_path(), encoded).await?;
-        Ok(())
-    }
-
     /// Lower build constraints without losing hashes when a source expands into multiple requirements.
     pub async fn lower_build_constraints(
         self,
