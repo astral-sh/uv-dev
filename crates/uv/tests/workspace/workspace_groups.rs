@@ -2101,6 +2101,76 @@ fn workspace_groups_conflicting_indexes() -> Result<()> {
     Ok(())
 }
 
+/// Substring platform conditions refine Python before an existing environment is reused.
+#[cfg(target_os = "linux")]
+#[test]
+fn workspace_groups_platform_substring_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        environments = ["sys_platform not in 'linux darwin' or python_full_version >= '3.13'"]
+        [tool.uv.workspace]
+        members = ["app"]
+        [[tool.uv.workspace.groups]]
+        name = "main"
+        members = ["app"]
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "1.0.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = []
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--python", "3.12"])
+        .assert()
+        .success();
+    let locked = context.read("uv.lock");
+    context.venv().args(["--python", "3.12"]).assert().success();
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    "#);
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
+        .success();
+    context
+        .venv()
+        .args(["--clear", "--python", "3.12"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--frozen"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    "#);
+    context
+        .assert_command("import sys; assert sys.version_info[:2] == (3, 13)")
+        .success();
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
 /// Platform-dependent bounds select a compatible interpreter before replacing an environment.
 #[cfg(target_os = "linux")]
 #[test]

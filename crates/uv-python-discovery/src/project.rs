@@ -14,9 +14,7 @@ use uv_configuration::{DependencyGroupsWithDefaults, NoSources, TargetTriple};
 use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
 use uv_pep440::TildeVersionSpecifier;
-use uv_pep508::{
-    CanonicalMarkerValueString, MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree,
-};
+use uv_pep508::{MarkerEnvironment, MarkerTree};
 use uv_python_interpreter::{Interpreter, RequestedInterpreter};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
@@ -238,30 +236,11 @@ impl ProjectPythonRequest {
         let Some(requirement) = self.requirement.as_ref() else {
             return Ok(vec![self]);
         };
-        // String-valued markers describe the platform and implementation. Version-valued markers
-        // remain free so a probe using one Python version can select another compatible version.
-        let platform = [
-            CanonicalMarkerValueString::OsName,
-            CanonicalMarkerValueString::SysPlatform,
-            CanonicalMarkerValueString::PlatformSystem,
-            CanonicalMarkerValueString::PlatformMachine,
-            CanonicalMarkerValueString::PlatformPythonImplementation,
-            CanonicalMarkerValueString::PlatformRelease,
-            CanonicalMarkerValueString::PlatformVersion,
-            CanonicalMarkerValueString::ImplementationName,
-        ]
-        .into_iter()
-        .fold(MarkerTree::TRUE, |marker, key| {
-            marker.and(MarkerTree::expression(MarkerExpression::String {
-                key: key.into(),
-                operator: MarkerOperator::Equal,
-                value: environment.get_string(key).into(),
-            }))
-        });
-        let selected = requirement
-            .requires_python
-            .to_exact_marker_tree()
-            .and(requirement.environments.restrict(platform));
+        let selected = requirement.requires_python.to_exact_marker_tree().and(
+            requirement
+                .environments
+                .evaluate_environment_strings(environment),
+        );
         let mut requirements = match RequiresPython::from_marker_tree(selected) {
             Some(requirement) => vec![requirement],
             None => RequiresPython::from_marker_tree_parts(selected),
@@ -919,6 +898,31 @@ mod tests {
                 .unwrap()
                 .contains(&"3.12.9".parse().unwrap())
         );
+    }
+
+    #[test]
+    fn platform_python_requirement_evaluates_substring_markers() {
+        for marker in [
+            "sys_platform not in 'linux darwin' or python_full_version >= '3.13'",
+            "sys_platform in 'win32 cygwin' or python_full_version >= '3.13'",
+            "'nux' not in sys_platform or python_full_version >= '3.13'",
+            "'win' in sys_platform or python_full_version >= '3.13'",
+        ] {
+            let selected = request(marker)
+                .for_environment(&linux_environment())
+                .unwrap();
+            assert_eq!(selected.len(), 1, "{marker}");
+            assert_eq!(
+                selected[0]
+                    .requires_python()
+                    .map(RequiresPython::to_exact_marker_tree),
+                Some(
+                    RequiresPython::from_specifiers(">=3.13,<3.14".parse().unwrap())
+                        .to_exact_marker_tree()
+                ),
+                "{marker}"
+            );
+        }
     }
 
     #[test]
