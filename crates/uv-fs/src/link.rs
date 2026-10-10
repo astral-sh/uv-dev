@@ -796,11 +796,12 @@ fn atomic_hardlink_overwrite(
     dst: &Path,
     state: LinkState,
 ) -> Result<LinkState, LinkError> {
-    // TODO(zanieb): Consider propagating an error instead of panicking if `dst` has no parent.
-    if let Ok(temp_file) = tempfile::Builder::new().make_in(
-        dst.parent().expect("Link path must have a parent"),
-        |temp_path| try_hardlink_file(src, temp_path),
-    ) {
+    let parent = dst.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "Link path must have a parent")
+    })?;
+    if let Ok(temp_file) =
+        tempfile::Builder::new().make_in(parent, |temp_path| try_hardlink_file(src, temp_path))
+    {
         // `persist` resets Windows file attributes, which are shared with the source.
         fs_err::rename(temp_file.path(), dst)?;
         Ok(state.mode_working())
@@ -834,11 +835,12 @@ fn atomic_symlink_overwrite(
     dst: &Path,
     state: LinkState,
 ) -> Result<LinkState, LinkError> {
-    // TODO(zanieb): Consider propagating an error instead of panicking if `dst` has no parent.
-    if let Ok(temp_file) = tempfile::Builder::new().make_in(
-        dst.parent().expect("Link path must have a parent"),
-        |temp_path| create_symlink(src, temp_path),
-    ) {
+    let parent = dst.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "Link path must have a parent")
+    })?;
+    if let Ok(temp_file) =
+        tempfile::Builder::new().make_in(parent, |temp_path| create_symlink(src, temp_path))
+    {
         let result = fs_err::rename(temp_file.path(), dst);
         // TempPath uses `remove_file`, which cannot remove a directory symlink on Windows.
         #[cfg(windows)]
@@ -1538,6 +1540,34 @@ mod tests {
             fs_err::read_to_string(dst_dir.path().join("file1.txt")).unwrap(),
             "content1"
         );
+    }
+
+    #[test]
+    fn test_atomic_hardlink_parentless_destination() {
+        let source_dir = test_tempdir();
+        let source = source_dir.path().join("source.txt");
+        fs_err::write(&source, "content").unwrap();
+
+        let result =
+            atomic_hardlink_overwrite(&source, Path::new(""), LinkState::new(LinkMode::Hardlink));
+
+        assert_matches!(result, Err(LinkError::Io(err)) if err.kind() == io::ErrorKind::InvalidInput);
+        assert_eq!(fs_err::read_to_string(&source).unwrap(), "content");
+        assert_eq!(fs_err::read_dir(source_dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn test_atomic_symlink_parentless_destination() {
+        let source_dir = test_tempdir();
+        let source = source_dir.path().join("source.txt");
+        fs_err::write(&source, "content").unwrap();
+
+        let result =
+            atomic_symlink_overwrite(&source, Path::new(""), LinkState::new(LinkMode::Symlink));
+
+        assert_matches!(result, Err(LinkError::Io(err)) if err.kind() == io::ErrorKind::InvalidInput);
+        assert_eq!(fs_err::read_to_string(&source).unwrap(), "content");
+        assert_eq!(fs_err::read_dir(source_dir.path()).unwrap().count(), 1);
     }
 
     #[test]
