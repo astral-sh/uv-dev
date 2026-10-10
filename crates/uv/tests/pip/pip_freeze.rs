@@ -662,3 +662,66 @@ fn freeze_exclude() {
     "
     );
 }
+
+/// Comma-separated and mixed exclusions select the same normalized package names.
+#[test]
+fn freeze_exclude_comma_separated() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let alpha = site_packages.child("tiny_alpha-1.0.0.dist-info");
+    alpha.create_dir_all()?;
+    alpha
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: tiny-alpha\nVersion: 1.0.0\n")?;
+    let beta = site_packages.child("tiny_beta-1.0.0.dist-info");
+    beta.create_dir_all()?;
+    beta.child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: tiny-beta\nVersion: 1.0.0\n")?;
+    let gamma = site_packages.child("tiny_gamma-1.0.0.dist-info");
+    gamma.create_dir_all()?;
+    gamma
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: tiny-gamma\nVersion: 1.0.0\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_freeze()
+        .args(["--no-config", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tiny-alpha==1.0.0
+    tiny-beta==1.0.0
+    tiny-gamma==1.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_freeze()
+        .args(["--no-config", "--offline"])
+        .args(["--exclude", "Tiny_Alpha,tiny.beta"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tiny-gamma==1.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_freeze()
+        .args(["--no-config", "--offline"])
+        .args(["--exclude", "tiny-alpha,tiny-beta", "--exclude", "tiny-gamma"]), @"exit_code: 0 (success)");
+
+    uv_snapshot!(context.filters(), context.pip_freeze()
+        .args(["--no-config", "--offline"])
+        .args(["--exclude", "tiny-alpha,,tiny-beta"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid value '' for '--exclude <EXCLUDE>': Not a valid package or extra name: "". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+
+    For more information, try '--help'.
+    "#);
+
+    uv_snapshot!(context.filters(), context.pip_freeze()
+        .args(["--no-config", "--offline"])
+        .args(["--exclude", "tiny-alpha,not@valid"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid value 'not@valid' for '--exclude <EXCLUDE>': Not a valid package or extra name: "not@valid". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+
+    For more information, try '--help'.
+    "#);
+    Ok(())
+}
