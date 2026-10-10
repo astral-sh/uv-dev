@@ -526,6 +526,8 @@ fn freeze_nonexistent_path() {
         .arg(nonexistent_dir.path()), @"
     exit_code: 0 (success)
     ");
+
+    assert!(!nonexistent_dir.exists());
 }
 
 #[test]
@@ -552,6 +554,38 @@ fn freeze_with_quiet_flag() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[test]
+fn freeze_file_path_is_ignored() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let path = context.temp_dir.child("not-a-directory");
+    path.write_str("unchanged")?;
+
+    uv_snapshot!(context.filters(), context.pip_freeze()
+        .arg("--offline")
+        .arg("--path")
+        .arg(path.path()), @"
+    exit_code: 0 (success)
+    ");
+
+    assert_eq!(context.read(path.path()), "unchanged");
+    Ok(())
+}
+
+#[test]
+fn freeze_missing_prefix_does_not_create_directory() {
+    let context = uv_test::test_context!("3.12");
+    let prefix = context.temp_dir.child("missing").child("prefix");
+
+    uv_snapshot!(context.filters(), context.pip_freeze()
+        .arg("--offline")
+        .arg("--prefix")
+        .arg(prefix.path()), @"
+    exit_code: 0 (success)
+    ");
+
+    assert!(!context.temp_dir.child("missing").exists());
 }
 
 #[test]

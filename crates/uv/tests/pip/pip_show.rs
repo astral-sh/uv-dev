@@ -476,6 +476,32 @@ fn show_files() {
 }
 
 #[test]
+#[cfg(all(unix, feature = "test-python"))]
+fn show_missing_prefix_in_readonly_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let parent = context.temp_dir.child("readonly");
+    fs_err::create_dir(parent.path())?;
+    let marker = parent.child("marker");
+    marker.write_str("unchanged")?;
+    let _readonly = uv_test::ReadOnlyDirectoryGuard::new(parent.path())?;
+    let prefix = parent.child("prefix");
+
+    uv_snapshot!(context.filters(), context.pip_show()
+        .arg("--offline")
+        .arg("absent-package")
+        .arg("--prefix")
+        .arg(prefix.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Package(s) not found for: absent-package
+    ");
+
+    assert!(!prefix.exists());
+    assert_eq!(context.read(marker.path()), "unchanged");
+    Ok(())
+}
+
+#[test]
 #[cfg(feature = "test-pypi")]
 fn show_target() -> Result<()> {
     let context = uv_test::test_context!("3.12");
