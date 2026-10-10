@@ -762,8 +762,16 @@ impl PubGrubReportFormatter<'_> {
 
         let requested_ranges = requested_ranges(derivation_tree);
 
-        let mut pending = vec![(derivation_tree, inherited_exclude_newer_ranges.clone())];
-        while let Some((derivation_tree, inherited_exclude_newer_ranges)) = pending.pop() {
+        let mut exclude_newer_ranges = Self::subtree_exclude_newer_ranges(derivation_tree);
+        for (name, range) in inherited_exclude_newer_ranges {
+            exclude_newer_ranges
+                .entry(name.clone())
+                .and_modify(|existing| *existing = existing.union(range))
+                .or_insert_with(|| range.clone());
+        }
+
+        let mut pending = vec![derivation_tree];
+        while let Some(derivation_tree) = pending.pop() {
             match derivation_tree {
                 DerivationTree::External(External::Custom(package, set, reason)) => {
                     if matches!(
@@ -903,11 +911,10 @@ impl PubGrubReportFormatter<'_> {
                                 .get(name)
                                 .is_some_and(|versions| versions.iter().any(|v| set.contains(v)));
                             if no_included_in_set && available_has_versions_in_set {
-                                let version_hint_set =
-                                    inherited_exclude_newer_ranges.get(name).map_or_else(
-                                        || set.clone(),
-                                        |exclude_newer_range| set.union(exclude_newer_range),
-                                    );
+                                let version_hint_set = exclude_newer_ranges.get(name).map_or_else(
+                                    || set.clone(),
+                                    |exclude_newer_range| set.union(exclude_newer_range),
+                                );
                                 let matching_version = self.exclude_newer_version_hint(
                                     name,
                                     &version_hint_set,
@@ -979,30 +986,8 @@ impl PubGrubReportFormatter<'_> {
                 }
                 DerivationTree::External(External::NotRoot(..)) => {}
                 DerivationTree::Derived(derived) => {
-                    let cause1_exclude_newer_ranges =
-                        Self::subtree_exclude_newer_ranges(&derived.cause1);
-                    let cause2_exclude_newer_ranges =
-                        Self::subtree_exclude_newer_ranges(&derived.cause2);
-
-                    let mut cause1_inherited_exclude_newer_ranges =
-                        inherited_exclude_newer_ranges.clone();
-                    for (name, range) in &cause2_exclude_newer_ranges {
-                        cause1_inherited_exclude_newer_ranges
-                            .entry(name.clone())
-                            .and_modify(|existing| *existing = existing.union(range))
-                            .or_insert_with(|| range.clone());
-                    }
-
-                    let mut cause2_inherited_exclude_newer_ranges = inherited_exclude_newer_ranges;
-                    for (name, range) in &cause1_exclude_newer_ranges {
-                        cause2_inherited_exclude_newer_ranges
-                            .entry(name.clone())
-                            .and_modify(|existing| *existing = existing.union(range))
-                            .or_insert_with(|| range.clone());
-                    }
-
-                    pending.push((&derived.cause2, cause2_inherited_exclude_newer_ranges));
-                    pending.push((&derived.cause1, cause1_inherited_exclude_newer_ranges));
+                    pending.push(&derived.cause2);
+                    pending.push(&derived.cause1);
                 }
             }
         }
@@ -1013,7 +998,10 @@ impl PubGrubReportFormatter<'_> {
     fn subtree_exclude_newer_ranges(
         derivation_tree: &ErrorTree,
     ) -> FxHashMap<PackageName, Range<Version>> {
-        let mut exclude_newer_ranges: FxHashMap<PackageName, Range<Version>> = FxHashMap::default();
+        type VersionBounds = (Bound<Version>, Bound<Version>);
+
+        let mut exclude_newer_ranges: FxHashMap<PackageName, Vec<VersionBounds>> =
+            FxHashMap::default();
         let mut trees = vec![derivation_tree];
         while let Some(derivation_tree) = trees.pop() {
             match derivation_tree {
@@ -1028,8 +1016,12 @@ impl PubGrubReportFormatter<'_> {
                         if let Some(name) = package.name() {
                             exclude_newer_ranges
                                 .entry(name.clone())
-                                .and_modify(|set| *set = set.union(versions))
-                                .or_insert_with(|| versions.clone());
+                                .or_default()
+                                .extend(
+                                    versions
+                                        .iter()
+                                        .map(|(lower, upper)| (lower.cloned(), upper.cloned())),
+                                );
                         }
                     }
                 }
@@ -1041,6 +1033,9 @@ impl PubGrubReportFormatter<'_> {
             }
         }
         exclude_newer_ranges
+            .into_iter()
+            .map(|(name, ranges)| (name, ranges.into_iter().collect()))
+            .collect()
     }
 
     /// Return the latest version in `set` that is available for resolver error reporting,
@@ -2780,11 +2775,14 @@ fn padded<'a, T: std::fmt::Display + ?Sized>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use pubgrub::{DefaultStringReporter, Reporter};
-    use uv_distribution_types::RequiresPython;
+    use uv_distribution_types::{ExcludeNewerValue, RequiresPython};
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
 
     use super::*;
+    use crate::{ExcludeNewer, Manifest};
 
     fn derived(
         cause1: DerivationTree<PubGrubPackage, Range<Version>, UnavailableReason>,
@@ -2869,6 +2867,165 @@ mod tests {
                 report(&tree, &formatter),
                 DefaultStringReporter::report_with_formatter(&tree, &formatter)
             );
+        }
+    }
+
+    #[test]
+    fn exclude_newer_hints_collect_ranges_across_branches() {
+        let package_name: PackageName = "example".parse().expect("valid package name");
+        let package = PubGrubPackage::base(package_name.clone());
+        let requested = Version::new([2_u64]);
+        let first_excluded = Version::new([4_u64]);
+        let second_excluded = Version::new([6_u64]);
+        let inherited = Version::new([8_u64]);
+        let ignored = Version::new([10_u64]);
+        let ineligible_name: PackageName = "ineligible".parse().expect("valid package name");
+        let ineligible_package = PubGrubPackage::base(ineligible_name.clone());
+
+        let no_versions = DerivationTree::External(External::NoVersions(
+            package.clone(),
+            Range::singleton(requested.clone()),
+        ));
+        let first_branch = derived(
+            no_versions.clone(),
+            DerivationTree::External(External::Custom(
+                package.clone(),
+                Range::singleton(first_excluded.clone()),
+                UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
+                    IncompatibleDist::Wheel(IncompatibleWheel::ExcludeNewer(None)),
+                )),
+            )),
+            None,
+        );
+        let second_branch = derived(
+            DerivationTree::External(External::Custom(
+                package.clone(),
+                Range::singleton(second_excluded.clone()),
+                UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
+                    IncompatibleDist::Source(IncompatibleSource::ExcludeNewer(None)),
+                )),
+            )),
+            no_versions,
+            None,
+        );
+        let ignored_and_ineligible = derived(
+            DerivationTree::External(External::Custom(
+                package,
+                Range::singleton(ignored.clone()),
+                UnavailableReason::Version(UnavailableVersion::InvalidMetadata),
+            )),
+            derived(
+                DerivationTree::External(External::NoVersions(
+                    ineligible_package.clone(),
+                    Range::singleton(Version::new([1_u64])),
+                )),
+                DerivationTree::External(External::Custom(
+                    ineligible_package,
+                    Range::singleton(ignored.clone()),
+                    UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
+                        IncompatibleDist::Wheel(IncompatibleWheel::ExcludeNewer(None)),
+                    )),
+                )),
+                None,
+            ),
+            None,
+        );
+
+        let mut fixture = FormatterFixture::new();
+        fixture.available_versions.insert(
+            package_name.clone(),
+            BTreeSet::from([
+                requested,
+                first_excluded,
+                second_excluded.clone(),
+                inherited.clone(),
+                ignored.clone(),
+            ]),
+        );
+        fixture
+            .available_versions
+            .insert(ineligible_name, BTreeSet::from([ignored]));
+        let formatter = fixture.formatter();
+        let options = Options {
+            exclude_newer: ExcludeNewer::global(ExcludeNewerValue::absolute(
+                "2022-01-01T00:00:00Z".parse().expect("valid timestamp"),
+            )),
+            ..Options::default()
+        };
+        let environment = ResolverEnvironment::universal(vec![]);
+        let selector =
+            CandidateSelector::for_resolution(&options, &Manifest::simple(vec![]), &environment);
+        let index = InMemoryIndex::default();
+        index.implicit().done(
+            package_name.clone(),
+            Arc::new(VersionsResponse::Found(vec![])),
+        );
+        let marker_environment = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+            implementation_name: "cpython",
+            implementation_version: "3.12.0",
+            os_name: "posix",
+            platform_machine: "x86_64",
+            platform_python_implementation: "CPython",
+            platform_release: "",
+            platform_system: "Linux",
+            platform_version: "",
+            python_full_version: "3.12.0",
+            python_version: "3.12",
+            sys_platform: "linux",
+        })
+        .expect("valid marker environment");
+
+        for (tree, inherited_ranges, expected_version) in [
+            (
+                derived(
+                    derived(first_branch.clone(), second_branch.clone(), None),
+                    ignored_and_ineligible.clone(),
+                    None,
+                ),
+                FxHashMap::default(),
+                second_excluded.clone(),
+            ),
+            (
+                derived(
+                    ignored_and_ineligible,
+                    derived(second_branch, first_branch, None),
+                    None,
+                ),
+                FxHashMap::from_iter([(package_name.clone(), Range::singleton(inherited.clone()))]),
+                inherited,
+            ),
+        ] {
+            let mut hints = IndexSet::default();
+            formatter.generate_hints(
+                &tree,
+                &index,
+                &selector,
+                &IndexLocations::default(),
+                &IndexCapabilities::default(),
+                &FxHashMap::default(),
+                &FxHashMap::default(),
+                &FxHashMap::default(),
+                &ForkUrls::default(),
+                &ForkIndexes::default(),
+                &environment,
+                &marker_environment,
+                None,
+                &BTreeSet::default(),
+                &options,
+                &inherited_ranges,
+                &mut hints,
+            );
+
+            assert_eq!(hints.len(), 1);
+            assert!(matches!(
+                hints.get_index(0),
+                Some(PubGrubHint::ExcludeNewer {
+                    package,
+                    source: EffectiveExcludeNewerSource::Global,
+                    matching_version: Some(ExcludeNewerVersionDetail { version, .. }),
+                    ..
+                }) if package == &package_name && version == &expected_version
+            ));
         }
     }
 
