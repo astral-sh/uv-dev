@@ -28,6 +28,13 @@ pub fn tempfile_in(path: &Path) -> io::Result<NamedTempFile> {
     Ok(NamedTempFile(file))
 }
 
+/// Return a temporary file with owner-only access on Unix, retaining Windows long-path support.
+///
+/// Use this to stage existing contents before applying the destination's retained permissions.
+pub fn tempfile_in_private(path: &Path) -> io::Result<NamedTempFile> {
+    tempfile::NamedTempFile::new_in(verbatim_path(path)).map(NamedTempFile)
+}
+
 impl NamedTempFile {
     #[expect(clippy::disallowed_types, reason = "tempfile exposes a std::fs::File")]
     pub fn as_file(&self) -> &std::fs::File {
@@ -74,4 +81,26 @@ pub struct PersistError {
     #[source]
     pub error: io::Error,
     pub file: NamedTempFile,
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io;
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::tempfile_in_private;
+
+    #[test]
+    fn replacement_staging_is_private_before_writing() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let file = tempfile_in_private(directory.path())?;
+        let mode = file.as_file().metadata()?.permissions().mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "staging must never grant group or other access"
+        );
+        assert_eq!(file.as_file().metadata()?.len(), 0);
+        Ok(())
+    }
 }

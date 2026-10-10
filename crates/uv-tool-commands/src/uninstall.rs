@@ -15,7 +15,7 @@ use uv_command_support::Printer;
 /// Uninstall a tool.
 pub async fn uninstall(name: Vec<PackageName>, printer: Printer) -> Result<ExitStatus> {
     let installed_tools = InstalledTools::from_settings()?.init()?;
-    let _lock = match installed_tools.lock().await {
+    let _lock = match installed_tools.lock_for_removal().await {
         Ok(lock) => lock,
         Err(err)
             if err
@@ -133,7 +133,12 @@ async fn do_uninstall(
     } else {
         let mut entrypoints = vec![];
         for name in names {
-            let Some(receipt) = installed_tools.get_tool_receipt(&name)? else {
+            let receipt = match installed_tools.get_tool_receipt(&name) {
+                Ok(receipt) => receipt,
+                Err(uv_tool::Error::MetadataRecover(..)) => None,
+                Err(err) => return Err(err.into()),
+            };
+            let Some(receipt) = receipt else {
                 // If the tool is not installed properly, attempt to remove the environment anyway.
                 match installed_tools.remove_environment(&name) {
                     Ok(()) => {

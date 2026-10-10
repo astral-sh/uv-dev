@@ -5941,6 +5941,206 @@ fn tool_install_lock_supports_local_wheel() {
     });
 }
 
+/// A reader recovers an interrupted metadata update even when tool locks are disabled.
+#[test]
+fn tool_metadata_recovery_before_reading_legacy_receipt() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.workspace_root.join("test/links");
+    context
+        .tool_install()
+        .arg("simple-launcher")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let directory = context.temp_dir.child("tools/simple-launcher");
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    let legacy_receipt = receipt.replace(
+        "requirements = [{ name = \"simple-launcher\" }]",
+        "requirements = [\"simple-launcher\"]",
+    );
+    assert_ne!(receipt, legacy_receipt);
+    let lock = fs_err::read(directory.child("uv.lock"))?;
+
+    // Reproduce interruption after removing the lock and replacing the receipt, before commit.
+    let journal = directory.child(".uv-metadata");
+    journal.create_dir_all()?;
+    journal.child("uv.lock").write_binary(&lock)?;
+    journal
+        .child("uv-receipt.toml")
+        .write_str(&legacy_receipt)?;
+    journal.child("journal.toml").write_str(indoc! {"
+        version = 1
+        receipt = true
+        lock = true
+    "})?;
+    fs_err::remove_file(directory.child("uv.lock"))?;
+    directory
+        .child("uv-receipt.toml")
+        .write_str("incomplete operation")?;
+
+    uv_snapshot!(context.filters(), context.tool_list().arg("--no-preview"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    simple-launcher v0.1.0
+    - simple_launcher
+    ");
+    assert_eq!(fs_err::read(directory.child("uv.lock"))?, lock);
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        legacy_receipt
+    );
+    journal.assert(predicate::path::missing());
+
+    // A successful installation without tool locks commits their absence with its new receipt.
+    context
+        .tool_install()
+        .arg("simple-launcher")
+        .args(["--reinstall", "--no-preview", "--no-index", "--find-links"])
+        .arg(&links)
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    directory
+        .child("uv.lock")
+        .assert(predicate::path::missing());
+    journal.assert(predicate::path::missing());
+    uv_snapshot!(context.filters(), context.tool_list(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    simple-launcher v0.1.0
+    - simple_launcher
+    ");
+    Ok(())
+}
+
+#[test]
+fn tool_metadata_missing_backup_is_not_an_empty_tool_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_missing_file_error()
+        .with_tool_dirs();
+    let journal = context.temp_dir.child("tools/simple-launcher/.uv-metadata");
+    journal.create_dir_all()?;
+    journal.child("journal.toml").write_str(indoc! {"
+        version = 1
+        receipt = false
+        lock = true
+    "})?;
+    uv_snapshot!(context.filters(), context.tool_list(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to recover tool metadata at `[TEMP_DIR]/tools/simple-launcher`
+      cause: failed to open file `[TEMP_DIR]/tools/simple-launcher/.uv-metadata/uv.lock`: [OS ERROR 2]
+    ");
+    journal
+        .child("journal.toml")
+        .assert(predicate::path::exists());
+    Ok(())
+}
+
+#[test]
+fn tool_metadata_recovery_preserves_unowned_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_tool_dirs();
+    let directory = context.temp_dir.child("tools/simple-launcher/.uv-metadata");
+    directory.create_dir_all()?;
+    directory
+        .child("unrelated.txt")
+        .write_str("unrelated contents")?;
+    uv_snapshot!(context.filters(), context.tool_list(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to recover tool metadata at `[TEMP_DIR]/tools/simple-launcher`
+      cause: Unrecognized tool metadata journal without a record
+    ");
+    assert_eq!(
+        fs_err::read_to_string(directory.child("unrelated.txt"))?,
+        "unrelated contents"
+    );
+    Ok(())
+}
+
+#[test]
+fn tool_metadata_committed_cleanup_does_not_block_readers() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.workspace_root.join("test/links");
+    context
+        .tool_install()
+        .args(["simple-launcher", "--no-index", "--find-links"])
+        .arg(&links)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let directory = context.temp_dir.child("tools/simple-launcher");
+    let receipt = fs_err::read(directory.child("uv-receipt.toml"))?;
+    let lock = fs_err::read(directory.child("uv.lock"))?;
+    let journal = directory.child(".uv-metadata");
+    journal.create_dir_all()?;
+    journal.child("uv-receipt.toml").write_str("old receipt")?;
+    journal.child("uv.lock").write_str("old lock")?;
+    journal.child("committed.toml").write_str(indoc! {"
+        version = 1
+        receipt = true
+        lock = true
+    "})?;
+    journal.child("unrelated.txt").write_str("keep")?;
+
+    uv_snapshot!(context.filters(), context.tool_list(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    simple-launcher v0.1.0
+    - simple_launcher
+    ");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["simple-launcher", "--no-index", "--find-links"])
+        .arg(&links)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Tool metadata journal `[TEMP_DIR]/tools/simple-launcher/.uv-metadata` still needs cleanup
+    ");
+    assert_eq!(fs_err::read(directory.child("uv-receipt.toml"))?, receipt);
+    assert_eq!(fs_err::read(directory.child("uv.lock"))?, lock);
+    assert_eq!(
+        fs_err::read_to_string(journal.child("uv-receipt.toml"))?,
+        "old receipt"
+    );
+    assert_eq!(
+        fs_err::read_to_string(journal.child("uv.lock"))?,
+        "old lock"
+    );
+    assert_eq!(
+        fs_err::read_to_string(journal.child("unrelated.txt"))?,
+        "keep"
+    );
+    journal
+        .child("committed.toml")
+        .assert(predicate::path::exists());
+
+    fs_err::remove_file(journal.child("unrelated.txt"))?;
+    context
+        .tool_install()
+        .args(["simple-launcher", "--no-index", "--find-links"])
+        .arg(&links)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    journal.assert(predicate::path::missing());
+    Ok(())
+}
+
 #[test]
 fn tool_install_lock_verifies_hashes() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_tool_dirs();

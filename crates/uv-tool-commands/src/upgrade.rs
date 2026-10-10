@@ -627,12 +627,13 @@ async fn upgrade_tool(
             printer,
         )?;
     } else if tool_locks {
-        ToolLock::write(&tool_dir, tool_lock.as_ref())?;
-        installed_tools.add_tool_receipt(
+        ToolLock::write_metadata(
+            installed_tools,
             name,
             existing_tool_receipt
                 .clone()
                 .with_options(ToolOptions::from(options)),
+            tool_lock.as_ref(),
         )?;
     }
 
