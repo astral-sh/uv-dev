@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22094,
+        "title": "Use tar-codec by default",
+        "url": "https://github.com/astral-sh/uv/pull/22094",
+        "state": "merged",
+        "reason": "Changed the default tar backend for uv 0.13.0. Its release notes explicitly describe rejection of previously accepted hard-link archives and document UV_LEGACY_TAR_BACKEND=1. The current extraction policy confirms hard-link rejection, matching the reported error."
+      },
+      {
+        "kind": "issue",
+        "number": 11223,
+        "title": "v0.5.27 fails to install pybabel-json==0.2.0",
+        "url": "https://github.com/astral-sh/uv/issues/11223",
+        "state": "closed",
+        "reason": "The same package version previously failed during hard-link extraction. A maintainer confirmed that a fix had merged; it shipped in uv 0.5.28. That failure involved incorrect link-target resolution, whereas this report shows explicit rejection by the new backend."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11221,
+        "title": "Fix hardlinks in tar unpacking",
+        "url": "https://github.com/astral-sh/uv/pull/11221",
+        "state": "merged",
+        "reason": "Historical fix released in uv 0.5.28 for hard-link targets incorrectly resolved relative to the member's parent directory. Establishes that hard-link extraction support had been restored before the uv 0.13.0 backend change."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs for pybabel-json, the exact hard-link policy error, Invalid tar file, 0.13.0 extraction failures, hardlink/hard-link archive handling, tar-codec, and UV_LEGACY_TAR_BACKEND. Supplemented PR keyword searches, which omitted known matches, with recent all-state PR listings and changelog-linked PRs. Inspected candidate bodies, comments, reviews, and historical references, including astral-sh/uv#11213. Ruled out astral-sh/uv#21641 (connection resets), astral-sh/uv#12163 and astral-sh/uv#1858 (different symlink failures), and astral-sh/uv#21128 (missing diagnostic hint). astral-sh/uv#22425 was closed without merging and only proposed compatibility documentation. No existing open tracker for this regression was found."
+  },
+  "type": "bug",
+  "type_reason": "A previously supported package fails because uv 0.13.0's default tar extraction policy rejects hard links. The earlier same-package failure was fixed in uv 0.5.28 by astral-sh/uv#11221, so this is a new compatibility regression, not a duplicate of astral-sh/uv#11223. The documented stricter policy explains the failure but does not negate the compatibility bug. No open issue or PR tracking this regression was found.",
+  "summary": "astral-sh/uv#22094 explains the uv 0.13.0 hard-link rejection and provides a legacy-backend workaround. The earlier same-package failure in astral-sh/uv#11223 was fixed by astral-sh/uv#11221 in uv 0.5.28.",
+  "draft_response": "uv 0.13.0 switched to tar-codec in astral-sh/uv#22094, and its extraction policy rejects hard links. The earlier failure in astral-sh/uv#11223 was fixed by astral-sh/uv#11221 in uv 0.5.28; this is a new compatibility regression with the default backend. Please try `UV_LEGACY_TAR_BACKEND=1 uv sync`, the documented workaround, and let us know whether it succeeds."
+}
