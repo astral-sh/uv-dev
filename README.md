@@ -1,4 +1,4 @@
-# `uv tool upgrade --all` reports `Nothing to upgrade` despite outdated tools
+# Bug: `uv tool upgrade --all` reports `Nothing to upgrade` despite outdated tools
 
 Issue: astral-sh/uv#22497
 
@@ -12,6 +12,8 @@ The outdated-list/upgrade-no-op symptom is reproducible on uv 0.13.0 with the re
 
 With default resolution settings, an otherwise equivalent reproduction on uv 0.13.0 and Python 3.15.0 successfully upgrades tombi from 1.8.1 to 1.8.4. The runner is Linux x86_64, so the reported Darwin arm64 environment was not exercised. Installing with `@latest` saves no version pin in either experiment.
 
+The reporter has now supplied their global configuration: it enables all preview features, uses managed Python only, explicitly disables exclude-newer, and contains no resolution override. The earlier isolated reproduction did not exercise this configuration. The saved tool receipt and verbose upgrade output are still missing, so neither lowest resolution nor preview behavior is established as the cause.
+
 The historical fix in astral-sh/uv#18586 is included in 0.13.0. Neither that fix nor the closure of astral-sh/uv#19704 establishes a cause for this report. The saved receipt and verbose upgrade output remain the most useful next evidence.
 
 ## Classification
@@ -22,7 +24,24 @@ The report alleges an upgrade correctness failure and insufficient explanation. 
 
 The reporter uses uv 0.13.0 (commit 4ecd0eff2a81e3ffdcd7cfee10d08936e4747c17, October 9, 2026), Python 3.15.0, and Darwin 27.0.0 arm64. They installed tombi with `uv tool install tombi@latest`. After a later release, `uv tool list --outdated` reports `tombi v1.8.1 [latest: 1.8.4]`, but `uv tool upgrade --all` prints `Nothing to upgrade` and leaves 1.8.1 installed.
 
-The report explicitly denies version bounds and an exclude-newer setting. It supplies no saved receipt, resolution strategy, index configuration, verbose upgrade output, or last-known-good uv version. It requests an upgrade to an allowed newer version and an explanation when configuration or constraints prevent an upgrade.
+The report explicitly denies version bounds and an active exclude-newer cutoff. The supplied global configuration explicitly sets `exclude-newer = false` and contains no resolution or index override. The saved receipt, effective resolution strategy and index settings, verbose upgrade output, and last-known-good uv version remain unavailable. The report requests an upgrade to an allowed newer version and an explanation when configuration or constraints prevent an upgrade.
+
+### Reported global configuration
+
+In the reporter's October 12, 2026 reply to the maintainer's configuration question (comment ID 6129571723 on astral-sh/uv#22497), they supplied these settings from `~/.config/uv/uv.toml`:
+
+| Setting | Reported value |
+| --- | --- |
+| `required-version` | `">=0.13.0"` |
+| `python-preference` | `"only-managed"` |
+| `preview-features` | `true` |
+| `exclude-newer` | `false` |
+| `[audit] malware-check` | `true` |
+| `[pip] strict` | `true` |
+
+These are reporter-supplied current settings, not a captured effective configuration or an installation-time receipt. No `resolution` or index setting appears in the supplied file. This does not establish what was persisted when tombi was installed, and does not confirm the lowest-direct explanation reproduced below.
+
+Preview mode is an additional reproduction condition. In the inspected checkout, `PreviewOption::resolve` in `crates/uv-settings/src/settings.rs` maps `preview-features = true` to `Preview::all()`. `PreviewFeature::ToolInstallLocks` is defined in `crates/uv-preview/src/lib.rs`, and both tool installation and upgrade branch on that feature in `crates/uv-tool-commands/src/install.rs` and `upgrade.rs`. This establishes a relevant code path to investigate, not a preview-related root cause. The reporter's actual tool lockfile and resolver trace have not been supplied.
 
 ## Reproduction
 
@@ -137,7 +156,7 @@ Read the setup and assertions of the following integration tests:
 
 These modules are gated by `test-python` and `test-pypi` in `crates/uv/tests/tool/main.rs`. The test context also applies a fixed exclude-newer timestamp, which the reproduction deliberately did not use. No direct test of the full tombi sequence was found, and no matching tool-upgrade test was found under `crates/uv-client/tests/it/`. During the initial reproduction, existing Rust tests were inspected, not executed; behavioral checks used the installed uv binary. The subsequent fix investigation built and ran the focused debug-profile tests listed below.
 
-No last-known-good uv release is specified, so no before/after version comparison was made. The same reported uv and Python versions were tested, but native Darwin arm64 behavior and the reporter's actual configuration remain untested.
+No last-known-good uv release is specified, so no before/after version comparison was made. The same reported uv and Python versions were tested, but native Darwin arm64 behavior and the newly supplied global configuration remain untested. The recorded isolated commands do not enable preview features; the successful default-settings control therefore does not rule out a failure specific to the reporter's preview-enabled setup.
 
 ## Related
 
@@ -149,7 +168,7 @@ No last-known-good uv release is specified, so no before/after version compariso
 
 - astral-sh/uv#19704 (issue, closed) — Issue with tool versioning. Same outdated-list/upgrade-no-op symptom on uv 0.11.19. A maintainer requested verbose upgrade output to check for pins; the reporter supplied verbose list output and closed after installing markitdown@latest. No fixing PR or confirmed cause appears in its timeline, so closure does not establish a fix.
 
-- astral-sh/uv#22468 (issue, open) — Bug: `uv tool upgrade` doesn't respect changes to the global `exclude-newer` setting. Adjacent upgrade blocker on the same uv, Python and platform versions: an inherited cooldown persists in the tool receipt after global configuration changes. This makes saved receipt options relevant evidence, but the new report denies exclude-newer configuration and does not establish that mechanism; it is not a confirmed duplicate.
+- astral-sh/uv#22468 (issue, open) — Bug: `uv tool upgrade` doesn't respect changes to the global `exclude-newer` setting. Adjacent upgrade blocker on the same uv, Python and platform versions: an inherited cooldown persists in the tool receipt after global configuration changes. This makes saved receipt options relevant evidence. The reporter now shows `exclude-newer = false` in the current global config, but no receipt or prior configuration history; retained cooldown settings are neither established nor ruled out. It is not a confirmed duplicate.
 
 - astral-sh/uv#16081 (pull request, merged) — Surface pinned-version hint when `uv tool upgrade` can’t move the tool. Implemented the exact-pin explanation requested in astral-sh/uv#15665; current source and integration tests contain that hint. Relevant to the secondary request for an explanation, but it only diagnoses exact version pins, and @latest does not persist such a pin.
 
@@ -215,12 +234,14 @@ The original parent file `crates/uv/tests/tool/tool_upgrade.rs` remains the only
 
 No release build, full test suite, dependency changes, commits, pushes, or GitHub writes were performed. Native Darwin arm64 was not tested. The original reporter's sanitized receipt and verbose resolver output are still needed to determine whether this diagnostic addresses their installation.
 
-## Follow-up and suggested response
+## Follow-up and remaining evidence
 
 The default-settings reproduction upgrades successfully. A saved `resolution = "lowest-direct"` setting can produce the same outdated-list/no-op mismatch without version bounds or exclude-newer, but it also produced a warning in the test. Check the reporter's saved settings before concluding that this explains their installation.
 
-Before reinstalling tombi changes the evidence, request `uv tool upgrade tombi -v`, `uv tool list --outdated --show-version-specifiers --show-python`, and the non-secret requirements, constraints, overrides, resolution, index identities, and exclude-newer settings from tombi's `uv-receipt.toml` and effective uv configuration. Ask for diagnostic material with credentials removed. If lowest resolution is present, `uv tool upgrade tombi --resolution highest` is a useful targeted comparison. If it is absent, the verbose resolver trace and native macOS reproduction are still needed.
+The global configuration question has been answered; the supplied file should be used as an input to the next isolated reproduction. Compare preview-enabled and preview-disabled behavior using separate tool environments and the same release-transition fixture, including the reported managed-Python preference and disabled cutoff. This comparison has not been performed, and disabling preview is not a confirmed workaround.
+
+Before reinstalling tombi changes the evidence, the remaining diagnostic material is `uv tool upgrade tombi -v`, `uv tool list --outdated --show-version-specifiers --show-python`, and the non-secret requirements, constraints, overrides, resolution, index identities, and exclude-newer settings from tombi's `uv-receipt.toml`. Any tool `uv.lock` should also be considered when investigating the preview path, using only diagnostic metadata with credentials removed. Effective environment or CLI overrides and installation-time configuration remain unknown. If lowest resolution is present, `uv tool upgrade tombi --resolution highest` is a useful targeted comparison. If it is absent, the verbose resolver trace, preview comparison, and native macOS reproduction remain necessary to narrow the cause.
 
 The initial reproduction wrote only the issue-context README and temporary files. The fix changes only `crates/uv-tool-commands/src/upgrade.rs` and `crates/uv/tests/tool/tool_upgrade.rs`, plus this README outside the checkout. No GitHub state was changed. Credentials were not inspected or exposed.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/2606
+Pull request: astral-sh/uv-dev#2606
