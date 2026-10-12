@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18522,
+        "title": "`uv tool upgrade --all` does not update anything",
+        "url": "https://github.com/astral-sh/uv/issues/18522",
+        "state": "closed",
+        "reason": "Closest historical symptom match: on uv 0.10.10, outdated tools, including tombi, remained unchanged with 'Nothing to upgrade', while reinstalling with @latest worked. Closed by astral-sh/uv#18586, which fixed outdated checks ignoring saved settings. The new report occurs after that fix and explicitly excludes a configured cooldown."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18586,
+        "title": "Respect installed settings in `uv tool list --outdated`",
+        "url": "https://github.com/astral-sh/uv/pull/18586",
+        "state": "merged",
+        "reason": "Merged March 21, 2026, closing astral-sh/uv#18522. Its diff makes outdated checks use saved index, prerelease and exclude-newer settings and consider the tool interpreter; its regression test covers a saved exclude-newer cutoff. Commit ancestry confirms this fix is in 0.13.0, but the same underlying failure has not been established here."
+      },
+      {
+        "kind": "issue",
+        "number": 19704,
+        "title": "Issue with tool versioning",
+        "url": "https://github.com/astral-sh/uv/issues/19704",
+        "state": "closed",
+        "reason": "Same outdated-list/upgrade-no-op symptom on uv 0.11.19. A maintainer requested verbose upgrade output to check for pins; the reporter supplied verbose list output and closed after installing markitdown@latest. No fixing PR or confirmed cause appears in its timeline, so closure does not establish a fix."
+      },
+      {
+        "kind": "issue",
+        "number": 22468,
+        "title": "Bug: `uv tool upgrade` doesn't respect changes to the global `exclude-newer` setting",
+        "url": "https://github.com/astral-sh/uv/issues/22468",
+        "state": "open",
+        "reason": "Adjacent upgrade blocker on the same uv, Python and platform versions: an inherited cooldown persists in the tool receipt after global configuration changes. This makes saved receipt options relevant evidence, but the new report denies exclude-newer configuration and does not establish that mechanism; it is not a confirmed duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16081,
+        "title": "Surface pinned-version hint when `uv tool upgrade` can’t move the tool",
+        "url": "https://github.com/astral-sh/uv/pull/16081",
+        "state": "merged",
+        "reason": "Implemented the exact-pin explanation requested in astral-sh/uv#15665; current source and integration tests contain that hint. Relevant to the secondary request for an explanation, but it only diagnoses exact version pins, and @latest does not persist such a pin."
+      },
+      {
+        "kind": "issue",
+        "number": 13968,
+        "title": "Warn when `--upgrade-package <name>` does not result in an upgrade",
+        "url": "https://github.com/astral-sh/uv/issues/13968",
+        "state": "open",
+        "reason": "Tracks the broader request to explain why requested upgrades cannot proceed, with maintainer discussion of resolver incompatibilities and Python requirements. It concerns --upgrade-package diagnostics rather than this tool-upgrade failure, so it overlaps only with the report's secondary request."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed and merged PRs through authenticated gh. Separated upgrade failure from missing explanations. Literal searches covered 'Nothing to upgrade', tool upgrade, tool list --outdated, @latest, tombi and 0.13.0; conceptual searches covered upgrade refusal, pins, constraints, warnings and area:uv-tool. Separately searched saved exclude-newer settings as a possible cause. PR searches returned no hits; followed issue timelines to inspect merged fixes, comments, diffs and release ancestry. Ruled out astral-sh/uv#19325 (dependency-only upgrades missing from the list), astral-sh/uv#8276 (explicit pins), astral-sh/uv#17548 (Windows executable-copy failure), and astral-sh/uv#21058 / astral-sh/uv#21368 (invalid tool directories, already fixed). Also checked astral-sh/uv#18819 / astral-sh/uv#18861 (exclude-newer support), astral-sh/uv#12052 (unreproduced transient failure) and astral-sh/uv#13733 (project dependency upgrade conflicts). No confirmed open duplicate of the reported failure was found."
+  },
+  "type": "bug",
+  "type_reason": "The report describes a failed upgrade and misleading output for an allegedly unconstrained tool. The similar historical bug in astral-sh/uv#18522 was fixed by astral-sh/uv#18586, and that fix is included in 0.13.0. This recurrence warrants investigation as a possible regression or an uncovered case, not closure as a duplicate of the fixed issue. The underlying mechanism remains unconfirmed; the inspected open issues do not establish the same failure.",
+  "summary": "Closest matches are astral-sh/uv#18522 and its merged fix astral-sh/uv#18586, plus the unresolved cause behind closed astral-sh/uv#19704. Saved cooldowns and upgrade explanations have adjacent discussions, but no confirmed open duplicate was found.",
+  "draft_response": "Installing with `@latest` does not save an exact version pin, so that syntax alone should not prevent future upgrades. astral-sh/uv#18522 was fixed by astral-sh/uv#18586, which made outdated checks respect saved tool settings; that fix is included in 0.13.0. astral-sh/uv#19704 closed after reinstalling, without a confirmed cause.\n\nBefore reinstalling tombi, please share the output of `uv tool upgrade tombi -v` and `uv tool list --outdated --show-version-specifiers --show-python`, plus tombi's saved requirements and options from its `uv-receipt.toml`, with credentials removed. Those details are needed to determine why the upgrade keeps 1.8.1 and whether this is a regression."
+}
