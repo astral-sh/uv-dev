@@ -1,7 +1,7 @@
 //! Output and process primitives shared by uv command implementations.
 
 use std::borrow::Cow;
-use std::io::stdout;
+use std::io::{Error, ErrorKind, stdout};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -130,6 +130,21 @@ impl<'a> OutputWriter<'a> {
             let output_file = fs_err::read_link(output_file)
                 .map(Cow::Owned)
                 .unwrap_or(Cow::Borrowed(output_file));
+
+            // Atomic replacement would destroy a device, FIFO, or socket instead of writing to it.
+            if let Ok(metadata) = fs_err::metadata(&output_file)
+                && !metadata.is_file()
+                && !metadata.is_dir()
+            {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "Cannot overwrite non-regular file `{}`",
+                        output_file.display()
+                    ),
+                ));
+            }
+
             let stream = anstream::adapter::strip_bytes(&self.buffer).into_vec();
             uv_fs::write_atomic(output_file, &stream).await?;
         }
