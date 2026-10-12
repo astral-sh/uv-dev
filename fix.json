@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "The shared output writer could replace special files with regular requirements files. It now rejects special destinations before atomic replacement, including targets reached through symlinks. Both parent regressions now verify rejection and FIFO preservation, while regular-file output remains unchanged.",
+  "validation": [
+    "Both parent regressions passed before modification and failed with corrected expectations before the production fix.",
+    "Six focused debug-profile integration tests passed.",
+    "Compile-to-install round trip preserved and installed six==1.16.0.",
+    "Formatting and format verification passed using the stable toolchain.",
+    "git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2597"
+}
