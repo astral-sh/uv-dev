@@ -2,23 +2,37 @@
 
 Issue: astral-sh/uv#22468
 
-Classification: bug
+Classification: bug (prior triage; maintainer considers settings retention intentional)
 
 ## Summary
 
-The core reported behavior is **reproducible** with the installed uv 0.12.13 on Linux x86_64 and Python 3.12.3. The parent integration regressions also pass against a debug build of the uv 0.13.0 checkout while asserting the unwanted behavior. The fix outcome is **not fixed**: inherited and explicit cutoffs produce indistinguishable receipts, so repairing existing installations while preserving explicit per-tool policy requires a compatibility decision. The checkout is unchanged; see the Fix section for evidence. A tool installed while the user-level configuration contains `exclude-newer = "3 days"` retains that policy after the configuration changes to `false`. Both `uv tool upgrade --all` and `uv tool upgrade --all --reinstall` keep the older tool version. With `UV_PREVIEW_FEATURES=tool-install-locks`, changing the setting to `false` or removing it retains `exclude-newer-span = "P3D"` in both the receipt and lockfile. A fresh installation with the global setting disabled selects the newer release.
+Maintainer charliermarsh considers retaining installation-time settings during upgrades intentional and recommends using `uv tool install black --upgrade --config-file /path/to/uv.toml` to change the setting. This clarifies the intended contract; the reproduction below demonstrates persistence, not by itself a violation of that contract. The suggested installation workflow has not been validated against an existing affected tool.
 
-The reporter uses uv 0.13.0 (4ecd0eff2, October 9, 2026), Python 3.15.0, and Darwin 27.0.0 arm64, and names Black as the affected tool. That exact version/platform combination was not run. The reproduction uses a dependency-free synthetic tool and a local index to ensure a release exists inside the three-day exclusion window.
+The core reported behavior is **reproducible** with the installed uv 0.12.13 on Linux x86_64 and Python 3.12.3. The parent integration regressions also pass against a debug build of the uv 0.13.0 checkout while asserting the reported persistence behavior. The prior fix investigation outcome is **not fixed**, meaning no production change was submitted. Inherited and explicit cutoffs produce indistinguishable receipts, so implementing the reporter's requested inheritance semantics for existing installations while preserving explicit per-tool policy would require a compatibility decision. The checkout is unchanged; see the Fix section for evidence. A tool installed while the user-level configuration contains `exclude-newer = "3 days"` retains that policy after the configuration changes to `false`. Both `uv tool upgrade --all` and `uv tool upgrade --all --reinstall` keep the older tool version. With `UV_PREVIEW_FEATURES=tool-install-locks`, changing the setting to `false` or removing it retains `exclude-newer-span = "P3D"` in both the receipt and lockfile. A fresh installation with the global setting disabled selects the newer release.
+
+The reporter uses uv 0.13.0 (4ecd0eff2, October 9, 2026), Python 3.15.0, and Darwin 27.0.0 arm64, and names Black as the affected tool. The current issue body installs it with `uv tool install black@latest`; the synthetic reproduction below used `uv tool install cooldown-demo`. That exact version/platform combination and Black invocation were not run. The reproduction uses a dependency-free synthetic tool and a local index to ensure a release exists inside the three-day exclusion window.
 
 The unchanged-timestamp detail is only partly reproduced: without preview locks, the receipt timestamp remains unchanged during the no-op upgrade and reinstall; with preview locks, the receipt timestamp advances. The preview lock retains a sentinel timestamp and the relative span. The CLI-workaround recommendation needs qualification: explicit CLI disabling upgrades successfully without preview locks, but only clears policy metadata in the tested preview-lock path.
 
 ## Classification
 
-Retain the bug classification for the reported failure of an inherited global policy to follow configuration changes. Reproduction establishes observable persistence and blocked upgrades; it does not by itself decide whether the intended configuration contract requires different precedence.
+The bug classification records the prior triage assessment, not maintainer agreement that the reproduced persistence is incorrect. In the supplied discussion, maintainer charliermarsh states that settings used to install a tool become part of its configuration and that upgrades intentionally retain them. This qualifies the earlier interpretation: reproduction establishes persistence and blocked upgrades under the saved cutoff, while the maintainer considers that behavior intended. No label change, issue closure, or commitment to changing inheritance semantics is established by the supplied comment.
 
-The installed `uv help tool upgrade` explicitly documents retaining settings supplied during installation. Source at checkout commit `5cc7f15` implements CLI > receipt > user configuration precedence, and receipts do not record whether `exclude-newer` came from the command line or global configuration. Retaining explicit per-tool settings is intentional; distinguishing those from inherited settings is the design question raised by this report. Changing precedence globally could discard intentional per-tool settings, and existing receipts cannot recover the original setting source.
+The installed `uv help tool upgrade` explicitly documents retaining settings supplied during installation. Source at checkout commit `5cc7f15` implements CLI > receipt > user configuration precedence, and receipts do not record whether `exclude-newer` came from the command line or global configuration. The maintainer's stated retention rule covers installation settings generally, rather than only explicit CLI values. Distinguishing inherited settings from explicit ones is the reporter's requested change to that contract. Changing precedence globally could discard intentional per-tool settings, and existing receipts cannot recover the original setting source.
 
 No regression from a previously working version was established. The behavior already occurs in the available uv 0.12.13. Related authentication and list-merging issues discuss the same precedence model but do not directly track clearing an inherited scalar cutoff.
+
+## Maintainer guidance
+
+On October 12, 2026 at 23:45 UTC, charliermarsh (repository MEMBER) commented on astral-sh/uv#22468 that the behavior appears to be working as intended: settings used during installation are part of the tool configuration and `upgrade` intentionally retains them. To change `exclude-newer`, the maintainer suggests using the installation command, for example:
+
+```console
+uv tool install black --upgrade --config-file /path/to/uv.toml
+```
+
+The configuration file should contain the desired current settings. This is guidance for updating an existing tool through `tool install`, distinct from the reporter's `tool upgrade --all --reinstall` attempt. It is also distinct from the earlier explicit `--exclude-newer false` upgrade control. The supplied discussion contains no reporter confirmation that the suggested command works. Existing validation of a fresh installation with the cutoff disabled does not validate this workflow against an already-installed tool, especially with preview locks.
+
+The comment does not address the separately observed preview-path failure to advance versions after explicit CLI disabling, or resolve the timestamp qualifications below.
 
 ## Reproduction
 
@@ -86,7 +100,7 @@ Read the setup and assertions of these integration tests:
 - `crates/uv/tests/tool/tool_install.rs`, `tool_install_locks_are_preview`: checks that installation omits `uv.lock` by default and creates it when `tool-install-locks` is enabled.
 - `crates/uv/tests/tool/tool_upgrade.rs`, `tool_upgrade_writes_preview_lock`: starts with an installation without a lock and checks that upgrading with the preview enabled writes a lock.
 
-These pre-existing tests do not cover changing an inherited global cutoff to `false` or removing it after installation. The parent regression pull request, astral-sh/uv-dev#2595, adds `tool_upgrade_disabled_global_exclude_newer` and `tool_upgrade_removed_global_exclude_newer_preview_lock` in `crates/uv/tests/tool/tool_upgrade.rs`. Both currently assert the unwanted retention behavior and pass against the debug build. The tool test modules are gated by both `test-python` and `test-pypi` in `crates/uv/tests/tool/main.rs`. The original reproduction used the installed executable; the Fix section records the focused repository test runs.
+These pre-existing tests do not cover changing an inherited global cutoff to `false` or removing it after installation. The parent regression pull request, astral-sh/uv-dev#2595, adds `tool_upgrade_disabled_global_exclude_newer` and `tool_upgrade_removed_global_exclude_newer_preview_lock` in `crates/uv/tests/tool/tool_upgrade.rs`. Both currently assert the reported retention behavior and pass against the debug build. The tool test modules are gated by both `test-python` and `test-pypi` in `crates/uv/tests/tool/main.rs`. The original reproduction used the installed executable; the Fix section records the focused repository test runs.
 
 ### Artifacts and limits
 
@@ -96,7 +110,7 @@ The exact uv 0.13.0/macOS/Python 3.15 environment, actual Black releases, and or
 
 ## Related
 
-- astral-sh/uv-dev#2595 (parent regression pull request) — Adds the global-disabling and preview-lock global-removal regressions in `crates/uv/tests/tool/tool_upgrade.rs`. Checkout commit `367b6255c9e2548b2d21871f300aa48b09e4a5d4` contains these passing assertions of the unwanted behavior.
+- astral-sh/uv-dev#2595 (parent regression pull request) — Adds the global-disabling and preview-lock global-removal regressions in `crates/uv/tests/tool/tool_upgrade.rs`. Checkout commit `367b6255c9e2548b2d21871f300aa48b09e4a5d4` contains these passing assertions of the reported behavior.
 - astral-sh/uv#8523 (open issue) — uv tool upgrade - problem with private indexes due to short living credentials. Upgrades reuse receipt values after the user updates global configuration. Maintainer comments discuss saving only explicit CLI overrides and distinguishing configuration origins. Its concrete failure concerns expiring index authentication, whereas this report requires clearing an inherited cutoff.
 - astral-sh/uv#11929 (open issue) — Upgrading tools adds an identical entry to the `index` list in uv-receipt.toml. Maintainers identify merging saved receipt settings with current filesystem settings as the cause and discuss replacement semantics. This concerns accumulating list entries; the new report concerns a saved scalar cutoff overriding changed or removed configuration.
 - astral-sh/uv#5937 (merged pull request) — Retain and respect settings in tool upgrades. Introduced persisted resolver/installer options and CLI > receipt > filesystem precedence, which remains in the upgrade implementation. This establishes the origin of the behavior, rather than an existing fix for inherited-setting removal.
@@ -146,13 +160,15 @@ Additional inspected distinctions:
 
 ## Follow-up
 
-The parent regressions already cover installation with an inherited global cooldown followed by disabling or removing it, including selected versions and saved policy. Once receipt compatibility is decided, update their assertions to the desired behavior. Keep the existing explicit relative-cutoff round trips as preservation coverage and account for the tool test feature gates.
+Validate the maintainer-recommended `uv tool install black --upgrade --config-file /path/to/uv.toml` workflow against an existing affected installation, checking selected versions and receipt/lock metadata with the intended current configuration. Cover the preview-lock case before describing the command as a verified workaround; the earlier fresh-install control is not equivalent.
 
-A maintainer decision is needed on inherited-versus-explicit policy semantics and compatibility with receipts that do not record origins. The preview-path failure to advance versions even after an explicit CLI override deserves separate investigation before presenting that override as a universal workaround. Exact uv 0.13.0/platform validation would refine these qualifications but is not needed to establish the reproduced persistence behavior.
+The maintainer has stated that upgrades intentionally retain installation settings. Do not treat the earlier desired-behavior assertions as an agreed fix specification or reverse receipt precedence without agreement to change that contract. If inherited-policy tracking is pursued, receipt-origin representation and compatibility for existing installations remain design questions. The parent regressions already cover global disabling/removal; preserve their observations and the existing explicit relative-cutoff coverage when evaluating any agreed change.
+
+The preview-path failure to advance versions even after an explicit CLI override deserves separate investigation before presenting that override as a universal workaround. Exact uv 0.13.0/platform validation would refine these qualifications but is not needed to establish the reproduced persistence behavior.
 
 ## Fix
 
-Outcome: **not_fixed**. No production fix or test modification remains in the checkout.
+Prior investigation outcome: **not_fixed**. No production fix or test modification remains in the checkout. This records the implementation attempt's outcome; the maintainer guidance above now disputes the premise that the retained settings require a fix.
 
 ### Confirmed cause and compatibility limitation
 
@@ -165,7 +181,7 @@ exclude-newer = "2024-03-22T00:00:00Z"
 exclude-newer-span = "P3D"
 ```
 
-This demonstrates that an upgrade cannot infer which existing receipt should lose its cutoff when global configuration changes. Letting global `false` or absence override every saved cutoff would also discard explicitly requested per-tool restrictions. Omitting inherited cutoffs from newly written receipts could prevent future occurrences, but alone would not repair existing installations. A complete fix needs a decision about provenance representation and the treatment of existing receipts whose origins cannot be recovered. No migration heuristic or precedence reversal was implemented.
+This demonstrates that an upgrade cannot infer which existing receipt should lose its cutoff when global configuration changes. Letting global `false` or absence override every saved cutoff would also discard explicitly requested per-tool restrictions. Omitting inherited cutoffs from newly written receipts could prevent future occurrences, but alone would not repair existing installations. Implementing the requested inheritance behavior would need a decision about provenance representation and the treatment of existing receipts whose origins cannot be recovered. The maintainer's stated contract instead retains installation settings and directs configuration changes through `tool install`. No migration heuristic or precedence reversal was implemented.
 
 ### Related paths and coverage review
 
