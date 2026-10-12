@@ -942,7 +942,6 @@ fn tool_upgrade_settings() {
     ");
 
     // `--outdated` advertises a newer version despite the saved `lowest-direct` strategy.
-    // The subsequent "Nothing to upgrade" is misleading: astral-sh/uv#22497.
     uv_snapshot!(context.filters(), context.tool_list()
         .arg("--outdated"), @"
     exit_code: 0 (success)
@@ -952,13 +951,15 @@ fn tool_upgrade_settings() {
     - blackd
     ");
 
-    // Upgrade all tools. This is a no-op because the receipt retains `lowest-direct`.
+    // Explain why the saved resolution strategy keeps the older version installed.
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Nothing to upgrade
+
+    hint: `black` uses `lowest-direct` resolution, which prefers the lowest compatible version; use `uv tool upgrade black --resolution highest` to prefer the latest compatible version.
     ");
 
     // Upgrade `black`, but override the resolution.
@@ -972,6 +973,15 @@ fn tool_upgrade_settings() {
      - black==23.1.0
      + black==24.3.0
     Installed 2 executables: black, blackd
+    ");
+
+    // The override is saved, so subsequent upgrades should not suggest changing the strategy.
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--all")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
     ");
 }
 
