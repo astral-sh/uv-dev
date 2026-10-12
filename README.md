@@ -2,21 +2,140 @@
 
 Issue: astral-sh/uv#22497
 
-Classification: bug
+Classification: bug report; conditional symptom reproduction, original cause unconfirmed
 
 ## Summary
 
-Closest matches are astral-sh/uv#18522 and its merged fix astral-sh/uv#18586, plus the unresolved cause behind closed astral-sh/uv#19704. Saved cooldowns and upgrade explanations have adjacent discussions, but no confirmed open duplicate was found.
+The outdated-list/upgrade-no-op symptom is reproducible on uv 0.13.0 with the real tombi 1.8.1 and 1.8.4 wheels when the installed tool has a saved `resolution = "lowest-direct"` setting. No version constraint or exclude-newer setting is needed. The setting can come from configuration at installation time and persists in the tool receipt. In this variant, retaining the older version follows the requested resolution strategy; the upgrade also emits a lowest-resolution warning. This is not evidence that the reporter has that setting or that their installation has the same cause.
 
-## Draft response
+With default resolution settings, an otherwise equivalent reproduction on uv 0.13.0 and Python 3.15.0 successfully upgrades tombi from 1.8.1 to 1.8.4. The runner is Linux x86_64, so the reported Darwin arm64 environment was not exercised. Installing with `@latest` saves no version pin in either experiment.
 
-Installing with `@latest` does not save an exact version pin, so that syntax alone should not prevent future upgrades. astral-sh/uv#18522 was fixed by astral-sh/uv#18586, which made outdated checks respect saved tool settings; that fix is included in 0.13.0. astral-sh/uv#19704 closed after reinstalling, without a confirmed cause.
-
-Before reinstalling tombi, please share the output of `uv tool upgrade tombi -v` and `uv tool list --outdated --show-version-specifiers --show-python`, plus tombi's saved requirements and options from its `uv-receipt.toml`, with credentials removed. Those details are needed to determine why the upgrade keeps 1.8.1 and whether this is a regression.
+The historical fix in astral-sh/uv#18586 is included in 0.13.0. Neither that fix nor the closure of astral-sh/uv#19704 establishes a cause for this report. The saved receipt and verbose upgrade output remain the most useful next evidence.
 
 ## Classification
 
-The report describes a failed upgrade and misleading output for an allegedly unconstrained tool. The similar historical bug in astral-sh/uv#18522 was fixed by astral-sh/uv#18586, and that fix is included in 0.13.0. This recurrence warrants investigation as a possible regression or an uncovered case, not closure as a duplicate of the fixed issue. The underlying mechanism remains unconfirmed; the inspected open issues do not establish the same failure.
+The report alleges an upgrade correctness failure and insufficient explanation. The reproduced configuration-dependent symptom is consistent with the documented rule that upgrades retain installation settings and with the existing `tool_upgrade_settings` integration test. It does not establish a regression or a defect in default-resolution upgrades. Keep the original report under investigation until its saved settings and resolver trace are available; do not close it as a confirmed duplicate of a historical fix or attribute it to lowest resolution without that evidence.
+
+## Report details
+
+The reporter uses uv 0.13.0 (commit 4ecd0eff2a81e3ffdcd7cfee10d08936e4747c17, October 9, 2026), Python 3.15.0, and Darwin 27.0.0 arm64. They installed tombi with `uv tool install tombi@latest`. After a later release, `uv tool list --outdated` reports `tombi v1.8.1 [latest: 1.8.4]`, but `uv tool upgrade --all` prints `Nothing to upgrade` and leaves 1.8.1 installed.
+
+The report explicitly denies version bounds and an exclude-newer setting. It supplies no saved receipt, resolution strategy, index configuration, verbose upgrade output, or last-known-good uv version. It requests an upgrade to an allowed newer version and an explanation when configuration or constraints prevent an upgrade.
+
+## Reproduction
+
+**Outcome: reproducible, conditionally.** The reported mismatch was observed with a saved lowest-direct resolution strategy, which is additional configuration absent from the report. Default settings did not produce the failure. The reporter's underlying cause remains unconfirmed.
+
+### Environment and fixture
+
+- Executable from PATH: `/opt/hostedtoolcache/uv/0.13.0/x86_64/uv`, reporting `uv 0.13.0 (x86_64-unknown-linux-gnu)`.
+- Host: Linux 6.17.0-1022-azure x86_64. Downloaded CPython 3.15.0 into the temporary reproduction directory and used it for both tool environments.
+- All fixture files, tool environments, executable directories, Python downloads, configuration, credentials directory, and caches were isolated under `/tmp/uv-22497-0o7mxaqb`. Commands ran from its `work` directory with an explicitly constructed environment, isolated XDG directories, and keyring disabled. Normal commands disabled configuration discovery; the variant installation explicitly read only the fixture's config file.
+- Downloaded the actual PyPI wheels `tombi-1.8.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` and `tombi-1.8.4-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`, and verified their SHA-256 hashes against public PyPI metadata. Both declare `Requires-Python: >=3.10` and no dependencies. PyPI also lists non-yanked macOS arm64 wheels for both versions; no missing-wheel explanation was established.
+- A local HTTP simple index at `http://127.0.0.1:18797` served the real wheels. Each scenario started with only 1.8.1 advertised. After installation, 1.8.4 was added to the same index URL. This models a new release without installing an exact pin, saving an exclude-newer cutoff, or editing a receipt. Separate `/default/simple` and `/lowest/simple` indexes and tool directories kept the two scenarios independent.
+
+### Default settings: upgrade succeeds
+
+With isolated `UV_TOOL_DIR`, `UV_TOOL_BIN_DIR`, `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, and `UV_NO_CONFIG=1`:
+
+```sh
+# The index initially advertises only tombi 1.8.1.
+uv tool install tombi@latest --python 3.15.0 \
+  --default-index http://127.0.0.1:18797/default/simple
+# Add the 1.8.4 wheel link to the same index, retaining 1.8.1.
+uv tool list --outdated --show-version-specifiers --show-python
+uv tool upgrade --all
+uv tool list --outdated
+uv tool list --show-python
+```
+
+The saved requirement was `requirements = [{ name = "tombi" }]`, with no constraint, resolution override, or exclude-newer option. The outdated listing showed:
+
+```text
+tombi v1.8.1 [CPython 3.15.0] [latest: 1.8.4]
+- tombi
+```
+
+Upgrade succeeded, exiting zero and printing:
+
+```text
+Updated tombi v1.8.1 -> v1.8.4
+ - tombi==1.8.1
+ + tombi==1.8.4
+Installed 1 executable: tombi
+```
+
+The subsequent outdated listing was empty, and the ordinary listing confirmed tombi 1.8.4 on CPython 3.15.0.
+
+### Saved lowest-direct resolution: symptom reproduced
+
+The fixture `lowest-config.toml` contained only:
+
+```toml
+resolution = "lowest-direct"
+```
+
+Using a fresh tool directory and an index initially advertising only 1.8.1, installation explicitly loaded this configuration:
+
+```sh
+uv --config-file /tmp/uv-22497-0o7mxaqb/lowest-config.toml \
+  tool install tombi@latest --python 3.15.0 \
+  --default-index http://127.0.0.1:18797/lowest/simple
+```
+
+The resulting receipt contained an unconstrained requirement and saved resolution strategy:
+
+```toml
+[tool]
+requirements = [{ name = "tombi" }]
+python = "3.15.0"
+# Entrypoint omitted here.
+
+[tool.options]
+index = [{ url = "http://127.0.0.1:18797/lowest/simple", explicit = false, default = true, format = "simple", authenticate = "auto" }]
+keyring-provider = "disabled"
+resolution = "lowest-direct"
+```
+
+After adding 1.8.4 to that same index, configuration discovery was disabled (`UV_NO_CONFIG=1`) so the saved receipt alone supplied the resolution strategy:
+
+```sh
+uv tool list --outdated --show-version-specifiers --show-python
+uv tool upgrade --all
+uv tool list --show-version-specifiers --show-python
+```
+
+The outdated listing again reported 1.8.4. Upgrade exited zero and produced:
+
+```text
+warning: The direct dependency `tombi` is unpinned. Consider setting a lower bound when using `--resolution lowest` or `--resolution lowest-direct` to avoid using outdated versions.
+Nothing to upgrade
+```
+
+The ordinary listing confirmed that 1.8.1 remained installed. Unlike the report's excerpt, this reproduction includes a warning; it establishes the mismatch and no-op summary, not identical full output.
+
+Overriding the saved strategy confirmed its effect in this fixture:
+
+```sh
+uv tool upgrade --all --resolution highest
+uv tool list --outdated
+uv tool list --show-python
+```
+
+This upgraded 1.8.1 to 1.8.4, left the outdated listing empty, and confirmed the new installed version. This control establishes the reason for the fixture's no-op, not the reason for the reporter's no-op.
+
+### Existing test coverage and limits
+
+Read the setup and assertions of the following integration tests:
+
+- `crates/uv/tests/tool/tool_upgrade.rs::tool_upgrade_settings`: installs `black>=23` with `--resolution=lowest-direct`, expects 23.1.0 and `Nothing to upgrade`, then overrides with `--resolution=highest` and expects 24.3.0. It covers retention and override of the saved strategy; it does not combine `@latest`, `--outdated`, or tombi.
+- `crates/uv/tests/tool/tool_upgrade.rs::tool_upgrade_all`: installs older synthetic babel and python-dotenv releases from one index, then supplies a newer index to `upgrade --all` and expects both upgrades. It also verifies that an invalid tool directory does not prevent valid upgrades.
+- `crates/uv/tests/tool/tool_install.rs::tool_install_at_latest`: installs `black@latest` and snapshots an unconstrained saved requirement, establishing that the syntax does not persist an exact pin.
+- `crates/uv/tests/tool/tool_list.rs::tool_list_outdated_respects_exclude_newer`: installs black with a persisted cutoff and expects an empty outdated listing. It covers the historical saved-cutoff fix, not the reported no-cutoff case.
+
+These modules are gated by `test-python` and `test-pypi` in `crates/uv/tests/tool/main.rs`. The test context also applies a fixed exclude-newer timestamp, which the reproduction deliberately did not use. No direct test of the full tombi sequence was found, and no matching tool-upgrade test was found under `crates/uv-client/tests/it/`. Existing Rust tests were inspected, not executed; behavioral checks used the installed uv binary. No build or checkout changes were needed.
+
+No last-known-good uv release is specified, so no before/after version comparison was made. The same reported uv and Python versions were tested, but native Darwin arm64 behavior and the reporter's actual configuration remain untested.
 
 ## Related
 
@@ -32,23 +151,18 @@ The report describes a failed upgrade and misleading output for an allegedly unc
 
 - astral-sh/uv#13968 (issue, open) — Warn when `--upgrade-package <name>` does not result in an upgrade. Tracks the broader request to explain why requested upgrades cannot proceed, with maintainer discussion of resolver incompatibilities and Python requirements. It concerns --upgrade-package diagnostics rather than this tool-upgrade failure, so it overlaps only with the report's secondary request.
 
-## Report details
-
-The reporter uses uv 0.13.0 (commit 4ecd0eff2a81e3ffdcd7cfee10d08936e4747c17, October 9, 2026), Python 3.15.0, and Darwin 27.0.0 arm64. They installed tombi with `uv tool install tombi@latest`. After a later release, `uv tool list --outdated` reports `tombi v1.8.1 [latest: 1.8.4]`, but `uv tool upgrade --all` prints `Nothing to upgrade` and leaves 1.8.1 installed.
-
-The report explicitly denies version bounds and an exclude-newer setting. It requests both an upgrade to an allowed newer version and an explanation when configuration or constraints prevent an upgrade. These are separate claims: the reported failure is a correctness issue, while general explanations overlap existing diagnostic work.
-
 ## Supporting evidence
 
-- The timeline for astral-sh/uv#18522 identifies astral-sh/uv#18586 as its closing fix. That PR merged on March 21, 2026, at commit c1517ec647a72a698b2af4d77927b31d9e3d83b3. GitHub's comparison with 0.13.0 reports the release ahead by 2,180 commits, behind by zero, with that fix as the merge base. This confirms inclusion in the reported release; it does not establish that the new report has the same cause.
-- The diff for astral-sh/uv#18586 changes the outdated lookup to use each tool's saved settings. Its added test uses an exclude-newer cutoff and expects no outdated entry. The corresponding test remains at `crates/uv/tests/tool/tool_list.rs:188`.
-- `crates/uv-tool-commands/src/install.rs:254` constructs an unconstrained registry requirement for `@latest`. The temporary resolution constraint is separate from the constraints saved to the receipt (`install.rs:441`, `install.rs:681`, and `install.rs:1067`). The existing `tool_install_at_latest` test at `crates/uv/tests/tool/tool_install.rs:4793` snapshots a receipt with `requirements = [{ name = "black" }]`, without a version pin. The install syntax alone therefore does not explain the failure.
-- `crates/uv-tool-commands/src/list.rs:131` combines CLI, receipt, and filesystem settings for outdated checks. The lookup at `list.rs:153` is a latest-package lookup, with no full dependency resolution and no wheel-tag filter. Its displayed latest version alone does not prove that the full upgrade can select that version. No package-compatibility cause has been established for tombi here.
-- `crates/uv-tool-commands/src/upgrade.rs:350` applies CLI > receipt > user configuration precedence and then resolves saved requirements and constraints. This makes the receipt useful evidence even when current global configuration has no cooldown; it does not prove the stored-cooldown mechanism in astral-sh/uv#22468 applies.
-- The upgrade command emits `Nothing to upgrade` when no tools are found or no upgrade outcome is recorded (`upgrade.rs:97` and `upgrade.rs:195`). Exact pins receive a separate hint (`upgrade.rs:243` and `upgrade.rs:653`), covered by `crates/uv/tests/tool/tool_upgrade.rs:665` and the merged astral-sh/uv#16081.
-- The timeline and comments for astral-sh/uv#19704 show a request for verbose upgrade diagnostics, verbose list diagnostics instead, and closure after reinstalling with `@latest`. There is no linked fixing commit or confirmed root cause.
+- The previous issue-context investigation confirmed that astral-sh/uv#18586 closed astral-sh/uv#18522 and is an ancestor of 0.13.0. The checkout's `changelogs/0.11.x.md` records the saved-settings fix. `changelogs/0.12.x.md` also records configured-index support from astral-sh/uv#20770. The 0.13.0 release notes describe Python 3.15 becoming the default and HTTP cache changes; neither establishes the cause of this report.
+- `crates/uv-tool-commands/src/install.rs` constructs an unconstrained registry requirement for `@latest`. Both observed receipts confirm this behavior.
+- `crates/uv-tool-commands/src/list.rs` obtains the latest version using saved index, prerelease, and exclude-newer settings, without full dependency resolution or a wheel-tag filter. A listed newer version alone does not prove that upgrade will select it under every saved resolution strategy.
+- `crates/uv-tool-commands/src/upgrade.rs` combines CLI settings, receipt settings, and user configuration in that precedence order, then resolves the saved requirements and constraints. The saved lowest-direct strategy and CLI highest override were verified behaviorally above.
+- `docs/concepts/tools.md` documents retention of installation settings during upgrades. `docs/concepts/resolution.md` documents lowest-direct's preference for the lowest direct-dependency versions. The reproduced no-op is consistent with those semantics.
+- The prior inspection of astral-sh/uv#19704 found closure after reinstalling with `@latest`, without a confirmed root cause or fixing commit. Its closure is not evidence of a regression here.
 
 ## Search coverage and exclusions
+
+The following summarizes the existing issue-context investigation; no new GitHub changes were made during reproduction.
 
 Searched astral-sh/uv open and closed issues and open, closed and merged PRs through authenticated gh. Separated upgrade failure from missing explanations. Literal searches covered 'Nothing to upgrade', tool upgrade, tool list --outdated, @latest, tombi and 0.13.0; conceptual searches covered upgrade refusal, pins, constraints, warnings and area:uv-tool. Separately searched saved exclude-newer settings as a possible cause. PR searches returned no hits; followed issue timelines to inspect merged fixes, comments, diffs and release ancestry. Ruled out astral-sh/uv#19325 (dependency-only upgrades missing from the list), astral-sh/uv#8276 (explicit pins), astral-sh/uv#17548 (Windows executable-copy failure), and astral-sh/uv#21058 / astral-sh/uv#21368 (invalid tool directories, already fixed). Also checked astral-sh/uv#18819 / astral-sh/uv#18861 (exclude-newer support), astral-sh/uv#12052 (unreproduced transient failure) and astral-sh/uv#13733 (project dependency upgrade conflicts). No confirmed open duplicate of the reported failure was found.
 
@@ -60,8 +174,10 @@ astral-sh/uv#18819 and astral-sh/uv#18861 concern explicit exclude-newer support
 
 PR keyword searches returned no results, including searches across all states and explicit open, closed, and merged filters. The related merged PRs were found through issue timeline references and inspected directly. The search result should not be read as proof that no other PR exists.
 
-## Follow-up and limits
+## Follow-up and suggested response
 
-Collect the verbose single-tool upgrade output, the outdated listing with saved version specifiers and interpreter information, and the tool's saved requirements and options before a reinstall changes the evidence. Request only diagnostic material with credentials removed. The report supplies no verbose upgrade trace or receipt, so the cause and whether this is a regression of the historical mechanism remain unconfirmed.
+The default-settings reproduction upgrades successfully. A saved `resolution = "lowest-direct"` setting can produce the same outdated-list/no-op mismatch without version bounds or exclude-newer, but it also produced a warning in the test. Check the reporter's saved settings before concluding that this explains their installation.
 
-This handoff is based on read-only GitHub inspection and the checkout's source, documentation, and existing tests. No reproduction, build, or test run was performed. No checkout files or GitHub state were changed.
+Before reinstalling tombi changes the evidence, request `uv tool upgrade tombi -v`, `uv tool list --outdated --show-version-specifiers --show-python`, and the non-secret requirements, constraints, overrides, resolution, index identities, and exclude-newer settings from tombi's `uv-receipt.toml` and effective uv configuration. Ask for diagnostic material with credentials removed. If lowest resolution is present, `uv tool upgrade tombi --resolution highest` is a useful targeted comparison. If it is absent, the verbose resolver trace and native macOS reproduction are still needed.
+
+Only the issue-context README and temporary reproduction files were written. Existing checkout modifications were left untouched, and no GitHub state was changed. Credentials were not inspected or exposed.
