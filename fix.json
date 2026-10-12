@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Tool upgrades that make no changes under lowest-version resolution now explain the active strategy and suggest `--resolution highest`. The updated parent regression verifies the hint, successful override, and persistence across subsequent upgrades. Package selection remains unchanged; the original reporter’s configuration is still unconfirmed.",
+  "validation": [
+    "Confirmed the parent regression passed unchanged and failed with the new hint assertion before the production fix.",
+    "Six focused debug-profile integration tests passed, covering the regression, receipt persistence, pinned hints, ordinary upgrades, and outdated listings.",
+    "RUSTUP_TOOLCHAIN=stable cargo fmt --all",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2606"
+}

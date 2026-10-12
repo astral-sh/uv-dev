@@ -2,9 +2,11 @@
 
 Issue: astral-sh/uv#22497
 
-Classification: bug report; conditional symptom reproduction, original cause unconfirmed
+Classification: bug report; reproduced diagnostic gap fixed, original installation cause unconfirmed
 
 ## Summary
+
+The fix adds an explanation when a tool upgrade makes no changes under `lowest` or `lowest-direct` resolution. It names the effective strategy and suggests `uv tool upgrade <tool> --resolution highest`. The updated parent regression verifies the hint and the persisted highest-resolution override. Package selection and outdated-list semantics are unchanged; the original reporter's saved settings remain unknown.
 
 The outdated-list/upgrade-no-op symptom is reproducible on uv 0.13.0 with the real tombi 1.8.1 and 1.8.4 wheels when the installed tool has a saved `resolution = "lowest-direct"` setting. No version constraint or exclude-newer setting is needed. The setting can come from configuration at installation time and persists in the tool receipt. In this variant, retaining the older version follows the requested resolution strategy; the upgrade also emits a lowest-resolution warning. This is not evidence that the reporter has that setting or that their installation has the same cause.
 
@@ -14,7 +16,7 @@ The historical fix in astral-sh/uv#18586 is included in 0.13.0. Neither that fix
 
 ## Classification
 
-The report alleges an upgrade correctness failure and insufficient explanation. The reproduced configuration-dependent symptom is consistent with the documented rule that upgrades retain installation settings and with the existing `tool_upgrade_settings` integration test. It does not establish a regression or a defect in default-resolution upgrades. Keep the original report under investigation until its saved settings and resolver trace are available; do not close it as a confirmed duplicate of a historical fix or attribute it to lowest resolution without that evidence.
+The report alleges an upgrade correctness failure and insufficient explanation. The confirmed diagnostic gap is addressed by the focused fix below. The reproduced configuration-dependent version selection is consistent with the documented rule that upgrades retain installation settings and with the existing `tool_upgrade_settings` integration test. It does not establish a regression or a defect in default-resolution upgrades. Keep the original report under investigation until its saved settings and resolver trace are available; do not close it as a confirmed duplicate of a historical fix or attribute it to lowest resolution without that evidence.
 
 ## Report details
 
@@ -128,16 +130,18 @@ This upgraded 1.8.1 to 1.8.4, left the outdated listing empty, and confirmed the
 
 Read the setup and assertions of the following integration tests:
 
-- `crates/uv/tests/tool/tool_upgrade.rs::tool_upgrade_settings`: installs `black>=23` with `--resolution=lowest-direct`, expects 23.1.0 and `Nothing to upgrade`, then overrides with `--resolution=highest` and expects 24.3.0. It covers retention and override of the saved strategy; it does not combine `@latest`, `--outdated`, or tombi.
+- `crates/uv/tests/tool/tool_upgrade.rs::tool_upgrade_settings`: installs `black>=23` with `--resolution=lowest-direct` and expects 23.1.0. The parent regression from astral-sh/uv-dev#2605 adds an outdated listing showing 24.3.0 and changes the no-op upgrade to `--all`. The fix retains that sequence, adds the resolution hint to the expected no-op output, and verifies that overriding with `--resolution=highest` upgrades to 24.3.0 and persists the strategy for the next upgrade. It does not use `@latest` or tombi.
 - `crates/uv/tests/tool/tool_upgrade.rs::tool_upgrade_all`: installs older synthetic babel and python-dotenv releases from one index, then supplies a newer index to `upgrade --all` and expects both upgrades. It also verifies that an invalid tool directory does not prevent valid upgrades.
 - `crates/uv/tests/tool/tool_install.rs::tool_install_at_latest`: installs `black@latest` and snapshots an unconstrained saved requirement, establishing that the syntax does not persist an exact pin.
 - `crates/uv/tests/tool/tool_list.rs::tool_list_outdated_respects_exclude_newer`: installs black with a persisted cutoff and expects an empty outdated listing. It covers the historical saved-cutoff fix, not the reported no-cutoff case.
 
-These modules are gated by `test-python` and `test-pypi` in `crates/uv/tests/tool/main.rs`. The test context also applies a fixed exclude-newer timestamp, which the reproduction deliberately did not use. No direct test of the full tombi sequence was found, and no matching tool-upgrade test was found under `crates/uv-client/tests/it/`. Existing Rust tests were inspected, not executed; behavioral checks used the installed uv binary. No build or checkout changes were needed.
+These modules are gated by `test-python` and `test-pypi` in `crates/uv/tests/tool/main.rs`. The test context also applies a fixed exclude-newer timestamp, which the reproduction deliberately did not use. No direct test of the full tombi sequence was found, and no matching tool-upgrade test was found under `crates/uv-client/tests/it/`. During the initial reproduction, existing Rust tests were inspected, not executed; behavioral checks used the installed uv binary. The subsequent fix investigation built and ran the focused debug-profile tests listed below.
 
 No last-known-good uv release is specified, so no before/after version comparison was made. The same reported uv and Python versions were tested, but native Darwin arm64 behavior and the reporter's actual configuration remain untested.
 
 ## Related
+
+- astral-sh/uv-dev#2605 (parent regression pull request) — Extends `tool_upgrade_settings` with an outdated listing followed by a no-op `upgrade --all`. The unchanged parent test passed locally before the expected diagnostic was updated.
 
 - astral-sh/uv#18522 (issue, closed) — `uv tool upgrade --all` does not update anything. Closest historical symptom match: on uv 0.10.10, outdated tools, including tombi, remained unchanged with 'Nothing to upgrade', while reinstalling with @latest worked. Closed by astral-sh/uv#18586, which fixed outdated checks ignoring saved settings. The new report occurs after that fix and explicitly excludes a configured cooldown.
 
@@ -174,10 +178,49 @@ astral-sh/uv#18819 and astral-sh/uv#18861 concern explicit exclude-newer support
 
 PR keyword searches returned no results, including searches across all states and explicit open, closed, and merged filters. The related merged PRs were found through issue timeline references and inspected directly. The search result should not be read as proof that no other PR exists.
 
+## Fix
+
+**Outcome: fixed for the confirmed missing explanation.** The original report's alleged default-resolution upgrade failure remains unconfirmed; this change does not force tools with a saved lowest-version strategy to upgrade.
+
+### Confirmed cause and scope
+
+`ToolOptions` persists the install-time resolution strategy, and `upgrade_tool` combines CLI settings, receipt settings, and user configuration in that order. The resolver intentionally chooses the lowest compatible direct-tool version under `lowest-direct`. The outdated listing separately asks for the newest available version. Before the fix, a no-op upgrade collected an explanatory hint only for an exact version pin, leaving the parent fixture's saved lowest-resolution strategy unexplained.
+
+Inspected both receipt conversions in `crates/uv-settings/src/settings.rs`, installation receipt creation, upgrade receipt reads and writes, resolver candidate selection, and the outdated-list lookup. Neighboring `tool_install_settings` tests intentionally preserve or replace the strategy in receipts, and `tool_list_outdated` intentionally lists newer releases even for an exactly pinned tool. These are compatible contracts, not additional failing cases. No distinct demonstrated failure required a new test or changes in another integration-test module. Both lowest-version enum variants share the same diagnostic path; no redundant option matrix was added.
+
+### Implementation and regression
+
+`crates/uv-tool-commands/src/upgrade.rs` adds a lowest-resolution diagnostic to the existing upgrade hint mechanism. It applies only to no-op outcomes with an effective `lowest` or `lowest-direct` strategy, gives existing exact-pin hints precedence, and suggests the highest-resolution override without promising that all other constraints permit an upgrade. Successful upgrades, dependency-only changes, errors, default highest-resolution no-ops, and outdated listings retain their behavior.
+
+The original parent file `crates/uv/tests/tool/tool_upgrade.rs` remains the only modified integration-test file. Its `tool_upgrade_settings` test keeps the outdated listing and no-op version selection, expects the new hint, executes the suggested override, and performs another upgrade to verify that the saved highest strategy no longer triggers a hint. The existing `test-python` and `test-pypi` module gates apply.
+
+### Focused validation
+
+1. The unchanged parent `tool_upgrade::tool_upgrade_settings` passed using `cargo test --locked -p uv --test tool tool_upgrade::tool_upgrade_settings -- --exact`.
+2. After updating only its expected output, the same test failed with `INSTA_UPDATE=no`: the observed no-op output lacked the newly expected hint. Production code was changed only after this failure was confirmed.
+3. After the fix, all six selected integration tests passed in the debug/test profile:
+
+   ```sh
+   cargo test --locked -p uv --test tool -- \
+     tool_upgrade::tool_upgrade_settings \
+     tool_upgrade::tool_upgrade_pinned_hint \
+     tool_upgrade::tool_upgrade_pinned_hint_with_mixed_constraint \
+     tool_upgrade::tool_upgrade_all \
+     tool_install::tool_install_settings \
+     tool_list::tool_list_outdated --exact
+   ```
+
+   These cover the parent regression and install/upgrade/receipt round trip, existing exact-pin diagnostics, ordinary upgrades, installation-setting persistence, and the established outdated-list contract.
+4. `RUSTUP_TOOLCHAIN=stable cargo fmt --all` and `git diff --check` passed. The pinned 1.99.0 toolchain lacks rustfmt and clippy; its read-only installation prevented adding rustfmt, so formatting used the installed stable toolchain. Clippy was not run.
+
+No release build, full test suite, dependency changes, commits, pushes, or GitHub writes were performed. Native Darwin arm64 was not tested. The original reporter's sanitized receipt and verbose resolver output are still needed to determine whether this diagnostic addresses their installation.
+
 ## Follow-up and suggested response
 
 The default-settings reproduction upgrades successfully. A saved `resolution = "lowest-direct"` setting can produce the same outdated-list/no-op mismatch without version bounds or exclude-newer, but it also produced a warning in the test. Check the reporter's saved settings before concluding that this explains their installation.
 
 Before reinstalling tombi changes the evidence, request `uv tool upgrade tombi -v`, `uv tool list --outdated --show-version-specifiers --show-python`, and the non-secret requirements, constraints, overrides, resolution, index identities, and exclude-newer settings from tombi's `uv-receipt.toml` and effective uv configuration. Ask for diagnostic material with credentials removed. If lowest resolution is present, `uv tool upgrade tombi --resolution highest` is a useful targeted comparison. If it is absent, the verbose resolver trace and native macOS reproduction are still needed.
 
-Only the issue-context README and temporary reproduction files were written. Existing checkout modifications were left untouched, and no GitHub state was changed. Credentials were not inspected or exposed.
+The initial reproduction wrote only the issue-context README and temporary files. The fix changes only `crates/uv-tool-commands/src/upgrade.rs` and `crates/uv/tests/tool/tool_upgrade.rs`, plus this README outside the checkout. No GitHub state was changed. Credentials were not inspected or exposed.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/2606
