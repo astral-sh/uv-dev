@@ -6,13 +6,13 @@ Classification: bug (Docker stable-image transition / publication)
 
 ## Summary
 
-The reported RC Docker tags are reproducible through anonymous registry queries on October 10, 2026, at approximately 14:15–14:16 UTC. GHCR lists 92 tags containing `python3.15`, all with `python3.15-rc-`; no stable Python 3.15 aliases are listed. The current Alpine, Trixie, and slim-Trixie images declare `PYTHON_VERSION=3.15.0rc3` on both Linux amd64 and arm64, with uv version labels identifying release 0.13.0. The corresponding stable upstream Python image tags return `manifest unknown`.
+Anonymous registry queries on October 10, 2026, at approximately 14:15–14:16 UTC reproduced the reported RC Docker tags. At that time, GHCR listed 92 tags containing `python3.15`, all with `python3.15-rc-`, and no stable Python 3.15 aliases. The Alpine, Trixie, and slim-Trixie images declared `PYTHON_VERSION=3.15.0rc3` on both Linux amd64 and arm64, with uv version labels identifying release 0.13.0. The corresponding stable upstream Python image tags returned `manifest unknown`. These are historical observations, not a fresh registry check after the reported upstream publication.
 
 The issue was opened on October 10, 2026, at 14:10 UTC. The reporter expected stable Python 3.15 images after Python's final release and observed RC tags despite an update approximately 18 hours earlier. No exact image reference, digest, command output, platform, or uv version was supplied. The reproduction uses the public aliases documented by uv, without assuming a project configuration or a CLI upgrade regression.
 
-astral-sh/uv#22421 promoted the Python 3.15 Docker tags, but astral-sh/uv#22435 deliberately reverted them because upstream stable images were unavailable. The current registry results corroborate that publication dependency. Reproducing the RC references does not establish that retaining them while upstream stable tags are unavailable is incorrect.
+astral-sh/uv#22421 promoted the Python 3.15 Docker tags, but astral-sh/uv#22435 deliberately reverted them because upstream stable images were unavailable. The October 10 registry results corroborate that publication dependency. Reproducing the RC references does not establish that retaining them while upstream stable tags are unavailable is incorrect.
 
-At 15:00 UTC on October 10, maintainer zanieb confirmed that the requisite upstream images were still unpublished and identified docker-library/python#1134 as the upstream change to follow. That pull request is open and proposes the Python 3.15 GA image definitions; its status does not establish registry publication.
+At 15:00 UTC on October 10, maintainer zanieb confirmed that the requisite upstream images were still unpublished and identified docker-library/python#1134 as the upstream change to follow. That pull request was open when first inspected and has since merged. On October 12 at 23:32:55 UTC, contributor CarrotManMatt reported that the official Docker images had been released. A fresh GitHub check confirms that docker-library/python#1134 merged on October 12 at 18:22:55 UTC. Publication is reported by the contributor; availability of all three required tags and both architectures has not been independently rechecked. No new evidence establishes publication of stable uv images.
 
 ## Classification
 
@@ -22,7 +22,7 @@ astral-sh/uv#22438 addresses the CI validation gap that allowed the promotion to
 
 ## Reproduction
 
-**Outcome: reproducible.** The reported tag naming and RC image metadata were observed directly in public registries, independently of source inspection.
+**Outcome: reproducible on October 10, 2026.** The reported tag naming and RC image metadata were observed directly in public registries, independently of source inspection. All registry observations in this section describe that reproduction; they have not been rerun after the October 12 upstream publication report.
 
 ### Environment and isolation
 
@@ -97,7 +97,7 @@ This reproduces the published RC tags and their declared Python version. Image l
 
 ## Related
 
-- docker-library/python#1134 — Add Python 3.15 GA release (open upstream pull request). Linked by maintainer zanieb in the issue discussion as the pending upstream image change. Direct inspection confirms that it changes the `versions.json` entry from `3.15-rc` / `3.15.0rc3` to `3.15` / `3.15.0`, renames image definitions into `3.15/` directories including Alpine 3.23, Trixie, and slim-Trixie, and changes the Trixie Dockerfile to `PYTHON_VERSION 3.15.0`. This tracks the external prerequisite for restoring uv's stable mappings, not the uv rollback itself. It was unmerged when inspected; merge and successful image publication must be verified separately.
+- docker-library/python#1134 — Add Python 3.15 GA release (merged upstream pull request). Linked by maintainer zanieb in the issue discussion as the upstream image change; GitHub confirms it merged on October 12, 2026, at 18:22:55 UTC. Direct inspection confirms that it changes the `versions.json` entry from `3.15-rc` / `3.15.0rc3` to `3.15` / `3.15.0`, renames image definitions into `3.15/` directories including Alpine 3.23, Trixie, and slim-Trixie, and changes the Trixie Dockerfile to `PYTHON_VERSION 3.15.0`. This tracks the external prerequisite for restoring uv's stable mappings, not the uv rollback itself. The earlier open status is superseded by the verified merge. A contributor reports that official images are now published, but registry availability and architecture coverage still need a fresh check.
 - astral-sh/uv#22421 — Promote Python 3.15 Docker images to stable tags (merged pull request). Merged on October 9, 2026, replacing all three Python 3.15 RC base-image mappings and four documented tags with stable equivalents. Its changes were subsequently reversed, so it is the historical fix for the reported regression, not a completed resolution.
 - astral-sh/uv#22435 — Restore Python 3.15 release-candidate Docker images (merged pull request). Merged about 25 minutes after astral-sh/uv#22421 and reversed its stable mappings and documentation. The PR explains that upstream stable base images were unavailable and Docker builds could not resolve them; this rollback directly explains the current RC references.
 - astral-sh/uv#22438 — Require planned Docker builds to pass (merged pull request). Explicitly cites astral-sh/uv#22421 as an image change that merged before its Docker builds finished. Adds Docker builds to the required CI dependencies; it addresses the validation gap, not restoration of stable Python 3.15 tags.
@@ -110,9 +110,11 @@ This reproduces the published RC tags and their declared Python version. Image l
 - Public GitHub API inspection confirms that astral-sh/uv#22421 merged on October 9 at 18:02:53 UTC and removed `-rc` from the three matrix entries and four documented aliases. astral-sh/uv#22435 merged at 18:28:11 UTC and reversed those changes, explicitly documenting unavailable upstream stable base images. These diffs establish the reason for the configured rollback; the registry checks independently establish the current published behavior.
 - astral-sh/uv#22438 merged at 18:32:45 UTC and adds `build-docker` to required CI dependencies. It does not change image mappings.
 - `CHANGELOG.md` for uv 0.13.0, released October 9, describes Python 3.15 as the default stable managed-Python version and cites astral-sh/uv#22400 for CPython 3.15.0. That catalog change does not replace the Docker base images.
-- Upstream `docker-library/python` source metadata inspected during issue classification listed `3.15-rc` with version `3.15.0rc3` and no `3.15` entry. Direct registry checks now confirm the absence of the three required stable upstream tags at reproduction time.
+- Upstream `docker-library/python` source metadata inspected during issue classification listed `3.15-rc` with version `3.15.0rc3` and no `3.15` entry. Direct registry checks on October 10 confirmed the absence of the three required stable upstream tags at reproduction time; they do not establish availability after the October 12 publication report.
 
-## Draft response
+## Prior draft response (October 10; historical)
+
+This existing draft predates the upstream merge and publication report. Its present-tense availability statements describe the October 10 reproduction, not the latest reported status.
 
 The published Python 3.15 Docker tags still use RC names. Registry checks show that the Alpine, Trixie, and slim-Trixie images declare Python 3.15.0rc3 on both supported architectures. astral-sh/uv#22421 switched the mappings to stable tags, but astral-sh/uv#22435 temporarily restored RC tags because the upstream stable Python images were unavailable. Those three upstream stable tags still return `manifest unknown` in the reproduction. Python's final release, uv's managed-Python catalog, and publication of Docker base images are separate steps; the recent uv image update did not complete the Docker transition.
 
@@ -126,4 +128,4 @@ astral-sh/uv#16652 requests aliases that follow the latest Python and Debian ver
 
 ## Maintainer next step
 
-Monitor docker-library/python#1134 for the upstream GA image transition, then verify actual Docker Hub publication; a merged source change alone is insufficient. Once upstream `python:3.15-alpine3.23`, `python:3.15-trixie`, and `python:3.15-slim-trixie` become available, verify both configured architectures, restore the stable mappings and documentation, require the planned Docker builds to pass, and verify the resulting uv tags in the public registries. Current evidence supports the temporary rollback explanation; it does not show that stable images were published and subsequently regressed at runtime.
+Recheck Docker Hub now that docker-library/python#1134 has merged and upstream publication has been reported. Verify `python:3.15-alpine3.23`, `python:3.15-trixie`, and `python:3.15-slim-trixie` for Linux amd64 and arm64, including the declared Python version. If all required stable images are available, the upstream availability blocker is cleared: restore the stable mappings and documentation, require the planned Docker builds to pass, and verify the resulting uv tags in the public registries. Do not infer that uv images are already published from the upstream merge or contributor report. The historical reproduction and rollback explanation remain valid; they do not show that stable uv images were published and subsequently regressed at runtime.
