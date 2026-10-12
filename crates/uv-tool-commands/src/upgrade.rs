@@ -11,7 +11,7 @@ use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    Concurrency, Constraints, DryRun, HashCheckingMode, Modifications, TargetTriple,
+    Concurrency, Constraints, DryRun, HashCheckingMode, Modifications, ResolutionMode, TargetTriple,
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
@@ -238,6 +238,8 @@ enum UpgradeOutcome {
 enum UpgradeConstraint {
     /// The tool remains pinned to an exact version, so an upgrade was skipped.
     PinnedVersion { version: Version },
+    /// The resolution strategy prefers the lowest compatible tool version.
+    LowestResolution { resolution: ResolutionMode },
 }
 
 impl UpgradeConstraint {
@@ -253,6 +255,17 @@ impl UpgradeConstraint {
                     name.cyan(),
                     version.to_string().magenta(),
                     reinstall_command.green(),
+                )?;
+            }
+            Self::LowestResolution { resolution } => {
+                let upgrade_command = format!("uv tool upgrade {name} --resolution highest");
+
+                writeln!(
+                    printer.stderr(),
+                    "hint: `{}` uses `{}` resolution, which prefers the lowest compatible version; use `{}` to prefer the latest compatible version.",
+                    name.cyan(),
+                    resolution.to_string().magenta(),
+                    upgrade_command.green(),
                 )?;
             }
         }
@@ -643,6 +656,17 @@ async fn upgrade_tool(
         }
         UpgradeOutcome::UpgradeTool | UpgradeOutcome::UpgradeEnvironment => None,
     };
+    let constraint = constraint.or(match outcome {
+        UpgradeOutcome::NoOp => match settings.resolver.resolution {
+            ResolutionMode::Highest => None,
+            resolution @ (ResolutionMode::Lowest | ResolutionMode::LowestDirect) => {
+                Some(UpgradeConstraint::LowestResolution { resolution })
+            }
+        },
+        UpgradeOutcome::UpgradeTool
+        | UpgradeOutcome::UpgradeDependencies
+        | UpgradeOutcome::UpgradeEnvironment => None,
+    });
 
     Ok(UpgradeReport {
         outcome,
