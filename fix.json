@@ -1,0 +1,13 @@
+{
+  "outcome": "fixed",
+  "summary": "Enable tar-codec’s hard-link support so pybabel-json’s source archive installs successfully while retaining target validation. Update the parent regression to require successful fresh installations with both the default and legacy backends.",
+  "validation": [
+    "Verified the original regression passes and the updated expectation fails before the fix.",
+    "cargo test --locked -p uv --test sync sync::sync_sdist_hardlink -- --exact",
+    "cargo test --locked -p uv --test build -- build::build_basic build::venv_included_in_sdist --exact",
+    "cargo xwin clippy --locked -p uv-extract --target x86_64-pc-windows-msvc -- -D warnings",
+    "cargo fmt --all",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2602"
+}

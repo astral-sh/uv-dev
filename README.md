@@ -19,6 +19,13 @@ The default-backend change in astral-sh/uv#22094 documents rejection of hard-lin
 archives and the legacy-backend opt-out. The observed failure is therefore
 consistent with the documented extraction policy.
 
+The checkout now contains a focused fix enabling tar-codec hard-link extraction
+and an updated parent regression requiring successful installation. The updated
+regression passes with both backends. This is a local, unreleased change.
+
+The updated report also states that uv 0.12.24 succeeds; the independently tested
+baseline here was uv 0.12.13.
+
 The reporter uses Linux 7.0.0-1017-azure x86_64, uv 0.13.0, and Python 3.14.8;
 their project includes the dependency through `fm-data-api:dev==4.7.75`. The full
 200-package project was not supplied or recreated. Its other dependencies are
@@ -26,18 +33,19 @@ not needed to reproduce this extraction failure.
 
 ## Classification
 
-Retain the installation compatibility regression classification: a published
+Installation compatibility regression: a published
 package that installs with uv 0.12.13 fails with uv 0.13.0's default backend.
 This is an observed compatibility loss, while hard-link rejection itself is an
-explicitly documented breaking change. Reproduction does not establish that the
-policy is unintended or that accepting these archives is the desired fix.
+explicitly documented breaking change. The focused fix restores installation
+compatibility using the backend's supported hard-link opt-in while retaining
+its target validation; it does not change parsers or remove other policies.
 
 The historical same-package failure in astral-sh/uv#11223 was fixed by
 astral-sh/uv#11221 in uv 0.5.28. That failure involved incorrect resolution of a
 hard-link target; this failure rejects hard-link members outright. The merged
 backend change explains the current behavior and is not a compatibility fix.
-No separate open tracker or fix release was identified in the related-issue
-search.
+The parent regression is in astral-sh/uv-dev#2601. No released compatibility
+fix was identified.
 
 ## Reproduction
 
@@ -139,8 +147,12 @@ archive's hard link triggers the policy rejection.
 ### Existing test coverage and limits
 
 Searched `crates/uv/tests/`, `crates/uv-client/tests/it/`, and `crates/uv-extract/`
-for the package, hard-link archive handling, and backend selection. No current
-test directly covering this package or its hard-link rejection was found.
+for the package, hard-link archive handling, and backend selection. The parent
+regression in `crates/uv/tests/sync/sync.rs::sync_sdist_hardlink` now directly
+covers this package. It originally asserted default-backend rejection and
+legacy-backend success; the updated test requires both to succeed, with a fresh
+virtual environment between installs. Its module requires `test-python` and
+`test-pypi`; no additional feature gate is needed.
 The following related tests were read, including their setup and assertions:
 
 - `crates/uv/tests/build/build.rs::build_with_symlink` creates a relative
@@ -160,15 +172,82 @@ then-current `crates/uv/tests/it/build.rs`; that named test is absent from this
 checkout. Current cache and installation hard-link tests concern filesystem
 linking, not hard-link entries in source archives.
 
-No repository test suite was run and no tests were added. The result comes
-from executing the published uv binaries against the published package. The
-reporter's exact kernel and full project were not tested; the documented
-legacy-backend workaround succeeded for the minimal fixture, and remains
-unverified for the full project.
+The release comparison above comes from executing published uv binaries against
+the published package. Focused checkout validation is described under Fix; no
+new test was added. The reporter's exact kernel and full project were not tested.
+The documented legacy-backend workaround succeeded for the minimal fixture and
+remains unverified for the full project.
+
+## Fix
+
+**Outcome: fixed in the checkout; not committed or published.**
+
+### Root cause and implementation
+
+The shared streaming tar extractor retained `LinkPolicy::default()`, which
+rejects every hard-link member before attempting extraction. This rejects the
+published archive's valid README link even though its target was already
+extracted. The dependency already implements hard-link extraction, including
+archive-relative target resolution and a requirement that the target be a
+previously extracted file. No dependency change or alternate parser is needed.
+
+`crates/uv-extract/src/stream.rs::tar_extract_policy` now explicitly enables
+hard links. Name validation, target confinement, rejection of pre-existing
+symbolic-link targets, and Windows symbolic-link skipping remain in place.
+The legacy backend is unchanged.
+
+The parent `sync_sdist_hardlink` test in `crates/uv/tests/sync/sync.rs` now
+requires the default backend to build and install `pybabel-json==0.2.0`.
+It retains the lockfile setup and the legacy-backend comparison, uses
+`--no-cache`, and recreates the virtual environment before the legacy install
+so neither successful assertion can be satisfied by an already-installed
+package. Only this test file and the extraction policy file are modified.
+
+### Related-path review
+
+Reviewed the shared extractor's source-distribution, build, managed-Python,
+and binary-install consumers; their tar paths reuse the same implementation.
+Additional command variants would duplicate the parent coverage. Reviewed
+`uv_build` source-distribution writers: both backends write regular file members,
+so their default-policy unpacking helpers do not encode the hard-link rejection
+bug. Publishing reads member payloads without applying this extraction policy,
+and no distinct manifestation of this cause was demonstrated there.
+
+The existing `build_with_symlink`, `venv_included_in_sdist`, and
+`python_install_armv7` fixtures exercise symbolic links and do not require
+changes. No additional test was added for an unproven variant or an unrelated
+configuration format.
+
+### Validation
+
+- Verified the unchanged parent test passes while asserting the exact
+  hard-link rejection at byte 25088.
+- Changed its expected result to a successful install before changing production
+  code; the test then failed on that same rejection, confirming the regression.
+- With the production fix, `cargo test --locked -p uv --test sync
+  sync::sync_sdist_hardlink -- --exact` passes (one test), exercising fresh
+  source builds and installs through both backends.
+- `cargo test --locked -p uv --test build -- build::build_basic
+  build::venv_included_in_sdist --exact` passes (two tests). This verifies the
+  source-tree → sdist → wheel round trip and retains unsafe external-symlink
+  rejection and its virtual-environment diagnostic under both tar backends.
+- Windows cross-compilation passes with warnings denied:
+  `cargo xwin clippy --locked -p uv-extract --target x86_64-pc-windows-msvc -- -D warnings`.
+  This used cargo-xwin 0.23.1 via `uv tool run`, a temporary Rust 1.99.0
+  toolchain, LLVM 18, and SDK/build caches under `/tmp`. It is a compilation
+  check, not a Windows runtime test.
+- Ran `cargo fmt --all` using a temporary Rust 1.99.0 toolchain because the
+  runner's system toolchain lacks rustfmt and is read-only. `git diff --check`
+  passes.
+
+No full suite or release-profile build was run. The published-version
+reproduction and the focused debug tests establish the package installation
+behavior; the complete reporter project remains outside the supplied fixture.
 
 ## Related
 
-- astral-sh/uv#22094 — Use tar-codec by default (pull request, merged). Changed the default tar backend for uv 0.13.0. Its release notes explicitly describe rejection of previously accepted hard-link archives and document UV_LEGACY_TAR_BACKEND=1. The current extraction policy confirms hard-link rejection, matching the reported error.
+- astral-sh/uv-dev#2601 — Parent regression pull request. Adds `sync_sdist_hardlink`, which records the default-backend failure and successful legacy fallback. This fix retains that test and changes its default-backend assertion to successful installation.
+- astral-sh/uv#22094 — Use tar-codec by default (pull request, merged). Changed the default tar backend for uv 0.13.0. Its release notes explicitly describe rejection of previously accepted hard-link archives and document UV_LEGACY_TAR_BACKEND=1. The released extraction policy rejects hard links, matching the reported error.
 - astral-sh/uv#11223 — v0.5.27 fails to install pybabel-json==0.2.0 (issue, closed). The same package version previously failed during hard-link extraction. A maintainer confirmed that a fix had merged; it shipped in uv 0.5.28. That failure involved incorrect link-target resolution, whereas this report shows explicit rejection by the new backend.
 - astral-sh/uv#11221 — Fix hardlinks in tar unpacking (pull request, merged). Historical fix released in uv 0.5.28 for hard-link targets incorrectly resolved relative to the member's parent directory. Establishes that hard-link extraction support had been restored before the uv 0.13.0 backend change.
 
@@ -180,8 +259,10 @@ unverified for the full project.
 - astral-sh/uv#22094 merged on October 1, 2026. Its body describes the default
   change for extraction, source-distribution creation, and publishing metadata,
   with the legacy-backend opt-out.
-- `crates/uv-extract/src/stream.rs::tar_extract_policy` keeps tar-codec's
-  default hard-link rejection. `crates/uv-static/src/lib.rs::TarBackend::from_env`
+- The released `crates/uv-extract/src/stream.rs::tar_extract_policy` kept
+  tar-codec's default hard-link rejection. The checkout fix explicitly enables
+  hard links through `LinkPolicy::allow_hard_links(true)`.
+  `crates/uv-static/src/lib.rs::TarBackend::from_env`
   selects `TokioTar` when the legacy environment variable is true, and
   `TarCodec` otherwise. This matches the observed comparison.
 - astral-sh/uv#22143, merged October 8, 2026, changes archive-reader
@@ -198,8 +279,9 @@ unverified for the full project.
 The related-issue search covered open and closed issues and pull requests for
 the package, exact hard-link policy error, invalid tar diagnostics, uv 0.13.0,
 hard-link archive handling, tar-codec, and the legacy-backend variable. Recent
-PR listings and changelog references supplemented keyword searches. No separate
-open tracker for this compatibility regression was identified.
+PR listings and changelog references supplemented keyword searches. That search
+identified no separate open tracker; the supplied parent regression pull request
+is recorded above.
 
 The following inspected candidates do not centralize this behavior:
 
@@ -222,5 +304,9 @@ hard link, which the new default tar backend rejects as documented in the
 0.13.0 release notes. `UV_LEGACY_TAR_BACKEND=1 uv sync` succeeds for a minimal
 project containing this dependency, as does uv 0.12.13. The earlier failure in
 astral-sh/uv#11223 had a different mechanism and was fixed by
-astral-sh/uv#11221. The workaround can be recommended with the qualification
-that the reporter's full project has not been tested.
+astral-sh/uv#11221. The checkout fix restores installation with the default
+backend, while the legacy environment variable remains a workaround for the
+released version.
+The reporter's full project has not been tested.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/2602
