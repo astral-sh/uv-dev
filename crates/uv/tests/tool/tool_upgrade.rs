@@ -941,9 +941,20 @@ fn tool_upgrade_settings() {
     Installed 2 executables: black, blackd
     ");
 
-    // Upgrade `black`. This should be a no-op, since the resolution is set to `lowest-direct`.
+    // `--outdated` advertises a newer version despite the saved `lowest-direct` strategy.
+    // The subsequent "Nothing to upgrade" is misleading: astral-sh/uv#22497.
+    uv_snapshot!(context.filters(), context.tool_list()
+        .arg("--outdated"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    black v23.1.0 [latest: 24.3.0]
+    - black
+    - blackd
+    ");
+
+    // Upgrade all tools. This is a no-op because the receipt retains `lowest-direct`.
     uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("black")
+        .arg("--all")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
