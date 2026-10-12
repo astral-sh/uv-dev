@@ -3541,22 +3541,22 @@ fn sync_sdist_hardlink() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    // The default backend rejects this valid README hard link, preventing installation.
+    // The default backend must extract the README hard link so the package can be built.
     // See astral-sh/uv#22492.
     uv_snapshot!(context.filters(), context.sync()
         .arg("--locked")
         .arg("--no-cache")
         .env_remove(EnvVars::UV_LEGACY_TAR_BACKEND), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    error: Failed to download and build `pybabel-json==0.2.0`
-      cause: Failed to extract archive: pybabel-json==0.2.0
-      cause: Invalid tar file
-      cause: at byte 25088: extraction policy rejected input: hard-link members are not allowed
-
-    hint: `pybabel-json` (v0.2.0) was included because `project:dev` (v0.1.0) depends on `pybabel-json`
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + babel==2.14.0
+     + pybabel-json==0.2.0
     ");
+
+    context.venv().arg("--clear").assert().success();
 
     // The same locked distribution can be extracted and installed with the legacy backend.
     uv_snapshot!(context.filters(), context.sync()

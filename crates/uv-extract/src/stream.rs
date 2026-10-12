@@ -789,13 +789,13 @@ impl<A: Archive> Archive for RecordingArchive<'_, A> {
 }
 
 fn tar_extract_policy() -> ExtractPolicy {
-    // Keep tar-codec's defaults, including name validation, hardlink rejection, and rejection of
-    // pre-existing link targets. uv extracts archives into new temporary directories.
+    // Source distributions can contain hard links. tar-codec restricts their targets to files
+    // already extracted within the archive root, retaining name and link-target validation.
+    let link_policy = LinkPolicy::default().allow_hard_links(true);
     if cfg!(windows) {
-        ExtractPolicy::default()
-            .link_policy(LinkPolicy::default().symlink_policy(SymlinkPolicy::Skip))
+        ExtractPolicy::default().link_policy(link_policy.symlink_policy(SymlinkPolicy::Skip))
     } else {
-        ExtractPolicy::default()
+        ExtractPolicy::default().link_policy(link_policy)
     }
 }
 
