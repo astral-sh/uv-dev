@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 6485,
+        "title": "Respect output-file symlinks",
+        "url": "https://github.com/astral-sh/uv/issues/6485",
+        "state": "closed",
+        "reason": "The same command replaced an output symlink with a regular file after uv 0.3.1 introduced atomic writes; a maintainer confirmed this was unintended. Its fix covers symlinks, while this report concerns device nodes and other non-regular destinations."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6487,
+        "title": "Avoid overwriting symlinks in `pip compile` output",
+        "url": "https://github.com/astral-sh/uv/pull/6487",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#6485 in uv 0.3.2 by resolving the output symlink before calling write_atomic. The inspected patch adds no destination file-type check, and that symlink handling remains present, so it does not establish a prior fix for device replacement."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6274,
+        "title": "Use atomic write for `pip compile` output",
+        "url": "https://github.com/astral-sh/uv/pull/6274",
+        "state": "merged",
+        "reason": "Introduced the buffered atomic output path in uv 0.3.1 to fix concurrent readers observing partially written requirements in astral-sh/uv#6239. This directly explains the current mechanism and why regular-file output should retain atomic writes; it did not address special files."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7109,
+        "title": "Add `--output-file` to `uv export`",
+        "url": "https://github.com/astral-sh/uv/pull/7109",
+        "state": "merged",
+        "reason": "Moved OutputWriter into shared command code and reused it for export. Current compile and export commands still share this unchecked atomic-write path, making export relevant to the requested audit; this PR added output-file support rather than fixing device handling."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered /dev/null, /dev/stdout, NUL, FIFO, write_atomic, OutputWriter, and the tmux error. Conceptual searches covered non-regular/special files, character devices, named pipes, mkfifo, output replacement, symlinks, and export. Historical searches covered atomic writes and closed/merged compile-output fixes; inspected candidate comments, timelines, PR patches, and release notes. Ruled out astral-sh/uv#3701 (stdout suppression), astral-sh/uv#4199 (configuration lookup under /dev/null), and astral-sh/uv#1382 (disabling cache). The downstream cross-reference omnigent-ai/omnigent#9743 concerns terminal diagnostics for the reported incident. No existing discussion or fix covering device replacement was found."
+  },
+  "type": "bug",
+  "type_reason": "The checked-out source confirms that OutputWriter::commit calls write_atomic without checking the destination's file type; on Unix the helper renames a temporary regular file over the destination. Where permissions and filesystem semantics permit, this can replace a device instead of writing to it. The historical symlink fix remains present and never covered device nodes, so this is neither a duplicate of that resolved issue nor an established recurrence of a previously fixed device bug.",
+  "summary": "Source confirms an unguarded atomic replacement path shared by compile and export. The closest history is astral-sh/uv#6485 and astral-sh/uv#6487, with the mechanism introduced by astral-sh/uv#6274 and shared with export by astral-sh/uv#7109.",
+  "draft_response": "Your report matches a bug in the current output writer: it follows symlinks, then uses a temporary file and rename without checking whether the destination is a regular file. The fix in astral-sh/uv#6487 only covered symlinks. The next step is to handle or reject non-regular output destinations without replacing them, with regression coverage for pip compile and the shared uv export writer. To discard output in the meantime, omit `-o` and use `uv pip compile requirements.in > /dev/null`; this leaves warnings on stderr and avoids the atomic output-file path."
+}
