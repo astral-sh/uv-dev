@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with CPython 3.14.8, uv 0.13.0 running `uv sync` on a minimal project with `dev = [\"pybabel-json==0.2.0\"]` reproduces the exact error: “at byte 25088: extraction policy rejected input: hard-link members are not allowed”. With separate fresh caches, the same fixture succeeds using uv 0.12.13 or `UV_LEGACY_TAR_BACKEND=1 uv sync` on 0.13.0. The archive contains a README hard link at that offset, and rejection matches the documented backend change in astral-sh/uv#22094. Updated $RUNNER_TEMP/issue-context/README.md with commands, comparisons, and test-coverage findings. The reporter’s full project was not tested."
+}

@@ -2,46 +2,169 @@
 
 Issue: astral-sh/uv#22492
 
-Classification: bug
+Classification: bug — installation compatibility regression under a documented breaking change
 
 ## Summary
 
-The reporter cannot complete `uv sync` with uv 0.13.0 because extraction of
-`pybabel-json==0.2.0` fails before its build. The dependency is included through
-`fm-data-api:dev==4.7.75`. The reported environment is Linux
-7.0.0-1017-azure, x86_64, with Python 3.14.8.
+Reproduced the reported `uv sync` failure with uv 0.13.0 and CPython 3.14.8 on
+Linux x86_64. A minimal project with `pybabel-json==0.2.0` in its default `dev`
+dependency group fails with the exact reported diagnostic, including byte offset
+25088. The same project and Python interpreter install successfully with uv
+0.12.13 and with uv 0.13.0 when `UV_LEGACY_TAR_BACKEND=1` is set. Each case used
+its own initially empty cache and virtual environment.
 
-The decisive diagnostic is:
+The published source archive contains a hard link from
+`PyBabel-json-0.2.0/README.rst` to `PyBabel-json-0.2.0/README` at offset 25088.
+The default-backend change in astral-sh/uv#22094 documents rejection of hard-link
+archives and the legacy-backend opt-out. The observed failure is therefore
+consistent with the documented extraction policy.
+
+The reporter uses Linux 7.0.0-1017-azure x86_64, uv 0.13.0, and Python 3.14.8;
+their project includes the dependency through `fm-data-api:dev==4.7.75`. The full
+200-package project was not supplied or recreated. Its other dependencies are
+not needed to reproduce this extraction failure.
+
+## Classification
+
+Retain the installation compatibility regression classification: a published
+package that installs with uv 0.12.13 fails with uv 0.13.0's default backend.
+This is an observed compatibility loss, while hard-link rejection itself is an
+explicitly documented breaking change. Reproduction does not establish that the
+policy is unintended or that accepting these archives is the desired fix.
+
+The historical same-package failure in astral-sh/uv#11223 was fixed by
+astral-sh/uv#11221 in uv 0.5.28. That failure involved incorrect resolution of a
+hard-link target; this failure rejects hard-link members outright. The merged
+backend change explains the current behavior and is not a compatibility fix.
+No separate open tracker or fix release was identified in the related-issue
+search.
+
+## Reproduction
+
+**Outcome: reproducible.**
+
+### Environment and isolation
+
+- Host: Linux 6.17.0-1022-azure x86_64 GNU/Linux.
+- Interpreter used for all three comparisons: CPython 3.14.8, installed under
+  the reproduction directory with uv 0.13.0 and `uv python install --no-bin 3.14.8`.
+- Baseline: installed executable on `PATH`,
+  `/opt/hostedtoolcache/uv/0.12.13/x86_64/uv`, reporting
+  `uv 0.12.13 (x86_64-unknown-linux-gnu)`.
+- Affected version: `uv 0.13.0 (x86_64-unknown-linux-gnu)`, installed from its
+  published PyPI wheel into a temporary target using the installed uv:
+  `uv pip install --python /usr/bin/python3 --target /tmp/uv-22492-umrppzp1/uv-0.13.0 --no-deps --only-binary :all: --default-index https://pypi.org/simple uv==0.13.0`.
+- Fixtures, downloaded executables, Python, virtual environments, caches, and
+  logs are under `/tmp/uv-22492-umrppzp1`. Subprocesses received a clean
+  environment with temporary XDG and Python directories, `UV_NO_CONFIG=1`, and
+  no inherited index or backend configuration. Sync used
+  `UV_PYTHON_DOWNLOADS=never` and an explicit interpreter path.
+
+### Fixture and commands
+
+Each of `baseline`, `default`, and `legacy` contains this `pyproject.toml`:
+
+```toml
+[project]
+name = "pybabel-json-repro"
+version = "0.1.0"
+requires-python = ">=3.14"
+
+[dependency-groups]
+dev = ["pybabel-json==0.2.0"]
+```
+
+This is a single virtual project with the implicit default `dev` group, no
+workspace, no source overrides, and no build-system table. All commands use
+ordinary, non-frozen `uv sync`. First, uv 0.12.13 generated a lockfile and
+installed the dependencies. That lockfile was copied to the two fresh 0.13.0
+projects, matching the report's failure after an already-resolved lockfile.
+The three explicit sync invocations were equivalent to the following, with
+the isolated environment described above:
+
+```sh
+reproduction_dir=/tmp/uv-22492-umrppzp1
+python_314="$reproduction_dir/python/cpython-3.14.8-linux-x86_64-gnu/bin/python3.14"
+uv_013="$reproduction_dir/uv-0.13.0/bin/uv"
+
+UV_CACHE_DIR="$reproduction_dir/cache-baseline" uv sync \
+  --directory "$reproduction_dir/baseline" \
+  --python "$python_314" --default-index https://pypi.org/simple
+
+cp "$reproduction_dir/baseline/uv.lock" "$reproduction_dir/default/uv.lock"
+cp "$reproduction_dir/baseline/uv.lock" "$reproduction_dir/legacy/uv.lock"
+
+UV_CACHE_DIR="$reproduction_dir/cache-default" "$uv_013" sync \
+  --directory "$reproduction_dir/default" \
+  --python "$python_314" --default-index https://pypi.org/simple
+
+UV_LEGACY_TAR_BACKEND=1 UV_CACHE_DIR="$reproduction_dir/cache-legacy" "$uv_013" sync \
+  --directory "$reproduction_dir/legacy" \
+  --python "$python_314" --default-index https://pypi.org/simple
+```
+
+### Observed results
+
+| uv version | Tar backend selection | Exit | Result |
+| --- | --- | --- | --- |
+| 0.12.13 | Default | 0 | Built and installed `pybabel-json==0.2.0` and `babel==2.18.0` |
+| 0.13.0 | Default | 1 | Rejected a hard-link member at byte 25088 before building |
+| 0.13.0 | `UV_LEGACY_TAR_BACKEND=1` | 0 | Built and installed the same package versions |
+
+The failing run produced:
 
 ```text
+Resolved 3 packages in 0.53ms
+Downloading babel (9.7MiB)
 error: Failed to download and build `pybabel-json==0.2.0`
   cause: Failed to extract archive: pybabel-json==0.2.0
   cause: Invalid tar file
   cause: at byte 25088: extraction policy rejected input: hard-link members are not allowed
+
+hint: `pybabel-json` (v0.2.0) was included because `pybabel-json-repro:dev` (v0.1.0) depends on `pybabel-json`
 ```
 
-astral-sh/uv#22094 explains the uv 0.13.0 hard-link rejection and provides a legacy-backend workaround. The earlier same-package failure in astral-sh/uv#11223 was fixed by astral-sh/uv#11221 in uv 0.5.28.
+`importlib.metadata.version` independently confirmed `pybabel-json=0.2.0` and
+`babel=2.18.0` in both successful virtual environments. Logs are in
+`baseline.log`, `default.log`, `legacy.log`, `baseline-installed.log`, and
+`legacy-installed.log` under the reproduction directory.
 
-No existing open issue or pull request tracking this regression was found.
-The issue had no comments when inspected.
+The PyPI release offers `PyBabel-json-0.2.0.tar.gz` and no wheel. Its SHA-256 is
+`204e7fdab0e39946b6793d5584e6927035d12f5813dc6efea24d580e2aa64ea9`, matching
+both PyPI metadata and the generated lockfile. Reading the tar headers without
+extracting them confirmed the README hard-link member at offset 25088.
+Together with the fresh-cache backend comparison, this confirms that the
+archive's hard link triggers the policy rejection.
 
-## Draft response
+### Existing test coverage and limits
 
-uv 0.13.0 switched to tar-codec in astral-sh/uv#22094, and its extraction policy rejects hard links. The earlier failure in astral-sh/uv#11223 was fixed by astral-sh/uv#11221 in uv 0.5.28; this is a new compatibility regression with the default backend. Please try `UV_LEGACY_TAR_BACKEND=1 uv sync`, the documented workaround, and let us know whether it succeeds.
+Searched `crates/uv/tests/`, `crates/uv-client/tests/it/`, and `crates/uv-extract/`
+for the package, hard-link archive handling, and backend selection. No current
+test directly covering this package or its hard-link rejection was found.
+The following related tests were read, including their setup and assertions:
 
-## Classification
+- `crates/uv/tests/build/build.rs::build_with_symlink` creates a relative
+  `pyproject.toml` symlink and asserts successful sdist and wheel builds. It
+  covers symbolic links, not tar hard-link members.
+- `crates/uv/tests/build/build.rs::venv_included_in_sdist` includes a virtual
+  environment in a Hatchling sdist and checks unsafe external symbolic-link
+  diagnostics and the venv hint for both backends. It does not cover this
+  archive-internal hard link. Both build tests require `test-python` and
+  `test-pypi`, and are Unix-only.
+- `crates/uv/tests/python/python_install.rs::python_install_armv7` checks that
+  both backends can install an archive containing duplicate terminfo symlinks;
+  its successful assertions do not cover hard links.
 
-A previously supported package fails because uv 0.13.0's default tar extraction policy rejects hard links. The earlier same-package failure was fixed in uv 0.5.28 by astral-sh/uv#11221, so this is a new compatibility regression, not a duplicate of astral-sh/uv#11223. The documented stricter policy explains the failure but does not negate the compatibility bug. No open issue or PR tracking this regression was found.
+The historical astral-sh/uv#11221 patch added `build_with_hardlink` under the
+then-current `crates/uv/tests/it/build.rs`; that named test is absent from this
+checkout. Current cache and installation hard-link tests concern filesystem
+linking, not hard-link entries in source archives.
 
-This classification concerns the loss of package-installation compatibility.
-The backend change was deliberate and its limitation is documented, but the
-reported installation failure is established by the error and matching source
-policy. It does not require an independent reproduction to classify.
-
-The historical failure and the current failure share a hard-linked source
-archive, but have different immediate mechanisms: the old backend constructed
-an incorrect target path; the new backend rejects hard-link members outright.
-The merged default-backend change explains the regression and is not a fix for it.
+No repository test suite was run and no tests were added. The result comes
+from executing the published uv binaries against the published package. The
+reporter's exact kernel and full project were not tested; the documented
+legacy-backend workaround succeeded for the minimal fixture, and remains
+unverified for the full project.
 
 ## Related
 
@@ -51,74 +174,53 @@ The merged default-backend change explains the regression and is not a fix for i
 
 ## Supporting evidence
 
-- `CHANGELOG.md:6` identifies the uv 0.13.0 release.
-  `CHANGELOG.md:66` attributes the default-backend switch to astral-sh/uv#22094.
-  `CHANGELOG.md:70` explicitly says that archives containing hard links can now
-  be rejected; `CHANGELOG.md:72` documents `UV_LEGACY_TAR_BACKEND=1`.
-- astral-sh/uv#22094 merged on October 1, 2026, before this report opened on
-  October 12, 2026. Its body covers extraction, source-distribution creation,
-  publishing metadata, and the legacy-backend opt-out. Its discussion and review
-  comments do not establish a later hard-link compatibility fix.
-- `crates/uv-extract/src/stream.rs:791` defines `tar_extract_policy()`.
-  It retains the default hard-link rejection policy; the Unix branch uses
-  `ExtractPolicy::default()`. This directly matches the reporter's diagnostic.
-- `crates/uv-static/src/lib.rs:19` defines `TarBackend::from_env()`.
-  A true `UV_LEGACY_TAR_BACKEND` selects `TokioTar`; otherwise it selects
-  `TarCodec`. The extraction dispatch in `crates/uv-extract/src/stream.rs`
-  applies that choice.
-- astral-sh/uv#11223 describes the same package version succeeding with uv
-  0.5.26 and pip, then failing with uv 0.5.27 while resolving the README hard
-  link. A maintainer said the hard-link fix was already merged. The issue was
-  closed on February 5, 2025.
-- astral-sh/uv#11221 merged on February 4, 2025. It explains the incorrect
-  hard-link target base, updates the tar dependency, and adds regression tests.
-  `changelogs/0.5.x.md:1504` and `changelogs/0.5.x.md:1513` place that fix in
-  uv 0.5.28. The PR closes astral-sh/uv#11213, whose maintainer discussion
-  confirms that including cached hard-linked files in a source distribution
-  exposed the same historical extraction regression.
+- `CHANGELOG.md`, uv 0.13.0, “Use tar-codec for tar archives by default,”
+  attributes the change to astral-sh/uv#22094 and explicitly documents
+  hard-link rejection and `UV_LEGACY_TAR_BACKEND=1`.
+- astral-sh/uv#22094 merged on October 1, 2026. Its body describes the default
+  change for extraction, source-distribution creation, and publishing metadata,
+  with the legacy-backend opt-out.
+- `crates/uv-extract/src/stream.rs::tar_extract_policy` keeps tar-codec's
+  default hard-link rejection. `crates/uv-static/src/lib.rs::TarBackend::from_env`
+  selects `TokioTar` when the legacy environment variable is true, and
+  `TarCodec` otherwise. This matches the observed comparison.
+- astral-sh/uv#22143, merged October 8, 2026, changes archive-reader
+  specialization; it does not describe a hard-link policy fix.
+- astral-sh/uv#11221 merged February 4, 2025, fixing incorrect hard-link target
+  resolution through the tar dependency and adding regression tests.
+  `changelogs/0.5.x.md` places the fix in uv 0.5.28.
+- astral-sh/uv#11223 describes the earlier same-package failure and was closed
+  after the historical fix. Its relation is the source archive's hard link,
+  while the immediate rejection mechanism differs.
 
-## Search coverage and excluded candidates
+## Related-issue search context
 
-The report was decomposed before searching into one installation-failure claim:
-`uv sync`; source-distribution extraction; the exact package and version;
-the exact policy-rejection and invalid-tar errors; uv 0.13.0 timing; and the
-reporter's proposed historical relationship. There is no separate request for
-new functionality or evidence of a Python-version-specific failure.
+The related-issue search covered open and closed issues and pull requests for
+the package, exact hard-link policy error, invalid tar diagnostics, uv 0.13.0,
+hard-link archive handling, tar-codec, and the legacy-backend variable. Recent
+PR listings and changelog references supplemented keyword searches. No separate
+open tracker for this compatibility regression was identified.
 
-Used authenticated gh to search open and closed issues and open, closed, and merged PRs for pybabel-json, the exact hard-link policy error, Invalid tar file, 0.13.0 extraction failures, hardlink/hard-link archive handling, tar-codec, and UV_LEGACY_TAR_BACKEND. Supplemented PR keyword searches, which omitted known matches, with recent all-state PR listings and changelog-linked PRs. Inspected candidate bodies, comments, reviews, and historical references, including astral-sh/uv#11213. Ruled out astral-sh/uv#21641 (connection resets), astral-sh/uv#12163 and astral-sh/uv#1858 (different symlink failures), and astral-sh/uv#21128 (missing diagnostic hint). astral-sh/uv#22425 was closed without merging and only proposed compatibility documentation. No existing open tracker for this regression was found.
+The following inspected candidates do not centralize this behavior:
 
-Literal symptom searches were kept separate from mechanism searches. Conceptual
-queries removed the package, version, and platform and used hard links,
-hardlinks, archive extraction, unpacking, source distributions, and tar policy.
-Fix-oriented checks included the historical release changelog and explicit
-closed/merged PR searches. Because keyword PR searches did not return known
-matching PRs, four pages of recent all-state PR listings were also inspected,
-and the strongest PRs were retrieved directly.
+- astral-sh/uv#21641 concerns download connection resets and changing failure
+  locations; changing networks resolved the reporter's problem.
+- astral-sh/uv#12163 concerns links outside the extraction directory.
+- astral-sh/uv#1858 concerns symbolic-link target lookup and Windows privileges.
+- astral-sh/uv#21128 concerns the diagnostic hint for an unsafe absolute
+  symbolic link in a bundled virtual environment.
+- astral-sh/uv#22425 proposed documentation of the same compatibility change
+  and fallback; it closed without merging on October 9, 2026.
+- astral-sh/uv#22143 changes reader specialization without a hard-link fix.
+- astral-sh/uv#11213 is historical context for astral-sh/uv#11221: a cached
+  hard-linked file in an sdist exposed the older link-target resolution bug.
 
-The following candidates were examined but do not centralize this regression:
+## Suggested maintainer response
 
-- astral-sh/uv#21641 reports changing extraction failure locations and
-  connection resets; a maintainer identifies a download failure, and changing
-  networks worked for the reporter.
-- astral-sh/uv#12163 concerns accepting links outside the extraction directory.
-  It does not track rejection of archive-internal hard links.
-- astral-sh/uv#1858 concerns querying a symbolic-link target before extraction
-  and Windows symbolic-link privileges.
-- astral-sh/uv#21128 concerns a missing virtual-environment diagnostic hint for
-  an unsafe absolute symbolic link.
-- astral-sh/uv#22425 proposes documentation of the same compatibility change
-  and fallback. It was closed without merging on October 9, 2026, and contains
-  no extraction fix or open regression discussion.
-- astral-sh/uv#22143 reduces archive-decoder specialization by changing the
-  reader interface; its body and discussion do not describe a hard-link policy fix.
-
-## Next step and validation limits
-
-Ask the reporter to retry with `UV_LEGACY_TAR_BACKEND=1 uv sync`. This is the
-documented compatibility option and selects the older extraction implementation.
-Its success for the reporter's full project remains unverified.
-
-No installation reproduction or test suite was run. The conclusion rests on
-the supplied diagnostic, repository source, release notes, and inspected GitHub
-discussions. No fix release for this regression was identified. Only this
-handoff README was written; no checkout files or GitHub state were changed.
+Confirmed with uv 0.13.0 and Python 3.14.8: the published archive contains a
+hard link, which the new default tar backend rejects as documented in the
+0.13.0 release notes. `UV_LEGACY_TAR_BACKEND=1 uv sync` succeeds for a minimal
+project containing this dependency, as does uv 0.12.13. The earlier failure in
+astral-sh/uv#11223 had a different mechanism and was fixed by
+astral-sh/uv#11221. The workaround can be recommended with the qualification
+that the reporter's full project has not been tested.
