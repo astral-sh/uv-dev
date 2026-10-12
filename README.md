@@ -6,7 +6,7 @@ Classification: bug
 
 ## Summary
 
-The core reported behavior is **reproducible** with the installed uv 0.12.13 on Linux x86_64 and Python 3.12.3. A tool installed while the user-level configuration contains `exclude-newer = "3 days"` retains that policy after the configuration changes to `false`. Both `uv tool upgrade --all` and `uv tool upgrade --all --reinstall` keep the older tool version. With `UV_PREVIEW_FEATURES=tool-install-locks`, changing the setting to `false` or removing it retains `exclude-newer-span = "P3D"` in both the receipt and lockfile. A fresh installation with the global setting disabled selects the newer release.
+The core reported behavior is **reproducible** with the installed uv 0.12.13 on Linux x86_64 and Python 3.12.3. The parent integration regressions also pass against a debug build of the uv 0.13.0 checkout while asserting the unwanted behavior. The fix outcome is **not fixed**: inherited and explicit cutoffs produce indistinguishable receipts, so repairing existing installations while preserving explicit per-tool policy requires a compatibility decision. The checkout is unchanged; see the Fix section for evidence. A tool installed while the user-level configuration contains `exclude-newer = "3 days"` retains that policy after the configuration changes to `false`. Both `uv tool upgrade --all` and `uv tool upgrade --all --reinstall` keep the older tool version. With `UV_PREVIEW_FEATURES=tool-install-locks`, changing the setting to `false` or removing it retains `exclude-newer-span = "P3D"` in both the receipt and lockfile. A fresh installation with the global setting disabled selects the newer release.
 
 The reporter uses uv 0.13.0 (4ecd0eff2, October 9, 2026), Python 3.15.0, and Darwin 27.0.0 arm64, and names Black as the affected tool. That exact version/platform combination was not run. The reproduction uses a dependency-free synthetic tool and a local index to ensure a release exists inside the three-day exclusion window.
 
@@ -86,7 +86,7 @@ Read the setup and assertions of these integration tests:
 - `crates/uv/tests/tool/tool_install.rs`, `tool_install_locks_are_preview`: checks that installation omits `uv.lock` by default and creates it when `tool-install-locks` is enabled.
 - `crates/uv/tests/tool/tool_upgrade.rs`, `tool_upgrade_writes_preview_lock`: starts with an installation without a lock and checks that upgrading with the preview enabled writes a lock.
 
-None of these tests covers changing an inherited global cutoff to `false` or removing it after installation. Searches in the tool tests and `crates/uv-client/tests/it/` found no test for that transition. The tool test modules are gated by both `test-python` and `test-pypi` in `crates/uv/tests/tool/main.rs`. No repository tests were added or executed; validation used the installed executable and temporary fixtures.
+These pre-existing tests do not cover changing an inherited global cutoff to `false` or removing it after installation. The parent regression pull request, astral-sh/uv-dev#2595, adds `tool_upgrade_disabled_global_exclude_newer` and `tool_upgrade_removed_global_exclude_newer_preview_lock` in `crates/uv/tests/tool/tool_upgrade.rs`. Both currently assert the unwanted retention behavior and pass against the debug build. The tool test modules are gated by both `test-python` and `test-pypi` in `crates/uv/tests/tool/main.rs`. The original reproduction used the installed executable; the Fix section records the focused repository test runs.
 
 ### Artifacts and limits
 
@@ -96,6 +96,7 @@ The exact uv 0.13.0/macOS/Python 3.15 environment, actual Black releases, and or
 
 ## Related
 
+- astral-sh/uv-dev#2595 (parent regression pull request) — Adds the global-disabling and preview-lock global-removal regressions in `crates/uv/tests/tool/tool_upgrade.rs`. Checkout commit `367b6255c9e2548b2d21871f300aa48b09e4a5d4` contains these passing assertions of the unwanted behavior.
 - astral-sh/uv#8523 (open issue) — uv tool upgrade - problem with private indexes due to short living credentials. Upgrades reuse receipt values after the user updates global configuration. Maintainer comments discuss saving only explicit CLI overrides and distinguishing configuration origins. Its concrete failure concerns expiring index authentication, whereas this report requires clearing an inherited cutoff.
 - astral-sh/uv#11929 (open issue) — Upgrading tools adds an identical entry to the `index` list in uv-receipt.toml. Maintainers identify merging saved receipt settings with current filesystem settings as the cause and discuss replacement semantics. This concerns accumulating list entries; the new report concerns a saved scalar cutoff overriding changed or removed configuration.
 - astral-sh/uv#5937 (merged pull request) — Retain and respect settings in tool upgrades. Introduced persisted resolver/installer options and CLI > receipt > filesystem precedence, which remains in the upgrade implementation. This establishes the origin of the behavior, rather than an existing fix for inherited-setting removal.
@@ -145,6 +146,43 @@ Additional inspected distinctions:
 
 ## Follow-up
 
-A focused regression test should install with an inherited global cooldown, change that configuration to `false` or remove it, and assert both selected versions and saved policy. Explicit per-tool values need a separate preservation scenario if inheritance semantics change. Reuse the existing relative-time test for recomputation coverage and account for the tool test feature gates.
+The parent regressions already cover installation with an inherited global cooldown followed by disabling or removing it, including selected versions and saved policy. Once receipt compatibility is decided, update their assertions to the desired behavior. Keep the existing explicit relative-cutoff round trips as preservation coverage and account for the tool test feature gates.
 
 A maintainer decision is needed on inherited-versus-explicit policy semantics and compatibility with receipts that do not record origins. The preview-path failure to advance versions even after an explicit CLI override deserves separate investigation before presenting that override as a universal workaround. Exact uv 0.13.0/platform validation would refine these qualifications but is not needed to establish the reproduced persistence behavior.
+
+## Fix
+
+Outcome: **not_fixed**. No production fix or test modification remains in the checkout.
+
+### Confirmed cause and compatibility limitation
+
+`ToolInstallSettings::resolve` in `crates/uv-cli/src/settings.rs` merges filesystem configuration with CLI/environment options before passing them to installation. `crates/uv-tool-commands/src/install.rs` converts those merged values to `ToolOptions`. `ToolOptionsWire` and the receipt writer in `crates/uv-tool/src/tool.rs` store the effective cutoff and relative span without their origin. `upgrade_tool` in `crates/uv-tool-commands/src/upgrade.rs` then gives those receipt values precedence over current filesystem configuration, including `false` or removal. Its receipt write paths persist the merged options again.
+
+An offline diagnostic against `target/debug/uv` installed the existing `simple-launcher` wheel twice in isolated temporary directories at the same simulated time, `2024-03-25T00:00:00Z`. One installation inherited `exclude-newer = "3 days"` from user configuration; the other supplied `--exclude-newer "3 days"` with an empty user configuration. The entire receipts were identical after normalizing only the scenario directory. Both contain:
+
+```toml
+exclude-newer = "2024-03-22T00:00:00Z"
+exclude-newer-span = "P3D"
+```
+
+This demonstrates that an upgrade cannot infer which existing receipt should lose its cutoff when global configuration changes. Letting global `false` or absence override every saved cutoff would also discard explicitly requested per-tool restrictions. Omitting inherited cutoffs from newly written receipts could prevent future occurrences, but alone would not repair existing installations. A complete fix needs a decision about provenance representation and the treatment of existing receipts whose origins cannot be recovered. No migration heuristic or precedence reversal was implemented.
+
+### Related paths and coverage review
+
+The independent outdated-list reader in `crates/uv-tool-commands/src/list.rs` also combines CLI > receipt > filesystem settings. Installed-tool reuse in `crates/uv-tool-commands/src/run.rs` compares resolved options with saved `ToolOptions`. Receipt representation changes must account for these readers rather than altering only upgrade resolution.
+
+Neighboring tests were checked in `tool_install.rs`, `tool_upgrade.rs`, `tool_list.rs`, and `tool_run.rs`. Explicit relative-cutoff persistence, later recomputation, CLI overrides, and installed-environment reuse are intentional expectations, not evidence that every saved cutoff should be dropped. No additional configuration variant or command failure was claimed solely from source inspection, and no unrelated tests were added or changed.
+
+### Focused validation
+
+All test execution used the debug/test profile at checkout commit `367b6255c9e2548b2d21871f300aa48b09e4a5d4`; the full suite was not run.
+
+- `cargo test -p uv --test tool --locked global_exclude_newer -- --nocapture` passed both original parent regressions. They assert that global disabling/removal retains version 1.0.0 and the saved cutoff; the default-path test also verifies that explicit CLI disabling upgrades to 2.0.0.
+- The parent snapshots were temporarily changed to require version 2.0.0 after the global changes and to remove obsolete cutoff metadata. `INSTA_UPDATE=no cargo test -p uv --test tool --locked global_exclude_newer -- --nocapture` failed both tests at the upgrade-output assertion: expected `Updated cooldown-demo v1.0.0 -> v2.0.0`, actual `Nothing to upgrade`. No production code was changed. The original test file was then restored byte-for-byte.
+- `cargo test -p uv --test tool --locked relative_exclude_newer -- --nocapture` passed three directly relevant producer/consumer round trips: `tool_install_relative_exclude_newer_receipt_preserves_span`, `tool_upgrade_recomputes_relative_exclude_newer`, and `tool_list_outdated_recomputes_relative_exclude_newer`.
+- The offline receipt-origin comparison passed, confirming identical persisted state for inherited and explicit cutoffs.
+- `git diff --exit-code` and `git status --short` confirmed an unchanged checkout after restoration. No commits, pushes, Git configuration changes, or GitHub changes were made.
+
+`cargo fmt --all` could not run because the installed Rust 1.99.0 toolchain lacks `rustfmt`. No changed Rust files remain, and formatting availability is not the reason the fix was declined.
+
+Diagnostic artifacts are in `/tmp/uv-cutoff-fix-0gC9ul`: `compare_origins.py`, `origin-comparison.txt`, the isolated receipts and installation logs, `desired-expectations.patch`, `desired-regressions.log`, and `explicit-roundtrips.log`. Only this README was changed in the issue-context directory. The structured result reports an empty validation array because no fix is being submitted; the checks above document the investigation rather than successful validation of a production fix.

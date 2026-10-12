@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "Inherited and explicit exclude-newer settings produce identical tool receipts. Safely clearing inherited restrictions while preserving explicit per-tool settings requires a decision about recording setting origins and handling existing receipts. Confirmed the parent regressions pass and desired-behavior assertions fail, restored the checkout unchanged, and documented the findings in the README.",
+  "validation": [],
+  "pull_request": null
+}
