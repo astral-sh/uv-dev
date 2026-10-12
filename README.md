@@ -10,17 +10,89 @@ The reporter describes `uv pip compile requirements.in -o /dev/null` replacing t
 
 The reported consequences are stale data when reading `/dev/null` and failed new tmux servers with `server exited unexpectedly`. These downstream effects are reported evidence, not independently reproduced here. Expected behavior is to write to a supported special destination or reject it without replacing it.
 
-Source confirms an unguarded atomic replacement path shared by compile and export. The closest history is astral-sh/uv#6485 and astral-sh/uv#6487, with the mechanism introduced by astral-sh/uv#6274 and shared with export by astral-sh/uv#7109.
-
-## Draft response
-
-Your report matches a bug in the current output writer: it follows symlinks, then uses a temporary file and rename without checking whether the destination is a regular file. The fix in astral-sh/uv#6487 only covered symlinks. The next step is to handle or reject non-regular output destinations without replacing them, with regression coverage for pip compile and the shared uv export writer. To discard output in the meantime, omit `-o` and use `uv pip compile requirements.in > /dev/null`; this leaves warnings on stderr and avoids the atomic output-file path.
+Runtime reproduction with the installed uv 0.12.13 confirms replacement of a non-regular output destination: a disposable FIFO became a regular requirements file, and a syscall trace recorded a successful rename over it. The exact character-device case and the reported uv 0.13.0 were not tested; this environment denies scratch character-device creation. The closest history is astral-sh/uv#6485 and astral-sh/uv#6487, with atomic output introduced by astral-sh/uv#6274 and shared with export by astral-sh/uv#7109.
 
 ## Classification
 
-The checked-out source confirms that OutputWriter::commit calls write_atomic without checking the destination's file type; on Unix the helper renames a temporary regular file over the destination. Where permissions and filesystem semantics permit, this can replace a device instead of writing to it. The historical symlink fix remains present and never covered device nodes, so this is neither a duplicate of that resolved issue nor an established recurrence of a previously fixed device bug.
+Bug; reproduction outcome: **reproducible**, specifically the reported atomic replacement of a non-regular output file. A targeted runtime test replaced a FIFO with a regular file and returned success. The observed rename agrees with the unchecked atomic-write path in the source. This confirms a filesystem correctness issue; it does not independently establish the reported character-device or tmux consequences.
 
-The destructive filesystem behavior establishes a correctness bug without requiring a runtime reproduction. No existing issue or PR found provides a canonical discussion for device-node replacement. The report is not a request merely to expand the supported output formats.
+The historical symlink fix remains present and does not cover device nodes or FIFOs, so this is neither a duplicate of that resolved issue nor an established recurrence of a previously fixed device bug. No existing issue or PR found provides a canonical discussion for device-node replacement.
+
+## Reproduction
+
+### Environment and outcome
+
+- Outcome: **reproducible** for replacement of a non-regular output destination, using a disposable FIFO explicitly within the report's scope.
+- Installed executable: `/opt/hostedtoolcache/uv/0.12.13/x86_64/uv`, reporting `uv 0.12.13 (x86_64-unknown-linux-gnu)`.
+- Python: `/usr/bin/python3`, version 3.12.3.
+- Platform: Ubuntu 24.04.5 LTS, Linux 6.17.0-1022-azure, x86_64; normal user UID 1001.
+- Fixture: `req.in` containing exactly `six==1.16.0` followed by a newline, with no project configuration. Resolution used public PyPI, disabled configuration discovery, and disabled Python downloads.
+- Files, cache, configuration directories, and trace artifacts were isolated under `/tmp/uv-22487-dti61rgd`. No checkout files or existing user state were modified.
+
+The reporter used uv 0.13.0, Python 3.12.15, and Debian 13 as root in Docker. Those exact versions and the character-device destination were not reproduced. Creating a disposable character device with major/minor 1,3 failed with `Operation not permitted`, including in a private user/mount namespace; privilege escalation was also unavailable. The real `/dev/null` was never used as a compile output destination.
+
+### Minimal commands
+
+The successful test is equivalent to the following shell sequence, with all paths in a new temporary directory:
+
+```sh
+scratch=$(mktemp -d /tmp/uv-22487-XXXXXX)
+cd "$scratch"
+mkdir tmp
+export TMPDIR="$scratch/tmp"
+export UV_CACHE_DIR="$scratch/cache"
+export UV_PYTHON_INSTALL_DIR="$scratch/python"
+export UV_PYTHON_DOWNLOADS=never
+export UV_PYTHON=/usr/bin/python3
+export UV_NO_CONFIG=1
+printf 'six==1.16.0\n' > req.in
+mkfifo -m 600 output.fifo
+stat -c '%F %s' output.fifo
+( : > output.fifo ) &
+uv pip compile req.in --no-deps -o output.fifo
+wait
+stat -c '%F %s' output.fifo
+cat output.fifo
+```
+
+The actual invocation used a clean subprocess environment with credential and XDG directories redirected into the scratch directory, a 45-second timeout, and a background Python thread that opened and closed the FIFO's writing end. This thread is equivalent to `( : > output.fifo ) &`: compile reads an existing output file for resolution preferences, so the writer supplies immediate EOF, as a null device would. No `--upgrade` or other option changing that read path was used.
+
+Observed results:
+
+```text
+Before: FIFO, mode prw-------, size 0
+Command: uv pip compile req.in --no-deps -o output.fifo
+Exit: 0
+Stderr: Resolved 1 package in 93ms
+After: regular file, mode -rw-r--r--, size 147
+```
+
+The resulting regular file and stdout both contained:
+
+```text
+# This file was autogenerated by uv via the following command:
+#    uv pip compile req.in --no-deps -o output.fifo
+six==1.16.0
+    # via -r req.in
+```
+
+Tracing only rename syscalls with `strace -f -e trace=rename,renameat,renameat2` recorded:
+
+```text
+rename("/tmp/uv-22487-dti61rgd/.tmpH3CLji", "output.fifo") = 0
+```
+
+This directly confirms that uv replaced the FIFO by renaming a temporary file over it. Ordinary user permissions were sufficient because the containing scratch directory was writable.
+
+### Workaround check
+
+A separate disposable FIFO with a reader attached was used for `uv pip compile req.in --no-deps > redirect.fifo`. The command exited 0, the reader received the compiled requirements, and `redirect.fifo` remained a FIFO. Omitting `-o` and redirecting stdout therefore avoids the replacement path. For discarding output, `uv pip compile requirements.in > /dev/null` uses that approach and leaves diagnostics on stderr; this exact real-device command was not run.
+
+### Existing test coverage
+
+Read `crates/uv/tests/pip_compile/pip_compile.rs::symlink` (starting at line 15486). It creates a regular `requirements.txt`, creates a symlink pointing to it, compiles `anyio` through `--output-file requirements-symlink.txt`, snapshots successful output, and asserts that the symlink still targets the original path. It is gated with `#[cfg(not(windows))]`. It covers preservation of a symlink targeting a regular file, not a character device or FIFO.
+
+`crates/uv/tests/pip_compile/pip_compile.rs::compile_invalid_output_file` checks rejection of `-o pyproject.toml` as an unsupported output format; it does not check filesystem object types. Targeted searches across `crates/uv/tests/`, `crates/uv-client/tests/it/`, `crates/uv-command-support/`, and `crates/uv-fs/` found no test exercising non-regular compile output preservation. No repository test suite was run or changed.
 
 ## Related
 
@@ -42,7 +114,7 @@ Source inspected at checkout commit `5cc7f15c359b83eed2c68c5578c1000bfd27e0da`:
 
 ## Scope and limitations
 
-The source confirms the missing guard and replacement mechanism. No reproduction, build, or test was run, and no device was modified. Actual handling of `/dev/stdout`, FIFOs, sockets, and Windows `NUL` was not verified. These are additional destination classes requested for review, not independently established command reproductions. In particular, compile also reads an existing output path for resolution preferences at `crates/uv-pip-commands/src/compile.rs:470`, so supporting pipes requires considering the read path as well as the final write.
+The FIFO reproduction and rename trace confirm the non-regular-file replacement mechanism on the installed uv 0.12.13. Device nodes, `/dev/stdout`, sockets, Windows `NUL`, and `uv export` were not tested; neither were the downstream tmux and glibc effects. No build was performed, and no device was modified. The source identifies export as sharing the output writer, but its runtime behavior must be checked separately. Compile also reads an existing output path for resolution preferences at `crates/uv-pip-commands/src/compile.rs:470`; `crates/uv-resolve-operations/src/locked_requirements.rs:34` only skips this read when upgrading all packages. Supporting pipes therefore requires considering the read path as well as the final write.
 
 The issue timeline links omnigent-ai/omnigent#9743, which reports the same incident and requests better downstream tmux diagnostics. It points back to astral-sh/uv#22487 for the uv defect and is not a replacement for this discussion.
 

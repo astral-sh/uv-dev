@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced non-regular output replacement using a disposable FIFO on Ubuntu 24.04.5 x86_64, installed uv 0.12.13, and Python 3.12.3. In a temporary directory with an isolated cache, created req.in containing six==1.16.0, ran `mkfifo output.fifo`, supplied EOF using `( : > output.fifo ) &`, then ran `uv pip compile req.in --no-deps -o output.fifo`. uv exited 0 and replaced the FIFO with a 147-byte regular requirements file. strace confirmed a successful temporary-file rename over the FIFO. Shell redirection instead preserved the FIFO. Scratch character-device creation was denied, so the exact /dev/null case and reported uv 0.13.0 remain unverified; the real device was untouched. Updated $RUNNER_TEMP/issue-context/README.md with findings, limitations, and existing test coverage. No checkout files were modified."
+}
