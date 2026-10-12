@@ -3516,6 +3516,65 @@ fn sync_non_project_frozen_modification() -> Result<()> {
     Ok(())
 }
 
+/// Sync a locked source distribution whose README is stored as a tar hard link.
+#[test]
+fn sync_sdist_hardlink() -> Result<()> {
+    let context = uv_test::test_context!("3.14");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.14"
+
+        [dependency-groups]
+        dev = ["pybabel-json==0.2.0"]
+    "#})?;
+
+    // Resolve with the legacy backend without caching the extracted source distribution.
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--no-cache")
+        .env(EnvVars::UV_LEGACY_TAR_BACKEND, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    // The default backend rejects this valid README hard link, preventing installation.
+    // See astral-sh/uv#22492.
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--locked")
+        .arg("--no-cache")
+        .env_remove(EnvVars::UV_LEGACY_TAR_BACKEND), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Failed to download and build `pybabel-json==0.2.0`
+      cause: Failed to extract archive: pybabel-json==0.2.0
+      cause: Invalid tar file
+      cause: at byte 25088: extraction policy rejected input: hard-link members are not allowed
+
+    hint: `pybabel-json` (v0.2.0) was included because `project:dev` (v0.1.0) depends on `pybabel-json`
+    ");
+
+    // The same locked distribution can be extracted and installed with the legacy backend.
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--locked")
+        .arg("--no-cache")
+        .env(EnvVars::UV_LEGACY_TAR_BACKEND, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + babel==2.14.0
+     + pybabel-json==0.2.0
+    ");
+
+    Ok(())
+}
+
 /// Use a `pip install` step to pre-install build dependencies for `--no-build-isolation`.
 #[test]
 fn sync_build_isolation() -> Result<()> {
