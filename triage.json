@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 14583,
+        "title": "can't install uv through powershell",
+        "url": "https://github.com/astral-sh/uv/issues/14583",
+        "state": "closed",
+        "reason": "Closest match: invoking uv immediately after installation produces the same PowerShell CommandNotFoundException. The reply explains PATH visibility and recommends restarting PowerShell. That report used the standalone installer; this report uses WinGet, whose screenshot explicitly requests a shell restart."
+      },
+      {
+        "kind": "issue",
+        "number": 3116,
+        "title": "uv powershell windows only works if you are running powershell as admin",
+        "url": "https://github.com/astral-sh/uv/issues/3116",
+        "state": "closed",
+        "reason": "Reports successful installation followed by the same unrecognized-uv error. Multiple commenters resolved command discovery by restarting PowerShell, logging out, or rebooting; a maintainer confirms administrator access should not be required. The original standalone-installer/admin trigger differs from this WinGet session."
+      },
+      {
+        "kind": "issue",
+        "number": 10014,
+        "title": "`uv` command on Windows: Inconsistent PATH set by installer",
+        "url": "https://github.com/astral-sh/uv/issues/10014",
+        "state": "closed",
+        "reason": "Historical PATH-propagation bug with the identical PowerShell error, but it persisted in newly opened shells after standalone installation. Its upstream fix, axodotdev/cargo-dist#1658, removed the system-restart requirement while retaining a shell restart. The current WinGet screenshot shows no shell restart, so it does not establish recurrence of that bug."
+      },
+      {
+        "kind": "issue",
+        "number": 20792,
+        "title": "Windows antivirus/EDR issues",
+        "url": "https://github.com/astral-sh/uv/issues/20792",
+        "state": "open",
+        "reason": "Canonical context for the reporter's antivirus question, including quarantined/deleted executables and access-denied errors. This report shows neither a detection nor quarantine evidence, so antivirus interference is unconfirmed and this is not the duplicate target."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues using cmdlet, CommandNotFoundException, not recognized, winget with not found/PowerShell/PATH, and installer-independent command not found/install terms. Conceptual searches covered shell restarts, PATH visibility, Windows installation, and antivirus/EDR separately; the GameForge-Harness identifier returned only this report. Searched open, closed, and merged PRs for WinGet, Windows installer, PowerShell/PATH, cargo-dist, antivirus, the exact exception, and version 0.13.0; no matching uv PR was returned. Read candidate comments and followed astral-sh/uv#10014 through axodotdev/cargo-dist#1614 to merged axodotdev/cargo-dist#1658. Ruled out astral-sh/uv#12211 (WinGet installation fails with Unicode errors), astral-sh/uv#14693 (misleading update-shell output after uv runs), and astral-sh/uv#2287 (pip/Python installation PATH setup)."
+  },
+  "type": "duplicate",
+  "type_reason": "The post-installation PowerShell command-discovery support question is already covered by astral-sh/uv#14583, so duplicate takes precedence over question. The new WinGet trigger includes an explicit instruction to restart the shell before the same CommandNotFoundException occurs. No failure after following that instruction, antivirus detection, uv runtime defect, or regression of the historically fixed standalone-installer bug is demonstrated.",
+  "summary": "astral-sh/uv#14583 is the closest existing support discussion; astral-sh/uv#3116 corroborates the shell-refresh advice. The older PATH bug and antivirus tracker provide context but do not establish a current defect.",
+  "draft_response": "Your screenshot shows WinGet installing uv 0.13.0 successfully and saying “Pfadumgebungsvariable geändert; Starten Sie Ihre Shell neu, um den neuen Wert zu verwenden” — restart your shell to use the updated PATH. Please fully close PowerShell/Windows Terminal, reopen it, and run `uv --version`.\n\nThis repeats the post-installation command-discovery question in astral-sh/uv#14583. The error means PowerShell cannot locate uv; it does not by itself indicate antivirus interference. If it still fails after restarting, please share the output of `winget list --id astral-sh.uv -e` and `Get-Command uv -All`, and whether your antivirus reports quarantining uv."
+}
