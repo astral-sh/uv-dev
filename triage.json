@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8523,
+        "title": "uv tool upgrade - problem with private indexes due to short living credentials",
+        "url": "https://github.com/astral-sh/uv/issues/8523",
+        "state": "open",
+        "reason": "Upgrades reuse receipt values after the user updates global configuration. Maintainer comments discuss saving only explicit CLI overrides and distinguishing configuration origins. Its concrete failure concerns expiring index authentication, whereas this report requires clearing an inherited cutoff."
+      },
+      {
+        "kind": "issue",
+        "number": 11929,
+        "title": "Upgrading tools adds an identical entry to the `index` list in uv-receipt.toml",
+        "url": "https://github.com/astral-sh/uv/issues/11929",
+        "state": "open",
+        "reason": "Maintainers identify merging saved receipt settings with current filesystem settings as the cause and discuss replacement semantics. This concerns accumulating list entries; the new report concerns a saved scalar cutoff overriding changed or removed configuration."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5937,
+        "title": "Retain and respect settings in tool upgrades",
+        "url": "https://github.com/astral-sh/uv/pull/5937",
+        "state": "merged",
+        "reason": "Introduced persisted resolver/installer options and CLI > receipt > filesystem precedence, which remains in the upgrade implementation. This establishes the origin of the behavior, rather than an existing fix for inherited-setting removal."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19934,
+        "title": "Allow disabling `exclude-newer`",
+        "url": "https://github.com/astral-sh/uv/pull/19934",
+        "state": "merged",
+        "reason": "Merged June 22, 2026, closing astral-sh/uv#19929. Added false overrides in CLI, environment, configuration, and receipts. It supports an explicit CLI workaround but did not change receipt precedence or track inherited values, so this report is not evidence that its fix regressed."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18901,
+        "title": "Store relative timestamps in tool receipts",
+        "url": "https://github.com/astral-sh/uv/pull/18901",
+        "state": "merged",
+        "reason": "Merged April 7, 2026, to retain relative spans and recompute cutoffs during upgrades instead of freezing the installation timestamp. Existing tests cover recomputation. Retaining a removed global policy is distinct; the reporter's unchanged-timestamp claim needs separate verification."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs. Literal searches covered exclude-newer, exclude-newer-span, false, uv tool upgrade, global configuration, receipts, and per-tool settings. Conceptual searches covered cooldowns, inherited settings, persistence, precedence, and configuration merging without package/version/platform restrictions. PR search omitted known matches, so a complete paginated all-state PR listing was also searched by title. Inspected candidate bodies, comments, reviews, and reference chains, including historical fixes predating 0.13.0. Ruled out astral-sh/uv#20652 and its canonical discussion astral-sh/uv#19196 (unused package exemptions in project locks), astral-sh/uv#18775 (lock-check configuration mismatch), and astral-sh/uv#18522 with astral-sh/uv#18586 (outdated-list settings mismatch). No exact duplicate found."
+  },
+  "type": "bug",
+  "type_reason": "Source confirms that installation persists merged settings without recording the origin of exclude-newer, and upgrades prioritize that saved value over current global configuration, including false or an absent value. This prevents an inherited policy from following global changes. Related issues concern authentication or list merging; prior fixes cover disabling support and relative-time recomputation, not this cutoff-reset behavior. No previously fixed regression was established.",
+  "summary": "Related discussions cover receipt/configuration merging; merged PRs explain the precedence, disabling support, and relative-cutoff handling. None directly tracks clearing an inherited tool cooldown.",
+  "draft_response": "Tool installation currently saves the merged settings, and upgrades prioritize those saved values over current global configuration. The receipt does not distinguish an inherited cutoff from an explicit per-tool setting, which explains why your global change is ignored.\n\nFor an immediate override, try `uv tool upgrade black --exclude-newer false`. This explicitly disables that tool's cutoff; it does not restore inheritance from global configuration. A fix needs to distinguish inherited values from explicit tool settings. Please also confirm whether the `tool-install-locks` preview feature is enabled for the reported `uv.lock` behavior."
+}
