@@ -646,6 +646,222 @@ fn tool_upgrade_noop_updates_options() {
     });
 }
 
+/// An inherited cooldown should stop applying when disabled in user configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn tool_upgrade_disabled_global_exclude_newer() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-cooldown"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.cooldown-demo.versions."1.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-03-15T00:00:00Z" }
+        entry_points = ["cooldown-demo"]
+
+        [packages.cooldown-demo.versions."2.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-03-24T00:00:00Z" }
+        entry_points = ["cooldown-demo"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let user_configuration = context.user_config_dir.child("uv").child("uv.toml");
+    user_configuration.write_str("exclude-newer = \"3 days\"\n")?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("cooldown-demo")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + cooldown-demo==1.0.0
+    Installed 1 executable: cooldown-demo
+    ");
+
+    user_configuration.write_str("exclude-newer = false\n")?;
+
+    // The receipt overrides the disabled global cooldown, preventing the available upgrade.
+    // This is undesirable for an inherited setting: astral-sh/uv#22468.
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--all")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, "2024-03-26T00:00:00Z")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    ");
+
+    // Reinstalling still selects the older release and retains the receipt's inherited cooldown.
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--all")
+        .arg("--reinstall")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, "2024-03-26T00:00:00Z")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified cooldown-demo environment
+     ~ cooldown-demo==1.0.0
+    Nothing to upgrade
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/cooldown-demo/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [{ name = "cooldown-demo" }]
+        entrypoints = [
+            { name = "cooldown-demo", install-path = "[TEMP_DIR]/bin/cooldown-demo", from = "cooldown-demo" },
+        ]
+
+        [tool.options]
+        index-url = "http://[LOCALHOST]/simple/"
+        exclude-newer = "2024-03-22T00:00:00Z"
+        exclude-newer-span = "P3D"
+        "#);
+    });
+
+    // The same override on the CLI allows the newer release to be installed.
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--all")
+        .arg("--exclude-newer")
+        .arg("false")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, "2024-03-26T00:00:00Z")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated cooldown-demo v1.0.0 -> v2.0.0
+     - cooldown-demo==1.0.0
+     + cooldown-demo==2.0.0
+    Installed 1 executable: cooldown-demo
+    ");
+
+    Ok(())
+}
+
+/// Preview upgrades write the inherited cooldown to both the receipt and lockfile.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn tool_upgrade_removed_global_exclude_newer_preview_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs()
+        .with_env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks");
+    let bin_dir = context.temp_dir.child("bin");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-cooldown"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.cooldown-demo.versions."1.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-03-15T00:00:00Z" }
+        entry_points = ["cooldown-demo"]
+
+        [packages.cooldown-demo.versions."2.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-03-24T00:00:00Z" }
+        entry_points = ["cooldown-demo"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = context.with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    let user_configuration = context.user_config_dir.child("uv").child("uv.toml");
+    user_configuration.write_str("exclude-newer = \"3 days\"\n")?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("cooldown-demo")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + cooldown-demo==1.0.0
+    Installed 1 executable: cooldown-demo
+    ");
+
+    user_configuration.write_str("")?;
+
+    // Removing the inherited setting should clear the cooldown, but the receipt restores it
+    // and the preview upgrade persists it in both metadata files: astral-sh/uv#22468.
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--all")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, "2024-03-26T00:00:00Z")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/cooldown-demo/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [{ name = "cooldown-demo" }]
+        entrypoints = [
+            { name = "cooldown-demo", install-path = "[TEMP_DIR]/bin/cooldown-demo", from = "cooldown-demo" },
+        ]
+
+        [tool.options]
+        index-url = "http://[LOCALHOST]/simple/"
+        exclude-newer = "2024-03-23T00:00:00Z"
+        exclude-newer-span = "P3D"
+        "#);
+        assert_snapshot!(context.read("tools/cooldown-demo/uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+        exclude-newer-span = "P3D"
+
+        [manifest]
+        requirements = [{ name = "cooldown-demo" }]
+
+        [[package]]
+        name = "cooldown-demo"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/cooldown_demo-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:cooldown_demo-1.0.0-py3-none-any.whl]", upload-time = "2024-03-15T00:00:00Z" },
+        ]
+        "#);
+    });
+
+    Ok(())
+}
+
 #[test]
 fn tool_upgrade_multiple_names() {
     let old_index = old_tool_index();
