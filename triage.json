@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15666,
+        "title": "`uv` installs package that is incompatible with environment python version",
+        "url": "https://github.com/astral-sh/uv/issues/15666",
+        "state": "closed",
+        "reason": "Same ai-edge-litert → backports-strenum dependency chain on Python >=3.11. Maintainers confirmed the unconditional dependency and ignored Requires-Python upper bound. The older report used uv sync on Python 3.11; this report adds pip compile on Python 3.12."
+      },
+      {
+        "kind": "issue",
+        "number": 7869,
+        "title": "UV will add and install packages that are not compatible with current python version",
+        "url": "https://github.com/astral-sh/uv/issues/7869",
+        "state": "open",
+        "reason": "Tracks the same successful resolution/installation followed by a Requires-Python upper-bound error from uv pip check. Uses geojson on Python 3.12 and remains open with compatibility, needs-design, and needs-decision labels."
+      },
+      {
+        "kind": "issue",
+        "number": 4022,
+        "title": "Discarding upper-bounds on `Requires-Python`",
+        "url": "https://github.com/astral-sh/uv/issues/4022",
+        "state": "closed",
+        "reason": "Canonical design discussion referenced by the matching reports. Its closure accompanied implementing upper-bound ignoring, not fixing selection of releases whose declared upper bounds exclude the target."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6882,
+        "title": "Use lower-bound semantics for all Python compatibility comparisons",
+        "url": "https://github.com/astral-sh/uv/pull/6882",
+        "state": "merged",
+        "reason": "Merged September 2, 2024; explicitly made pip compile with an explicit Python target ignore upper bounds consistently with universal resolution. Explains why --python-version does not prevent this selection and establishes that the behavior predates uv 0.12.18."
+      },
+      {
+        "kind": "pull_request",
+        "number": 4086,
+        "title": "Ignore upper-bounds on `Requires-Python`",
+        "url": "https://github.com/astral-sh/uv/pull/4086",
+        "state": "merged",
+        "reason": "Merged June 6, 2024; introduced lower-bound-only dependency compatibility and closed astral-sh/uv#4022. Historical implementation of the reported mechanism, not a fix enforcing upper bounds."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv through authenticated gh across open/closed issues and open/closed/merged PRs. Literal queries covered backports-strenum, backports.strenum, ai-edge-litert, the Requires-Python error, pip compile, --python-version, and pip check. Conceptual searches covered incompatible Python versions, ignored upper bounds, and lower-bound compatibility; fix-oriented searches followed closed reports and merged changes. Inspected bodies, comments, and timeline references, including astral-sh/uv#15666 → astral-sh/uv#14711 → astral-sh/uv#4022 and astral-sh/uv#5045 / astral-sh/uv#6859 → astral-sh/uv#6882. Inspected astral-sh/uv#14752 and confirmed it only clarified documentation. Ruled out astral-sh/uv#11624 as first-party interpreter enforcement, astral-sh/uv#17649 as build-failure/backtracking behavior, and astral-sh/uv#4959 as universal-resolution/prerelease handling."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#15666 already covers the same dependency chain and ignored Python upper bound; astral-sh/uv#7869 tracks the resulting resolve/install versus pip check discrepancy. Source and documentation confirm lower-bound-only resolution and full-specifier validation by pip check. The explicit Python 3.12 compile reproduction does not establish a separate mechanism or regression: astral-sh/uv#6882 intentionally introduced this compile behavior in 2024, and no intervening fix enforcing dependency upper bounds was identified.",
+  "summary": "Duplicate of the same-package report astral-sh/uv#15666, with ongoing discussion in astral-sh/uv#7869. astral-sh/uv#4022 and merged astral-sh/uv#4086 / astral-sh/uv#6882 document and implement the underlying upper-bound behavior.",
+  "draft_response": "This matches astral-sh/uv#15666, which covers the same ai-edge-litert/backports-strenum dependency chain. uv currently ignores dependency Requires-Python upper bounds during resolution, including with --python-version, while uv pip check validates the full declared range. That explains the discrepancy you observed. Please continue the discussion in astral-sh/uv#7869, which remains open for this behavior. You can keep the backports.strenum<1.3 constraint you verified as a workaround."
+}
