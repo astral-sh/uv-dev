@@ -732,7 +732,7 @@ fn tool_upgrade_disabled_global_exclude_newer() -> Result<()> {
 
         [tool.options]
         index-url = "http://[LOCALHOST]/simple/"
-        exclude-newer = "2024-03-22T00:00:00Z"
+        exclude-newer = "2024-03-23T00:00:00Z"
         exclude-newer-span = "P3D"
         "#);
     });
