@@ -9,8 +9,6 @@ use std::io::pipe;
 use std::os::unix::fs::FileTypeExt;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
-#[cfg(not(windows))]
-use std::path::Path;
 use std::process::Command;
 use std::str::FromStr;
 #[cfg(unix)]
@@ -15979,15 +15977,7 @@ fn symlink() -> Result<()> {
 #[cfg(not(windows))]
 fn dangling_relative_output_symlink() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (filename, wheel) = generate_wheel(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?).build();
     context
         .temp_dir
         .child("wheels")
@@ -16018,7 +16008,7 @@ fn dangling_relative_output_symlink() -> Result<()> {
 
     assert_eq!(context.read("out/generated.txt"), "example==1.0.0\n");
     assert_eq!(context.read("generated.txt"), "# cwd sentinel\n");
-    assert_eq!(output.path().read_link()?, Path::new("generated.txt"));
+    assert_link_target(output, "generated.txt");
     Ok(())
 }
 
@@ -16027,15 +16017,7 @@ fn dangling_relative_output_symlink() -> Result<()> {
 #[cfg(not(windows))]
 fn cyclic_output_symlink() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (filename, wheel) = generate_wheel(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?).build();
     context
         .temp_dir
         .child("wheels")
@@ -16067,8 +16049,8 @@ fn cyclic_output_symlink() -> Result<()> {
     ");
 
     assert_eq!(context.read("next.txt"), "# cwd sentinel\n");
-    assert_eq!(output.path().read_link()?, Path::new("next.txt"));
-    assert_eq!(next.path().read_link()?, Path::new("result.txt"));
+    assert_link_target(output, "next.txt");
+    assert_link_target(next, "result.txt");
     Ok(())
 }
 
