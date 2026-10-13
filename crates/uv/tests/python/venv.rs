@@ -81,6 +81,8 @@ fn create_venv_caches_interpreter() -> Result<()> {
         .init_no_wait()?
         .context("Interpreter cache is locked")?;
 
+    let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let base_executable = fs_err::canonicalize(environment.interpreter().to_base_python()?)?;
     let root = tempfile::tempdir_in(context.temp_dir.path())?;
     // Check that cached metadata matches Python's output even when the venv path has
     // a Windows verbatim prefix.
@@ -90,20 +92,16 @@ fn create_venv_caches_interpreter() -> Result<()> {
         .arg(&root_path)
         .arg("--clear")
         .arg("--python")
-        .arg("3.12")
+        .arg(&base_executable)
         .assert()
         .success();
 
     let site_packages = site_packages_path(&root_path, "python3.12");
     fs_err::write(
-        site_packages.join("sitecustomize.py"),
-        indoc! {r#"
-            from pathlib import Path
-
-            Path(__file__).with_name("interpreter-started").touch()
-        "#},
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
     )?;
-    let startup_marker = site_packages.join("interpreter-started");
+    let startup_marker = root_path.join("interpreter-started");
 
     let cached_interpreters = context.cache_files(CacheBucket::Interpreter)?;
     let cached = PythonEnvironment::from_root(&root_path, &cache)?;
@@ -132,7 +130,7 @@ fn create_venv_caches_interpreter_from_symlinked_installation() -> Result<()> {
         .init_no_wait()?
         .context("Interpreter cache is locked")?;
     let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
-    let base_executable = environment.interpreter().to_base_python()?;
+    let base_executable = fs_err::canonicalize(environment.interpreter().to_base_python()?)?;
     let installation = base_executable
         .parent()
         .and_then(Path::parent)
@@ -152,14 +150,10 @@ fn create_venv_caches_interpreter_from_symlinked_installation() -> Result<()> {
 
     let site_packages = site_packages_path(root.path(), "python3.12");
     fs_err::write(
-        site_packages.join("sitecustomize.py"),
-        indoc! {r#"
-            from pathlib import Path
-
-            Path(__file__).with_name("interpreter-started").touch()
-        "#},
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
     )?;
-    let startup_marker = site_packages.join("interpreter-started");
+    let startup_marker = root.join("interpreter-started");
 
     let cached_interpreters = context.cache_files(CacheBucket::Interpreter)?;
     let cached = PythonEnvironment::from_root(root.path(), &cache)?;
@@ -217,14 +211,10 @@ fn create_venv_queries_symlinked_base_executable() -> Result<()> {
 
     let site_packages = site_packages_path(root.path(), "python3.12");
     fs_err::write(
-        site_packages.join("sitecustomize.py"),
-        indoc! {r#"
-            from pathlib import Path
-
-            Path(__file__).with_name("interpreter-started").touch()
-        "#},
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
     )?;
-    let startup_marker = site_packages.join("interpreter-started");
+    let startup_marker = root.join("interpreter-started");
     let cached = PythonEnvironment::from_root(root.path(), &cache)?;
     assert!(startup_marker.is_file());
     let fresh_cache = Cache::temp()?
@@ -245,6 +235,18 @@ fn create_venv_caches_interpreter_from_venv() -> Result<()> {
         .init_no_wait()?
         .context("Interpreter cache is locked")?;
 
+    // Use a regular base executable so this fixture exercises inference on system Python too.
+    let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let base_executable = fs_err::canonicalize(environment.interpreter().to_base_python()?)?;
+    context
+        .venv()
+        .arg(context.venv.path())
+        .arg("--clear")
+        .arg("--python")
+        .arg(&base_executable)
+        .assert()
+        .success();
+
     let root = tempfile::tempdir_in(context.temp_dir.path())?;
     // Check that cached metadata matches Python's output even when the venv path has
     // a Windows verbatim prefix.
@@ -260,14 +262,10 @@ fn create_venv_caches_interpreter_from_venv() -> Result<()> {
 
     let site_packages = site_packages_path(&root_path, "python3.12");
     fs_err::write(
-        site_packages.join("sitecustomize.py"),
-        indoc! {r#"
-            from pathlib import Path
-
-            Path(__file__).with_name("interpreter-started").touch()
-        "#},
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
     )?;
-    let startup_marker = site_packages.join("interpreter-started");
+    let startup_marker = root_path.join("interpreter-started");
 
     let cached_interpreters = context.cache_files(CacheBucket::Interpreter)?;
     let cached = PythonEnvironment::from_root(&root_path, &cache)?;
@@ -282,6 +280,44 @@ fn create_venv_caches_interpreter_from_venv() -> Result<()> {
         .context("Fresh interpreter cache is locked")?;
     let queried = PythonEnvironment::from_root(&root_path, &fresh_cache)?;
     assert!(startup_marker.is_file());
+    assert_eq!(cached, queried);
+
+    Ok(())
+}
+
+/// Parent components in the requested root do not enter the interpreter's reported paths.
+#[test]
+#[cfg(unix)]
+fn create_venv_queries_parent_components() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let base_executable = fs_err::canonicalize(environment.interpreter().to_base_python()?)?;
+    let staging = context.temp_dir.child("staging");
+    staging.create_dir_all()?;
+    let root = staging.join("../parent-components-venv");
+    context
+        .venv()
+        .arg(&root)
+        .arg("--python")
+        .arg(&base_executable)
+        .assert()
+        .success();
+
+    let site_packages = site_packages_path(&root, "python3.12");
+    fs_err::write(
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
+    )?;
+    let startup_marker = root.join("interpreter-started");
+    let cached = PythonEnvironment::from_root(&root, &cache)?;
+    assert!(startup_marker.is_file());
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(&root, &fresh_cache)?;
     assert_eq!(cached, queried);
 
     Ok(())
@@ -332,14 +368,10 @@ fn recreate_venv_system_site_packages_invalidates_interpreter() -> Result<()> {
     let fixed = PythonEnvironment::from_root(context.venv.path(), &cache)?;
     let site_packages = site_packages_path(context.venv.path(), "python3.12");
     fs_err::write(
-        site_packages.join("sitecustomize.py"),
-        indoc! {r#"
-            from pathlib import Path
-
-            Path(__file__).with_name("interpreter-started").touch()
-        "#},
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
     )?;
-    let startup_marker = site_packages.join("interpreter-started");
+    let startup_marker = context.venv.join("interpreter-started");
 
     context
         .venv()
@@ -385,14 +417,10 @@ fn create_venv_caches_upgradeable_interpreter() -> Result<()> {
 
     let site_packages = site_packages_path(context.venv.path(), "python3.12");
     fs_err::write(
-        site_packages.join("sitecustomize.py"),
-        indoc! {r#"
-            from pathlib import Path
-
-            Path(__file__).with_name("interpreter-started").touch()
-        "#},
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
     )?;
-    let startup_marker = site_packages.join("interpreter-started");
+    let startup_marker = context.venv.join("interpreter-started");
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
         .init_no_wait()?
         .context("Interpreter cache is locked")?;

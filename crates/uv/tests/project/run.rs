@@ -1,6 +1,6 @@
 #![expect(clippy::disallowed_types)]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
@@ -8,7 +8,9 @@ use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
+use uv_cache::Cache;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
+use uv_python_interpreter::PythonEnvironment;
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1889,13 +1891,23 @@ fn run_with_overlay_interpreter() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    // Switch to a relocatable virtual environment.
+    // Keep the base interpreter fixed when switching to a relocatable virtual environment.
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let base_python = PythonEnvironment::from_root(context.venv.path(), &cache)?
+        .interpreter()
+        .to_base_python()?;
     context
         .venv()
         .arg("--allow-existing")
         .arg("--relocatable")
+        .arg("--python")
+        .arg(&base_python)
         .assert()
         .success();
+    let recreated = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    assert_eq!(recreated.interpreter().to_base_python()?, base_python);
 
     // Cleanup previous shutil
     fs_err::remove_file(context.temp_dir.child("main"))?;
