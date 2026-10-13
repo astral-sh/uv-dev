@@ -29,6 +29,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install mold"
         run: ./scripts/install-mold.sh
 
@@ -42,7 +44,7 @@ jobs:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
 
       - name: "Build"
-        run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness
 
       - name: "Upload binary"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -64,6 +66,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install mold"
         run: ./scripts/install-mold.sh
 
@@ -77,7 +81,7 @@ jobs:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
 
       - name: "Build"
-        run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness
 
       - name: "Upload binary"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -98,6 +102,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - uses: $/.github/actions/setup-cargo
 
       - name: "Install mold"
         run: ./scripts/install-mold.sh
@@ -128,7 +134,7 @@ jobs:
       - name: "Build"
         env:
           CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
-        run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target armv7-unknown-linux-gnueabihf --bin uv --bin uvx
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness --target armv7-unknown-linux-gnueabihf --bin uv --bin uvx
 
       - name: "Upload binary"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -150,6 +156,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install mold"
         run: ./scripts/install-mold.sh
 
@@ -168,7 +176,7 @@ jobs:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
 
       - name: "Build"
-        run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target x86_64-unknown-linux-musl --bin uv --bin uvx
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness --target x86_64-unknown-linux-musl --bin uv --bin uvx
 
       - name: "Upload binary"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -190,6 +198,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         run: rustup toolchain install --profile minimal
 
@@ -200,7 +210,7 @@ jobs:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
           cache-bin: false
       - name: "Build"
-        run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
 
       - name: "Upload binary"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -222,6 +232,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         run: |
           rustup toolchain install --profile minimal
@@ -234,7 +246,7 @@ jobs:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
           cache-bin: false
       - name: "Build"
-        run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target x86_64-apple-darwin --bin uv --bin uvx
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness --target x86_64-apple-darwin --bin uv --bin uvx
 
       - name: "Verify binary architecture"
         run: |
@@ -261,6 +273,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: Setup Dev Drive
         run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
 
@@ -282,7 +296,7 @@ jobs:
 
       - name: "Build"
         working-directory: ${{ env.UV_WORKSPACE }}
-        run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
 
       - name: "Upload binary"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -304,6 +318,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: Setup Dev Drive
         run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
 
@@ -325,7 +341,7 @@ jobs:
 
       - name: "Build"
         working-directory: ${{ env.UV_WORKSPACE }}
-        run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
 
       - name: "Upload binary"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -344,6 +360,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Read MSRV from Cargo.toml"
         id: msrv
         run: |
@@ -358,7 +376,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
-      - run: cargo +${MSRV} build --locked --profile no-debug
+      - run: cargo +${MSRV} build --profile no-debug
         env:
           MSRV: ${{ steps.msrv.outputs.value }}
       - run: ./target/no-debug/uv --version
@@ -373,6 +391,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - uses: $/.github/actions/setup-cargo
 
       - name: "Setup Android NDK"
         run: |
@@ -409,7 +429,7 @@ jobs:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
 
       - name: "Build"
-        run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target aarch64-linux-android --bin uv --bin uvx
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness --target aarch64-linux-android --bin uv --bin uvx
 
       - name: "Upload binary"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -428,6 +448,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: $/.github/actions/setup-cargo
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
@@ -440,7 +462,7 @@ jobs:
           chmod +x cross
           mv cross /usr/local/bin/cross
 
-          cross build --target x86_64-unknown-freebsd --profile no-debug
+          cross build --locked --target x86_64-unknown-freebsd --profile no-debug
 
       - name: Test in Firecracker VM
         uses: acj/freebsd-firecracker-action@e04896d2dd91f7ec7381e5f363c6fbe83ee445c3 # v0.11.0
