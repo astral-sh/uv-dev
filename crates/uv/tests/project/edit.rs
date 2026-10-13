@@ -6087,7 +6087,7 @@ async fn add_stdin_constraints_require_index_authentication() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.add()
         .args(["a", "-c", "-"])
-        .stdin(fs_err::File::open(&constraints)?), @"
+        .stdin(fs_err::File::open(constraints.path())?.into_file()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to fetch: http://[LOCALHOST]/simple/a/
@@ -6147,7 +6147,7 @@ async fn add_stdin_constraints_with_index_credentials() -> Result<()> {
         .args(["a", "-c", "-"])
         .env(EnvVars::index_username("PRIVATE"), "public")
         .env(EnvVars::index_password("PRIVATE"), "heron")
-        .stdin(fs_err::File::open(&constraints)?), @"
+        .stdin(fs_err::File::open(constraints.path())?.into_file()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -6207,7 +6207,7 @@ async fn add_stdin_constraints_index_command_line_override() -> Result<()> {
     uv_snapshot!(context.filters(), context.add()
         .args(["a", "-c", "-", "--index"])
         .arg(format!("private={}", selected.index_url()))
-        .stdin(fs_err::File::open(&constraints)?), @"
+        .stdin(fs_err::File::open(constraints.path())?.into_file()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
