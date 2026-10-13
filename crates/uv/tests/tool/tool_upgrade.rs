@@ -1526,7 +1526,7 @@ fn tool_upgrade_excludes() {
     ");
 }
 
-/// Reuse the configured index username when the tool receipt has stripped its credentials.
+/// Reuse the default index username even when an explicit index uses another account at that URL.
 ///
 /// See: <https://github.com/astral-sh/uv/issues/21216>
 #[tokio::test]
@@ -1561,8 +1561,14 @@ async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
         indoc! {r#"
             index-url = "{}"
             keyring-provider = "subprocess"
+
+            [[index]]
+            name = "unrelated"
+            url = "{}"
+            explicit = true
         "#},
-        proxy.username_url("public", "/basic-auth/simple/")
+        proxy.username_url("public", "/basic-auth/simple/"),
+        proxy.username_url("unrelated", "/basic-auth/simple/")
     ))?;
 
     context
@@ -1590,7 +1596,7 @@ async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
         ]
 
         [tool.options]
-        index = [{ url = "http://[LOCALHOST]/basic-auth/simple", explicit = false, default = true, format = "simple", authenticate = "always" }, { url = "http://[LOCALHOST]/basic-auth/simple/", explicit = false, default = true, format = "simple", authenticate = "always" }]
+        index = [{ url = "http://[LOCALHOST]/basic-auth/simple", explicit = false, default = true, format = "simple", authenticate = "always" }, { name = "unrelated", url = "http://[LOCALHOST]/basic-auth/simple/", explicit = true, default = false, format = "simple", authenticate = "always" }, { url = "http://[LOCALHOST]/basic-auth/simple/", explicit = false, default = true, format = "simple", authenticate = "always" }]
         keyring-provider = "subprocess"
         exclude-newer = "2025-01-18T00:00:00Z"
         "#);

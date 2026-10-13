@@ -15,7 +15,7 @@ use uv_configuration::{
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{ExtraBuildRequires, Name, Requirement, RequirementSource};
+use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
 use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
@@ -332,17 +332,7 @@ async fn upgrade_tool(
     receipt.indexes = receipt.indexes.normalize();
     let configured = filesystem.indexes.clone().normalize();
     for stored in receipt.indexes.index.iter_mut().flatten() {
-        if stored.raw_url().username().is_empty()
-            && stored.raw_url().password().is_none()
-            && let Some(configured) = configured.index.iter().flatten().find(|configured| {
-                (!configured.raw_url().username().is_empty()
-                    || configured.raw_url().password().is_some())
-                    && CanonicalUrl::new(stored.raw_url().clone())
-                        == CanonicalUrl::new(configured.raw_url().clone())
-            })
-        {
-            stored.url = configured.url.clone();
-        }
+        restore_index_credentials(stored, configured.index.as_deref().unwrap_or_default());
     }
 
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
@@ -650,6 +640,35 @@ async fn upgrade_tool(
     })
 }
 
+/// Restore an index's credentials from its declaration, or from an unambiguous endpoint match.
+/// Multiple declarations can use different accounts at the same endpoint.
+fn restore_index_credentials(stored: &mut Index, configured: &[Index]) {
+    if !stored.raw_url().username().is_empty() || stored.raw_url().password().is_some() {
+        return;
+    }
+
+    let url = CanonicalUrl::new(stored.raw_url().clone());
+    let mut candidates = configured
+        .iter()
+        .filter(|index| CanonicalUrl::new(index.raw_url().clone()) == url);
+    let matched = candidates
+        .clone()
+        .find(|index| match &stored.name {
+            Some(name) => index.name.as_ref() == Some(name),
+            None => stored.default && index.default,
+        })
+        .or_else(|| {
+            let index = candidates.next()?;
+            candidates.next().is_none().then_some(index)
+        });
+
+    if let Some(index) = matched
+        && (!index.raw_url().username().is_empty() || index.raw_url().password().is_some())
+    {
+        stored.url = index.url.clone();
+    }
+}
+
 fn pinned_requirement_version(tool: &Tool, name: &PackageName) -> Option<Version> {
     pinned_version_from(tool.requirements(), name)
         .or_else(|| pinned_version_from(tool.constraints(), name))
@@ -670,4 +689,100 @@ fn pinned_version_from(requirements: &[Requirement], name: &PackageName) -> Opti
             }
             _ => None,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use uv_distribution_types::{Index, IndexUrl};
+
+    use super::restore_index_credentials;
+
+    #[test]
+    fn named_index_credentials() -> Result<()> {
+        let mut stored =
+            Index::from_extra_index_url("https://example.com/simple".parse::<IndexUrl>()?);
+        stored.name = Some("primary".parse()?);
+        let mut other =
+            Index::from_extra_index_url("https://other:password@example.com/simple".parse()?);
+        other.name = Some("other".parse()?);
+        let mut matching =
+            Index::from_extra_index_url("https://primary:password@example.com/simple".parse()?);
+        matching.name = Some("primary".parse()?);
+
+        restore_index_credentials(&mut stored, &[other, matching]);
+        assert_eq!(stored.raw_url().username(), "primary");
+        Ok(())
+    }
+
+    #[test]
+    fn unnamed_default_index_credentials() -> Result<()> {
+        let mut stored = Index::from_index_url("https://example.com/simple".parse()?);
+        let mut explicit =
+            Index::from_extra_index_url("https://explicit:password@example.com/simple".parse()?);
+        explicit.name = Some("explicit".parse()?);
+        explicit.explicit = true;
+        let default = Index::from_index_url("https://default:password@example.com/simple".parse()?);
+
+        restore_index_credentials(&mut stored, &[explicit, default]);
+        assert_eq!(stored.raw_url().username(), "default");
+        Ok(())
+    }
+
+    #[test]
+    fn unique_endpoint_credentials() -> Result<()> {
+        let mut stored = Index::from_extra_index_url("https://example.com/simple".parse()?);
+        let mut configured =
+            Index::from_extra_index_url("https://renamed:password@example.com/simple".parse()?);
+        configured.name = Some("new-name".parse()?);
+
+        restore_index_credentials(&mut stored, &[configured]);
+        assert_eq!(stored.raw_url().username(), "renamed");
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_endpoint_credentials() -> Result<()> {
+        let mut stored = Index::from_extra_index_url("https://example.com/simple".parse()?);
+        let first =
+            Index::from_extra_index_url("https://first:password@example.com/simple".parse()?);
+        let second =
+            Index::from_extra_index_url("https://second:password@example.com/simple".parse()?);
+
+        restore_index_credentials(&mut stored, &[first, second]);
+        assert_eq!(stored.raw_url().username(), "");
+        assert!(stored.raw_url().password().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn same_name_different_endpoint_credentials() -> Result<()> {
+        let mut stored =
+            Index::from_extra_index_url("https://original.example.com/simple".parse()?);
+        stored.name = Some("primary".parse()?);
+        let mut configured =
+            Index::from_extra_index_url("https://user:password@new.example.com/simple".parse()?);
+        configured.name = Some("primary".parse()?);
+
+        restore_index_credentials(&mut stored, &[configured]);
+        assert_eq!(
+            stored.raw_url().as_str(),
+            "https://original.example.com/simple"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn matching_declaration_without_credentials() -> Result<()> {
+        let mut stored = Index::from_index_url("https://example.com/simple".parse()?);
+        let mut other =
+            Index::from_extra_index_url("https://other:password@example.com/simple".parse()?);
+        other.name = Some("other".parse()?);
+        let matching = Index::from_index_url("https://example.com/simple".parse()?);
+
+        restore_index_credentials(&mut stored, &[other, matching]);
+        assert_eq!(stored.raw_url().username(), "");
+        assert!(stored.raw_url().password().is_none());
+        Ok(())
+    }
 }
