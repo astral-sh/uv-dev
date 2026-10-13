@@ -640,7 +640,7 @@ fn tool_upgrade_noop_updates_options() {
         ]
 
         [tool.options]
-        index-url = "http://[LOCALHOST]/simple/"
+        index = [{ url = "http://[LOCALHOST]/simple/", explicit = false, default = true, format = "simple", authenticate = "auto" }]
         exclude-newer = false
         "#);
     });

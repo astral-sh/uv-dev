@@ -3764,9 +3764,9 @@ async fn tool_run_from_install_after_default_index_upgrades() -> Result<()> {
     let bin_dir = context.temp_dir.child("bin");
     let config = context.temp_dir.child("config.toml");
     let url = server.index_url();
-    config.write_str(&formatdoc! {r#"
+    config.write_str(&formatdoc! {r"
         index-url = {url:?}
-    "#})?;
+    "})?;
     let (filename, bytes) = generate_wheel(
         &name,
         &"1.0.0".parse()?,
