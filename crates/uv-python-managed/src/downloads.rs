@@ -268,7 +268,7 @@ struct DownloadListSource {
 #[derive(Debug, Clone)]
 enum DownloadListLocation {
     Path(PathBuf),
-    Http(Vec<DisplaySafeUrl>),
+    Http(Vec<SafeUrl>),
 }
 
 pub struct ManagedPythonDownloadList {
@@ -318,7 +318,7 @@ pub enum DownloadResult {
 }
 
 fn detect_download_list_format(url_or_path: &str) -> DownloadListFormat {
-    let path = Url::parse(url_or_path)
+    let path = SafeUrl::parse(url_or_path)
         .ok()
         .filter(|url| matches!(url.scheme(), "http" | "https" | "file"))
         .map(|url| url.path().to_owned());
@@ -331,18 +331,16 @@ fn detect_download_list_format(url_or_path: &str) -> DownloadListFormat {
     }
 }
 
-fn python_download_metadata_urls(
-    astral_mirror_url: Option<&str>,
-) -> Result<Vec<DisplaySafeUrl>, Error> {
+fn python_download_metadata_urls(astral_mirror_url: Option<&str>) -> Result<Vec<SafeUrl>, Error> {
     let astral_mirror_url = custom_astral_mirror_url(astral_mirror_url);
-    let mirror = DisplaySafeUrl::parse(&format!(
+    let mirror = SafeUrl::parse(&format!(
         "{}{}",
         astral_mirror_base_url(astral_mirror_url),
         REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_SUFFIX.as_str()
     ))?;
     let mut urls = vec![mirror];
     if astral_mirror_url.is_none() {
-        urls.push(DisplaySafeUrl::parse(&REMOTE_PYTHON_DOWNLOAD_METADATA_URL)?);
+        urls.push(SafeUrl::parse(&REMOTE_PYTHON_DOWNLOAD_METADATA_URL)?);
     }
     Ok(urls)
 }
@@ -373,7 +371,7 @@ fn resolve_download_list_source(
     };
 
     let format = detect_download_list_format(&source);
-    let location = if let Ok(url) = DisplaySafeUrl::parse(&source) {
+    let location = if let Ok(url) = SafeUrl::parse(&source) {
         match url.scheme() {
             "http" | "https" => DownloadListLocation::Http(vec![url]),
             "file" => DownloadListLocation::Path(
@@ -445,7 +443,7 @@ impl DownloadListSource {
     }
 }
 
-fn versions_cache_shard_key(url: &DisplaySafeUrl) -> String {
+fn versions_cache_shard_key(url: &SafeUrl) -> String {
     if url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_URL.as_str() {
         "versions/default".to_string()
     } else {
@@ -454,7 +452,7 @@ fn versions_cache_shard_key(url: &DisplaySafeUrl) -> String {
     }
 }
 
-fn versions_cache_shard(cache: &Cache, url: &DisplaySafeUrl) -> CacheShard {
+fn versions_cache_shard(cache: &Cache, url: &SafeUrl) -> CacheShard {
     cache.shard(CacheBucket::Python, versions_cache_shard_key(url))
 }
 
@@ -465,7 +463,7 @@ fn versions_cache_entries(shard: &CacheShard) -> (CacheEntry, CacheEntry) {
     )
 }
 
-fn supports_incremental_versions_cache(url: &DisplaySafeUrl) -> bool {
+fn supports_incremental_versions_cache(url: &SafeUrl) -> bool {
     // Only the official manifest promises to add new releases by prepending complete records.
     url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_URL.as_str()
         || url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_URL.as_str()
@@ -489,7 +487,7 @@ async fn read_versions_cache(
     Some((content, meta))
 }
 
-fn versions_cache_is_fresh(cache: &Cache, url: &DisplaySafeUrl, meta: &VersionsCacheMeta) -> bool {
+fn versions_cache_is_fresh(cache: &Cache, url: &SafeUrl, meta: &VersionsCacheMeta) -> bool {
     let shard = versions_cache_shard(cache, url);
     let (_, meta_entry) = versions_cache_entries(&shard);
     if !cache
@@ -515,11 +513,7 @@ async fn write_versions_cache_meta(
     Ok(())
 }
 
-async fn refresh_versions_cache_meta(
-    cache: &Cache,
-    url: &DisplaySafeUrl,
-    expected: &VersionsCacheMeta,
-) {
+async fn refresh_versions_cache_meta(cache: &Cache, url: &SafeUrl, expected: &VersionsCacheMeta) {
     let shard = versions_cache_shard(cache, url);
     let Ok(_lock) = shard.lock().await else {
         debug!("Failed to lock Python downloads cache");
@@ -593,7 +587,7 @@ async fn write_versions_cache_if_valid(
 
 async fn read_versions_cache_content(
     cache: &Cache,
-    url: &DisplaySafeUrl,
+    url: &SafeUrl,
 ) -> Option<(Vec<u8>, VersionsCacheMeta)> {
     let shard = versions_cache_shard(cache, url);
     let _lock = shard.lock().await.ok()?;
@@ -601,13 +595,8 @@ async fn read_versions_cache_content(
     read_versions_cache(&content_entry, &meta_entry).await
 }
 
-async fn fetch_versions_cache_etag(client: &BaseClient, url: &DisplaySafeUrl) -> Option<String> {
-    let response = match client
-        .for_host(url)
-        .head(Url::from(url.clone()))
-        .send()
-        .await
-    {
+async fn fetch_versions_cache_head(client: &BaseClient, url: &SafeUrl) -> Option<Response> {
+    let response = match client.for_host(url).head(url.clone()).send().await {
         Ok(response) => match response.error_for_status() {
             Ok(response) => response,
             Err(err) => {
@@ -627,12 +616,12 @@ async fn fetch_versions_cache_etag(client: &BaseClient, url: &DisplaySafeUrl) ->
         }
     };
 
-    response_etag(&response)
+    Some(response)
 }
 
 async fn write_streamed_versions_cache(
     cache: &Cache,
-    url: &DisplaySafeUrl,
+    url: &SafeUrl,
     content: &[u8],
     etag: Option<String>,
 ) {
@@ -680,7 +669,7 @@ fn response_etag(response: &Response) -> Option<String> {
 
 async fn fetch_bytes_from_url(
     client: &BaseClient,
-    url: &DisplaySafeUrl,
+    url: &SafeUrl,
 ) -> Result<(Vec<u8>, Option<String>), Error> {
     let response = fetch_http_response(client, url).await?;
     let etag = response_etag(&response);
@@ -693,7 +682,7 @@ async fn fetch_bytes_from_url(
 
 async fn fetch_ndjson_cached(
     client: &BaseClient,
-    url: &DisplaySafeUrl,
+    url: &SafeUrl,
     cache: &Cache,
 ) -> Result<Vec<u8>, Error> {
     let shard = versions_cache_shard(cache, url);
@@ -723,30 +712,7 @@ async fn fetch_ndjson_cached(
     }
 
     let head_response = if cached.is_some() {
-        let head_result = client
-            .for_host(url)
-            .head(Url::from(url.clone()))
-            .send()
-            .await;
-        match head_result {
-            Ok(response) => match response.error_for_status() {
-                Ok(response) => Some(response),
-                Err(err) => {
-                    debug!(
-                        "Failed to validate Python downloads metadata with HEAD request: {}",
-                        url.redact_in(&err.to_string())
-                    );
-                    None
-                }
-            },
-            Err(err) => {
-                debug!(
-                    "Failed to send HEAD request for Python downloads metadata: {}",
-                    url.redact_in(&err.to_string())
-                );
-                None
-            }
-        }
+        fetch_versions_cache_head(client, url).await
     } else {
         None
     };
@@ -812,7 +778,7 @@ async fn fetch_ndjson_cached(
             let content_range = format!("bytes 0-{}/{current_length}", delta_size - 1);
             let response = client
                 .for_host(url)
-                .get(Url::from(url.clone()))
+                .get(url.clone())
                 .header(reqwest::header::RANGE, &range_header)
                 .header(reqwest::header::IF_MATCH, etag)
                 .send()
@@ -2197,7 +2163,7 @@ fn parse_ndjson_bytes_find(
 
 async fn fetch_ndjson_streaming<T>(
     client: &BaseClient,
-    url: &DisplaySafeUrl,
+    url: &SafeUrl,
     mut visitor: impl FnMut(ManagedPythonDownload) -> ControlFlow<T, ()>,
 ) -> Result<Option<T>, Error> {
     let source = url.to_string();
@@ -2230,7 +2196,7 @@ async fn fetch_ndjson_streaming<T>(
 
 async fn fetch_ndjson_find(
     client: &BaseClient,
-    url: &DisplaySafeUrl,
+    url: &SafeUrl,
     request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
     let mut search = DownloadSearch::new(request);
@@ -2240,7 +2206,7 @@ async fn fetch_ndjson_find(
 
 async fn fetch_ndjson_find_cached(
     client: &BaseClient,
-    url: &DisplaySafeUrl,
+    url: &SafeUrl,
     cache: &Cache,
     request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
@@ -2253,7 +2219,10 @@ async fn fetch_ndjson_find_cached(
     }
 
     if let Some((content, meta)) = &cached {
-        let etag = fetch_versions_cache_etag(client, url).await;
+        let etag = fetch_versions_cache_head(client, url)
+            .await
+            .as_ref()
+            .and_then(response_etag);
         if etag.is_some() && etag == meta.etag {
             refresh_versions_cache_meta(cache, url, meta).await;
             return parse_ndjson_bytes_find(&source, content, request);
@@ -2275,7 +2244,7 @@ async fn fetch_ndjson_find_cached(
 
 async fn fetch_ndjson_collect_streaming_cached(
     client: &BaseClient,
-    url: &DisplaySafeUrl,
+    url: &SafeUrl,
     cache: &Cache,
     predicate: impl Fn(&ManagedPythonDownload) -> bool,
 ) -> Result<Vec<ManagedPythonDownload>, Error> {
@@ -2288,7 +2257,10 @@ async fn fetch_ndjson_collect_streaming_cached(
     }
 
     if let Some((content, meta)) = &cached {
-        let etag = fetch_versions_cache_etag(client, url).await;
+        let etag = fetch_versions_cache_head(client, url)
+            .await
+            .as_ref()
+            .and_then(response_etag);
         if etag.is_some() && etag == meta.etag {
             refresh_versions_cache_meta(cache, url, meta).await;
             return parse_ndjson_bytes_filtered(&source, content, predicate);
@@ -2833,9 +2805,9 @@ mod tests {
 
     #[test]
     fn versions_cache_shard_key_hashes_unredacted_url() {
-        let url_a = DisplaySafeUrl::parse("https://user:tokenA@example.com/versions.ndjson")
+        let url_a = SafeUrl::parse("https://user:tokenA@example.com/versions.ndjson")
             .expect("URL should parse");
-        let url_b = DisplaySafeUrl::parse("https://user:tokenB@example.com/versions.ndjson")
+        let url_b = SafeUrl::parse("https://user:tokenB@example.com/versions.ndjson")
             .expect("URL should parse");
 
         assert_eq!(url_a.to_string(), url_b.to_string());
@@ -2931,7 +2903,7 @@ mod tests {
                 stream.write_all(content).unwrap();
             });
             let cache = Cache::temp().unwrap().init().await.unwrap();
-            let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+            let url = SafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
             let client = BaseClientBuilder::default().retries(0).build().unwrap();
             if streaming {
                 fetch_ndjson_collect_streaming_cached(&client, &url, &cache, |_| true)
@@ -2954,7 +2926,7 @@ mod tests {
     async fn versions_cache_refresh_does_not_overwrite_newer_metadata() {
         let content = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
         let cache = Cache::temp().unwrap().init().await.unwrap();
-        let url = DisplaySafeUrl::parse("https://example.com/versions.ndjson").unwrap();
+        let url = SafeUrl::parse("https://example.com/versions.ndjson").unwrap();
         let shard = versions_cache_shard(&cache, &url);
         let (content_entry, meta_entry) = versions_cache_entries(&shard);
         let old = VersionsCacheMeta {
@@ -2978,7 +2950,7 @@ mod tests {
     async fn versions_cache_respects_refresh_policy() {
         let content = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
         let cache = Cache::temp().unwrap().init().await.unwrap();
-        let url = DisplaySafeUrl::parse("https://example.com/versions.ndjson").unwrap();
+        let url = SafeUrl::parse("https://example.com/versions.ndjson").unwrap();
         let shard = versions_cache_shard(&cache, &url);
         let (content_entry, meta_entry) = versions_cache_entries(&shard);
         let meta = VersionsCacheMeta {
@@ -3035,7 +3007,7 @@ mod tests {
             stream.write_all(content)
         });
         let client = BaseClientBuilder::default().retries(0).build()?;
-        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson"))?;
+        let url = SafeUrl::parse(&format!("http://{address}/versions.ndjson"))?;
         let error = fetch_ndjson_find(&client, &url, &PythonDownloadRequest::from_str("3.99")?)
             .await
             .expect_err("third record is invalid");
@@ -3069,7 +3041,7 @@ mod tests {
         let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu").unwrap();
         let source = DownloadListSource {
             location: DownloadListLocation::Http(vec![
-                DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap(),
+                SafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap(),
             ]),
             format: DownloadListFormat::Ndjson,
             implicit: true,
@@ -3135,7 +3107,7 @@ mod tests {
         });
 
         let cache = Cache::temp().unwrap().init().await.unwrap();
-        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let url = SafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
         let shard = versions_cache_shard(&cache, &url);
         let (content_entry, meta_entry) = versions_cache_entries(&shard);
         write_versions_cache(
@@ -3162,7 +3134,7 @@ mod tests {
     #[tokio::test]
     async fn failed_cache_metadata_write_cannot_reuse_old_validators() -> anyhow::Result<()> {
         let cache = Cache::temp()?.init().await?;
-        let url = DisplaySafeUrl::parse("https://example.com/versions.ndjson")?;
+        let url = SafeUrl::parse("https://example.com/versions.ndjson")?;
         let shard = versions_cache_shard(&cache, &url);
         let (content_entry, meta_entry) = versions_cache_entries(&shard);
         let old = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
@@ -3238,7 +3210,7 @@ mod tests {
         });
 
         let cache = Cache::temp().unwrap().init().await.unwrap();
-        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let url = SafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
         let shard = versions_cache_shard(&cache, &url);
         let (content_entry, meta_entry) = versions_cache_entries(&shard);
         write_versions_cache(
@@ -3306,7 +3278,7 @@ mod tests {
         });
 
         let cache = Cache::temp().unwrap().init().await.unwrap();
-        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let url = SafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
         let shard = versions_cache_shard(&cache, &url);
         let (content_entry, meta_entry) = versions_cache_entries(&shard);
         write_versions_cache(
@@ -3372,7 +3344,7 @@ mod tests {
         });
 
         let cache = Cache::temp().unwrap().init().await.unwrap();
-        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let url = SafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
         let shard = versions_cache_shard(&cache, &url);
         let (content_entry, meta_entry) = versions_cache_entries(&shard);
         write_versions_cache(
@@ -3425,7 +3397,7 @@ mod tests {
         });
 
         let cache = Cache::temp().unwrap().init().await.unwrap();
-        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let url = SafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
         let shard = versions_cache_shard(&cache, &url);
         let (content_entry, meta_entry) = versions_cache_entries(&shard);
         write_versions_cache(

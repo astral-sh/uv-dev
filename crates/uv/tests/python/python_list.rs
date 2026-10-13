@@ -15,7 +15,7 @@ use uv_static::EnvVars;
 
 use anyhow::{Context, Result};
 use indoc::indoc;
-use url::Url;
+use uv_redacted::SafeUrl;
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
@@ -1238,13 +1238,13 @@ async fn python_list_remote_python_downloads_ndjson_cache_keys_include_credentia
         .await;
 
     let metadata_url = |password: &str| {
-        let mut url = Url::parse(&server.uri()).expect("mock server URI should be valid");
+        let mut url = SafeUrl::parse(&server.uri()).expect("mock server URI should be valid");
         url.set_path("versions.ndjson");
         url.set_username("user")
             .expect("mock username should be valid");
         url.set_password(Some(password))
             .expect("mock password should be valid");
-        url.to_string()
+        url.as_str().to_owned()
     };
 
     uv_snapshot!(context.filters(), context.python_list()
