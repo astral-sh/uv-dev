@@ -267,6 +267,71 @@ fn create_venv_caches_absolute_symlink_target() -> Result<()> {
     Ok(())
 }
 
+/// Relative executable symlinks can walk above the root, where CPython clamps parent components.
+/// Inference must defer to Python when the lexical normalizer rejects that working path.
+#[test]
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+fn create_venv_with_relative_symlink_above_root() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.12.9").assert().success();
+    let output = context.python_find().arg("3.12.9").assert().success();
+    let python = Path::new(std::str::from_utf8(&output.get_output().stdout)?.trim());
+
+    // Move the installation out of the managed directory to avoid transparent patch upgrades.
+    let installation = python
+        .parent()
+        .and_then(Path::parent)
+        .context("Python executable has no installation directory")?;
+    let relocated = context.temp_dir.child("python");
+    fs_err::rename(installation, relocated.path())?;
+    let python_directory = relocated.child("bin");
+    let context = context.with_filtered_path(python_directory.path(), "PYTHON_BIN");
+
+    let executable_target = python_directory.child("python3.12");
+    let relative_target =
+        PathBuf::from("../".repeat(python_directory.path().ancestors().count() + 1))
+            .join(executable_target.path().strip_prefix("/")?);
+    let symlinked_python = python_directory.child("python-link");
+    symlink(&relative_target, symlinked_python.path())?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg(symlinked_python.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: python/bin/python-link
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("child")
+        .arg("--python")
+        .arg(context.venv.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: .venv/bin/python
+    Creating virtual environment at: child
+    Activate with: source child/[BIN]/activate
+    ");
+
+    uv_snapshot!(context.filters(), context.external_command(context.temp_dir.child("child/bin/python").path())
+        .arg("-I")
+        .arg("-c")
+        .arg("print('ok')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+    ");
+
+    assert_link_target(
+        context.temp_dir.child("child/bin/python"),
+        &executable_target,
+    );
+
+    Ok(())
+}
+
 /// Linux can execute a venv with 40 executable symlinks, including its own `bin/python`.
 /// CPython falls back to the executable in `pyvenv.cfg`'s home at its resolution limit.
 #[test]

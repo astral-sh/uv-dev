@@ -1192,7 +1192,13 @@ impl InterpreterInfo {
                     target
                 } else {
                     executable.pop();
-                    uv_fs::normalize_absolute_path(&executable.join(target))?
+                    let Ok(target) = uv_fs::normalize_absolute_path(&executable.join(target))
+                    else {
+                        // CPython clamps parent components at the root. Query Python when our
+                        // normalizer cannot represent that path.
+                        return Ok(None);
+                    };
+                    target
                 };
             }
             Some(executable)
