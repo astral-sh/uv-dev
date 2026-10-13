@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::{env, fmt};
 
@@ -86,6 +86,17 @@ impl CreatedVirtualEnvironment {
             environment,
             system_site_packages,
         } = self;
+
+        // Python removes parent components from the paths it reports. Query roots with `..`
+        // so cached paths do not depend on an intermediate directory remaining present.
+        if environment
+            .root()
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
+            return Ok(environment);
+        }
 
         // Launcher overrides can change `sys.executable` and `sys.prefix`, while
         // `sys._base_executable` isn't affected. Query the actual metadata on the next run.
