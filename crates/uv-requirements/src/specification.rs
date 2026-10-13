@@ -55,6 +55,13 @@ use uv_warnings::warn_user;
 
 use crate::{RequirementsSource, SourceTree};
 
+/// How a requirements file contributes entries to the specification.
+#[derive(Clone, Copy)]
+enum RequirementsFileKind {
+    Requirements,
+    Constraints,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct RequirementsSpecification {
     /// The name of the project specifying requirements.
@@ -102,7 +109,13 @@ impl RequirementsSpecification {
         source: &RequirementsSource,
         client_builder: &BaseClientBuilder<'_>,
     ) -> Result<Self> {
-        Self::from_source_with_cache(source, client_builder, &mut SourceCache::default()).await
+        Self::from_source_with_cache(
+            source,
+            client_builder,
+            &mut SourceCache::default(),
+            RequirementsFileKind::Requirements,
+        )
+        .await
     }
 
     /// Create a [`RequirementsSpecification`] from PEP 723 script metadata.
@@ -257,6 +270,7 @@ impl RequirementsSpecification {
         source: &RequirementsSource,
         client_builder: &BaseClientBuilder<'_>,
         cache: &mut SourceCache,
+        kind: RequirementsFileKind,
     ) -> Result<Self> {
         Ok(match source {
             RequirementsSource::Package(requirement) => Self {
@@ -282,9 +296,26 @@ impl RequirementsSpecification {
                     return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
                 }
 
-                let requirements_txt =
-                    RequirementsTxt::parse_with_cache(input.clone(), &*CWD, client_builder, cache)
-                        .await?;
+                let requirements_txt = match kind {
+                    RequirementsFileKind::Requirements => {
+                        RequirementsTxt::parse_with_cache(
+                            input.clone(),
+                            &*CWD,
+                            client_builder,
+                            cache,
+                        )
+                        .await?
+                    }
+                    RequirementsFileKind::Constraints => {
+                        RequirementsTxt::parse_constraints_with_cache(
+                            input.clone(),
+                            &*CWD,
+                            client_builder,
+                            cache,
+                        )
+                        .await?
+                    }
+                };
 
                 if requirements_txt == RequirementsTxt::default() {
                     warn_user!(
@@ -552,7 +583,13 @@ impl RequirementsSpecification {
         // Resolve sources into specifications so we know their `source_tree`.
         let mut requirement_sources = Vec::new();
         for source in requirements {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source = Self::from_source_with_cache(
+                source,
+                client_builder,
+                &mut cache,
+                RequirementsFileKind::Requirements,
+            )
+            .await?;
             requirement_sources.push(source);
         }
 
@@ -608,7 +645,13 @@ impl RequirementsSpecification {
         // Read all constraints, treating both requirements _and_ constraints as constraints.
         // Overrides are ignored.
         for source in constraints {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source = Self::from_source_with_cache(
+                source,
+                client_builder,
+                &mut cache,
+                RequirementsFileKind::Constraints,
+            )
+            .await?;
             for entry in source.requirements {
                 match entry.requirement {
                     UnresolvedRequirement::Named(requirement) => {
@@ -648,7 +691,13 @@ impl RequirementsSpecification {
         // Read all overrides, treating both requirements _and_ overrides as overrides.
         // Constraints are ignored.
         for source in overrides {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source = Self::from_source_with_cache(
+                source,
+                client_builder,
+                &mut cache,
+                RequirementsFileKind::Requirements,
+            )
+            .await?;
             spec.overrides.extend(source.requirements);
             spec.overrides.extend(source.overrides);
             spec.override_dependencies
@@ -675,7 +724,13 @@ impl RequirementsSpecification {
 
         // Collect excludes.
         for source in excludes {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source = Self::from_source_with_cache(
+                source,
+                client_builder,
+                &mut cache,
+                RequirementsFileKind::Requirements,
+            )
+            .await?;
             for req_spec in source.requirements {
                 match req_spec.requirement {
                     UnresolvedRequirement::Named(requirement) => {

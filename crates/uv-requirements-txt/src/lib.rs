@@ -207,6 +207,28 @@ impl RequirementsTxt {
         .await
     }
 
+    /// Parse a constraints file, retaining declaration order across recursive inclusions.
+    #[instrument(skip_all)]
+    pub async fn parse_constraints_with_cache(
+        requirements_txt: impl Into<RequirementsInput>,
+        working_dir: impl AsRef<Path>,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &mut SourceCache,
+    ) -> Result<Self, RequirementsTxtFileError> {
+        let requirements_txt = requirements_txt.into();
+        let mut visited = VisitedFiles::Constraints {
+            constraints: &mut FxHashSet::default(),
+        };
+        Self::parse_impl(
+            &requirements_txt,
+            working_dir,
+            client_builder,
+            &mut visited,
+            cache,
+        )
+        .await
+    }
+
     /// Parse requirements from a string, using the given input for error messages and resolving
     /// relative inputs.
     pub async fn parse_str(
