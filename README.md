@@ -182,6 +182,15 @@ remains unverified for the full project.
 
 **Outcome: fixed in the checkout; not committed or published.**
 
+### Maintainer assessment
+
+After investigating, maintainer woodruffw said in astral-sh/uv#22492 on
+October 13, 2026 (comment 6147828972) that the hard-link check could probably
+be relaxed, and expressed an intent to keep this older package working.
+This tentative direction is consistent with the hard-link opt-in described
+below. The comment does not approve the specific checkout implementation or
+confirm a merged fix or release.
+
 ### Root cause and implementation
 
 The shared streaming tar extractor retained `LinkPolicy::default()`, which
