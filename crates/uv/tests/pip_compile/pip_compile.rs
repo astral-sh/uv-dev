@@ -4336,6 +4336,58 @@ fn pep723_requirements_index_exclude_newer() -> Result<()> {
     Ok(())
 }
 
+/// An overridden legacy default cannot replace the selected script index's release cutoff.
+#[test]
+#[cfg(feature = "test-universal")]
+fn pep723_requirements_index_exclude_newer_with_shadowed_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "script-index-cutoff-shadowed-default"
+        [root]
+        requires = ["a"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        wheel = { upload_time = "2023-01-01T00:00:00Z" }
+        [packages.a.versions."2.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00Z" }
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        #
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{index}"
+        # explicit = true
+        # exclude-newer = "2023-06-01T00:00:00Z"
+        #
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, index = server.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.py").arg("--no-header")
+        .args(["--default-index", "https://unused.example/simple", "--index-url"])
+        .arg(server.index_url())
+        .arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
 /// Check that `tool.uv.constraint-dependencies` in `pyproject.toml` is respected.
 #[test]
 fn constraint_dependency_from_pyproject() -> Result<()> {
@@ -20648,7 +20700,7 @@ async fn pep723_requirements_file_conflicting_index_policy() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.py", "requirements.txt"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    error: Conflicting authentication policies for indexes `http://[LOCALHOST]/simple` (auto) and `private` (`http://[LOCALHOST]/simple`) (always): authentication scopes overlap
     ");
     assert!(
         server
@@ -20685,7 +20737,7 @@ fn pep723_requirements_conflicting_artifact_error_policy() -> Result<()> {
         .args(["--offline", "--index", "mirror=https://download.pytorch.org/whl/cpu", "requirements.py"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Conflicting policies for index URL `https://download.pytorch.org/whl/cpu` in requirements sources
+    error: Conflicting policies for indexes `mirror` (`https://download.pytorch.org/whl/cpu`) and `private` (`https://download.pytorch.org/whl/cpu`)
     ");
     Ok(())
 }
@@ -20715,7 +20767,7 @@ fn pep723_requirements_conflicting_implicit_default_policy() -> Result<()> {
         .args(["--offline", "requirements.py"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Conflicting policies for index URL `https://pypi.org/simple` in requirements sources
+    error: Conflicting authentication policies for indexes `https://pypi.org/simple` (auto) and `private` (`https://pypi.org/simple`) (always): authentication scopes overlap
     ");
     Ok(())
 }
@@ -20747,7 +20799,7 @@ async fn pep723_requirements_conflicting_flat_index_policy() -> Result<()> {
         .args(["--find-links", &format!("{}/links", server.uri()), "requirements.py"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Conflicting policies for index URL `http://[LOCALHOST]/links` in requirements sources
+    error: Conflicting authentication policies for indexes `http://[LOCALHOST]/links` (auto) and `private` (`http://[LOCALHOST]/links`) (always): authentication scopes overlap
     ");
     assert!(
         server
@@ -20785,7 +20837,7 @@ async fn pep723_requirements_conflicting_authentication_scope() -> Result<()> {
         .args(["--index", &format!("mirror={}/+simple", server.uri()), "requirements.py"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    error: Conflicting authentication policies for indexes `mirror` (`http://[LOCALHOST]/+simple`) (auto) and `private` (`http://[LOCALHOST]/simple`) (always): authentication scopes overlap
     ");
     assert!(
         server

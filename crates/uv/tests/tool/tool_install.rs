@@ -7057,7 +7057,7 @@ async fn tool_install_pep723_receipt_rejects_conflicting_index_alias() -> Result
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to upgrade simple-launcher
-      cause: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+      cause: Conflicting authentication policies for indexes `private` (`http://[LOCALHOST]/simple`) (always) and `mirror` (`http://[LOCALHOST]/simple`) (auto): authentication scopes overlap
     ");
     assert_eq!(
         context.read("tools/simple-launcher/uv-receipt.toml"),

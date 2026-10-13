@@ -19097,7 +19097,7 @@ async fn pep723_requirements_file_conflicting_index_policy() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_install().args(["-r", "requirements.py", "-r", "requirements.txt"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    error: Conflicting authentication policies for indexes `http://[LOCALHOST]/simple` (auto) and `private` (`http://[LOCALHOST]/simple`) (always): authentication scopes overlap
     ");
     assert!(
         server

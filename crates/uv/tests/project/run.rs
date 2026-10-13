@@ -8679,7 +8679,7 @@ async fn run_pep723_requirements_conflicting_alias_authentication() -> Result<()
     ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    error: Conflicting authentication policies for indexes `first` (`http://[LOCALHOST]/simple`) (auto) and `second` (`http://[LOCALHOST]/simple`) (always): authentication scopes overlap
     ");
     assert!(
         server
@@ -8778,7 +8778,7 @@ async fn run_pep723_requirements_conflicting_cli_alias() -> Result<()> {
         .args(["--with-requirements", "requirements.py", "python", "-c", "pass"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    error: Conflicting authentication policies for indexes `mirror` (`http://[LOCALHOST]/simple`) (auto) and `private` (`http://[LOCALHOST]/simple`) (always): authentication scopes overlap
     ");
     assert!(
         server
@@ -8822,7 +8822,7 @@ async fn run_pep723_requirements_conflicting_configured_alias() -> Result<()> {
         .args(["--with-requirements", "requirements.py", "python", "-c", "pass"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    error: Conflicting authentication policies for indexes `mirror` (`http://[LOCALHOST]/simple`) (auto) and `private` (`http://[LOCALHOST]/simple`) (always): authentication scopes overlap
     ");
     assert!(
         server
