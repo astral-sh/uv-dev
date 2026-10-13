@@ -10,13 +10,21 @@ The analogous `uname` cases were also independently reproduced: 32 and 40 bytes 
 
 The reporter encountered this after upgrading to uv 0.13.0 in Azure Pipelines containers with long domain group names, and reported Windows 11 x86_64 and Linux x86_64 with Python 3.13.12. This reproduction verifies Linux with Python 3.12.3; Windows and Python 3.13.12 were not independently tested.
 
+The maintainer identifies a possible CPython format-conformance issue and is considering a limited tar-codec compatibility allowance. The specification requires NUL-terminated owner/group fields; accepting these archives in other tools does not establish conformance. No fix or release commitment is identified in the supplied discussion.
+
 ## Classification
 
 Bug: an observed compatibility regression at the tar-backend switch in uv 0.13.0. CPython writes these archive headers, Python and GNU tar read them, and uv's previous backend successfully builds wheels from the same inputs. The requested behavior is acceptance of full-width owner/group fields, including entries with PAX overrides.
 
-The release notes document stricter archive validation, including hard-link and unsupported-extension rejection. That policy announcement alone does not resolve whether rejecting this CPython-generated input is intended. The observations establish the behavior and regression boundary; they do not establish a particular dependency-level fix or the exact ordering of validation and PAX override application.
+The classification describes the reproduced compatibility regression. It does not imply that the CPython-generated headers conform to the archive specification: the owner/group NUL-termination requirement supports the maintainer's concern about Python's output. The observations establish the behavior and regression boundary; they do not establish a particular dependency-level fix or the exact ordering of validation and PAX override application. A compatibility allowance remains a proposed approach, not an implemented fix or a final policy decision.
 
 Prior triage found no duplicate. The separate hard-link rejection in astral-sh/uv#22492 and historical PAX streaming bug concern different mechanisms.
+
+## Format conformance and maintainer assessment
+
+In the October 13, 2026, 14:17 UTC comment on astral-sh/uv#22510, maintainer `woodruffw` interprets the missing terminator as likely Python non-conformance and says it should be corrected on Python's side. The maintainer also suggests that tar-codec could probably accommodate it through a limited allowance. This is a preliminary assessment and possible compatibility approach; the comment does not identify an upstream Python issue, a patch, or a release target.
+
+The cited [POSIX pax specification](https://pubs.opengroup.org/onlinepubs/9799919799/utilities/pax.html) was independently checked. Its ustar header description requires `magic`, `uname`, and `gname` to be character strings terminated by NUL. The exception allowing all bytes to be non-NUL applies to `name`, `linkname`, and `prefix`, not to owner/group fields. The reproduced 32- and 40-byte fixtures have no NUL in the fixed owner/group field, so the observed bytes conflict with that requirement. This standards evidence qualifies the reporter's expected behavior while leaving the demonstrated compatibility regression intact. It does not independently settle how the decoder should handle a PAX override of the affected field.
 
 ## Reproduction
 
@@ -166,4 +174,4 @@ Excluded candidates remain distinct: astral-sh/uv#5450 and its fix astral-sh/tok
 
 ## Recommended next step
 
-Investigate decoder handling of full-width `uname`/`gname`, including PAX overrides, and add focused regression coverage when implementing a fix. The observed 31/32-byte boundary and 40-byte PAX case provide concrete inputs. The legacy-backend setting is a verified workaround for the tested 40-byte group and owner names. The reporter also suggests building a wheel directly from the source tree with `uv build --wheel`; that separate workaround was not independently tested here.
+Evaluate the limited tar-codec compatibility allowance suggested by the maintainer for non-NUL-terminated `uname`/`gname`, including entries with PAX overrides, and assess the corresponding CPython writer correction. Determine the precise decoder change before treating the proposal as a fix, and add focused regression coverage if implemented. The observed 31/32-byte boundary and 40-byte PAX case provide concrete inputs. The legacy-backend setting remains a verified workaround for the tested 40-byte group and owner names. The reporter also suggests building a wheel directly from the source tree with `uv build --wheel`; that separate workaround was not independently tested here.
