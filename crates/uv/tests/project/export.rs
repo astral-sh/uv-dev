@@ -6,18 +6,18 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use std::collections::BTreeMap;
-#[cfg(all(unix, feature = "test-universal"))]
+#[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use std::path::Path;
 use std::process::{Command, Stdio};
-#[cfg(all(unix, feature = "test-universal"))]
+#[cfg(unix)]
 use std::thread;
 #[cfg(feature = "test-universal")]
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
-#[cfg(all(unix, feature = "test-universal"))]
+#[cfg(unix)]
 use uv_test::assert_link_target;
 #[cfg(feature = "test-universal")]
 use uv_test::copy_dir_ignore;
@@ -2722,7 +2722,7 @@ fn output_file_fifo() -> Result<()> {
 }
 
 /// Exported requirements follow a symlink to a FIFO without replacing either.
-#[cfg(all(unix, feature = "test-universal"))]
+#[cfg(unix)]
 #[test]
 fn output_file_fifo_symlink() -> Result<()> {
     let context = uv_test::test_context!("3.12");
