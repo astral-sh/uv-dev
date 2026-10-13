@@ -11,7 +11,6 @@ use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
-use url::Url;
 #[cfg(all(unix, feature = "test-python"))]
 use wiremock::matchers::{method, path};
 #[cfg(all(unix, feature = "test-python"))]
@@ -1244,6 +1243,257 @@ async fn workspace_metadata_script_keeps_patch_when_managed_link_changes() -> Re
         prompt = script.py
         "#);
     });
+
+    Ok(())
+}
+
+/// An unmanaged installation alias cannot change the selected patch during resolution.
+#[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
+#[tokio::test]
+async fn workspace_metadata_script_rejects_changed_unmanaged_alias() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+    // Install outside the managed root used by script discovery.
+    let unmanaged = context.temp_dir.join("unmanaged");
+    context
+        .python_install()
+        .args(["3.12.9", "3.12.13"])
+        .env(EnvVars::UV_PYTHON_INSTALL_DIR, &unmanaged)
+        .assert()
+        .success();
+    let selected = context
+        .python_find()
+        .arg("3.12.9")
+        .arg("--managed-python")
+        .env(EnvVars::UV_PYTHON_INSTALL_DIR, &unmanaged)
+        .assert()
+        .success();
+    let selected_executable = Path::new(std::str::from_utf8(&selected.get_output().stdout)?.trim());
+    let selected_installation = selected_executable
+        .parent()
+        .and_then(Path::parent)
+        .context("expected a Python installation")?;
+    let upgraded = context
+        .python_find()
+        .arg("3.12.13")
+        .arg("--managed-python")
+        .env(EnvVars::UV_PYTHON_INSTALL_DIR, &unmanaged)
+        .assert()
+        .success();
+    let upgraded_executable = Path::new(std::str::from_utf8(&upgraded.get_output().stdout)?.trim());
+    let upgraded_installation = upgraded_executable
+        .parent()
+        .and_then(Path::parent)
+        .context("expected a Python installation")?
+        .to_path_buf();
+    let alias = context.temp_dir.join("python-current");
+    uv_fs::create_symlink(selected_installation, &alias)?;
+
+    let wheel = context
+        .temp_dir
+        .child("changing_python-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "changing-python",
+        "changing_python-0.1.0",
+        &[("changing_python.py", "")],
+    )?;
+    let wheel_bytes = context.read_bytes(wheel.path());
+    let server = MockServer::start().await;
+    let replaced = Arc::new(OnceLock::new());
+    let replace_once = Arc::clone(&replaced);
+    let alias_for_server = alias.clone();
+    let upgraded_installation_for_server = upgraded_installation.clone();
+    Mock::given(method("GET"))
+        .and(path("/changing_python-0.1.0-py3-none-any.whl"))
+        .respond_with(move |_: &wiremock::Request| {
+            let result = replace_once.get_or_init(|| {
+                uv_fs::replace_symlink(&upgraded_installation_for_server, &alias_for_server)
+                    .map_err(|error| error.to_string())
+            });
+            if let Err(error) = result {
+                return ResponseTemplate::new(500).set_body_string(error.clone());
+            }
+            ResponseTemplate::new(200).set_body_bytes(wheel_bytes.clone())
+        })
+        .mount(&server)
+        .await;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["changing-python @ {server}/changing_python-0.1.0-py3-none-any.whl"]
+        # ///
+        "#,
+        server = server.uri(),
+    })?;
+
+    uv_snapshot!(context.filters(), context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--python")
+        .arg("3.12.9")
+        .arg("--no-managed-python")
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, alias.join("bin")), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Resolved 1 package in [TIME]
+    error: The base interpreter (cpython-3.12.13-[PLATFORM]) does not match the selected interpreter (cpython-3.12.9-[PLATFORM])
+    ");
+    assert!(replaced.get().is_some_and(Result::is_ok));
+    assert_link_target(&alias, &upgraded_installation);
+
+    Ok(())
+}
+
+/// Reusing a replaced script environment must retain the identity selected through an unmanaged alias.
+#[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
+#[tokio::test]
+async fn workspace_metadata_script_rejects_changed_unmanaged_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+    // Install outside the managed root used by script discovery.
+    let unmanaged = context.temp_dir.join("unmanaged");
+    context
+        .python_install()
+        .args(["3.12.9", "3.12.13"])
+        .env(EnvVars::UV_PYTHON_INSTALL_DIR, &unmanaged)
+        .assert()
+        .success();
+    let selected = context
+        .python_find()
+        .arg("3.12.9")
+        .arg("--managed-python")
+        .env(EnvVars::UV_PYTHON_INSTALL_DIR, &unmanaged)
+        .assert()
+        .success();
+    let selected_executable = Path::new(std::str::from_utf8(&selected.get_output().stdout)?.trim());
+    let selected_installation = selected_executable
+        .parent()
+        .and_then(Path::parent)
+        .context("expected a Python installation")?;
+    let upgraded = context
+        .python_find()
+        .arg("3.12.13")
+        .arg("--managed-python")
+        .env(EnvVars::UV_PYTHON_INSTALL_DIR, &unmanaged)
+        .assert()
+        .success();
+    let upgraded_executable = Path::new(std::str::from_utf8(&upgraded.get_output().stdout)?.trim());
+    let upgraded_installation = upgraded_executable
+        .parent()
+        .and_then(Path::parent)
+        .context("expected a Python installation")?
+        .to_path_buf();
+    let alias = context.temp_dir.join("python-current");
+    uv_fs::create_symlink(selected_installation, &alias)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+        "#})?;
+    let initial = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--python")
+        .arg("3.12.9")
+        .arg("--no-managed-python")
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, alias.join("bin"))
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&initial.get_output().stdout)?;
+    assert_eq!(metadata["environment"]["python"]["version"], "3.12.9");
+    let environment = Path::new(
+        metadata["environment"]["root"]
+            .as_str()
+            .context("expected an environment root")?,
+    );
+    let replacement = context.temp_dir.child("replacement-environment");
+    context
+        .venv()
+        .arg(replacement.path())
+        .arg("--python")
+        .arg(upgraded_executable)
+        .assert()
+        .success();
+    replacement
+        .child("retained-marker")
+        .write_str("retained\n")?;
+
+    let wheel = context
+        .temp_dir
+        .child("changing_python-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "changing-python",
+        "changing_python-0.1.0",
+        &[("changing_python.py", "")],
+    )?;
+    let wheel_bytes = context.read_bytes(wheel.path());
+    let server = MockServer::start().await;
+    let replaced = Arc::new(OnceLock::new());
+    let replace_once = Arc::clone(&replaced);
+    let alias_for_server = alias.clone();
+    let upgraded_installation_for_server = upgraded_installation.clone();
+    let environment_for_server = environment.to_path_buf();
+    let replacement_for_server = replacement.path().to_path_buf();
+    Mock::given(method("GET"))
+        .and(path("/changing_python-0.1.0-py3-none-any.whl"))
+        .respond_with(move |_: &wiremock::Request| {
+            let result = replace_once.get_or_init(|| {
+                uv_fs::replace_symlink(&upgraded_installation_for_server, &alias_for_server)
+                    .and_then(|()| fs_err::remove_dir_all(&environment_for_server))
+                    .and_then(|()| fs_err::rename(&replacement_for_server, &environment_for_server))
+                    .map_err(|error| error.to_string())
+            });
+            if let Err(error) = result {
+                return ResponseTemplate::new(500).set_body_string(error.clone());
+            }
+            ResponseTemplate::new(200).set_body_bytes(wheel_bytes.clone())
+        })
+        .mount(&server)
+        .await;
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["changing-python @ {server}/changing_python-0.1.0-py3-none-any.whl"]
+        # ///
+        "#,
+        server = server.uri(),
+    })?;
+
+    uv_snapshot!(context.filters(), context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--python")
+        .arg("3.12.9")
+        .arg("--no-managed-python")
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, alias.join("bin")), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Resolved 1 package in [TIME]
+    error: The base interpreter (cpython-3.12.13-[PLATFORM]) does not match the selected interpreter (cpython-3.12.9-[PLATFORM])
+    ");
+    assert!(replaced.get().is_some_and(Result::is_ok));
+    assert_link_target(&alias, &upgraded_installation);
+    assert_eq!(
+        context.read(environment.join("retained-marker")),
+        "retained\n"
+    );
 
     Ok(())
 }
@@ -4295,7 +4545,8 @@ fn workspace_metadata_script_active_without_base_executable() -> Result<()> {
           "path": "[TEMP_DIR]/active/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
-        }
+        },
+        "packages": {}
       },
       "script": {
         "path": "[TEMP_DIR]/script.py",

@@ -35,7 +35,7 @@ use uv_python_interpreter::{
 use uv_python_managed::{ManagedPythonInstallation, PythonMinorVersionLink, UpgradePolicy};
 use uv_python_types::{
     EnvironmentPreference, LenientImplementationName, PythonArchitecture, PythonDownloads,
-    PythonPreference, PythonRequest,
+    PythonInstallationKey, PythonPreference, PythonRequest,
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{
@@ -1171,17 +1171,25 @@ impl PreparedScriptInterpreter {
         {
             base_interpreter = Interpreter::query(executable, cache)?;
         }
-        let base = base_interpreter.key();
-        let selected = interpreter.key();
+        Self::validate_identity(&base_interpreter, interpreter.key())?;
+        Ok(Self {
+            requested: RequestedInterpreter::new(base_interpreter, request),
+        })
+    }
+
+    /// Reject an interpreter that differs from the one used to resolve the script.
+    fn validate_identity(
+        interpreter: &Interpreter,
+        selected: PythonInstallationKey,
+    ) -> Result<(), EnvironmentError> {
+        let base = interpreter.key();
         if base != selected {
             return Err(EnvironmentError::ScriptInterpreterMismatch {
                 base: Box::new(base),
                 selected: Box::new(selected),
             });
         }
-        Ok(Self {
-            requested: RequestedInterpreter::new(base_interpreter, request),
-        })
+        Ok(())
     }
 }
 
@@ -1213,16 +1221,21 @@ impl ScriptEnvironment {
 
         // An interpreter selected by an earlier operation should constrain discovery without
         // changing the resolved request that controls managed Python patch upgrades.
-        let (python_request, upgrade_policy) = if let Some(prepared_interpreter) =
+        let (python_request, upgrade_policy, selected_key) = if let Some(prepared_interpreter) =
             prepared_interpreter
         {
             let requested = prepared_interpreter.requested;
             let upgrade_policy = UpgradePolicy::from_request(requested.request());
-            let python_request =
-                PythonRequest::File(requested.into_interpreter().sys_executable().to_path_buf());
-            (Some(python_request), Some(upgrade_policy))
+            let interpreter = requested.into_interpreter();
+            let selected_key = interpreter.key();
+            let python_request = PythonRequest::File(interpreter.sys_executable().to_path_buf());
+            (
+                Some(python_request),
+                Some(upgrade_policy),
+                Some(selected_key),
+            )
         } else {
-            (python_request, None)
+            (python_request, None, None)
         };
 
         match ScriptInterpreter::discover(
@@ -1242,13 +1255,26 @@ impl ScriptEnvironment {
         .await?
         {
             // If we found an existing, compatible environment, use it.
-            ScriptInterpreter::Environment { environment, .. } => Ok(Self::Existing(environment)),
+            ScriptInterpreter::Environment { environment, .. } => {
+                if let Some(selected_key) = selected_key {
+                    PreparedScriptInterpreter::validate_identity(
+                        environment.interpreter(),
+                        selected_key,
+                    )?;
+                }
+                Ok(Self::Existing(environment))
+            }
 
             // Otherwise, create a virtual environment with the discovered interpreter.
             ScriptInterpreter::Interpreter(requested) => {
                 let upgrade_policy = upgrade_policy
                     .unwrap_or_else(|| UpgradePolicy::from_request(requested.request()));
                 let interpreter = requested.into_interpreter();
+                // Unmanaged installation aliases can change during resolution. Check the
+                // rediscovered identity before removing or creating the script environment.
+                if let Some(selected_key) = selected_key {
+                    PreparedScriptInterpreter::validate_identity(&interpreter, selected_key)?;
+                }
                 let root = ScriptInterpreter::root(script, active, cache);
 
                 // The derived cache entry is owned by uv and can be repaired, but an active
