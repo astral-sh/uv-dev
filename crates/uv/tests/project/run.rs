@@ -8,8 +8,6 @@ use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
-#[cfg(unix)]
-use std::process::Command;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
@@ -1545,7 +1543,8 @@ fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
     let older_python = &context.python_versions[1].1;
     let base = context.temp_dir.child("base");
 
-    Command::new(newer_python)
+    context
+        .external_command(newer_python)
         .arg("-c")
         .arg(indoc! {r#"
             import pathlib
@@ -1626,6 +1625,112 @@ fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
 
     ----- stderr -----
     Resolved 1 package in [TIME]
+    ");
+}
+
+/// A copied creator virtual environment must resolve to a compatible base installation before
+/// its executable can be used to create a `--with` overlay.
+#[test]
+#[cfg(unix)]
+fn run_with_nested_copied_virtualenv_uses_matching_base_interpreter() {
+    let context = uv_test::test_context_with_versions!(&["3.14", "3.13"]);
+    let newer_python = &context.python_versions[0].1;
+    let older_python = &context.python_versions[1].1;
+    let base = context.temp_dir.child("base");
+    let creator = context.temp_dir.child("creator");
+
+    context
+        .external_command(newer_python)
+        .arg("-c")
+        .arg(indoc! {r#"
+            import pathlib
+            import subprocess
+            import sys
+            import sysconfig
+
+            base = pathlib.Path(sys.argv[1])
+            older_python = pathlib.Path(sys.argv[2])
+            newer_python = pathlib.Path(sys.argv[3])
+            creator = pathlib.Path(sys.argv[4])
+            environment = pathlib.Path(sys.argv[5])
+
+            scripts = base / "bin"
+            scripts.mkdir(parents=True)
+            (scripts / "python").symlink_to(newer_python)
+            (scripts / "python3").symlink_to(newer_python)
+            (scripts / "python3.14").symlink_to(newer_python)
+
+            library_directory = pathlib.Path(sysconfig.get_config_var("LIBDIR"))
+            (base / "lib").symlink_to(library_directory, target_is_directory=True)
+
+            subprocess.check_call([
+                str(scripts / "python3.14"),
+                "-m",
+                "venv",
+                "--copies",
+                "--without-pip",
+                str(creator),
+            ])
+            library = sysconfig.get_config_var("LDLIBRARY")
+            if library:
+                source = library_directory / library
+                if source.exists():
+                    (creator / "lib" / library).symlink_to(source)
+
+            subprocess.check_call([
+                str(creator / "bin" / "python"),
+                "-m",
+                "venv",
+                "--copies",
+                "--without-pip",
+                str(environment),
+            ])
+            if library:
+                source = library_directory / library
+                if source.exists():
+                    (environment / "lib" / library).symlink_to(source)
+
+            (scripts / "python").unlink()
+            (scripts / "python").symlink_to(older_python)
+            (scripts / "python3").unlink()
+            (scripts / "python3").symlink_to(older_python)
+            "#})
+        .arg(base.path())
+        .arg(older_python)
+        .arg(newer_python)
+        .arg(creator.path())
+        .arg(context.venv.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.run()
+        .env(EnvVars::VIRTUAL_ENV, context.venv.path())
+        .arg("--with")
+        .arg("iniconfig")
+        .arg("python")
+        .arg("-c")
+        .arg(indoc! {r#"
+            import importlib.metadata
+            import pathlib
+            import platform
+            import sys
+
+            print(platform.python_version())
+            print(importlib.metadata.version("iniconfig"))
+            print(pathlib.Path(sys._base_executable).resolve() == pathlib.Path(sys.argv[1]).resolve())
+            "#})
+        .arg(newer_python), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.14.[X]
+    2.0.0
+    True
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
     ");
 }
 

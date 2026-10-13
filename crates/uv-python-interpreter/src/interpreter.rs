@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::env::consts::ARCH;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -86,9 +87,8 @@ impl Interpreter {
             && let Some(configured_executable) = configuration.executable
             && let Ok(base_info) = InterpreterInfo::query_cached(base_executable, cache)
             && !info.matches_interpreter(&base_info)
-            && let Ok(configured_info) =
-                InterpreterInfo::query_cached(&configured_executable, cache)
-            && info.matches_interpreter(&configured_info)
+            && let Some(configured_executable) =
+                info.find_matching_base_executable(&configured_executable, cache)
         {
             debug!(
                 "Base interpreter {} is Python {}, which does not match virtual environment Python {}; using configured executable {}",
@@ -1176,6 +1176,38 @@ impl InterpreterInfo {
             && self.platform == other.platform
             && self.gil_disabled == other.gil_disabled
             && self.debug_enabled == other.debug_enabled
+    }
+
+    /// Resolve a compatible creator executable to an interpreter outside a virtual environment.
+    fn find_matching_base_executable(&self, executable: &Path, cache: &Cache) -> Option<PathBuf> {
+        let mut executable = executable.to_path_buf();
+        let mut visited = HashSet::new();
+
+        loop {
+            let info = Self::query_cached(&executable, cache).ok()?;
+            if !self.matches_interpreter(&info)
+                || !visited.insert(fs::canonicalize(&info.sys_prefix).ok()?)
+            {
+                return None;
+            }
+            if info.sys_prefix == info.sys_base_prefix {
+                return Some(executable);
+            }
+
+            if let Some(base_executable) = info.sys_base_executable.as_ref()
+                && let Ok(base_info) = Self::query_cached(base_executable, cache)
+                && self.matches_interpreter(&base_info)
+                && base_info.sys_prefix == base_info.sys_base_prefix
+            {
+                return Some(base_executable.clone());
+            }
+
+            // CPython records the creating executable, which can itself be a copied virtual
+            // environment whose reported base no longer matches its Python installation.
+            executable = PyVenvConfiguration::parse(info.sys_prefix.join("pyvenv.cfg"))
+                .ok()?
+                .executable?;
+        }
     }
 
     /// Return the resolved [`InterpreterInfo`] for the given Python executable.
