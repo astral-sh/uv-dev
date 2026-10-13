@@ -6,7 +6,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use ring::signature::{self, Ed25519KeyPair, KeyPair};
 use serde::{Deserialize, Serialize};
-use url::Url;
+use uv_redacted::SafeUrl;
 
 use crate::Error;
 
@@ -31,10 +31,10 @@ struct WireArtifactId {
 }
 
 impl ArtifactId {
-    pub fn new(source: &Url, filename: &str) -> Result<Self, Error> {
+    pub fn new(source: &SafeUrl, filename: &str) -> Result<Self, Error> {
         if !matches!(source.scheme(), "http" | "https")
             || source.host_str().is_none()
-            || source.query().is_some()
+            || source.clone().into_unsafe_url().query().is_some()
             || filename.is_empty()
             || filename.len() > MAX_FILENAME_LENGTH
             || filename == "."
@@ -63,7 +63,7 @@ impl ArtifactId {
 
     /// Parse an identity received over the wire, requiring its canonical spelling.
     pub fn from_canonical(source: &str, filename: &str) -> Result<Self, Error> {
-        let url = Url::parse(source).map_err(|_| Error::InvalidIdentity)?;
+        let url = SafeUrl::parse(source).map_err(|_| Error::InvalidIdentity)?;
         let artifact = Self::new(&url, filename)?;
         if artifact.source != source {
             return Err(Error::InvalidIdentity);

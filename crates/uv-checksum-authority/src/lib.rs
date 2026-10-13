@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
-use url::{Host, Url};
+use url::Host;
+use uv_redacted::SafeUrl;
 
 use protocol::insert_record;
 
@@ -25,14 +26,14 @@ const MAX_RESPONSE_SIZE: usize = 16 * 1024;
 /// A configured authority and an independently supplied Ed25519 verification key.
 #[derive(Debug, Clone)]
 pub struct ChecksumAuthority {
-    endpoint: Url,
+    endpoint: SafeUrl,
     public_key: AuthorityPublicKey,
     client: reqwest::Client,
     records: Arc<Mutex<BTreeMap<ArtifactId, ChecksumRecord>>>,
 }
 
 impl ChecksumAuthority {
-    pub fn new(mut endpoint: Url, public_key: AuthorityPublicKey) -> Result<Self, Error> {
+    pub fn new(mut endpoint: SafeUrl, public_key: AuthorityPublicKey) -> Result<Self, Error> {
         let loopback = match endpoint.host() {
             Some(Host::Domain("localhost")) => true,
             Some(Host::Ipv4(address)) => address.is_loopback(),
@@ -42,7 +43,7 @@ impl ChecksumAuthority {
         if !(endpoint.scheme() == "https" || (endpoint.scheme() == "http" && loopback))
             || !endpoint.username().is_empty()
             || endpoint.password().is_some()
-            || endpoint.query().is_some()
+            || endpoint.clone().into_unsafe_url().query().is_some()
             || endpoint.fragment().is_some()
         {
             return Err(Error::InvalidEndpoint);
@@ -63,7 +64,7 @@ impl ChecksumAuthority {
     }
 
     /// Return the configured endpoint for network policy selection.
-    pub fn endpoint(&self) -> &Url {
+    pub fn endpoint(&self) -> &SafeUrl {
         &self.endpoint
     }
 
@@ -83,7 +84,8 @@ impl ChecksumAuthority {
         let endpoint = self
             .endpoint
             .join("v1/checksum")
-            .map_err(|_| Error::InvalidEndpoint)?;
+            .map_err(|_| Error::InvalidEndpoint)?
+            .into_unsafe_url();
         let mut response = self.client.get(endpoint).query(artifact).send().await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(Error::UnknownArtifact(artifact.clone()));

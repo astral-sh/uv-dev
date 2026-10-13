@@ -12,12 +12,12 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufR
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use url::Url;
 use uv_checksum_authority::{
     ArtifactId, AuthorityPublicKey, ChecksumAuthority, ChecksumRecord, Error, Sha256Digest,
     SignedRecord, VerificationReceipt,
 };
 use uv_checksum_authority_service::{AuthorityService, Catalog};
+use uv_redacted::SafeUrl;
 use uv_test::uv_snapshot;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -29,7 +29,7 @@ async fn rejects_untrusted_authority_responses() -> Result<()> {
     let signing_key = key(7)?;
     let record = record()?;
     let authority = ChecksumAuthority::new(
-        Url::parse(&server.uri())?,
+        SafeUrl::parse(&server.uri())?,
         AuthorityPublicKey::from_signing_key(&signing_key),
     )?
     .with_client_builder(
@@ -84,7 +84,7 @@ fn key(seed: u8) -> Result<Ed25519KeyPair> {
 fn record() -> Result<ChecksumRecord> {
     Ok(ChecksumRecord::new(
         ArtifactId::new(
-            &Url::parse("https://pypi.org/simple/")?,
+            &SafeUrl::parse("https://pypi.org/simple/")?,
             "example-1.0-py3-none-any.whl",
         )?,
         Sha256Digest::from_bytes(Sha256::digest(b"trusted archive").into()),
@@ -98,7 +98,7 @@ async fn in_memory_authority() -> Result<()> {
     let signing_key = key(7)?;
     let service = AuthorityService::new(Catalog::from_records([record.clone()])?, &signing_key)?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let endpoint = Url::parse(&format!("http://{}", listener.local_addr()?))?;
+    let endpoint = SafeUrl::parse(&format!("http://{}", listener.local_addr()?))?;
     let authority = ChecksumAuthority::new(endpoint.clone(), service.public_key())?;
     let (shutdown, stopped) = oneshot::channel();
     let server = tokio::spawn(service.serve(listener, async {
@@ -195,21 +195,30 @@ fn signature_domain_separation() -> Result<()> {
 #[test]
 fn identities_do_not_leak_credentials() -> Result<()> {
     let identity = ArtifactId::new(
-        &Url::parse("https://user:secret@example.com/simple/#fragment")?,
+        &SafeUrl::parse("https://user:secret@example.com/simple/#fragment")?,
         "example.whl",
     )?;
     assert_eq!(identity.source(), "https://example.com/simple");
     assert!(
         ArtifactId::new(
-            &Url::parse("https://example.com/simple?token=secret")?,
+            &SafeUrl::parse("https://example.com/simple?token=secret")?,
             "example.whl"
         )
         .is_err()
     );
-    assert!(ArtifactId::new(&Url::parse("https://example.com/simple")?, "../example.whl").is_err());
     assert!(
-        ChecksumAuthority::new(Url::parse("http://example.com")?, "00".repeat(32).parse()?)
-            .is_err()
+        ArtifactId::new(
+            &SafeUrl::parse("https://example.com/simple")?,
+            "../example.whl"
+        )
+        .is_err()
+    );
+    assert!(
+        ChecksumAuthority::new(
+            SafeUrl::parse("http://example.com")?,
+            "00".repeat(32).parse()?
+        )
+        .is_err()
     );
     Ok(())
 }
@@ -334,7 +343,7 @@ async fn reauthorize_build_receipt() -> Result<()> {
     let signing_key = key(7)?;
     let record = record()?;
     let authority = ChecksumAuthority::new(
-        Url::parse(&server.uri())?,
+        SafeUrl::parse(&server.uri())?,
         AuthorityPublicKey::from_signing_key(&signing_key),
     )?;
     Mock::given(method("GET"))
@@ -365,7 +374,7 @@ async fn rejects_conflicting_authority_records() -> Result<()> {
     let signing_key = key(7)?;
     let record = record()?;
     let authority = ChecksumAuthority::new(
-        Url::parse(&server.uri())?,
+        SafeUrl::parse(&server.uri())?,
         AuthorityPublicKey::from_signing_key(&signing_key),
     )?;
     Mock::given(method("GET"))
@@ -413,7 +422,7 @@ async fn reauthorize_changed_build_receipt() -> Result<()> {
         .mount(&server)
         .await;
     let authority = ChecksumAuthority::new(
-        Url::parse(&server.uri())?,
+        SafeUrl::parse(&server.uri())?,
         AuthorityPublicKey::from_signing_key(&signing_key),
     )?;
     assert!(matches!(
@@ -437,7 +446,7 @@ async fn reauthorize_changed_build_receipt() -> Result<()> {
         .mount(&server)
         .await;
     let authority = ChecksumAuthority::new(
-        Url::parse(&server.uri())?,
+        SafeUrl::parse(&server.uri())?,
         AuthorityPublicKey::from_signing_key(&signing_key),
     )?;
     insta::assert_snapshot!(authority.verify_receipt(&receipt).await.expect_err("changed size"), @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl` from `https://pypi.org/simple`: expected 16 bytes");
@@ -474,7 +483,7 @@ async fn archive_short_response() -> Result<()> {
     let service = AuthorityService::new(Catalog::from_records([record.clone()])?, &key(7)?)?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let authority = ChecksumAuthority::new(
-        Url::parse(&format!("http://{}", listener.local_addr()?))?,
+        SafeUrl::parse(&format!("http://{}", listener.local_addr()?))?,
         service.public_key(),
     )?;
     let (shutdown, stopped) = oneshot::channel();
@@ -503,7 +512,7 @@ async fn archive_oversized_response() -> Result<()> {
     let service = AuthorityService::new(Catalog::from_records([record.clone()])?, &key(7)?)?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let authority = ChecksumAuthority::new(
-        Url::parse(&format!("http://{}", listener.local_addr()?))?,
+        SafeUrl::parse(&format!("http://{}", listener.local_addr()?))?,
         service.public_key(),
     )?;
     let (shutdown, stopped) = oneshot::channel();
@@ -532,7 +541,7 @@ async fn archive_partial_response() -> Result<()> {
     let service = AuthorityService::new(Catalog::from_records([record.clone()])?, &key(7)?)?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let authority = ChecksumAuthority::new(
-        Url::parse(&format!("http://{}", listener.local_addr()?))?,
+        SafeUrl::parse(&format!("http://{}", listener.local_addr()?))?,
         service.public_key(),
     )?;
     let (shutdown, stopped) = oneshot::channel();
