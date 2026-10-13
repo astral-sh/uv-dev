@@ -353,8 +353,9 @@ To explicitly request a debug build, use a specifier such as `3.13d` or `3.13+de
 
 !!! note
 
-    Standard CPython installations omit debug symbols to reduce their size. Debug builds retain
-    these symbols. A C-level debugger can use them to inspect Python processes.
+    CPython distributions installed by uv usually have debug symbols stripped to reduce their
+    size. Debug builds installed by uv retain these symbols. A C-level debugger can use them to
+    inspect Python processes.
 
 ## Disabling automatic Python downloads
 
