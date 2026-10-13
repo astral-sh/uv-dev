@@ -30829,13 +30829,12 @@ fn lock_strip_fragment() -> Result<()> {
 
     // Locked validation can read only the wheel metadata. Install from the fragment-free URL in
     // the lockfile, preparing the wheel if it was only cached under the original URL.
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Would use project environment at: .venv
-    Would download 1 package
-    Would install 1 package
-     + iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
     ");
 
     Ok(())
