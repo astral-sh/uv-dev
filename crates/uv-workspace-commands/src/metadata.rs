@@ -126,28 +126,22 @@ pub async fn metadata(
                             printer,
                         )
                         .await?;
-                        let interpreter = match interpreter {
+                        let (interpreter, request) = match interpreter {
                             ScriptInterpreter::Interpreter(requested) => {
                                 let request = requested.request().clone();
-                                let interpreter = requested.into_interpreter();
-                                script_interpreter_request =
-                                    Some(RequestedInterpreter::new(interpreter.clone(), request));
-                                interpreter
+                                (requested.into_interpreter(), request)
                             }
                             ScriptInterpreter::Environment {
                                 environment,
                                 request,
-                            } => {
-                                let interpreter = environment.into_interpreter();
-                                if sync.is_some() {
-                                    let base_interpreter =
-                                        CachedEnvironment::base_interpreter(&interpreter, cache)?;
-                                    script_interpreter_request =
-                                        Some(RequestedInterpreter::new(base_interpreter, request));
-                                }
-                                interpreter
-                            }
+                            } => (environment.into_interpreter(), request),
                         };
+                        if sync.is_some() {
+                            let base_interpreter =
+                                CachedEnvironment::base_interpreter(&interpreter, cache)?;
+                            script_interpreter_request =
+                                Some(RequestedInterpreter::new(base_interpreter, request));
+                        }
                         // Keep environment discovery consistent with the interpreter used for
                         // resolution. The environment itself is still rediscovered under its lock.
                         interpreter

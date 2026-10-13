@@ -2,7 +2,7 @@ use std::path::Path;
 #[cfg(all(unix, feature = "test-python"))]
 use std::sync::{Arc, OnceLock};
 
-#[cfg(all(unix, feature = "test-python"))]
+#[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
 use anyhow::Context;
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -785,6 +785,151 @@ async fn workspace_metadata_script_reuses_resolution_interpreter() -> Result<()>
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(metadata["environment"]["python"]["version"], @r#""3.12.[X]""#);
     });
+
+    Ok(())
+}
+
+/// Fresh script discovery keeps the base Python when a project environment changes during resolution.
+#[cfg(all(unix, feature = "test-python"))]
+#[tokio::test]
+async fn workspace_metadata_script_uses_base_of_replaced_project_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filter((r#""sha256": "[a-f0-9]{64}""#, r#""sha256": "[HASH]""#));
+    let [(_, resolution_python), (_, replacement_python)] = context.python_versions.as_slice()
+    else {
+        return Err(anyhow::anyhow!("expected Python 3.12 and 3.11"));
+    };
+    context
+        .venv()
+        .arg("--python")
+        .arg(resolution_python)
+        .assert()
+        .success();
+    let replacement = context.temp_dir.join("replacement-environment");
+    context
+        .venv()
+        .arg(&replacement)
+        .arg("--python")
+        .arg(replacement_python)
+        .assert()
+        .success();
+
+    let wheel = context
+        .temp_dir
+        .child("changing_python-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "changing-python",
+        "changing_python-0.1.0",
+        &[("changing_python.py", "")],
+    )?;
+    let wheel_bytes = context.read_bytes(wheel.path());
+    let server = MockServer::start().await;
+    let replaced = Arc::new(OnceLock::new());
+    let replace_once = Arc::clone(&replaced);
+    let environment = context.venv.path().to_path_buf();
+    Mock::given(method("GET"))
+        .and(path("/changing_python-0.1.0-py3-none-any.whl"))
+        .respond_with(move |_: &wiremock::Request| {
+            let result = replace_once.get_or_init(|| {
+                fs_err::remove_dir_all(&environment)
+                    .and_then(|()| fs_err::rename(&replacement, &environment))
+                    .map_err(|error| error.to_string())
+            });
+            if let Err(error) = result {
+                return ResponseTemplate::new(500).set_body_string(error.clone());
+            }
+            ResponseTemplate::new(200).set_body_bytes(wheel_bytes.clone())
+        })
+        .mount(&server)
+        .await;
+
+    let script = context.temp_dir.child("script.py");
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["changing-python @ {server}/changing_python-0.1.0-py3-none-any.whl"]
+        # ///
+        "#,
+        server = server.uri(),
+    })?;
+
+    uv_snapshot!(context.filters(), context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--python")
+        .arg("3.12"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[CACHE_DIR]/environments-v2/script-[HASH]",
+        "python": {
+          "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "script": {
+        "path": "[TEMP_DIR]/script.py",
+        "id": "script+[TEMP_DIR]/script.py"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "module_owners": {
+        "changing_python": [
+          {
+            "package_id": "changing-python==0.1.0@direct+http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl"
+          }
+        ]
+      },
+      "resolution": {
+        "changing-python==0.1.0@direct+http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl": {
+          "name": "changing-python",
+          "version": "0.1.0",
+          "source": {
+            "url": "http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl",
+            "subdirectory": null
+          },
+          "kind": "package",
+          "dependencies": [],
+          "wheels": [
+            {
+              "url": "http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl",
+              "hashes": {
+                "sha256": "[HASH]"
+              },
+              "filename": "changing_python-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "script+[TEMP_DIR]/script.py": {
+          "kind": "script",
+          "path": "[TEMP_DIR]/script.py",
+          "dependencies": [
+            {
+              "id": "changing-python==0.1.0@direct+http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl"
+            }
+          ]
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved 1 package in [TIME]
+    "#);
+    assert!(replaced.get().is_some_and(Result::is_ok));
 
     Ok(())
 }
