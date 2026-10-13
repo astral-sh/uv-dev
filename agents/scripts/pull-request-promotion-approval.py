@@ -121,7 +121,9 @@ def current_approval(repository, number):
     }
 
 
-def eligible_source(repository, repository_id, number, approval, expected_head):
+def eligible_source(
+    repository, repository_id, number, approval, expected_head, expected_ref=None
+):
     source = gh_json(f"repos/{repository}/pulls/{number}")
     require(source.get("state") == "open", "The source pull request is no longer open.")
     require(
@@ -145,6 +147,10 @@ def eligible_source(repository, repository_id, number, approval, expected_head):
     require(
         source["head"]["sha"] == expected_head,
         "The source head changed; a fresh approval is required.",
+    )
+    require(
+        expected_ref is None or source["head"]["ref"] == expected_ref,
+        "The approved source branch changed.",
     )
     require(
         not source["head"]["ref"].startswith("automations/promote/"),
@@ -360,10 +366,15 @@ def recorded_approval(repository, repository_id, workflow_id, number, approval):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("current", "capture", "load"))
+    parser.add_argument("command", choices=("current", "capture", "load", "source"))
     parser.add_argument("repository", choices=sorted(REPOSITORIES))
     parser.add_argument("number", type=int)
+    parser.add_argument("--repository-id", type=int)
     parser.add_argument("--head-sha")
+    parser.add_argument("--head-ref")
+    parser.add_argument("--approval-id", type=int)
+    parser.add_argument("--approval-event", choices=("labeled", "ready_for_review"))
+    parser.add_argument("--promoter")
     parser.add_argument("--promotion-label", choices=sorted(LABELS))
     args = parser.parse_args()
     require(args.number > 0, "Invalid pull request number.")
@@ -382,6 +393,34 @@ def main():
         and repository.get("full_name") == args.repository,
         "Repository identity is invalid.",
     )
+    if args.command == "source":
+        require(
+            repository_id == args.repository_id,
+            "The source repository identity changed.",
+        )
+        require(
+            args.head_sha is not None
+            and re.fullmatch(r"[0-9a-f]{40}", args.head_sha)
+            and args.head_ref is not None,
+            "The planned source revision and branch are required.",
+        )
+        require(
+            approval["id"] == args.approval_id
+            and approval["event"] == args.approval_event
+            and approval["promotion_label"] == args.promotion_label
+            and approval["actor"]["login"] == args.promoter,
+            "The human promotion event changed.",
+        )
+        source = eligible_source(
+            args.repository,
+            repository_id,
+            args.number,
+            approval,
+            args.head_sha,
+            args.head_ref,
+        )
+        print(json.dumps(source, separators=(",", ":")))
+        return
     workflow_id = gh_json(
         f"repos/{args.repository}/actions/workflows/promote-pull-request.yml"
     )["id"]
@@ -394,12 +433,13 @@ def main():
             existing is not None,
             "No durable approval record remains; a fresh explicit approval or dispatch is required.",
         )
-        source = eligible_source(
-            args.repository, repository_id, args.number, approval, existing["head_sha"]
-        )
-        require(
-            source["head"]["ref"] == existing["head_ref"],
-            "The approved source branch changed.",
+        eligible_source(
+            args.repository,
+            repository_id,
+            args.number,
+            approval,
+            existing["head_sha"],
+            existing["head_ref"],
         )
         print(json.dumps(existing, separators=(",", ":")))
         return
