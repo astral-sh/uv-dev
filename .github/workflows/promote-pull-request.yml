@@ -67,68 +67,6 @@ jobs:
               ;;
           esac
 
-          find_promotion() {
-            local source_number="$1" source_ref="$2" source_sha="$3"
-            local promotion_ref marker promotion_repository
-            local dedicated historical candidates number pull_request
-            if [ "$GITHUB_REPOSITORY" = astral-sh/uv-security ]; then
-              promotion_ref="automations/promote/security/$source_number"
-              marker="<!-- uv-security-promotion:$source_number:$source_sha -->"
-              promotion_repository=astral-sh/uv
-            else
-              promotion_ref="automations/promote/$source_number"
-              marker="<!-- uv-dev-promotion:$source_number:$source_sha -->"
-              promotion_repository=astral-sh/uv-dev
-            fi
-            dedicated=$(gh pr list --repo astral-sh/uv --state all --head "$promotion_ref" --limit 1000 \
-              --json number,headRefName,headRepository) || return 1
-            historical=$(gh pr list --repo astral-sh/uv --state all --head "$source_ref" --limit 1000 \
-              --json number,headRefName,headRepository) || return 1
-            candidates=$(jq --null-input --compact-output \
-              --argjson dedicated "$dedicated" --argjson historical "$historical" \
-              --arg promotion_ref "$promotion_ref" --arg promotion_repository "$promotion_repository" \
-              --arg source_ref "$source_ref" --arg source_repository "$GITHUB_REPOSITORY" '
-                [$dedicated[] | select(.headRefName == $promotion_ref and .headRepository.nameWithOwner == $promotion_repository)]
-                + [$historical[] | select(
-                    .headRefName == $source_ref
-                    and (.headRepository.nameWithOwner == "astral-sh/uv"
-                      or ($source_repository == "astral-sh/uv-dev" and .headRepository.nameWithOwner == $source_repository))
-                  )]
-              ') || return 1
-            if [ "$(jq 'length' <<< "$candidates")" -gt 1 ]; then
-              echo "Found multiple upstream promotions for $GITHUB_REPOSITORY#$source_number." >&2
-              return 1
-            fi
-            number=$(jq --raw-output '.[0].number // empty' <<< "$candidates")
-            if [ -z "$number" ]; then
-              echo null
-              return
-            fi
-            pull_request=$(gh api "repos/astral-sh/uv/pulls/$number") || return 1
-            if ! jq --exit-status \
-              --arg promotion_ref "$promotion_ref" --arg source_ref "$source_ref" \
-              --arg source_sha "$source_sha" --arg marker "$marker" --arg promotion_repository "$promotion_repository" \
-              --arg source_repository "$GITHUB_REPOSITORY" \
-              --argjson uv_id "$UV_REPOSITORY_ID" --argjson uv_dev_id "$UV_DEV_REPOSITORY_ID" '
-                .base.repo.id == $uv_id and .base.repo.full_name == "astral-sh/uv"
-                and (
-                  (.head.ref == $promotion_ref and .head.repo.full_name == $promotion_repository
-                    and (.head.repo.id == $uv_id or .head.repo.id == $uv_dev_id)
-                    and .user.login == "astral-automations-bot[bot]"
-                    and ((.body // "" | sub("\\s+$"; "")) | endswith($marker)))
-                  or
-                  (.head.ref == $source_ref and .head.sha == $source_sha
-                    and ((.head.repo.id == $uv_id and .head.repo.full_name == "astral-sh/uv")
-                      or ($source_repository == "astral-sh/uv-dev"
-                        and .head.repo.id == $uv_dev_id and .head.repo.full_name == $source_repository)))
-                )
-              ' <<< "$pull_request" > /dev/null; then
-              echo "The upstream promotion does not match $GITHUB_REPOSITORY#$source_number at its verified revision." >&2
-              return 1
-            fi
-            jq --compact-output . <<< "$pull_request"
-          }
-
           plan_pull_request() {
             local number="$1" expected_head="$2"
             local source approval approval_id approval_event head_ref head_sha source_base source_base_sha
@@ -187,7 +125,7 @@ jobs:
                 return 1
               fi
             fi
-            existing=$(find_promotion "$number" "$head_ref" "$head_sha") || return 1
+            existing=$(bash agents/scripts/find-pull-request-promotion.sh "$GITHUB_REPOSITORY" "$number" "$head_ref" "$head_sha") || return 1
             if [ "$existing" != null ]; then
               if ! jq --exit-status '.state == "open" or .merged_at != null' <<< "$existing" > /dev/null; then
                 echo "The existing promotion was closed without merging." >&2
@@ -214,7 +152,7 @@ jobs:
                   echo "The source parent no longer matches the stacked base." >&2
                   return 1
                 fi
-                promoted_parent=$(find_promotion "$parent_number" "$source_base" "$source_base_sha") || return 1
+                promoted_parent=$(bash agents/scripts/find-pull-request-promotion.sh "$GITHUB_REPOSITORY" "$parent_number" "$source_base" "$source_base_sha") || return 1
                 if [ "$promoted_parent" = null ] || [ "$(jq --raw-output '.state' <<< "$promoted_parent")" = open ]; then
                   echo "Waiting for $GITHUB_REPOSITORY#$parent_number to merge upstream." >&2
                   echo null
@@ -318,8 +256,13 @@ jobs:
             numbers="$PULL_REQUEST_NUMBER"
           else
             numbers=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 \
-              --json number,isDraft,isCrossRepository,headRefName \
-              --jq '.[] | select((.isDraft | not) and (.isCrossRepository | not) and (.headRefName | startswith("automations/promote/") | not)) | .number')
+              --json number,isDraft,isCrossRepository,headRefName,labels |
+              jq --raw-output --arg label "$PROMOTION_LABEL" '
+                .[] | select(
+                  ((.isDraft | not) or any(.labels[]; .name == $label))
+                  and (.isCrossRepository | not)
+                  and (.headRefName | startswith("automations/promote/") | not)
+                ) | .number')
           fi
           plans='[]'
           while IFS= read -r number; do
@@ -449,68 +392,6 @@ jobs:
           APPROVAL_ID: ${{ matrix.approval_id }}
           APPROVAL_EVENT: ${{ matrix.approval_event }}
         run: |
-          find_promotion() {
-            local source_number="$1" source_ref="$2" source_sha="$3"
-            local promotion_ref marker promotion_repository
-            local dedicated historical candidates number pull_request
-            if [ "$GITHUB_REPOSITORY" = astral-sh/uv-security ]; then
-              promotion_ref="automations/promote/security/$source_number"
-              marker="<!-- uv-security-promotion:$source_number:$source_sha -->"
-              promotion_repository=astral-sh/uv
-            else
-              promotion_ref="automations/promote/$source_number"
-              marker="<!-- uv-dev-promotion:$source_number:$source_sha -->"
-              promotion_repository=astral-sh/uv-dev
-            fi
-            dedicated=$(gh pr list --repo astral-sh/uv --state all --head "$promotion_ref" --limit 1000 \
-              --json number,headRefName,headRepository) || return 1
-            historical=$(gh pr list --repo astral-sh/uv --state all --head "$source_ref" --limit 1000 \
-              --json number,headRefName,headRepository) || return 1
-            candidates=$(jq --null-input --compact-output \
-              --argjson dedicated "$dedicated" --argjson historical "$historical" \
-              --arg promotion_ref "$promotion_ref" --arg promotion_repository "$promotion_repository" \
-              --arg source_ref "$source_ref" --arg source_repository "$GITHUB_REPOSITORY" '
-                [$dedicated[] | select(.headRefName == $promotion_ref and .headRepository.nameWithOwner == $promotion_repository)]
-                + [$historical[] | select(
-                    .headRefName == $source_ref
-                    and (.headRepository.nameWithOwner == "astral-sh/uv"
-                      or ($source_repository == "astral-sh/uv-dev" and .headRepository.nameWithOwner == $source_repository))
-                  )]
-              ') || return 1
-            if [ "$(jq 'length' <<< "$candidates")" -gt 1 ]; then
-              echo "Found multiple upstream promotions for $GITHUB_REPOSITORY#$source_number." >&2
-              return 1
-            fi
-            number=$(jq --raw-output '.[0].number // empty' <<< "$candidates")
-            if [ -z "$number" ]; then
-              echo null
-              return
-            fi
-            pull_request=$(gh api "repos/astral-sh/uv/pulls/$number") || return 1
-            if ! jq --exit-status \
-              --arg promotion_ref "$promotion_ref" --arg source_ref "$source_ref" \
-              --arg source_sha "$source_sha" --arg marker "$marker" --arg promotion_repository "$promotion_repository" \
-              --arg source_repository "$GITHUB_REPOSITORY" \
-              --argjson uv_id "$UV_REPOSITORY_ID" --argjson uv_dev_id "$UV_DEV_REPOSITORY_ID" '
-                .base.repo.id == $uv_id and .base.repo.full_name == "astral-sh/uv"
-                and (
-                  (.head.ref == $promotion_ref and .head.repo.full_name == $promotion_repository
-                    and (.head.repo.id == $uv_id or .head.repo.id == $uv_dev_id)
-                    and .user.login == "astral-automations-bot[bot]"
-                    and ((.body // "" | sub("\\s+$"; "")) | endswith($marker)))
-                  or
-                  (.head.ref == $source_ref and .head.sha == $source_sha
-                    and ((.head.repo.id == $uv_id and .head.repo.full_name == "astral-sh/uv")
-                      or ($source_repository == "astral-sh/uv-dev"
-                        and .head.repo.id == $uv_dev_id and .head.repo.full_name == $source_repository)))
-                )
-              ' <<< "$pull_request" > /dev/null; then
-              echo "The upstream promotion does not match $GITHUB_REPOSITORY#$source_number at its verified revision." >&2
-              return 1
-            fi
-            jq --compact-output . <<< "$pull_request"
-          }
-
           source_pull_request=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
           if ! jq --exit-status --arg head_ref "$HEAD_REF" --arg head_sha "$HEAD_SHA" \
             --arg approval_event "$APPROVAL_EVENT" --arg label "$PROMOTION_LABEL" \
@@ -546,7 +427,7 @@ jobs:
               exit 1
             fi
           fi
-          existing=$(find_promotion "$PULL_REQUEST_NUMBER" "$HEAD_REF" "$HEAD_SHA")
+          existing=$(bash agents/scripts/find-pull-request-promotion.sh "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" "$HEAD_REF" "$HEAD_SHA")
           if [ "$existing" != null ]; then
             if ! jq --exit-status --arg base_ref "$BASE_REF" \
               '(.state == "open" or .merged_at != null) and .base.ref == $base_ref' \

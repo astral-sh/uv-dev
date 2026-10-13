@@ -91,6 +91,7 @@ jobs:
       - name: Prepare pull request branch
         id: prepare
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE_REF: ${{ inputs.base-ref }}
           EXPECTED_BASE_SHA: ${{ inputs.base-sha }}
           BASE_PREVIOUS_SHA: ${{ inputs.base-previous-sha }}
@@ -103,7 +104,8 @@ jobs:
           cp agents/codex/config.toml "$RUNNER_TEMP/codex-home/config.toml"
           cp agents/prompts/rebase-pull-request.md "$RUNNER_TEMP/rebase-pull-request.md"
 
-          git fetch --no-tags "https://github.com/$HEAD_REPOSITORY.git" "refs/heads/$HEAD_REF"
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch \
+            --no-tags "https://github.com/$HEAD_REPOSITORY.git" "refs/heads/$HEAD_REF"
           current_head=$(git rev-parse 'FETCH_HEAD^{commit}')
           if [ "$current_head" != "$HEAD_SHA" ]; then
             echo "The pull request head changed; refusing to rebase a stale revision." >&2
