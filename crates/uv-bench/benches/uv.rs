@@ -197,6 +197,55 @@ fn create_many_files_wheel() -> tempfile::NamedTempFile {
     archive
 }
 
+fn create_entrypoints_wheel(
+    entrypoint_count: usize,
+    data_script_count: usize,
+) -> tempfile::NamedTempFile {
+    let archive = tempfile::NamedTempFile::new().expect("Failed to create temporary archive");
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let mut entry_points = String::from("[console_scripts]\n");
+    for index in 0..entrypoint_count {
+        writeln!(entry_points, "entry_{index:05} = entrypoints:main")
+            .expect("Writing to a string cannot fail");
+    }
+    let mut record = String::new();
+    for index in 0..data_script_count {
+        let path = format!("entrypoints-0.0.0.data/scripts/entry_{index:05}.exe");
+        write_zip_entry(&mut writer, &path, b"payload");
+        writeln!(record, "{path},,7").expect("Writing to a string cannot fail");
+    }
+    for (path, contents) in [
+        ("entrypoints/__init__.py", "def main():\n    return 0\n"),
+        (
+            "entrypoints-0.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: entrypoints\nVersion: 0.0.0\n",
+        ),
+        (
+            "entrypoints-0.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: uv-bench\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        (
+            "entrypoints-0.0.0.dist-info/entry_points.txt",
+            entry_points.as_str(),
+        ),
+    ] {
+        write_zip_entry(&mut writer, path, contents.as_bytes());
+        writeln!(record, "{path},,{}", contents.len()).expect("Writing to a string cannot fail");
+    }
+    record.push_str("entrypoints-0.0.0.dist-info/RECORD,,\n");
+    write_zip_entry(
+        &mut writer,
+        "entrypoints-0.0.0.dist-info/RECORD",
+        record.as_bytes(),
+    );
+    fs_err::write(
+        archive.path(),
+        block_on(writer.close()).expect("Failed to finish ZIP archive"),
+    )
+    .expect("Failed to write temporary archive");
+    archive
+}
+
 fn create_many_files_sdist() -> tempfile::NamedTempFile {
     let archive = tempfile::NamedTempFile::new().expect("Failed to create temporary archive");
     let mut encoder = GzEncoder::new(archive.as_file(), flate2::Compression::default());
@@ -327,14 +376,41 @@ fn install_wheel_many_files(c: &mut Criterion<WallTime>) {
     let archive = create_many_files_wheel();
     let filename =
         WheelFilename::from_str(MANY_FILES_WHEEL_FILENAME).expect("Invalid wheel filename");
+    benchmark_install_wheel(c, "install_wheel_many_files", archive.path(), &filename);
+}
+
+fn install_wheel_entrypoints(c: &mut Criterion<WallTime>) {
+    for (name, entrypoints, data_scripts) in [
+        ("two_entrypoints_two_scripts", 2, 2),
+        ("many_entrypoints_two_scripts", 256, 2),
+        ("many_entrypoints_many_scripts", 256, 256),
+    ] {
+        let archive = create_entrypoints_wheel(entrypoints, data_scripts);
+        let filename = WheelFilename::from_str("entrypoints-0.0.0-py3-none-any.whl")
+            .expect("Invalid wheel filename");
+        benchmark_install_wheel(
+            c,
+            &format!("install_wheel_entrypoints/{name}"),
+            archive.path(),
+            &filename,
+        );
+    }
+}
+
+fn benchmark_install_wheel(
+    c: &mut Criterion<WallTime>,
+    name: &str,
+    archive: &Path,
+    filename: &WheelFilename,
+) {
     let extracted_wheel = tempfile::tempdir().expect("Failed to create wheel extraction directory");
     prepare_wheel(
-        fs_err::File::open(archive.path()).expect("Failed to open temporary archive"),
+        fs_err::File::open(archive).expect("Failed to open temporary archive"),
         extracted_wheel.path(),
-        &filename,
+        filename,
     );
 
-    c.bench_function("install_wheel_many_files", |b| {
+    c.bench_function(name, |b| {
         b.iter_batched(
             || {
                 let environment =
@@ -350,7 +426,7 @@ fn install_wheel_many_files(c: &mut Criterion<WallTime>) {
                     &layout,
                     false,
                     extracted_wheel.path(),
-                    &filename,
+                    filename,
                     None,
                     None::<&()>,
                     None::<&()>,
@@ -471,6 +547,7 @@ criterion_group! {
         unzip_wheel_many_files,
         prepare_wheel_many_files,
         install_wheel_many_files,
+        install_wheel_entrypoints,
         resolve_warm_jupyter,
         resolve_warm_jupyter_universal,
         resolve_warm_airflow

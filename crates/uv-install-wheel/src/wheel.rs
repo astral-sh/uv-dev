@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
-use std::iter;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -765,30 +764,24 @@ fn install_script(
     Ok(())
 }
 
-/// The names of the console and GUI entrypoints declared by a wheel.
-enum EntryPointNames<'a> {
-    None,
-    One(&'a str),
-    Many(FxHashSet<&'a str>),
+/// Entry-point membership with an index amortized over the work spent on linear scans.
+struct EntryPointNames<'script> {
+    console_scripts: &'script [Script],
+    gui_scripts: &'script [Script],
+    remaining_comparisons: usize,
+    indexed: Option<FxHashSet<&'script str>>,
 }
 
-impl<'a> EntryPointNames<'a> {
-    fn new(console_scripts: &'a [Script], gui_scripts: &'a [Script]) -> Self {
-        let mut scripts = console_scripts.iter().chain(gui_scripts);
-        let Some(first) = scripts.next() else {
-            return Self::None;
-        };
-        let Some(second) = scripts.next() else {
-            return Self::One(&first.name);
-        };
-
-        Self::Many(
-            iter::once(first)
-                .chain(iter::once(second))
-                .chain(scripts)
-                .map(|script| script.name.as_str())
-                .collect(),
-        )
+impl<'script> EntryPointNames<'script> {
+    fn new(console_scripts: &'script [Script], gui_scripts: &'script [Script]) -> Self {
+        Self {
+            console_scripts,
+            gui_scripts,
+            // Allow four full scans before paying to build an index. Early matches consume
+            // only the comparisons they actually need, so repeated short scans stay cheap.
+            remaining_comparisons: (console_scripts.len() + gui_scripts.len()).saturating_mul(4),
+            indexed: None,
+        }
     }
 
     fn match_name(name: &str) -> &str {
@@ -798,14 +791,41 @@ impl<'a> EntryPointNames<'a> {
             .unwrap_or(name)
     }
 
-    fn contains(&self, name: &str) -> bool {
+    fn contains(&mut self, name: &str) -> bool {
         let name = Self::match_name(name);
+        let entry_point_count = self.console_scripts.len() + self.gui_scripts.len();
 
-        match self {
-            Self::None => false,
-            Self::One(entry_point) => *entry_point == name,
-            Self::Many(entry_points) => entry_points.contains(name),
+        // Small collections do not amortize the hash lookup, even across many data files.
+        if entry_point_count < 8 {
+            return self
+                .console_scripts
+                .iter()
+                .chain(self.gui_scripts)
+                .any(|script| script.name == name);
         }
+
+        if self.remaining_comparisons == 0 {
+            return self
+                .indexed
+                .get_or_insert_with(|| {
+                    self.console_scripts
+                        .iter()
+                        .chain(self.gui_scripts)
+                        .map(|script| script.name.as_str())
+                        .collect()
+                })
+                .contains(name);
+        }
+
+        let position = self
+            .console_scripts
+            .iter()
+            .chain(self.gui_scripts)
+            .position(|script| script.name == name);
+        self.remaining_comparisons = self
+            .remaining_comparisons
+            .saturating_sub(position.map_or(entry_point_count, |index| index + 1));
+        position.is_some()
     }
 }
 
@@ -849,27 +869,14 @@ pub(crate) fn install_data(
                 );
                 let mut rename_or_copy = RenameOrCopy::default();
                 let mut initialized = false;
-                let mut entry_point_names = None;
-                for (index, file) in fs::read_dir(path)?.enumerate() {
+                let mut entry_point_names = EntryPointNames::new(console_scripts, gui_scripts);
+                for file in fs::read_dir(path)? {
                     let file = file?;
 
                     // Couldn't find any docs for this, took it directly from
                     // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
                     let name = file.file_name().to_string_lossy().to_string();
-                    let is_entry_point = if index == 0 {
-                        let match_name = EntryPointNames::match_name(&name);
-                        console_scripts
-                            .iter()
-                            .chain(gui_scripts)
-                            .any(|script| script.name == match_name)
-                    } else {
-                        entry_point_names
-                            .get_or_insert_with(|| {
-                                EntryPointNames::new(console_scripts, gui_scripts)
-                            })
-                            .contains(&name)
-                    };
-                    if is_entry_point {
+                    if entry_point_names.contains(&name) {
                         continue;
                     }
 
@@ -1331,8 +1338,8 @@ mod test {
     use uv_pypi_types::Scheme;
 
     use super::{
-        EntryPointNames, Error, Layout, RecordEntry, Script, WheelFile, format_shebang,
-        find_script_encoding, get_script_executable, install_data, parse_email_message_file,
+        EntryPointNames, Error, Layout, RecordEntry, Script, WheelFile, find_script_encoding,
+        format_shebang, get_script_executable, install_data, parse_email_message_file,
         parse_scripts, read_record, write_installer_metadata,
     };
 
@@ -1485,11 +1492,11 @@ mod test {
             }
         }
 
-        let empty = EntryPointNames::new(&[], &[]);
+        let mut empty = EntryPointNames::new(&[], &[]);
         assert!(!empty.contains("console"));
 
         let console = [script("console")];
-        let one_console = EntryPointNames::new(&console, &[]);
+        let mut one_console = EntryPointNames::new(&console, &[]);
         assert!(one_console.contains("console"));
         assert!(one_console.contains("console.exe"));
         assert!(one_console.contains("console-script.py"));
@@ -1497,17 +1504,30 @@ mod test {
         assert!(!one_console.contains("console-script.py.exe"));
 
         let gui = [script("gui")];
-        let one_gui = EntryPointNames::new(&[], &gui);
+        let mut one_gui = EntryPointNames::new(&[], &gui);
         assert!(one_gui.contains("gui"));
         assert!(!one_gui.contains("console"));
 
         let console = [script("console"), script("duplicate")];
         let gui = [script("gui"), script("duplicate")];
-        let many = EntryPointNames::new(&console, &gui);
+        let mut many = EntryPointNames::new(&console, &gui);
         assert!(many.contains("console.exe"));
         assert!(many.contains("gui-script.py"));
         assert!(many.contains("duplicate.pya"));
         assert!(!many.contains("data-script"));
+
+        let console: Vec<_> = (0..32)
+            .map(|index| script(&format!("console-{index}")))
+            .collect();
+        let gui: Vec<_> = (0..32)
+            .map(|index| script(&format!("gui-{index}")))
+            .collect();
+        let mut many = EntryPointNames::new(&console, &gui);
+        for index in 0..32 {
+            assert!(many.contains(&format!("console-{index}.exe")));
+            assert!(many.contains(&format!("gui-{index}-script.py")));
+            assert!(!many.contains(&format!("data-{index}")));
+        }
     }
 
     #[test]
