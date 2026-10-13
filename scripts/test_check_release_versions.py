@@ -3,16 +3,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check_release_versions import ROOT, VERSION_GROUPS, check_release_versions
+from check_release_versions import ROOT, check_release_versions
 
 
 def write_versions(root: Path, python_version: str, cargo_version: str) -> None:
-    for section, manifests in VERSION_GROUPS:
-        version = python_version if section == "project" else cargo_version
-        for manifest in manifests:
-            path = root / manifest
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f'[{section}]\nversion = "{version}"\n', encoding="utf-8")
+    for manifest, section, version in (
+        ("pyproject.toml", "project", python_version),
+        ("crates/uv-build/pyproject.toml", "project", python_version),
+        ("crates/uv/Cargo.toml", "package", cargo_version),
+        ("crates/uv-build/Cargo.toml", "package", cargo_version),
+        ("crates/uv-version/Cargo.toml", "package", cargo_version),
+    ):
+        path = root / manifest
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'[{section}]\nversion = "{version}"\n', encoding="utf-8")
 
 
 class ReleaseVersionTests(unittest.TestCase):
@@ -35,26 +39,29 @@ class ReleaseVersionTests(unittest.TestCase):
                 self.assertEqual(check_release_versions(root), python_version)
 
     def test_each_release_manifest_must_match(self) -> None:
-        for section, (reference, *manifests) in VERSION_GROUPS:
-            for manifest in manifests:
-                with (
-                    self.subTest(manifest=manifest),
-                    tempfile.TemporaryDirectory() as temp,
+        for section, reference, manifest in (
+            ("project", "pyproject.toml", "crates/uv-build/pyproject.toml"),
+            ("package", "crates/uv/Cargo.toml", "crates/uv-build/Cargo.toml"),
+            ("package", "crates/uv/Cargo.toml", "crates/uv-version/Cargo.toml"),
+        ):
+            with (
+                self.subTest(manifest=manifest),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                root = Path(temp)
+                write_versions(root, "0.13.0rc1", "0.13.0-rc.1")
+                (root / manifest).write_text(
+                    f'[{section}]\nversion = "0.12.11"\n', encoding="utf-8"
+                )
+                expected = "0.13.0rc1" if section == "project" else "0.13.0-rc.1"
+                with self.assertRaisesRegex(
+                    ValueError,
+                    re.escape(
+                        f"Release versions do not match {reference} ({expected}):\n"
+                        f"  {manifest}: 0.12.11"
+                    ),
                 ):
-                    root = Path(temp)
-                    write_versions(root, "0.13.0rc1", "0.13.0-rc.1")
-                    (root / manifest).write_text(
-                        f'[{section}]\nversion = "0.12.11"\n', encoding="utf-8"
-                    )
-                    expected = "0.13.0rc1" if section == "project" else "0.13.0-rc.1"
-                    with self.assertRaisesRegex(
-                        ValueError,
-                        re.escape(
-                            f"Release versions do not match {reference} ({expected}):\n"
-                            f"  {manifest}: 0.12.11"
-                        ),
-                    ):
-                        check_release_versions(root)
+                    check_release_versions(root)
 
 
 if __name__ == "__main__":
