@@ -8285,6 +8285,7 @@ dependencies = [
  "uv-pypi-types",
  "uv-python-discovery",
  "uv-python-interpreter",
+ "uv-python-managed",
  "uv-python-types",
  "uv-resolve-operations",
  "uv-scripts",
