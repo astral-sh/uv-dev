@@ -1874,6 +1874,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_inferred_cache_queries_pypy_metadata() -> Result<()> {
+        let directory = tempdir()?;
+        let base_executable = directory.path().join("pypy3.11");
+        let response_file = directory.path().join("response.json");
+        let query_log = directory.path().join("queries");
+        let mut response = serde_json::from_str::<Value>(
+            &mocked_interpreter_response()
+                .replace(
+                    "/home/ferris/.pyenv/versions/3.12.0",
+                    &directory.path().display().to_string(),
+                )
+                .replace("python3.12", "pypy3.11")
+                .replace("3.12.0", "3.11.15")
+                .replace("3.12", "3.11"),
+        )?;
+        response["markers"]["implementation_name"] = "pypy".into();
+        response["markers"]["implementation_version"] = "7.3.23".into();
+        response["markers"]["platform_python_implementation"] = "PyPy".into();
+        response["gil_disabled"] = false.into();
+        response["extension_suffixes"] = serde_json::json!([".pypy311-pp73-x86_64-linux-gnu.so"]);
+        response["sys_executable"] = serde_json::to_value(&base_executable)?;
+        response["sys_base_executable"] = serde_json::to_value(&base_executable)?;
+        response["sys_prefix"] = serde_json::to_value(directory.path())?;
+        response["sys_base_prefix"] = serde_json::to_value(directory.path())?;
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+        fs::write(
+            &base_executable,
+            formatdoc! {r#"
+                #!/bin/sh
+                echo queried >> "{}"
+                cat "{}"
+                "#, query_log.display(), response_file.display()},
+        )?;
+        fs::set_permissions(
+            &base_executable,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+        let cache = Cache::temp()?.init().await?;
+        let interpreter = Interpreter::query(&base_executable, &cache)?;
+        let root = directory.path().join("venv");
+        fs::create_dir_all(root.join("bin"))?;
+        let executable = root.join("bin/python");
+        std::os::unix::fs::symlink(&base_executable, &executable)?;
+        fs::write(
+            root.join("pyvenv.cfg"),
+            format!("home = {}\n", directory.path().display()),
+        )?;
+        let scheme = uv_pypi_types::Scheme {
+            purelib: root.join(&interpreter.virtualenv.purelib),
+            platlib: root.join(&interpreter.virtualenv.platlib),
+            scripts: root.join(&interpreter.virtualenv.scripts),
+            data: root.clone(),
+            include: root.join(&interpreter.virtualenv.include),
+        };
+        // PyPy reports the environment executable as its base, even with a regular base binary.
+        response["sys_executable"] = serde_json::to_value(&executable)?;
+        response["sys_base_executable"] = serde_json::to_value(&executable)?;
+        response["sys_prefix"] = serde_json::to_value(&root)?;
+        response["scheme"] = serde_json::to_value(&scheme)?;
+        response["site_packages"] = serde_json::to_value([&scheme.purelib])?;
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+        interpreter
+            .with_virtualenv(crate::VirtualEnvironment {
+                root,
+                executable: executable.clone(),
+                base_executable,
+                scheme,
+                system_site_packages: false,
+            })
+            .cache(&cache)?;
+
+        let cached = Interpreter::query(&executable, &cache)?;
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
+        let fresh_cache = Cache::temp()?.init().await?;
+        let queried = Interpreter::query(&executable, &fresh_cache)?;
+        assert_eq!(queried.to_base_python()?, executable);
+        assert_eq!(cached, queried);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_inferred_cache_skips_removed_source_alias() -> Result<()> {
         let directory = tempdir()?;
         let executable = directory.path().join("python");

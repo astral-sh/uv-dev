@@ -123,6 +123,41 @@ fn create_venv_caches_interpreter() -> Result<()> {
     Ok(())
 }
 
+/// Older CPython metadata is queried instead of assuming newer base-executable semantics.
+#[test]
+fn create_venv_queries_older_cpython_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.10");
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let base_executable = fs_err::canonicalize(environment.interpreter().to_base_python()?)?;
+    let root = context.temp_dir.child("older-python");
+    context
+        .venv()
+        .arg(root.path())
+        .arg("--python")
+        .arg(&base_executable)
+        .assert()
+        .success();
+
+    let site_packages = site_packages_path(root.path(), "python3.10");
+    fs_err::write(
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
+    )?;
+    let startup_marker = root.join("interpreter-started");
+    let cached = PythonEnvironment::from_root(root.path(), &cache)?;
+    assert!(startup_marker.is_file());
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(root.path(), &fresh_cache)?;
+    assert_eq!(cached, queried);
+
+    Ok(())
+}
+
 /// An installation-directory alias remains part of the cached base executable.
 #[test]
 #[cfg(unix)]
