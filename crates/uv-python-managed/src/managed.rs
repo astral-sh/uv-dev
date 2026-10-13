@@ -1416,44 +1416,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_version_matching() {
-        let platform = Platform::from_env().unwrap();
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        // Create mock installation directories
-        fs::create_dir(temp_dir.path().join(format!("cpython-3.10.0-{platform}"))).unwrap();
-
-        temp_env::with_var(
-            uv_static::EnvVars::UV_PYTHON_INSTALL_DIR,
-            Some(temp_dir.path()),
-            || {
-                let installations: Vec<_> =
-                    ManagedPythonInstallations::find_matching_current_platform()
-                        .unwrap()
-                        .collect();
-
-                // Version 3.1 should NOT match 3.10
-                let v3_1 = PythonVersion::from_str("3.1").unwrap();
-                let request = VersionRequest::from(&v3_1);
-                let matched: Vec<_> = installations
-                    .iter()
-                    .filter(|installation| request.matches_installation_key(installation.key()))
-                    .collect();
-                assert_eq!(matched.len(), 0);
-
-                // Check that 3.10 matches
-                let v3_10 = PythonVersion::from_str("3.10").unwrap();
-                let request = VersionRequest::from(&v3_10);
-                let matched: Vec<_> = installations
-                    .iter()
-                    .filter(|installation| request.matches_installation_key(installation.key()))
-                    .collect();
-                assert_eq!(matched.len(), 1);
-            },
-        );
-    }
-
-    #[test]
     fn test_relative_install_dir_resolves_against_pwd() {
         let temp_dir = tempfile::tempdir().unwrap();
         let workdir = temp_dir.path().join("workdir");
