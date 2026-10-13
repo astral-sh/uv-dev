@@ -20796,3 +20796,46 @@ async fn pep723_requirements_conflicting_authentication_scope() -> Result<()> {
     );
     Ok(())
 }
+
+/// An equivalent command-line default retains the endpoint selected by a requirements script.
+#[test]
+fn pep723_requirements_equivalent_command_line_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "equivalent-source-default"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # default = true
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.py", "--default-index"])
+        .arg(server.index_url())
+        .args(["--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}

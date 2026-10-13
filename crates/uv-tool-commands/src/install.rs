@@ -508,13 +508,11 @@ pub async fn install(
     // Keep legacy index flags separate so later upgrades can override them.
     let mut options = options;
     if !spec.indexes.is_empty() {
-        let indexes = uv_distribution_types::IndexLocations::new(
-            options.indexes.index.take().unwrap_or_default(),
-            Vec::new(),
-            false,
-        )
-        .with_source_indexes(spec.indexes.clone())?;
-        options.indexes.index = Some(indexes.defined_indexes().cloned().collect());
+        options.indexes.index = Some(
+            spec.indexes
+                .clone()
+                .merge_index_definitions(options.indexes.index.take().unwrap_or_default()),
+        );
     }
     let options = ToolOptions::from(options);
     let lock_manifest = ToolLock::manifest(

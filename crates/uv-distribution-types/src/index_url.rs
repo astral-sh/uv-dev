@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
-use std::ops::Deref;
+use std::ops::{Deref, Range};
 use std::path::Path;
 use std::ptr;
 use std::str::FromStr;
@@ -82,6 +82,19 @@ impl SourceIndexes {
         Ok(())
     }
 
+    /// Merge source definitions into index options while retaining command-line precedence.
+    ///
+    /// Legacy index fields and implicit defaults are not part of this declaration list. Validate
+    /// the complete client locations with [`IndexLocations::with_source_indexes`] before persisting
+    /// these definitions.
+    pub fn merge_index_definitions(self, indexes: Vec<Index>) -> Vec<Index> {
+        let (indexes, _) = merge_source_index_definitions(indexes, self);
+        let (non_default, default) = indexes
+            .into_iter()
+            .partition::<Vec<_>, _>(|index| !index.default);
+        non_default.into_iter().chain(default).collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -89,6 +102,36 @@ impl SourceIndexes {
     fn iter(&self) -> std::slice::Iter<'_, Index> {
         self.0.iter()
     }
+}
+
+/// Merge declarations in command-line, source, then configured order, retaining the first name.
+fn merge_source_index_definitions(
+    indexes: Vec<Index>,
+    sources: SourceIndexes,
+) -> (Vec<Index>, Range<usize>) {
+    let (mut command_line, mut configured): (Vec<_>, Vec<_>) = indexes
+        .into_iter()
+        .partition(|index| index.origin == Some(Origin::Cli));
+    let mut names = FxHashSet::default();
+    let mut keep_first_name = |index: &Index| {
+        index
+            .name
+            .as_ref()
+            .is_none_or(|name| names.insert(name.clone()))
+    };
+    command_line.retain(&mut keep_first_name);
+    let sources = sources
+        .into_iter()
+        .filter(&mut keep_first_name)
+        .collect::<Vec<_>>();
+    configured.retain(keep_first_name);
+    let source_range = command_line.len()..command_line.len() + sources.len();
+    let indexes = command_line
+        .into_iter()
+        .chain(sources)
+        .chain(configured)
+        .collect();
+    (indexes, source_range)
 }
 
 /// Authentication scopes and endpoint-based policies must agree across selected definitions.
@@ -427,42 +470,34 @@ impl IndexLocations {
         if indexes.is_empty() {
             return Ok(self);
         }
-        if indexes.iter().any(|index| index.default)
-            && self
-                .indexes
+        let source_defaults = indexes
+            .iter()
+            .filter(|index| index.default)
+            .cloned()
+            .collect::<Vec<_>>();
+        let (definitions, source_range) = merge_source_index_definitions(self.indexes, indexes);
+        self.indexes = definitions;
+
+        let allowed_indexes = self.allowed_indexes();
+        // Source defaults must retain a compatible endpoint when a command-line default wins.
+        if !self.no_index
+            && allowed_indexes
                 .iter()
                 .any(|index| index.default && index.origin == Some(Origin::Cli))
         {
-            return Err(SourceIndexError::ConfiguredDefault);
+            for index in &source_defaults {
+                if !allowed_indexes
+                    .iter()
+                    .any(|existing| is_same_index(&existing.url, &index.url))
+                {
+                    return Err(SourceIndexError::ConfiguredDefault);
+                }
+                for existing in &allowed_indexes {
+                    validate_source_index_policy(existing, index)?;
+                }
+            }
         }
-        let (mut command_line, mut configured): (Vec<_>, Vec<_>) = self
-            .indexes
-            .into_iter()
-            .partition(|index| index.origin == Some(Origin::Cli));
-        // Use the same first-name precedence as configured_indexes before comparing policies.
-        let mut names = FxHashSet::default();
-        let mut keep_first_name = |index: &Index| {
-            index
-                .name
-                .as_ref()
-                .is_none_or(|name| names.insert(name.clone()))
-        };
-        command_line.retain(&mut keep_first_name);
-        let indexes = indexes
-            .into_iter()
-            .filter(&mut keep_first_name)
-            .collect::<Vec<_>>();
-        configured.retain(keep_first_name);
-        let source_range = command_line.len()..command_line.len() + indexes.len();
-        self.indexes = command_line
-            .into_iter()
-            .chain(indexes)
-            .chain(configured)
-            .collect();
-
-        // Clients also retain flat indexes and may add implicit PyPI. Only selected source
-        // definitions that survive name, default, and no-index filtering can impose a policy.
-        let allowed_indexes = self.allowed_indexes();
+        // Compare retained source definitions against the complete client set.
         for index in &self.indexes[source_range] {
             if !allowed_indexes
                 .iter()
@@ -827,6 +862,149 @@ mod tests {
             .into_iter()
             .map(|index| index.url().url().as_str())
             .collect()
+    }
+
+    #[test]
+    fn source_defaults_accept_equivalent_command_line_default() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.default = true;
+        let mut command_line = Index::from_index_url(selected.url.clone());
+        command_line.origin = Some(Origin::Cli);
+
+        let locations = IndexLocations::new(vec![command_line], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert_eq!(
+            index_urls(locations.allowed_indexes()),
+            ["https://example.com/simple"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_defaults_retain_endpoint_through_alias() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://private.example.com/simple")?;
+        selected.default = true;
+        selected.authenticate = AuthPolicy::Always;
+        let mut alias = Index::from_str("mirror=https://private.example.com/simple")?;
+        alias.authenticate = AuthPolicy::Always;
+        alias.origin = Some(Origin::Cli);
+        let mut command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example.com/simple")?);
+        command_line.origin = Some(Origin::Cli);
+
+        let locations = IndexLocations::new(vec![command_line, alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert_eq!(
+            index_urls(locations.allowed_indexes()),
+            [
+                "https://private.example.com/simple",
+                "https://default.example.com/simple"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_defaults_reject_incompatible_retained_alias() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://private.example.com/simple")?;
+        selected.default = true;
+        selected.authenticate = AuthPolicy::Always;
+        let mut alias = Index::from_str("mirror=https://private.example.com/simple")?;
+        alias.origin = Some(Origin::Cli);
+        let mut command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example.com/simple")?);
+        command_line.origin = Some(Origin::Cli);
+
+        let result = IndexLocations::new(vec![command_line, alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Conflicting policies for index URL `https://private.example.com/simple` in requirements sources".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_defaults_ignore_shadowed_command_line_default() -> Result<(), Box<dyn Error>> {
+        let mut command_line = Index::from_str("shared=https://example.com/primary")?;
+        command_line.origin = Some(Origin::Cli);
+        let mut shadowed = Index::from_str("shared=https://example.com/unused")?;
+        shadowed.default = true;
+        shadowed.origin = Some(Origin::Cli);
+        let mut selected = Index::from_str("private=https://example.com/selected")?;
+        selected.default = true;
+
+        let locations = IndexLocations::new(vec![command_line, shadowed], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert_eq!(
+            index_urls(locations.default_index()),
+            ["https://example.com/selected"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_defaults_ignore_disabled_command_line_default() -> Result<(), Box<dyn Error>> {
+        let mut command_line =
+            Index::from_index_url(IndexUrl::from_str("https://example.com/unused")?);
+        command_line.origin = Some(Origin::Cli);
+        let mut selected = Index::from_str("private=https://example.com/selected")?;
+        selected.default = true;
+        selected.authenticate = AuthPolicy::Always;
+
+        let locations = IndexLocations::new(vec![command_line], Vec::new(), true)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert!(locations.allowed_indexes().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn source_index_definitions_preserve_receipt_precedence() -> Result<(), Box<dyn Error>> {
+        let mut command_line_default = Index::from_str("cli-default=https://example.com/default")?;
+        command_line_default.default = true;
+        command_line_default.origin = Some(Origin::Cli);
+        let mut command_line = Index::from_str("shared=https://example.com/cli")?;
+        command_line.origin = Some(Origin::Cli);
+        let configured = Index::from_str("configured=https://example.com/configured")?;
+        let mut configured_default =
+            Index::from_str("configured-default=https://example.com/unused")?;
+        configured_default.default = true;
+        let indexes = vec![
+            command_line_default,
+            configured,
+            command_line,
+            configured_default,
+        ];
+        let mut source_default = Index::from_str("source-default=https://example.com/default")?;
+        source_default.default = true;
+        let sources = SourceIndexes::try_from_iter([
+            source_default,
+            Index::from_str("source=https://example.com/source")?,
+            Index::from_str("shared=https://example.com/shadowed")?,
+        ])?;
+        let effective = IndexLocations::new(indexes.clone(), Vec::new(), false)
+            .with_source_indexes(sources.clone())?;
+        let definitions = sources.merge_index_definitions(indexes);
+
+        assert_eq!(
+            definitions,
+            effective.defined_indexes().cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            definitions
+                .iter()
+                .map(|index| index.name.as_ref().map(ToString::to_string))
+                .collect::<Vec<_>>(),
+            [
+                Some("shared".to_owned()),
+                Some("source".to_owned()),
+                Some("configured".to_owned()),
+                Some("cli-default".to_owned()),
+                Some("source-default".to_owned()),
+                Some("configured-default".to_owned()),
+            ]
+        );
+        Ok(())
     }
 
     #[test]

@@ -17,6 +17,7 @@ use indoc::indoc;
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
+use url::Url;
 #[cfg(windows)]
 use uv_fs::Simplified;
 use uv_static::EnvVars;
@@ -7068,6 +7069,68 @@ async fn tool_install_pep723_receipt_rejects_conflicting_index_alias() -> Result
             .await
             .expect("request recording")
             .is_empty()
+    );
+    Ok(())
+}
+
+/// Receipt declarations retain per-index policies without synthesizing an implicit default.
+#[test]
+fn tool_install_pep723_receipt_retains_legacy_default_and_index_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    context.temp_dir.child("deps.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["ok"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "https://pypi.org/simple"
+        # explicit = true
+        # exclude-newer = "2020-01-01T00:00:00Z"
+        # [tool.uv.sources]
+        # ok = { index = "private" }
+        # ///
+    "#})?;
+    let wheel = context
+        .workspace_root
+        .join("test/links/ok-1.0.0-py3-none-any.whl");
+    let wheel = Url::from_file_path(wheel).expect("absolute wheel path");
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str(&format!("ok @ {wheel}"))?;
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let bin = context.temp_dir.child("bin");
+
+    context
+        .tool_install()
+        .arg(launcher)
+        .args([
+            "--with-requirements",
+            "deps.py",
+            "--override",
+            "overrides.txt",
+            "--index-url",
+            "https://mirror.example/simple",
+            "--offline",
+        ])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt: toml::Value =
+        toml::from_str(&context.read("tools/simple-launcher/uv-receipt.toml"))?;
+    let options = &receipt["tool"]["options"];
+    assert_eq!(
+        options["index-url"].as_str(),
+        Some("https://mirror.example/simple")
+    );
+    assert_eq!(options["index"].as_array().map(Vec::len), Some(1));
+    let index = &options["index"][0];
+    assert_eq!(index["name"].as_str(), Some("private"));
+    assert_eq!(index["url"].as_str(), Some("https://pypi.org/simple"));
+    assert_eq!(
+        index["exclude-newer"].as_str(),
+        Some("2020-01-01T00:00:00Z")
     );
     Ok(())
 }
