@@ -117,7 +117,7 @@ jobs:
             local promoter promoter_permission existing existing_head_sha=''
             local base_ref base_sha='' previous_sha='' merge_sha='' merged_parent_number=''
             local parents parent parent_number promoted_parent ancestors ancestor comparison visited='[]'
-            local record promotion_label
+            local record promotion_label plan promotion_ref promotion_repository refs candidate_head_sha
             if [ -n "$PULL_REQUEST_NUMBER" ]; then
               record="$CAPTURED_APPROVAL"
             else
@@ -276,7 +276,7 @@ jobs:
                 return
               fi
             fi
-            jq --null-input --compact-output \
+            plan=$(jq --null-input --compact-output \
               --argjson number "$number" --arg promoter "$promoter" \
               --arg approval_id "$approval_id" --arg approval_event "$approval_event" \
               --arg promotion_label "$promotion_label" \
@@ -289,7 +289,28 @@ jobs:
                 {$number, $promoter, $approval_id, $approval_event, $promotion_label,
                  $head_ref, $head_sha, $existing_head_sha, $source_base, $source_base_sha,
                  $base_ref, $base_sha, $previous_sha, $merge_sha, $merged_parent_number,
-                 action: (if $previous_sha == "" then "promote" else "rebase" end)}'
+                 candidate_head_sha: "",
+                 action: (if $previous_sha == "" then "promote" else "rebase" end)}') || return 1
+            if [ -n "$previous_sha" ]; then
+              if [ "$GITHUB_REPOSITORY" = astral-sh/uv-security ]; then
+                promotion_repository=astral-sh/uv
+                promotion_ref="automations/promote/security/$number"
+              else
+                promotion_repository="$GITHUB_REPOSITORY"
+                promotion_ref="automations/promote/$number"
+              fi
+              refs=$(gh api "repos/$promotion_repository/git/matching-refs/heads/$promotion_ref") || return 1
+              candidate_head_sha=$(jq --raw-output --arg ref "refs/heads/$promotion_ref" \
+                '.[] | select(.ref == $ref) | .object.sha' <<< "$refs")
+              if [ -n "$candidate_head_sha" ]; then
+                python3 agents/scripts/pull-request-promotion-approval.py load-candidate "$GITHUB_REPOSITORY" "$number" \
+                  --repository-id "$GITHUB_REPOSITORY_ID" --plan "$plan" \
+                  --candidate-sha "$candidate_head_sha" > /dev/null || return 1
+                plan=$(jq --compact-output --arg head "$candidate_head_sha" \
+                  '.candidate_head_sha = $head | .existing_head_sha = $head | .action = "promote"' <<< "$plan")
+              fi
+            fi
+            echo "$plan"
           }
 
           if [ -n "$PULL_REQUEST_NUMBER" ]; then
@@ -385,6 +406,7 @@ jobs:
       contents: read
       id-token: write
       pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -445,6 +467,7 @@ jobs:
           BASE_SHA: ${{ matrix.base_sha }}
           PARENT_MERGE_SHA: ${{ matrix.merge_sha }}
           MERGED_PARENT_NUMBER: ${{ matrix.merged_parent_number }}
+          CANDIDATE_HEAD_SHA: ${{ matrix.candidate_head_sha }}
           PROMOTED_HEAD: ${{ steps.verify.outputs.head_sha }}
           PROMOTER: ${{ matrix.promoter }}
           APPROVAL_ID: ${{ matrix.approval_id }}
@@ -479,24 +502,72 @@ jobs:
               echo "The existing promotion has a different state, base, or head." >&2
               exit 1
             fi
-          elif [ -n "$PARENT_MERGE_SHA" ]; then
-            merged_parent=$(gh api "repos/astral-sh/uv/pulls/$MERGED_PARENT_NUMBER")
-            if ! jq --exit-status --arg base_ref "$BASE_REF" --arg merge_sha "$PARENT_MERGE_SHA" \
-              --argjson repository_id "$UV_REPOSITORY_ID" \
-              '.merged_at != null and .base.repo.id == $repository_id and .base.ref == $base_ref and .merge_commit_sha == $merge_sha' \
-              <<< "$merged_parent" > /dev/null; then
-              echo "The merged parent no longer matches the promotion plan." >&2
-              exit 1
+          else
+            if [ -n "$CANDIDATE_HEAD_SHA" ]; then
+              if [ "$GITHUB_REPOSITORY" = astral-sh/uv-security ]; then
+                promotion_repository=astral-sh/uv
+                promotion_ref="automations/promote/security/$PULL_REQUEST_NUMBER"
+              else
+                promotion_repository="$GITHUB_REPOSITORY"
+                promotion_ref="automations/promote/$PULL_REQUEST_NUMBER"
+              fi
+              refs=$(gh api "repos/$promotion_repository/git/matching-refs/heads/$promotion_ref")
+              current_head=$(jq --raw-output --arg ref "refs/heads/$promotion_ref" \
+                '.[] | select(.ref == $ref) | .object.sha' <<< "$refs")
+              if [ "$current_head" != "$CANDIDATE_HEAD_SHA" ]; then
+                echo "The verified candidate branch changed before publication." >&2
+                exit 1
+              fi
             fi
-            current_base=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BASE_REF" --jq .object.sha)
-            if [ "$current_base" != "$BASE_SHA" ]; then
-              echo "The promotion base changed; refusing to publish a stale rebase." >&2
-              exit 1
+            if [ -n "$PARENT_MERGE_SHA" ]; then
+              merged_parent=$(gh api "repos/astral-sh/uv/pulls/$MERGED_PARENT_NUMBER")
+              if ! jq --exit-status --arg base_ref "$BASE_REF" --arg merge_sha "$PARENT_MERGE_SHA" \
+                --argjson repository_id "$UV_REPOSITORY_ID" \
+                '.merged_at != null and .base.repo.id == $repository_id and .base.ref == $base_ref and .merge_commit_sha == $merge_sha' \
+                <<< "$merged_parent" > /dev/null; then
+                echo "The merged parent no longer matches the promotion plan." >&2
+                exit 1
+              fi
+              current_base=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BASE_REF" --jq .object.sha)
+              if [ "$current_base" != "$BASE_SHA" ]; then
+                echo "The promotion base changed; refusing to publish a stale rebase." >&2
+                exit 1
+              fi
             fi
           fi
           jq . <<< "$source_pull_request" > "$RUNNER_TEMP/pull-request.json"
           jq . <<< "$existing" > "$RUNNER_TEMP/upstream-pull-request.json"
           echo "upstream_number=$(jq --raw-output '.number // empty' <<< "$existing")" >> "$GITHUB_OUTPUT"
+
+      - name: Capture verified promotion candidate
+        id: candidate
+        if: matrix.action == 'rebase' && steps.recheck.outputs.upstream_number == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ matrix.number }}
+          PROMOTION_PLAN: ${{ toJSON(matrix) }}
+          PROMOTED_HEAD: ${{ steps.verify.outputs.head_sha }}
+        run: |
+          result=$(python3 agents/scripts/pull-request-promotion-approval.py capture-candidate \
+            "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" --repository-id "$GITHUB_REPOSITORY_ID" \
+            --plan "$PROMOTION_PLAN" --candidate-sha "$PROMOTED_HEAD")
+          mkdir -p "$RUNNER_TEMP/promotion-candidate"
+          jq '.record' <<< "$result" > "$RUNNER_TEMP/promotion-candidate/candidate.json"
+          {
+            echo "artifact_name=$(jq --raw-output .artifact_name <<< "$result")"
+            echo "upload=$(jq --raw-output .upload <<< "$result")"
+            echo "overwrite=$(jq --raw-output .overwrite <<< "$result")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Persist verified promotion candidate
+        if: steps.candidate.outputs.upload == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.candidate.outputs.artifact_name }}
+          path: ${{ runner.temp }}/promotion-candidate/candidate.json
+          if-no-files-found: error
+          overwrite: ${{ steps.candidate.outputs.overwrite == 'true' }}
+          retention-days: 90
 
       - name: Get promotion token
         id: token
@@ -514,6 +585,7 @@ jobs:
             workflows: write
 
       - name: Promote pull request
+        id: publish
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PULL_REQUEST_NUMBER: ${{ matrix.number }}
@@ -675,6 +747,8 @@ jobs:
                 }' <<< "$source_pull_request" |
                 gh api --method POST repos/astral-sh/uv/pulls --input -
             )
+            upstream_number=$(jq --exit-status --raw-output '.number | select(type == "number")' <<< "$upstream_pull_request")
+            echo "upstream_number=$upstream_number" >> "$GITHUB_OUTPUT"
             if ! jq --exit-status --arg head_ref "$promotion_ref" --arg head_sha "$PROMOTED_HEAD" \
               --arg base_ref "$BASE_REF" --argjson uv_id "$UV_REPOSITORY_ID" \
               --argjson promotion_repository_id "$promotion_repository_id" \
@@ -735,7 +809,7 @@ jobs:
           HEAD_SHA: ${{ matrix.head_sha }}
           PROMOTER: ${{ matrix.promoter }}
           APPROVAL_ID: ${{ matrix.approval_id }}
-          UPSTREAM_NUMBER: ${{ steps.recheck.outputs.upstream_number }}
+          UPSTREAM_NUMBER: ${{ steps.publish.outputs.upstream_number || steps.recheck.outputs.upstream_number }}
         run: |
           get_current_approval() {
             python3 agents/scripts/pull-request-promotion-approval.py current "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER"

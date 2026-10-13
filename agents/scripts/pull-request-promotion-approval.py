@@ -5,6 +5,7 @@ import argparse
 import datetime
 import hashlib
 import io
+import itertools
 import json
 import os
 import re
@@ -23,6 +24,12 @@ MAX_RECORD_BYTES = 16 * 1024
 
 class ApprovalError(Exception):
     pass
+
+
+class IncompleteCandidateUpload(ApprovalError):
+    def __init__(self, record):
+        super().__init__("The candidate upload did not complete successfully.")
+        self.record = record
 
 
 def require(condition, message):
@@ -174,7 +181,9 @@ def binding(record):
     return {key: value for key, value in record.items() if key != "run"}
 
 
-def validate_record(record, repository, repository_id, number, approval):
+def validate_record(
+    record, repository, repository_id, number, approval, *, candidate=False
+):
     require(
         isinstance(record, dict)
         and set(record)
@@ -186,7 +195,8 @@ def validate_record(record, repository, repository_id, number, approval):
             "head_sha",
             "approval",
             "run",
-        },
+        }
+        | ({"candidate"} if candidate else set()),
         "Approval record schema is invalid.",
     )
     require(
@@ -229,14 +239,16 @@ def validate_record(record, repository, repository_id, number, approval):
     )
 
 
-def validate_run(run, repository, repository_id, workflow_id):
+def validate_run(run, repository, repository_id, workflow_id, *, candidate=False):
     require(
         run.get("workflow_id") == workflow_id
         and run.get("path", "").split("@", 1)[0] == WORKFLOW_PATH,
         "Approval artifact was not produced by the promotion workflow.",
     )
     require(
-        run.get("event") == "workflow_dispatch" and run.get("head_branch") == "main",
+        run.get("event")
+        in ({"push", "workflow_dispatch"} if candidate else {"workflow_dispatch"})
+        and run.get("head_branch") == "main",
         "Approval artifacts must originate from an explicit dispatch on main.",
     )
     for key in ("repository", "head_repository"):
@@ -247,7 +259,17 @@ def validate_run(run, repository, repository_id, workflow_id):
         )
 
 
-def read_artifact(artifact, repository, repository_id, workflow_id, number, approval):
+def read_artifact(
+    artifact,
+    repository,
+    repository_id,
+    workflow_id,
+    number,
+    approval,
+    *,
+    candidate=False,
+):
+    filename = "candidate.json" if candidate else "approval.json"
     origin = artifact.get("workflow_run") or {}
     # Artifact names are public. PR and unrelated CI workflows cannot supply approval authority.
     if not (
@@ -261,7 +283,8 @@ def read_artifact(artifact, repository, repository_id, workflow_id, number, appr
     if not (
         run.get("workflow_id") == workflow_id
         and run.get("path", "").split("@", 1)[0] == WORKFLOW_PATH
-        and run.get("event") == "workflow_dispatch"
+        and run.get("event")
+        in ({"push", "workflow_dispatch"} if candidate else {"workflow_dispatch"})
         and run.get("head_branch") == "main"
         and all(
             (run.get(key) or {}).get("id") == repository_id
@@ -294,13 +317,16 @@ def read_artifact(artifact, repository, repository_id, workflow_id, number, appr
         entries = bundle.infolist()
         require(
             len(entries) == 1
-            and entries[0].filename == "approval.json"
+            and entries[0].filename == filename
             and not entries[0].is_dir()
             and entries[0].file_size <= MAX_RECORD_BYTES,
-            "Approval artifact must contain only approval.json.",
+            f"Promotion artifact must contain only {filename}.",
         )
         record = json.loads(bundle.read(entries[0]))
-    validate_record(record, repository, repository_id, number, approval)
+    if candidate:
+        validate_candidate(record, repository, repository_id, number)
+    else:
+        validate_record(record, repository, repository_id, number, approval)
     require(
         record["run"]["id"] == run["id"]
         and record["run"]["workflow_id"] == workflow_id
@@ -314,26 +340,86 @@ def read_artifact(artifact, repository, repository_id, workflow_id, number, appr
             f"repos/{repository}/actions/runs/{run['id']}/attempts/{record['run']['attempt']}/jobs?per_page=100"
         )
         for job in page["jobs"]
-        if job.get("name") == CAPTURE_JOB
+        if job.get("name")
+        == (f"Promote {repository}#{number}" if candidate else CAPTURE_JOB)
     ]
-    require(
-        len(jobs) == 1
-        and jobs[0].get("status") == "completed"
-        and jobs[0].get("conclusion") == "success"
-        and jobs[0].get("head_sha") == run["head_sha"],
-        "The approval capture job did not complete successfully.",
-    )
-    require(
-        timestamp(jobs[0]["started_at"])
-        <= timestamp(artifact["created_at"])
-        <= timestamp(jobs[0]["completed_at"]),
-        "Approval artifact was not created during its capture job.",
-    )
+    if candidate:
+        require(
+            len(jobs) == 1 and jobs[0].get("head_sha") == run["head_sha"],
+            "The candidate writer job does not match its workflow.",
+        )
+        # A successful upload survives a later publication failure. Each prerequisite must
+        # have succeeded in this exact attempt, with the artifact inside the upload step.
+        steps = []
+        incomplete_upload = False
+        for name in (
+            "Verify promotion revision",
+            "Recheck promotion plan",
+            "Capture verified promotion candidate",
+            "Persist verified promotion candidate",
+        ):
+            matches = [
+                step for step in jobs[0].get("steps", []) if step.get("name") == name
+            ]
+            require(
+                len(matches) == 1 and matches[0].get("status") == "completed",
+                "Candidate verification, recheck, and upload must all complete.",
+            )
+            step = matches[0]
+            if name == "Persist verified promotion candidate" and step.get(
+                "conclusion"
+            ) in {"failure", "cancelled"}:
+                incomplete_upload = True
+            else:
+                require(
+                    step.get("conclusion") == "success",
+                    "Candidate verification, recheck, and upload must all succeed.",
+                )
+            steps.append(step)
+        require(
+            all(
+                before["number"] < after["number"]
+                and timestamp(before["completed_at"]) <= timestamp(after["started_at"])
+                for before, after in itertools.pairwise(steps)
+            ),
+            "Candidate proof steps ran in an unexpected order.",
+        )
+        require(
+            timestamp(steps[-1]["started_at"])
+            <= timestamp(artifact["created_at"])
+            <= timestamp(steps[-1]["completed_at"]),
+            "Candidate artifact was not created during its upload step.",
+        )
+        if incomplete_upload:
+            raise IncompleteCandidateUpload(record)
+    else:
+        require(
+            len(jobs) == 1
+            and jobs[0].get("status") == "completed"
+            and jobs[0].get("conclusion") == "success"
+            and jobs[0].get("head_sha") == run["head_sha"],
+            "The approval capture job did not complete successfully.",
+        )
+        require(
+            timestamp(jobs[0]["started_at"])
+            <= timestamp(artifact["created_at"])
+            <= timestamp(jobs[0]["completed_at"]),
+            "Approval artifact was not created during its capture job.",
+        )
     return record
 
 
-def recorded_approval(repository, repository_id, workflow_id, number, approval):
-    name = artifact_name(repository_id, number, approval["id"])
+def artifact_records(
+    repository,
+    repository_id,
+    workflow_id,
+    number,
+    approval,
+    name,
+    *,
+    candidate=False,
+    incomplete_uploads=None,
+):
     query = urllib.parse.urlencode({"name": name, "per_page": 100})
     artifacts = [
         artifact
@@ -344,17 +430,41 @@ def recorded_approval(repository, repository_id, workflow_id, number, approval):
     for artifact in artifacts:
         require(
             artifact.get("name") == name,
-            "GitHub returned an unrelated approval artifact.",
+            "GitHub returned an unrelated promotion artifact.",
         )
         if artifact.get("expired") or timestamp(
             artifact["expires_at"]
         ) <= datetime.datetime.now(datetime.UTC):
             continue
-        record = read_artifact(
-            artifact, repository, repository_id, workflow_id, number, approval
-        )
+        try:
+            record = read_artifact(
+                artifact,
+                repository,
+                repository_id,
+                workflow_id,
+                number,
+                approval,
+                candidate=candidate,
+            )
+        except IncompleteCandidateUpload as error:
+            # The payload is well formed, but cannot prove that its upload finished.
+            if incomplete_uploads is not None:
+                incomplete_uploads.append(error.record)
+            continue
         if record is not None:
             records.append(record)
+    return records
+
+
+def recorded_approval(repository, repository_id, workflow_id, number, approval):
+    records = artifact_records(
+        repository,
+        repository_id,
+        workflow_id,
+        number,
+        approval,
+        artifact_name(repository_id, number, approval["id"]),
+    )
     if not records:
         return None
     require(
@@ -364,13 +474,253 @@ def recorded_approval(repository, repository_id, workflow_id, number, approval):
     return records[0]
 
 
+CANDIDATE_CONTEXT = (
+    "source_base",
+    "source_base_sha",
+    "base_ref",
+    "base_sha",
+    "previous_sha",
+    "merge_sha",
+    "merged_parent_number",
+)
+
+
+def candidate_artifact_name(repository_id, number, head_sha, candidate_sha):
+    return f"promotion-candidate-{repository_id}-{number}-{head_sha}-{candidate_sha}"
+
+
+def validate_candidate(record, repository, repository_id, number):
+    approval = record.get("approval") if isinstance(record, dict) else None
+    require(
+        isinstance(approval, dict)
+        and set(approval) == {"id", "event", "actor", "created_at", "promotion_label"}
+        and positive_integer(approval.get("id"))
+        and approval.get("event") in {"labeled", "ready_for_review"}
+        and approval.get("promotion_label") in LABELS,
+        "Candidate approval provenance is invalid.",
+    )
+    actor = approval.get("actor")
+    require(
+        isinstance(actor, dict)
+        and set(actor) == {"id", "login", "type"}
+        and positive_integer(actor.get("id"))
+        and actor.get("type") == "User"
+        and isinstance(actor.get("login"), str)
+        and actor["login"],
+        "Candidate approval actor is invalid.",
+    )
+    require(
+        (
+            approval["event"] != "ready_for_review"
+            or (
+                repository == "astral-sh/uv-dev"
+                and approval["promotion_label"] == "bot:promote"
+            )
+        )
+        and (
+            repository != "astral-sh/uv-security"
+            or approval["promotion_label"] == "bot:promote"
+        ),
+        "Candidate approval mode is invalid.",
+    )
+    timestamp(approval["created_at"])
+    validate_record(record, repository, repository_id, number, approval, candidate=True)
+    candidate = record["candidate"]
+    require(
+        isinstance(candidate, dict)
+        and set(candidate) == {"head_sha", *CANDIDATE_CONTEXT},
+        "Candidate transformation schema is invalid.",
+    )
+    for field in (
+        "head_sha",
+        "source_base_sha",
+        "base_sha",
+        "previous_sha",
+        "merge_sha",
+    ):
+        require(
+            isinstance(candidate[field], str)
+            and re.fullmatch(r"[0-9a-f]{40}", candidate[field]),
+            "Candidate transformation revision is invalid.",
+        )
+    require(
+        isinstance(candidate["merged_parent_number"], str)
+        and re.fullmatch(r"[1-9][0-9]*", candidate["merged_parent_number"]),
+        "Candidate parent identity is invalid.",
+    )
+    for field in ("source_base", "base_ref"):
+        require(isinstance(candidate[field], str), "Candidate branch is invalid.")
+        subprocess.run(
+            ["git", "check-ref-format", "refs/heads/" + candidate[field]], check=True
+        )
+
+
+def planned_candidate_source(repository, repository_id, number, approval, plan):
+    require(
+        isinstance(plan, dict)
+        and type(plan.get("number")) is int
+        and plan["number"] == number
+        and plan.get("approval_id") == str(approval["id"])
+        and plan.get("approval_event") == approval["event"]
+        and plan.get("promotion_label") == approval["promotion_label"]
+        and plan.get("promoter") == approval["actor"]["login"],
+        "The current approval does not authorize this candidate plan.",
+    )
+    source = eligible_source(
+        repository, repository_id, number, approval, plan["head_sha"], plan["head_ref"]
+    )
+    require(
+        source["base"]["ref"] == plan["source_base"]
+        and source["base"]["sha"] == plan["source_base_sha"],
+        "The candidate source parent changed.",
+    )
+    return source
+
+
+def candidate_binding(record):
+    return {
+        key: value for key, value in record.items() if key not in {"run", "approval"}
+    }
+
+
+def recorded_candidate(
+    repository,
+    repository_id,
+    workflow_id,
+    number,
+    approval,
+    plan,
+    candidate_sha,
+    *,
+    required=True,
+    incomplete_uploads=None,
+):
+    records = artifact_records(
+        repository,
+        repository_id,
+        workflow_id,
+        number,
+        approval,
+        candidate_artifact_name(repository_id, number, plan["head_sha"], candidate_sha),
+        candidate=True,
+        incomplete_uploads=incomplete_uploads,
+    )
+    require(
+        all(record["candidate"]["head_sha"] == candidate_sha for record in records),
+        "A candidate artifact names another revision.",
+    )
+    if not records:
+        require(
+            not required,
+            "No trusted candidate record matches the existing promotion branch.",
+        )
+        return None
+    # Historical approval proves how the candidate was produced, not permission to publish it.
+    # A fresh captured approval of the same source can choose a different promotion mode.
+    transformations = [candidate_binding(record) for record in records]
+    require(
+        all(value == transformations[0] for value in transformations),
+        "Conflicting candidate records cannot authorize branch reuse.",
+    )
+    record = records[0]
+    require(
+        record["head_ref"] == plan["head_ref"]
+        and record["head_sha"] == plan["head_sha"],
+        "The candidate source revision or branch changed.",
+    )
+    candidate = record["candidate"]
+    require(
+        all(
+            candidate[field] == plan[field]
+            for field in CANDIDATE_CONTEXT
+            if field != "base_sha"
+        ),
+        "The candidate parent or target branch changed.",
+    )
+    if candidate["base_sha"] != plan["base_sha"]:
+        comparison = gh_json(
+            f"repos/{repository}/compare/{candidate['base_sha']}...{plan['base_sha']}"
+        )
+        require(
+            comparison.get("status") in {"ahead", "identical"},
+            "The candidate base is not an ancestor of the current target.",
+        )
+    return record
+
+
+def capture_candidate(
+    repository, repository_id, workflow_id, number, approval, plan, candidate_sha
+):
+    require(
+        plan.get("action") == "rebase" and not plan.get("existing_head_sha"),
+        "Only newly verified rebases can create candidate records.",
+    )
+    require(
+        os.environ.get("GITHUB_EVENT_NAME") in {"push", "workflow_dispatch"}
+        and os.environ.get("GITHUB_REF") == "refs/heads/main"
+        and os.environ.get("GITHUB_REPOSITORY") == repository
+        and os.environ.get("GITHUB_REPOSITORY_ID") == str(repository_id),
+        "Candidate capture requires the source promotion workflow on main.",
+    )
+    run_id = int(os.environ["GITHUB_RUN_ID"])
+    attempt = int(os.environ["GITHUB_RUN_ATTEMPT"])
+    require(run_id > 0 and attempt > 0, "Current workflow identity is invalid.")
+    run = gh_json(f"repos/{repository}/actions/runs/{run_id}")
+    validate_run(run, repository, repository_id, workflow_id, candidate=True)
+    require(
+        run.get("run_attempt") == attempt
+        and run.get("head_sha") == os.environ.get("GITHUB_SHA"),
+        "The current workflow attempt changed.",
+    )
+    record = {
+        "schema": 1,
+        "repository": {"id": repository_id, "full_name": repository},
+        "number": number,
+        "head_ref": plan["head_ref"],
+        "head_sha": plan["head_sha"],
+        "approval": approval,
+        "run": {
+            "id": run_id,
+            "attempt": attempt,
+            "workflow_id": workflow_id,
+            "head_sha": run["head_sha"],
+        },
+        "candidate": {
+            "head_sha": candidate_sha,
+            **{field: plan[field] for field in CANDIDATE_CONTEXT},
+        },
+    }
+    validate_candidate(record, repository, repository_id, number)
+    subprocess.run(
+        ["git", "merge-base", "--is-ancestor", plan["base_sha"], candidate_sha],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "merge-base", "--is-ancestor", plan["merge_sha"], plan["base_sha"]],
+        check=True,
+    )
+    return record
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("current", "capture", "load", "source"))
+    parser.add_argument(
+        "command",
+        choices=(
+            "current",
+            "capture",
+            "load",
+            "source",
+            "capture-candidate",
+            "load-candidate",
+        ),
+    )
     parser.add_argument("repository", choices=sorted(REPOSITORIES))
     parser.add_argument("number", type=int)
     parser.add_argument("--repository-id", type=int)
     parser.add_argument("--head-sha")
+    parser.add_argument("--plan")
+    parser.add_argument("--candidate-sha")
     parser.add_argument("--head-ref")
     parser.add_argument("--approval-id", type=int)
     parser.add_argument("--approval-event", choices=("labeled", "ready_for_review"))
@@ -425,6 +775,86 @@ def main():
         f"repos/{args.repository}/actions/workflows/promote-pull-request.yml"
     )["id"]
     require(positive_integer(workflow_id), "Workflow identity is invalid.")
+    if args.command in {"capture-candidate", "load-candidate"}:
+        require(
+            args.repository_id == repository_id
+            and args.plan is not None
+            and args.candidate_sha is not None
+            and re.fullmatch(r"[0-9a-f]{40}", args.candidate_sha),
+            "The candidate plan, repository, and revision are required.",
+        )
+        plan = json.loads(args.plan)
+        planned_candidate_source(
+            args.repository, repository_id, args.number, approval, plan
+        )
+        if args.command == "load-candidate":
+            record = recorded_candidate(
+                args.repository,
+                repository_id,
+                workflow_id,
+                args.number,
+                approval,
+                plan,
+                args.candidate_sha,
+            )
+            print(json.dumps(record, separators=(",", ":")))
+        else:
+            record = capture_candidate(
+                args.repository,
+                repository_id,
+                workflow_id,
+                args.number,
+                approval,
+                plan,
+                args.candidate_sha,
+            )
+            incomplete_uploads = []
+            existing_candidate = recorded_candidate(
+                args.repository,
+                repository_id,
+                workflow_id,
+                args.number,
+                approval,
+                plan,
+                args.candidate_sha,
+                required=False,
+                incomplete_uploads=incomplete_uploads,
+            )
+            overwrite = False
+            if existing_candidate is not None:
+                record = existing_candidate
+            else:
+                same_run = [
+                    old
+                    for old in incomplete_uploads
+                    if old["run"]["id"] == record["run"]["id"]
+                ]
+                require(
+                    all(
+                        old["run"]["attempt"] < record["run"]["attempt"]
+                        and candidate_binding(old) == candidate_binding(record)
+                        for old in same_run
+                    ),
+                    "Only an identical incomplete candidate from an earlier attempt may be replaced.",
+                )
+                overwrite = bool(same_run)
+            print(
+                json.dumps(
+                    {
+                        "record": record,
+                        "upload": existing_candidate is None,
+                        "overwrite": overwrite,
+                        "artifact_name": candidate_artifact_name(
+                            repository_id,
+                            args.number,
+                            plan["head_sha"],
+                            args.candidate_sha,
+                        ),
+                    },
+                    separators=(",", ":"),
+                )
+            )
+        return
     existing = recorded_approval(
         args.repository, repository_id, workflow_id, args.number, approval
     )
