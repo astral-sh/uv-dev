@@ -8,7 +8,9 @@ import io
 import json
 import os
 import pathlib
+import subprocess
 import sys
+import tempfile
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -29,6 +31,7 @@ WORKFLOW_HEAD = "f" * 40
 
 class PromotionApprovalTests(unittest.TestCase):
     def setUp(self):
+        self.temporary_root = tempfile.gettempdir()
         self.repository = {"id": REPOSITORY_ID, "full_name": REPOSITORY}
         self.event = {
             "id": 11,
@@ -619,21 +622,106 @@ class PromotionApprovalTests(unittest.TestCase):
             )
         return result, calls.call_args_list
 
-    def test_candidate_capture_checks_both_git_ancestry_boundaries(self):
+    @contextlib.contextmanager
+    def candidate_git_history(self):
         self.candidate_setup()
-        result, calls = self.capture_candidate()
-        self.assertEqual(result["record"], self.candidate_record)
+        with tempfile.TemporaryDirectory(dir=self.temporary_root) as directory:
+            environment = os.environ | {
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_AUTHOR_NAME": "Fixture",
+                "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                "GIT_COMMITTER_NAME": "Fixture",
+                "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+                "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z",
+                "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
+            }
+
+            def git(*arguments, input=None):
+                return subprocess.run(
+                    ["git", *arguments],
+                    cwd=directory,
+                    env=environment,
+                    input=input,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip()
+
+            git("init", "--quiet")
+            tree = git("mktree", input="")
+            root = git("commit-tree", tree, "-m", "Root")
+            parent = git("commit-tree", tree, "-p", root, "-m", "Source parent")
+            source = git("commit-tree", tree, "-p", parent, "-m", "Source child")
+            merged_parent = git("commit-tree", tree, "-p", root, "-m", "Merged parent")
+            base = git("commit-tree", tree, "-p", merged_parent, "-m", "Current target")
+            candidate = git("commit-tree", tree, "-p", base, "-m", "Rebased child")
+            unrelated = git("commit-tree", tree, "-p", root, "-m", "Unrelated branch")
+            self.source["head"]["sha"] = source
+            self.source["base"]["sha"] = parent
+            self.plan.update(
+                head_sha=source,
+                source_base_sha=parent,
+                previous_sha=parent,
+                base_sha=base,
+                merge_sha=merged_parent,
+            )
+            for revision in (candidate, unrelated):
+                name = APPROVAL.candidate_artifact_name(
+                    REPOSITORY_ID, 101, source, revision
+                )
+                self.api_values[
+                    f"repos/{REPOSITORY}/actions/artifacts?name={name}&per_page=100"
+                ] = [{"artifacts": []}]
+
+            with (
+                contextlib.chdir(directory),
+                patch.dict(os.environ, environment, clear=True),
+            ):
+                yield candidate, unrelated
+
+    def test_candidate_capture_accepts_verified_git_history(self):
+        with self.candidate_git_history() as (candidate, _):
+            result = self.invoke(
+                "capture-candidate",
+                "--repository-id",
+                str(REPOSITORY_ID),
+                "--plan",
+                json.dumps(self.plan),
+                "--candidate-sha",
+                candidate,
+            )
         self.assertTrue(result["upload"])
-        ancestry = [
-            call.args[0] for call in calls if call.args[0][:2] == ["git", "merge-base"]
-        ]
-        self.assertEqual(
-            ancestry,
-            [
-                ["git", "merge-base", "--is-ancestor", "d" * 40, "6" * 40],
-                ["git", "merge-base", "--is-ancestor", "c" * 40, "d" * 40],
-            ],
-        )
+        self.assertEqual(result["record"]["candidate"]["head_sha"], candidate)
+
+    def test_candidate_capture_rejects_unrelated_candidate_history(self):
+        with (
+            self.candidate_git_history() as (_, unrelated),
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            self.invoke(
+                "capture-candidate",
+                "--repository-id",
+                str(REPOSITORY_ID),
+                "--plan",
+                json.dumps(self.plan),
+                "--candidate-sha",
+                unrelated,
+            )
+
+    def test_candidate_capture_rejects_parent_outside_target_history(self):
+        with self.candidate_git_history() as (candidate, unrelated):
+            self.plan["merge_sha"] = unrelated
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.invoke(
+                    "capture-candidate",
+                    "--repository-id",
+                    str(REPOSITORY_ID),
+                    "--plan",
+                    json.dumps(self.plan),
+                    "--candidate-sha",
+                    candidate,
+                )
 
     def test_candidate_capture_reuses_a_verified_prior_attempt(self):
         self.candidate_setup()
