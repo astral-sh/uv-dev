@@ -1,7 +1,7 @@
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
@@ -24,7 +24,8 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
-use uv_python_interpreter::RequestedInterpreter;
+use uv_python_interpreter::{Interpreter, RequestedInterpreter};
+use uv_python_managed::ManagedPythonInstallation;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -137,8 +138,23 @@ pub async fn metadata(
                             } => (environment.into_interpreter(), request),
                         };
                         if sync.is_some() {
-                            let base_interpreter =
+                            let mut base_interpreter =
                                 CachedEnvironment::base_interpreter(&interpreter, cache)?;
+                            // Managed minor-version links can move during resolution. Save the
+                            // selected installation while retaining the request's upgrade policy.
+                            if let Some(executable) =
+                                ManagedPythonInstallation::try_from_interpreter(&base_interpreter)
+                                    .map(|installation| installation.executable(false))
+                                && executable != base_interpreter.sys_executable()
+                            {
+                                base_interpreter = Interpreter::query(executable, cache)?;
+                            }
+                            ensure!(
+                                base_interpreter.key() == interpreter.key(),
+                                "The base interpreter ({}) does not match the selected interpreter ({})",
+                                base_interpreter.key(),
+                                interpreter.key(),
+                            );
                             script_interpreter_request =
                                 Some(RequestedInterpreter::new(base_interpreter, request));
                         }
