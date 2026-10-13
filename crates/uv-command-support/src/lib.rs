@@ -124,6 +124,12 @@ impl<'a> OutputWriter<'a> {
         if let Some(output_file) = self.output_file {
             let stream = anstream::adapter::strip_bytes(&self.buffer).into_vec();
 
+            // Descriptor links such as `/dev/stdout` can name pipes instead of filesystem paths.
+            // Follow their metadata before manually traversing ordinary symbolic links.
+            if fs_err::metadata(output_file).is_ok_and(|metadata| !metadata.is_file()) {
+                return fs_err::tokio::write(output_file, &stream).await;
+            }
+
             // Resolve each link relative to its containing directory, retaining the links when
             // atomically replacing the final target. A missing final target can be created.
             let mut target = Cow::Borrowed(output_file);

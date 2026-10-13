@@ -7,8 +7,6 @@ use std::fs;
 use std::os::unix::fs::FileTypeExt;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
-#[cfg(not(windows))]
-use std::path::Path;
 use std::process::Command;
 use std::str::FromStr;
 #[cfg(unix)]
@@ -15766,7 +15764,7 @@ fn dangling_relative_output_symlink() -> Result<()> {
 
     assert_eq!(context.read("out/generated.txt"), "example==1.0.0\n");
     assert_eq!(context.read("generated.txt"), "# cwd sentinel\n");
-    assert_eq!(output.path().read_link()?, Path::new("generated.txt"));
+    assert_link_target(output, "generated.txt");
     Ok(())
 }
 
@@ -15815,8 +15813,8 @@ fn cyclic_output_symlink() -> Result<()> {
     ");
 
     assert_eq!(context.read("next.txt"), "# cwd sentinel\n");
-    assert_eq!(output.path().read_link()?, Path::new("next.txt"));
-    assert_eq!(next.path().read_link()?, Path::new("result.txt"));
+    assert_link_target(output, "next.txt");
+    assert_link_target(next, "result.txt");
     Ok(())
 }
 
