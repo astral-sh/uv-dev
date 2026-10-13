@@ -39,7 +39,7 @@ pub enum Error {
     #[error(transparent)]
     ChecksumAuthority(#[from] uv_checksum_authority::Error),
     #[error("Checksum authority does not support a local archive supplied by a remote index: {0}")]
-    ChecksumAuthorityLocalArchive(DisplaySafeUrl),
+    ChecksumAuthorityLocalArchive(SafeUrl),
     #[error("Building source distributions is disabled")]
     NoBuild,
     #[error("Building source distributions for `{0}` is disabled")]

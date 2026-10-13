@@ -1,6 +1,6 @@
 [package]
 name = "uv-checksum-authority"
-version = "0.0.92"
+version = "0.0.93"
 description = "Experimental checksum authority protocol and client for uv"
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -27,3 +27,4 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 url = { workspace = true }
+uv-redacted = { workspace = true }

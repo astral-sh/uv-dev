@@ -180,7 +180,7 @@ pub struct GlobalArgs {
 
     /// Require remote package archives to match an experimental checksum authority.
     #[arg(global = true, long, env = EnvVars::UV_CHECKSUM_AUTHORITY, requires = "checksum_authority_key", hide = true)]
-    pub checksum_authority: Option<url::Url>,
+    pub checksum_authority: Option<SafeUrl>,
 
     /// The hexadecimal Ed25519 public key trusted for checksum authority records.
     #[arg(global = true, long, env = EnvVars::UV_CHECKSUM_AUTHORITY_KEY, requires = "checksum_authority", hide = true)]

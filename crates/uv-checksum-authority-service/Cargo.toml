@@ -1,6 +1,6 @@
 [package]
 name = "uv-checksum-authority-service"
-version = "0.0.92"
+version = "0.0.93"
 description = "Experimental signed checksum authority service for uv"
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -30,6 +30,7 @@ sha2 = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 url = { workspace = true }
+uv-redacted = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]

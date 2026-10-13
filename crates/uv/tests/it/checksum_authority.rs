@@ -13,12 +13,11 @@ use serde_json::json;
 use sha2::{Digest, Sha256, Sha512};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
-use url::Url;
 use walkdir::WalkDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use uv_cache::{Cache, CacheBucket, WheelCache};
+use uv_cache::{AUTHORITY_RECEIPT_SUFFIX, Cache, CacheBucket, WheelCache};
 use uv_checksum_authority::{ArtifactId, ChecksumRecord, Sha256Digest};
 use uv_checksum_authority_service::{AuthorityService, Catalog};
 use uv_distribution::HttpArchivePointer;
@@ -26,7 +25,7 @@ use uv_distribution_filename::WheelFilename;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::HashDigests;
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::write_tar_gz;
 use uv_test::packse::{generate_wheel, generate_wheel_with_files};
@@ -71,7 +70,7 @@ impl Drop for Authority {
 
 fn record(source: &str, filename: &str, bytes: &[u8]) -> Result<ChecksumRecord> {
     Ok(ChecksumRecord::new(
-        ArtifactId::new(&Url::parse(source)?, filename)?,
+        ArtifactId::new(&SafeUrl::parse(source)?, filename)?,
         Sha256Digest::from_bytes(Sha256::digest(bytes).into()),
         bytes.len() as u64,
     ))
@@ -751,9 +750,9 @@ async fn checksum_authority_remote_index_cannot_use_local_archive() -> Result<()
     let local = context.temp_dir.child(WHEEL);
     fs_err::write(&local, &bytes)?;
     let url =
-        Url::from_file_path(local.path()).map_err(|()| anyhow!("invalid local wheel path"))?;
+        SafeUrl::from_file_path(local.path()).map_err(|()| anyhow!("invalid local wheel path"))?;
     let body = json!({"name": "checksum-example", "files": [{
-        "filename": WHEEL, "url": url, "hashes": {}, "upload-time": "2024-01-01T00:00:00Z"
+        "filename": WHEEL, "url": url.as_str(), "hashes": {}, "upload-time": "2024-01-01T00:00:00Z"
     }]});
     Mock::given(method("GET"))
         .and(path("/simple/checksum-example/"))
@@ -892,7 +891,7 @@ async fn checksum_authority_repairs_legacy_wheel_cache() -> Result<()> {
     let filename = WheelFilename::from_str(WHEEL)?;
     let entry = cache.entry(
         CacheBucket::Wheels,
-        WheelCache::Url(&DisplaySafeUrl::parse(&url)?).wheel_dir("checksum-example"),
+        WheelCache::Url(&SafeUrl::parse(&url)?).wheel_dir("checksum-example"),
         format!("{}.http", filename.cache_key()),
     );
     let original = fs_err::read(entry.path())?;
@@ -1120,12 +1119,12 @@ async fn checksum_authority_reauthorizes_generated_source_metadata() -> Result<(
         import checksum_build
 
         def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
-            with Path({marker:?}).open('a') as file:
-                file.write('prepared\n')
-            Path('PKG-INFO').write_text({metadata:?})
+            with Path({marker:?}).open('ab') as file:
+                file.write(b'prepared\n')
+            Path('PKG-INFO').write_bytes({metadata:?}.encode())
             directory = Path(metadata_directory, 'checksum_example-1.0.0.dist-info')
             directory.mkdir()
-            (directory / 'METADATA').write_text({metadata:?})
+            (directory / 'METADATA').write_bytes({metadata:?}.encode())
             return directory.name
     ", marker = marker.path().to_string_lossy()};
     let mut bytes = Vec::new();
@@ -1214,6 +1213,158 @@ async fn checksum_authority_reauthorizes_generated_source_metadata() -> Result<(
       cause: Checksum authority has no trusted record for `checksum_build-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
     ");
     assert_eq!(context.read("preparations"), "prepared\n");
+    Ok(())
+}
+
+/// Frozen installs must not build wheels from metadata-backend outputs with revoked inputs.
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_reauthorizes_metadata_workspace_for_frozen_sync() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "checksum_example-1.0.0.tar.gz";
+    let marker = context.temp_dir.child("backend-calls");
+    let metadata = "Metadata-Version: 2.3\nName: checksum-example\nVersion: 1.0.0\n";
+    let modified_project =
+        "[build-system]\nrequires = []\nbuild-backend = 'backend'\nbackend-path = ['.']\n";
+    let backend = formatdoc! {r"
+        from pathlib import Path
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            import checksum_build
+            with Path({marker:?}).open('ab') as file:
+                file.write(b'metadata\n')
+            Path('generated.whl').write_bytes(bytes.fromhex({wheel:?}))
+            Path('pyproject.toml').write_bytes({modified_project:?}.encode())
+            directory = Path(metadata_directory, 'checksum_example-1.0.0.dist-info')
+            directory.mkdir()
+            (directory / 'METADATA').write_bytes({metadata:?}.encode())
+            return directory.name
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            if not Path('generated.whl').exists():
+                import checksum_build
+                Path('generated.whl').write_bytes(bytes.fromhex({wheel:?}))
+            with Path({marker:?}).open('ab') as file:
+                file.write(b'wheel\n')
+            Path('pyproject.toml').write_bytes({modified_project:?}.encode())
+            Path(wheel_directory, {WHEEL:?}).write_bytes(Path('generated.whl').read_bytes())
+            return {WHEEL:?}
+    ", marker = marker.path().to_string_lossy(), wheel = hex::encode(wheel()?)};
+    let mut bytes = Vec::new();
+    write_tar_gz(
+        &mut bytes,
+        &[
+            (
+                "checksum_example-1.0.0/pyproject.toml",
+                "[build-system]\nrequires = ['checksum-build==1.0.0']\nbuild-backend = 'backend'\nbackend-path = ['.']\n[project]\nname = 'checksum-example'\nversion = '1.0.0'\ndynamic = ['dependencies']\n",
+            ),
+            ("checksum_example-1.0.0/backend.py", &backend),
+        ],
+    )?;
+    let (build_filename, build_bytes) = generate_wheel(
+        &"checksum-build".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    index(&server, filename, &bytes, false).await;
+    index(&server, &build_filename, &build_bytes, false).await;
+    let index_url = format!("{}/simple", server.uri());
+    context.temp_dir.child("pyproject.toml").write_str(
+        formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["checksum-example"]
+
+        [[tool.uv.index]]
+        url = "{index_url}"
+        default = true
+    "#}
+        .as_str(),
+    )?;
+    let authority = Authority::start(vec![
+        record(&index_url, filename, &bytes)?,
+        record(&index_url, &build_filename, &build_bytes)?,
+    ])
+    .await?;
+    authority
+        .configure(context.lock().arg("--index-url").arg(&index_url))
+        .assert()
+        .success();
+    let lock = context.read("uv.lock");
+    assert_eq!(context.read("backend-calls"), "metadata\n");
+
+    let restricted = Authority::start(vec![record(&index_url, filename, &bytes)?]).await?;
+    assert_eq!(restricted.public_key, authority.public_key);
+    uv_snapshot!(context.filters(), restricted.configure(context.sync().arg("--frozen")), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `checksum-example==1.0.0`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: No solution found when resolving: `checksum-build==1.0.0`
+      cause: Failed to download `checksum-build==1.0.0`
+      cause: Checksum authority has no trusted record for `checksum_build-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
+
+    hint: `checksum-example` (v1.0.0) was included because `project` (v0.1.0) depends on `checksum-example`
+    ");
+    assert_eq!(context.read("backend-calls"), "metadata\n");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    authority
+        .configure(context.sync().arg("--frozen"))
+        .assert()
+        .success();
+    context.assert_command("import checksum_example").success();
+    assert_eq!(context.read("backend-calls"), "metadata\nwheel\n");
+    context
+        .pip_uninstall()
+        .arg("checksum-example")
+        .assert()
+        .success();
+
+    // A cached wheel still requires the build inputs recorded in its receipt.
+    uv_snapshot!(context.filters(), restricted.configure(context.sync().arg("--frozen")), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `checksum-example==1.0.0`
+      cause: Checksum authority has no trusted record for `checksum_build-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
+
+    hint: `checksum-example` (v1.0.0) was included because `project` (v0.1.0) depends on `checksum-example`
+    ");
+    assert_eq!(context.read("backend-calls"), "metadata\nwheel\n");
+
+    // Missing build receipts force restoration before rebuilding from the shared workspace.
+    let built_wheel = WalkDir::new(context.cache_dir.path())
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|entry| entry.file_name() == WHEEL)
+        .ok_or_else(|| anyhow!("expected an authority-built wheel"))?;
+    let receipt = built_wheel.path().with_file_name(format!(
+        "{}{}",
+        hex::encode(Sha256::digest(WHEEL.as_bytes())),
+        AUTHORITY_RECEIPT_SUFFIX,
+    ));
+    fs_err::remove_file(receipt)?;
+    uv_snapshot!(context.filters(), restricted.configure(context.sync().arg("--frozen")), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `checksum-example==1.0.0`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: No solution found when resolving: `checksum-build==1.0.0`
+      cause: Failed to download `checksum-build==1.0.0`
+      cause: Checksum authority has no trusted record for `checksum_build-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
+
+    hint: `checksum-example` (v1.0.0) was included because `project` (v0.1.0) depends on `checksum-example`
+    ");
+    assert_eq!(context.read("backend-calls"), "metadata\nwheel\n");
+    assert_eq!(context.read("uv.lock"), lock);
+    context.assert_command("import checksum_example").failure();
     Ok(())
 }
 
@@ -1702,7 +1853,7 @@ async fn checksum_authority_reuses_exempt_local_build_without_building() -> Resu
             Path(wheel_directory, {WHEEL:?}).write_bytes(bytes.fromhex({wheel:?}))
             return {WHEEL:?}
     "#, wheel = hex::encode(wheel()?)})?;
-    let url = Url::from_directory_path(project.path())
+    let url = SafeUrl::from_directory_path(project.path())
         .map_err(|()| anyhow!("invalid local source URL"))?;
     let (parent_name, parent_bytes) = generate_wheel(
         &"authority-parent".parse()?,

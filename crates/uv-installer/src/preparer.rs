@@ -127,7 +127,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                         debug!(
                             "Allowing build for first-party or editable source distribution: {dist}"
                         );
-                    } else if self.database.client().unmanaged.has_checksum_authority()
+                    } else if self.database.client().has_checksum_authority()
                         && matches!(dist, SourceDist::Registry(_) | SourceDist::DirectUrl(_))
                     {
                         // Reauthorize cached remote builds before the builder's no-build guard.

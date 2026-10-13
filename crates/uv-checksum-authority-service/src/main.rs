@@ -12,9 +12,9 @@ use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::Ed25519KeyPair;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
-use url::Url;
 use uv_checksum_authority::{ArtifactId, AuthorityPublicKey, ChecksumRecord, Sha256Digest};
 use uv_checksum_authority_service::{AuthorityService, Catalog};
+use uv_redacted::SafeUrl;
 use zeroize::Zeroizing;
 
 #[derive(Parser)]
@@ -36,7 +36,7 @@ enum Command {
         #[arg(long)]
         catalog: PathBuf,
         #[arg(long)]
-        source: Url,
+        source: SafeUrl,
         #[arg(long)]
         filename: Option<String>,
         artifact: PathBuf,

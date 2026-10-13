@@ -1806,6 +1806,11 @@ impl<'a> ManagedClient<'a> {
         self.unmanaged.connectivity().is_offline()
     }
 
+    /// Return whether the client is configured with a checksum authority.
+    pub fn has_checksum_authority(&self) -> bool {
+        self.unmanaged.has_checksum_authority()
+    }
+
     /// Perform a request using the client, respecting the concurrency limit.
     ///
     /// If the concurrency limit has been reached, this method will wait until a pending

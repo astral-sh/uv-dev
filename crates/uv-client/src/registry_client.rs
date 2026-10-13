@@ -292,7 +292,7 @@ impl RegistryClient {
     /// Retrieve the independently authenticated record for an archive, if configured.
     pub async fn checksum_authority_record(
         &self,
-        source: &DisplaySafeUrl,
+        source: &SafeUrl,
         archive: &(dyn RemoteSource + Sync),
     ) -> Result<Option<VerifiedRecord>, ChecksumAuthorityError> {
         let Some(authority) = &self.checksum_authority else {
@@ -1876,7 +1876,6 @@ mod tests {
 
     use insta::{assert_debug_snapshot, assert_snapshot};
     use tokio::sync::Semaphore;
-    use url::Url;
     use uv_normalize::PackageName;
     use uv_pypi_types::{HashDigest, HashDigests, PypiSimpleDetail};
     use uv_redacted::SafeUrl;
