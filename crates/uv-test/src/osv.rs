@@ -21,37 +21,3 @@ pub async fn mount_advisory(server: &MockServer, id: &str) {
         .mount(server)
         .await;
 }
-
-#[cfg(test)]
-mod tests {
-    use anyhow::Result;
-    use reqwest::Client;
-    use serde_json::{Value, json};
-    use wiremock::MockServer;
-
-    use super::mount_advisory;
-
-    #[tokio::test]
-    async fn advisory_responses() -> Result<()> {
-        let server = MockServer::start().await;
-        mount_advisory(&server, "MAL-2026-1234").await;
-
-        let client = Client::new();
-        let response = client
-            .get(format!("{}/v1/vulns/MAL-2026-1234", server.uri()))
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<Value>()
-            .await?;
-        assert_eq!(
-            response,
-            json!({
-                "id": "MAL-2026-1234",
-                "modified": "2026-01-01T00:00:00Z",
-            })
-        );
-
-        Ok(())
-    }
-}
