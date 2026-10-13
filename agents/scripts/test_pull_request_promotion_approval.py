@@ -321,10 +321,11 @@ class PromotionApprovalTests(unittest.TestCase):
             "action": "rebase",
         }
         self.candidate_record = copy.deepcopy(self.record) | {
+            "schema": 2,
             "candidate": {
                 "head_sha": "6" * 40,
                 **{key: self.plan[key] for key in APPROVAL.CANDIDATE_CONTEXT},
-            }
+            },
         }
         self.job.update(
             name=f"Promote {REPOSITORY}#101",
@@ -556,6 +557,34 @@ class PromotionApprovalTests(unittest.TestCase):
         self.add_candidate(extra_file=True)
         with self.assertRaisesRegex(APPROVAL.ApprovalError, "only candidate.json"):
             self.load_candidate()
+
+    def test_candidate_rejects_proof_that_permitted_generated_edits(self):
+        self.candidate_setup()
+        self.candidate_record["schema"] = 1
+        self.add_candidate()
+        with self.assertRaisesRegex(
+            APPROVAL.ApprovalError, "Unsupported approval record"
+        ):
+            self.load_candidate()
+
+    def test_clean_candidate_namespace_does_not_load_legacy_proof(self):
+        self.candidate_setup()
+        self.candidate_record["schema"] = 1
+        artifact = self.add_candidate()
+        current_name = artifact["name"]
+        legacy_name = current_name.replace(
+            "promotion-clean-candidate-", "promotion-candidate-"
+        )
+        artifact["name"] = legacy_name
+        self.api_values[
+            f"repos/{REPOSITORY}/actions/artifacts?name={legacy_name}&per_page=100"
+        ] = [{"artifacts": [artifact]}]
+        self.api_values[
+            f"repos/{REPOSITORY}/actions/artifacts?name={current_name}&per_page=100"
+        ] = [{"artifacts": []}]
+        with self.assertRaisesRegex(APPROVAL.ApprovalError, "No trusted candidate"):
+            self.load_candidate()
+        self.assertFalse(any(legacy_name in endpoint for endpoint, _ in self.requests))
 
     def test_candidate_rejects_invalid_historical_approval_actor(self):
         self.candidate_setup()
