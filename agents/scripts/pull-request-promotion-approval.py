@@ -200,7 +200,7 @@ def validate_record(
         "Approval record schema is invalid.",
     )
     require(
-        type(record["schema"]) is int and record["schema"] == 1,
+        type(record["schema"]) is int and record["schema"] == (2 if candidate else 1),
         "Unsupported approval record version.",
     )
     require(
@@ -486,7 +486,10 @@ CANDIDATE_CONTEXT = (
 
 
 def candidate_artifact_name(repository_id, number, head_sha, candidate_sha):
-    return f"promotion-candidate-{repository_id}-{number}-{head_sha}-{candidate_sha}"
+    # Only clean Git parent updates can supply this proof, including when a branch already exists.
+    return (
+        f"promotion-clean-candidate-{repository_id}-{number}-{head_sha}-{candidate_sha}"
+    )
 
 
 def validate_candidate(record, repository, repository_id, number):
@@ -673,7 +676,7 @@ def capture_candidate(
         "The current workflow attempt changed.",
     )
     record = {
-        "schema": 1,
+        "schema": 2,
         "repository": {"id": repository_id, "full_name": repository},
         "number": number,
         "head_ref": plan["head_ref"],

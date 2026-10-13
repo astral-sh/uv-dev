@@ -178,7 +178,9 @@ jobs:
               fi
               base_ref=$(jq --raw-output '.base.ref' <<< "$existing")
               existing_head_sha=$(jq --raw-output '.head.sha' <<< "$existing")
-            elif [ "$source_base" != main ]; then
+            fi
+            # A changed upstream head needs the same clean-rebase proof as a pending branch.
+            if [ "$source_base" != main ] && { [ "$existing" = null ] || [ "$existing_head_sha" != "$head_sha" ]; }; then
               parents=$(gh pr list --repo "$GITHUB_REPOSITORY" --state all --head "$source_base" --limit 1000 \
                 --json number,headRefName,headRefOid,headRepository |
                 jq --compact-output --arg source_base "$source_base" --arg source_repository "$GITHUB_REPOSITORY" \
@@ -264,6 +266,12 @@ jobs:
               fi
             fi
             git check-ref-format "refs/heads/$base_ref" || return 1
+            if [ "$existing" != null ] && [ "$existing_head_sha" != "$head_sha" ]; then
+              if [ -z "$previous_sha" ] || [ "$base_ref" != "$(jq --raw-output '.base.ref' <<< "$existing")" ]; then
+                echo "The existing promotion has no verified clean parent update." >&2
+                return 1
+              fi
+            fi
             if [ "$existing" = null ]; then
               gh api "repos/astral-sh/uv/git/ref/heads/$base_ref" --silent || return 1
             fi
@@ -302,6 +310,10 @@ jobs:
               refs=$(gh api "repos/$promotion_repository/git/matching-refs/heads/$promotion_ref") || return 1
               candidate_head_sha=$(jq --raw-output --arg ref "refs/heads/$promotion_ref" \
                 '.[] | select(.ref == $ref) | .object.sha' <<< "$refs")
+              if [ "$existing" != null ] && [ "$candidate_head_sha" != "$existing_head_sha" ]; then
+                echo "The existing promotion branch changed or disappeared." >&2
+                return 1
+              fi
               if [ -n "$candidate_head_sha" ]; then
                 python3 agents/scripts/pull-request-promotion-approval.py load-candidate "$GITHUB_REPOSITORY" "$number" \
                   --repository-id "$GITHUB_REPOSITORY_ID" --plan "$plan" \
@@ -367,24 +379,19 @@ jobs:
     if: always() && needs.identify.result == 'success' && needs.identify.outputs.rebase-count != '0'
     permissions:
       contents: read
-      id-token: write
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix: ${{ fromJSON(needs.identify.outputs.rebases) }}
-    uses: $/.github/workflows/rebase-conflicted-pull-request.yml
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    uses: $/.github/workflows/update-pull-request-parent.yml
     with:
-      number: ${{ matrix.number }}
+      number: ${{ format('{0}', matrix.number) }}
       base-ref: ${{ matrix.base_ref }}
       base-sha: ${{ matrix.base_sha }}
       base-previous-sha: ${{ matrix.previous_sha }}
       parent-merge-sha: ${{ matrix.merge_sha }}
       head-ref: ${{ matrix.head_ref }}
       head-sha: ${{ matrix.head_sha }}
-      head-repository: ${{ github.repository }}
-      publish: false
 
   promote:
     name: "Promote ${{ github.repository }}#${{ matrix.number }}"
@@ -417,8 +424,8 @@ jobs:
         if: matrix.action == 'rebase'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rebased-pull-request-${{ matrix.number }}-${{ matrix.head_sha }}
-          path: ${{ runner.temp }}/rebased-pull-request
+          name: updated-pull-request-parent-${{ matrix.number }}-${{ matrix.head_sha }}
+          path: ${{ runner.temp }}/updated-pull-request-parent
 
       - name: Verify promotion revision
         id: verify
@@ -446,7 +453,7 @@ jobs:
               exit 1
             fi
             git merge-base --is-ancestor "$PARENT_MERGE_SHA" "$BASE_SHA"
-            bundle="$RUNNER_TEMP/rebased-pull-request/rebased.bundle"
+            bundle="$RUNNER_TEMP/updated-pull-request-parent/updated-parent.bundle"
             git bundle verify "$bundle"
             git -c core.hooksPath=/dev/null fetch --no-tags "$bundle" HEAD
             promoted_head=$(git rev-parse 'FETCH_HEAD^{commit}')
