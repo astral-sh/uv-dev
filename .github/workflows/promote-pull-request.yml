@@ -859,6 +859,21 @@ jobs:
             echo "The source base changed before it could be closed." >&2
             exit 1
           fi
+          current_upstream=$(gh api "repos/astral-sh/uv/pulls/$upstream_number")
+          expected_upstream=$(jq '{
+            head_repository_id: .head.repo.id, head_ref: .head.ref,
+            base_repository_id: .base.repo.id, base_ref: .base.ref
+          }' <<< "$upstream_pull_request")
+          if ! jq --exit-status --argjson expected "$expected_upstream" \
+            --arg promoted_head "$PROMOTED_HEAD" '
+              (.state == "open" or .merged_at != null)
+              and .head.sha == $promoted_head
+              and .head.repo.id == $expected.head_repository_id and .head.ref == $expected.head_ref
+              and .base.repo.id == $expected.base_repository_id and .base.ref == $expected.base_ref
+            ' <<< "$current_upstream" > /dev/null; then
+            echo "The upstream promotion changed before the source could be closed." >&2
+            exit 1
+          fi
           if [ "$PROMOTION_LABEL" = bot:automerge ]; then
             check_automerge_permission
             gh pr merge "$upstream_number" --repo astral-sh/uv --auto --squash \
