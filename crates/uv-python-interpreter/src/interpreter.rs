@@ -1168,7 +1168,44 @@ pub(crate) struct InterpreterInfo {
 
 impl InterpreterInfo {
     /// Build metadata for virtual environment discovery without querying Python or using the cache.
-    pub(crate) fn from_virtualenv(interpreter: &Interpreter) -> Result<Self, Error> {
+    /// Return `None` when Python must be queried to determine fallback metadata.
+    pub(crate) fn from_virtualenv(interpreter: &Interpreter) -> Result<Option<Self>, Error> {
+        // On Unix, CPython 3.11+ resolves the venv executable's symlinks when setting
+        // `sys._base_executable`, but leaves symlinks in parent directories intact (including
+        // managed minor-version directories). Match its readlink loop rather than canonicalizing.
+        let sys_base_executable = if cfg!(unix)
+            && interpreter.implementation_name() == "cpython"
+            && interpreter.python_tuple() >= (3, 11)
+        {
+            let mut executable = interpreter.sys_executable().to_path_buf();
+            let mut links = 0;
+            while let Ok(target) = fs::read_link(&executable) {
+                links += 1;
+                if links >= 40 {
+                    // CPython may fall back to the configured home at its readlink limit.
+                    // Query the working venv instead of inferring this metadata.
+                    return Ok(None);
+                }
+                executable = if target.is_absolute() {
+                    // CPython retains absolute targets, including parent components that can
+                    // traverse a directory symlink differently after lexical normalization.
+                    target
+                } else {
+                    executable.pop();
+                    let Ok(target) = uv_fs::normalize_absolute_path(&executable.join(target))
+                    else {
+                        // CPython clamps parent components at the root. Query Python when our
+                        // normalizer cannot represent that path.
+                        return Ok(None);
+                    };
+                    target
+                };
+            }
+            Some(executable)
+        } else {
+            interpreter.sys_base_executable.clone()
+        };
+
         // Python reports ordinary Windows paths even when the venv was created with a verbatim path.
         let scheme = Scheme {
             purelib: interpreter.scheme.purelib.simplified().to_path_buf(),
@@ -1178,7 +1215,7 @@ impl InterpreterInfo {
             data: interpreter.scheme.data.simplified().components().collect(),
             include: interpreter.scheme.include.simplified().to_path_buf(),
         };
-        Ok(Self {
+        Ok(Some(Self {
             platform: interpreter.platform.clone(),
             markers: (*interpreter.markers).clone(),
             scheme,
@@ -1189,7 +1226,7 @@ impl InterpreterInfo {
             sys_base_exec_prefix: PathBuf::new(),
             sys_path: Vec::new(),
             sys_base_prefix: interpreter.sys_base_prefix.clone(),
-            sys_base_executable: interpreter.sys_base_executable.clone(),
+            sys_base_executable,
             sys_executable: std::path::absolute(interpreter.sys_executable())?
                 .simplified()
                 .to_path_buf(),
@@ -1204,7 +1241,7 @@ impl InterpreterInfo {
             pointer_size: interpreter.pointer_size,
             gil_disabled: interpreter.gil_disabled,
             debug_enabled: interpreter.debug_enabled,
-        })
+        }))
     }
 
     /// Cache already prepared metadata for this executable.
