@@ -1186,8 +1186,14 @@ impl InterpreterInfo {
                     // Query the working venv instead of inferring this metadata.
                     return Ok(None);
                 }
-                executable.pop();
-                executable = uv_fs::normalize_absolute_path(&executable.join(target))?;
+                executable = if target.is_absolute() {
+                    // CPython retains absolute targets, including parent components that can
+                    // traverse a directory symlink differently after lexical normalization.
+                    target
+                } else {
+                    executable.pop();
+                    uv_fs::normalize_absolute_path(&executable.join(target))?
+                };
             }
             Some(executable)
         } else {

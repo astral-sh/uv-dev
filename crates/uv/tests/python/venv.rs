@@ -121,7 +121,7 @@ fn create_venv_caches_interpreter() -> Result<()> {
     Ok(())
 }
 
-/// A symlink inside a Python installation resolves identically in cached and queried venv metadata.
+/// A relative executable symlink normalizes parent components in cached and queried venv metadata.
 #[test]
 #[cfg(all(target_os = "linux", feature = "test-python-managed"))]
 fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
@@ -140,6 +140,8 @@ fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
     let python_directory = relocated.child("bin");
     let symlinked_python = python_directory.child("python3");
     assert!(symlinked_python.is_symlink());
+    fs_err::remove_file(symlinked_python.path())?;
+    symlink("../bin/./python3.12", symlinked_python.path())?;
     let context = context.with_filtered_path(python_directory.path(), "PYTHON_BIN");
 
     uv_snapshot!(context.filters(), context.venv().arg("--python").arg(symlinked_python.path()), @"
@@ -197,6 +199,70 @@ fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
         insta::assert_snapshot!(cached_target.display(), @"[PYTHON_BIN]/python3.12");
         insta::assert_snapshot!(queried_target.display(), @"[PYTHON_BIN]/python3.12");
     });
+
+    Ok(())
+}
+
+/// An absolute executable symlink can contain a directory symlink followed by `..`.
+/// Normalizing that target lexically can turn a working Python path into a missing file.
+#[test]
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+fn create_venv_caches_absolute_symlink_target() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.12.9").assert().success();
+    let output = context.python_find().arg("3.12.9").assert().success();
+    let python = Path::new(std::str::from_utf8(&output.get_output().stdout)?.trim());
+
+    // Move the installation out of the managed directory to avoid transparent patch upgrades.
+    let installation = python
+        .parent()
+        .and_then(Path::parent)
+        .context("Python executable has no installation directory")?;
+    let relocated = context.temp_dir.child("python");
+    fs_err::rename(installation, relocated.path())?;
+    let python_directory = relocated.child("bin");
+    let context = context.with_filtered_path(python_directory.path(), "PYTHON_BIN");
+
+    let directory_link = python_directory.child("alias");
+    symlink(python_directory.path(), directory_link.path())?;
+    let executable_target = directory_link.join("../bin/python3.12");
+    let symlinked_python = python_directory.child("python-link");
+    symlink(&executable_target, symlinked_python.path())?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg(symlinked_python.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: python/bin/python-link
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("child")
+        .arg("--python")
+        .arg(context.venv.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: .venv/bin/python
+    Creating virtual environment at: child
+    Activate with: source child/[BIN]/activate
+    ");
+
+    uv_snapshot!(context.filters(), context.external_command(context.temp_dir.child("child/bin/python").path())
+        .arg("-I")
+        .arg("-c")
+        .arg("print('ok')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+    ");
+
+    assert_link_target(
+        context.temp_dir.child("child/bin/python"),
+        &executable_target,
+    );
 
     Ok(())
 }
