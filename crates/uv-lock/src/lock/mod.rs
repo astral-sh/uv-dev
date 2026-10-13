@@ -4571,10 +4571,10 @@ impl Lock {
             if groups.includes != self.manifest.dependency_group_includes {
                 return Ok(SatisfiesResult::MismatchedWorkspaceGroupIncludes);
             }
+            // Empty groups still name valid selections even when they have no requirements.
             let expected = groups
                 .requirements
                 .iter()
-                .filter(|(_, requirements)| !requirements.is_empty())
                 .map(|(group, requirements)| {
                     Ok((
                         group.clone(),
@@ -4586,7 +4586,6 @@ impl Lock {
                 .manifest
                 .dependency_groups
                 .iter()
-                .filter(|(_, requirements)| !requirements.is_empty())
                 .map(|(group, requirements)| {
                     Ok((
                         group.clone(),
