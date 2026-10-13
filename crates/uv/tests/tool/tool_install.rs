@@ -24,6 +24,7 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use uv_test::package_server::PackageServer;
 use uv_test::packse::{
     PackseServer, generate_wheel, generate_wheel_with_files, scenario::Scenario,
 };
@@ -7348,5 +7349,134 @@ fn tool_install_pep723_receipt_accepts_consistent_promoted_aliases() -> Result<(
         context.read("tools/simple-launcher/uv-receipt.toml"),
         receipt
     );
+    Ok(())
+}
+
+/// Requirement sources protect metadata requests for an unnamed primary tool archive.
+#[tokio::test]
+async fn tool_install_pep723_authenticates_unnamed_target() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .env_remove(EnvVars::index_username("PRIVATE"))
+        .env_remove(EnvVars::index_password("PRIVATE"))
+        .args(["--with-requirements", "deps.py"])
+        .arg(format!("{}/private/archive.tar.gz", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/private/archive.tar.gz
+      cause: Missing credentials for: http://[LOCALHOST]/private/archive.tar.gz
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Tool installation selects its latest version from the same indexes as final resolution.
+#[tokio::test]
+async fn tool_install_latest_with_pep723_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let selected = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    selected.serve(&filename, &wheel, None).await;
+    let configured = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    configured.serve(&filename, &wheel, None).await;
+    let input = context.temp_dir.child("deps.py");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = selected.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["--with-requirements", "deps.py", "--default-index"])
+        .arg(configured.index_url())
+        .arg("a@latest")
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
+    Installed 1 executable: a
+    ");
+    assert!(
+        configured
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    let executable = bin.child(format!("a{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    ");
     Ok(())
 }

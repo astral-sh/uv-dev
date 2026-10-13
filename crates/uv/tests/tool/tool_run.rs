@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -8,7 +9,11 @@ use assert_fs::prelude::*;
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
 use uv_static::EnvVars;
+use uv_test::package_server::PackageServer;
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::{copy_dir_ignore, uv_snapshot, venv_bin_path};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn tool_run_args() {
@@ -3638,4 +3643,347 @@ async fn tool_run_latest_keyring_auth() {
      + executable-application==0.3.0
     Installed 1 executable: app
     ");
+}
+
+/// Source policies apply before discovering names for additional archives.
+#[tokio::test]
+async fn tool_run_pep723_authenticates_unnamed_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .env_remove(EnvVars::index_username("PRIVATE"))
+        .env_remove(EnvVars::index_password("PRIVATE"))
+        .args(["--with-requirements", "deps.py", "--with"])
+        .arg(format!("{}/private/archive.tar.gz", server.uri()))
+        .args(["python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to resolve `--with` requirement
+      cause: Failed to fetch: http://[LOCALHOST]/private/archive.tar.gz
+      cause: Missing credentials for: http://[LOCALHOST]/private/archive.tar.gz
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Source policies apply before discovering the primary tool package name.
+#[tokio::test]
+async fn tool_run_pep723_authenticates_unnamed_target() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .env_remove(EnvVars::index_username("PRIVATE"))
+        .env_remove(EnvVars::index_password("PRIVATE"))
+        .args(["--with-requirements", "deps.py", "--from"])
+        .arg(format!("{}/private/archive.tar.gz", server.uri()))
+        .arg("a"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to resolve `--with` requirement
+      cause: Failed to fetch: http://[LOCALHOST]/private/archive.tar.gz
+      cause: Missing credentials for: http://[LOCALHOST]/private/archive.tar.gz
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Source policies apply when an override archive needs package metadata.
+#[tokio::test]
+async fn tool_run_pep723_authenticates_unnamed_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str(&format!("{}/private/archive.tar.gz\n", server.uri()))?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .env_remove(EnvVars::index_username("PRIVATE"))
+        .env_remove(EnvVars::index_password("PRIVATE"))
+        .args(["--with-requirements", "deps.py", "--override", "overrides.txt"])
+        .args(["python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to resolve `--with` requirement
+      cause: Failed to fetch: http://[LOCALHOST]/private/archive.tar.gz
+      cause: Missing credentials for: http://[LOCALHOST]/private/archive.tar.gz
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Available source credentials are sent on the first archive request.
+#[tokio::test]
+async fn tool_run_pep723_unnamed_requirement_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/private/archive.tar.gz"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--with"])
+        .arg(format!("{}/private/archive.tar.gz", server.uri()))
+        .args(["python", "-c", "pass"])
+        .env(EnvVars::index_username("PRIVATE"), "username")
+        .env(EnvVars::index_password("PRIVATE"), "password"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to resolve `--with` requirement
+      cause: Failed to fetch: http://[LOCALHOST]/private/archive.tar.gz
+      cause: HTTP status client error (404 Not Found) for url (http://[LOCALHOST]/private/archive.tar.gz)
+    ");
+    let requests = server.received_requests().await.expect("request recording");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("authorization")
+            .expect("authorization header")
+            .to_str()?,
+        "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
+    );
+    Ok(())
+}
+
+/// Latest-version discovery uses selected stdin indexes before pinning the tool version.
+#[tokio::test]
+async fn tool_run_latest_with_pep723_stdin_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let name = "a".parse()?;
+    let selected = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    selected.serve(&filename, &wheel, None).await;
+    let configured = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    configured.serve(&filename, &wheel, None).await;
+    let input = context.temp_dir.child("deps.py");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = selected.index_url()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "-", "--default-index"])
+        .arg(configured.index_url())
+        .arg("a@latest")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
+    ");
+    assert!(
+        configured
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Explicit command-line names override selected indexes for both latest lookup and resolution.
+#[tokio::test]
+async fn tool_run_latest_pep723_index_command_line_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let name = "a".parse()?;
+    let selected = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    selected.serve(&filename, &wheel, None).await;
+    let configured = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    configured.serve(&filename, &wheel, None).await;
+    let input = context.temp_dir.child("deps.py");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = selected.index_url()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--index"])
+        .arg(format!("private={}", configured.index_url()))
+        .arg("a@latest"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    ");
+    assert!(
+        selected
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
 }

@@ -197,6 +197,30 @@ pub async fn install(
     };
     let cache = cache.with_refresh(refresh.clone());
 
+    // Load source index policies before preliminary name and latest-version lookups.
+    let mut spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        excludes,
+        None,
+        &client_builder,
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
+    )
+    .await?;
+
+    spec.extend_indexes(build_indexes)?;
+    settings.resolver.index_locations = settings
+        .resolver
+        .index_locations
+        .with_source_indexes(spec.indexes.clone())?;
+
     // Resolve the `--from` requirement.
     let requirement = match &request {
         // Ex) `ruff`
@@ -398,31 +422,6 @@ pub async fn install(
     } else {
         settings
     };
-
-    // Read the `--with` requirements.
-    let mut spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        excludes,
-        None,
-        &client_builder,
-        LoweringContext::new(
-            &settings.resolver.sources,
-            &settings.resolver.index_locations,
-            &cache,
-            workspace_cache,
-            client_builder.credentials_cache(),
-        ),
-    )
-    .await?;
-
-    spec.extend_indexes(build_indexes)?;
-    let mut settings = settings;
-    settings.resolver.index_locations = settings
-        .resolver
-        .index_locations
-        .with_source_indexes(spec.indexes.clone())?;
 
     // Resolve the `--from` and `--with` requirements.
     let requirements = {

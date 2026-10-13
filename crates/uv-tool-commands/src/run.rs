@@ -850,13 +850,39 @@ async fn get_or_create_environment(
     .await?;
     let build_indexes = build_spec.indexes;
     let build_constraints = Constraints::from_specifications(build_spec.constraints);
-    let mut settings_with_build_indexes = settings.clone();
-    settings_with_build_indexes.resolver.index_locations = settings_with_build_indexes
+    let mut source_settings = settings.clone();
+    source_settings.resolver.index_locations = source_settings
         .resolver
         .index_locations
         .with_source_indexes(build_indexes.clone())
         .map_err(anyhow::Error::from)?;
-    let settings = &settings_with_build_indexes;
+
+    // Load source index policies before preliminary name and latest-version lookups.
+    let mut spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        &[],
+        None,
+        client_builder,
+        LoweringContext::new(
+            &source_settings.resolver.sources,
+            &source_settings.resolver.index_locations,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
+    )
+    .await?;
+    let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
+
+    spec.extend_indexes(build_indexes)?;
+    source_settings.resolver.index_locations = source_settings
+        .resolver
+        .index_locations
+        .with_source_indexes(spec.indexes.clone())
+        .map_err(anyhow::Error::from)?;
+    let settings = &source_settings;
 
     let from = match request {
         ToolRequest::Python {
@@ -1038,26 +1064,6 @@ async fn get_or_create_environment(
         None
     };
 
-    // Read the `--with` requirements.
-    let mut spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        &[],
-        None,
-        client_builder,
-        LoweringContext::new(
-            &settings.resolver.sources,
-            &settings.resolver.index_locations,
-            cache,
-            workspace_cache,
-            client_builder.credentials_cache(),
-        ),
-    )
-    .await?;
-    let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
-
-    spec.extend_indexes(build_indexes)?;
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
         let mut requirements = Vec::with_capacity(1 + with.len());
