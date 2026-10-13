@@ -1034,6 +1034,178 @@ fn install_distinct_windows_dotted_i_wheel_entrypoints() -> Result<()> {
     Ok(())
 }
 
+/// Canonical filename variants on the macOS test filesystem identify the same launcher.
+#[cfg(target_os = "macos")]
+#[test]
+fn reject_canonically_equivalent_macos_wheel_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"canonical".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "canonical-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    café = canonical.cli:main
+                    [gui_scripts]
+                    cafe\u{301} = canonical.cli:main
+                "},
+            ),
+            (
+                "canonical/cli.py",
+                indoc! {"
+                    def main():
+                        print('canonical')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: canonical-1.0.0-py3-none-any.whl (canonical==1.0.0 (from file://[TEMP_DIR]/canonical-1.0.0-py3-none-any.whl))
+      cause: The wheel is invalid: Wheel entry points `cafe\u{301}` and `café` install to the same destination
+    ");
+    ChildPath::new(context.site_packages().join("canonical")).assert(predicate::path::missing());
+    ChildPath::new(context.site_packages().join("canonical-1.0.0.dist-info"))
+        .assert(predicate::path::missing());
+    ChildPath::new(venv_bin_path(&context.venv).join("café")).assert(predicate::path::missing());
+    for entry in fs::read_dir(venv_bin_path(&context.venv))? {
+        assert!(
+            !entry?
+                .file_name()
+                .as_encoded_bytes()
+                .starts_with(b".uv-entrypoints-")
+        );
+    }
+
+    Ok(())
+}
+
+/// A decomposed data-script filename must not replace a composed entry-point launcher.
+#[cfg(target_os = "macos")]
+#[test]
+fn install_macos_canonical_entrypoint_over_data_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"canonical-script".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "canonical_script-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    café = canonical_script.cli:main
+                "},
+            ),
+            (
+                "canonical_script/cli.py",
+                indoc! {"
+                    def main():
+                        print('canonical_script')
+                "},
+            ),
+            (
+                "canonical_script-1.0.0.data/scripts/cafe\u{301}",
+                indoc! {"
+                    #!python
+                    print('DATA_SCRIPT')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + canonical-script==1.0.0 (from file://[TEMP_DIR]/canonical_script-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("café{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    canonical_script
+    ");
+    for entry in fs::read_dir(venv_bin_path(&context.venv))? {
+        assert!(
+            !entry?
+                .file_name()
+                .as_encoded_bytes()
+                .starts_with(b".uv-entrypoints-")
+        );
+    }
+
+    Ok(())
+}
+
+/// Compatibility normalization would incorrectly merge the circled digit with its plain form.
+#[cfg(target_os = "macos")]
+#[test]
+fn install_distinct_macos_compatibility_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"compatibility".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "compatibility-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    ① = compatibility.cli:circled
+                    1 = compatibility.cli:plain
+                "},
+            ),
+            (
+                "compatibility/cli.py",
+                indoc! {"
+                    def circled():
+                        print('circled')
+                    def plain():
+                        print('plain')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + compatibility==1.0.0 (from file://[TEMP_DIR]/compatibility-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("①{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    circled
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("1{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    plain
+    ");
+    Ok(())
+}
+
 #[test]
 fn whitespace_only_requirement() {
     let context = uv_test::test_context_with_versions!(&[])

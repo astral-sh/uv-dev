@@ -85,7 +85,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
 
     let (console_scripts, gui_scripts) =
         parse_scripts(wheel, &dist_info_prefix, layout.python_version.1)?;
-    let entrypoints = PreparedEntryPoints::new(layout, &console_scripts, &gui_scripts)?;
+    let mut entrypoints = PreparedEntryPoints::new(layout, &console_scripts, &gui_scripts)?;
 
     // We're going step by step though
     // https://packaging.python.org/en/latest/specifications/binary-distribution-format/#installing-a-wheel-distribution-1-0-py32-none-any-whl
@@ -127,7 +127,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
             site_packages,
             &data_dir,
             &name,
-            &entrypoints,
+            &mut entrypoints,
             &mut record,
         )?;
         // 2.c If applicable, update scripts starting with #!python to point to the correct interpreter.
