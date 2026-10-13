@@ -199,6 +199,7 @@ impl CandidateSelector {
             index.is_none_or(|index| entry.index().matches(index))
                 && (!entry.source().is_inherited()
                     || (range.contains(entry.pin().version())
+                        && Self::allows_preference(entry, prerelease_selection)
                         && env.included_by_marker(entry.marker().pep508())
                         && version_maps.iter().any(|version_map| {
                             version_map
@@ -261,6 +262,26 @@ impl CandidateSelector {
             prerelease_selection,
             tags,
         )
+    }
+
+    /// Return whether a preference is permitted by the pre-release policy for this fork.
+    fn allows_preference(preference: &Entry, prerelease_selection: PrereleaseSelection) -> bool {
+        if !preference.pin().version().any_prerelease() {
+            return true;
+        }
+
+        match prerelease_selection {
+            PrereleaseSelection::Allow => true,
+            PrereleaseSelection::Disallow => false,
+            // A pre-release from an existing file is accepted unless pre-releases are banned.
+            PrereleaseSelection::PreferStable => match preference.source() {
+                PreferenceSource::Resolver => false,
+                PreferenceSource::Lock
+                | PreferenceSource::InheritedLock
+                | PreferenceSource::Environment
+                | PreferenceSource::RequirementsTxt => true,
+            },
+        }
     }
 
     /// Return the first preference that satisfies the current range and is allowed.
@@ -329,23 +350,8 @@ impl CandidateSelector {
             }
 
             // Respect the pre-release strategy for this fork.
-            if version.any_prerelease() {
-                let allow = match prerelease_selection {
-                    PrereleaseSelection::Allow => true,
-                    PrereleaseSelection::Disallow => false,
-                    // If the pre-release was provided via an existing file, rather than from the
-                    // current solve, accept it unless pre-releases are completely banned.
-                    PrereleaseSelection::PreferStable => match source {
-                        PreferenceSource::Resolver => false,
-                        PreferenceSource::Lock
-                        | PreferenceSource::InheritedLock
-                        | PreferenceSource::Environment
-                        | PreferenceSource::RequirementsTxt => true,
-                    },
-                };
-                if !allow {
-                    continue;
-                }
+            if !Self::allows_preference(preference, prerelease_selection) {
+                continue;
             }
 
             // Check for a remote distribution that matches the preferred version
@@ -1064,6 +1070,66 @@ mod tests {
                 PrereleaseMode::IfNecessary,
             ),
             version("2")
+        );
+    }
+
+    #[test]
+    fn disallowed_inherited_prerelease_does_not_change_version_order() {
+        let index = index("https://pypi.org/simple");
+        let env = ResolverEnvironment::universal(Vec::new());
+        let mut preferences = Preferences::from_iter(
+            [
+                inherited(&index, "3rc1"),
+                Preference::from_locked(
+                    package_name(),
+                    version("1"),
+                    Some(index.clone()),
+                    Vec::new(),
+                ),
+            ],
+            &env,
+        );
+        preferences.insert(
+            package_name(),
+            Some(index.clone()),
+            UniversalMarker::TRUE,
+            version("2"),
+            PreferenceSource::Resolver,
+        );
+        let version_maps = [version_map(&index, &["1", "2", "3rc1"])];
+
+        assert_eq!(
+            selected_version(
+                &preferences,
+                &version_maps,
+                &Range::full(),
+                None,
+                &env,
+                PrereleaseMode::Disallow,
+            ),
+            version("2")
+        );
+        assert_eq!(
+            selected_version(
+                &preferences,
+                &version_maps,
+                &Range::full(),
+                None,
+                &env,
+                PrereleaseMode::IfNecessary,
+            ),
+            version("1")
+        );
+        assert_eq!(
+            selected_version(
+                &preferences,
+                &version_maps,
+                &Range::full(),
+                None,
+                &env,
+                PrereleaseMode::Allow,
+            ),
+            version("1")
         );
     }
 
