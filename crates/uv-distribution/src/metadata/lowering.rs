@@ -198,6 +198,7 @@ impl LoweredRequirement {
             join_all(sources.into_iter().map(|source| {
                 let requirement = &requirement;
                 async move {
+                    let mut selected_index = None;
                     let (source, mut marker) = match source {
                         Source::Git {
                             git,
@@ -277,6 +278,7 @@ impl LoweredRequirement {
                             if let Some(credentials) = index.credentials()? {
                                 credentials_cache.store_credentials(index.raw_url(), credentials);
                             }
+                            selected_index = Some(index.clone());
                             let index = IndexMetadata {
                                 url: index.url.clone(),
                                 format: index.format,
@@ -319,15 +321,18 @@ impl LoweredRequirement {
 
                     marker = marker.and(requirement.marker);
 
-                    Ok(Self::new(Requirement {
-                        name: requirement.name.clone(),
-                        extras: requirement.extras.clone(),
-                        groups: Box::new([]),
-                        marker,
-                        source,
-                        scope: RequirementScope::Global,
-                        origin: requirement.origin.clone(),
-                    }))
+                    Ok(Self {
+                        requirement: Requirement {
+                            name: requirement.name.clone(),
+                            extras: requirement.extras.clone(),
+                            groups: Box::new([]),
+                            marker,
+                            source,
+                            scope: RequirementScope::Global,
+                            origin: requirement.origin.clone(),
+                        },
+                        selected_index,
+                    })
                 }
             }))
             .await

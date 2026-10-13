@@ -7186,7 +7186,7 @@ async fn tool_install_pep723_receipt_rejects_promoted_alias_conflict() -> Result
         .env(EnvVars::PATH, bin.path()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Conflicting authentication policies for indexes `mirror` (`http://[LOCALHOST]/simple`) (auto) and `private` (`http://[LOCALHOST]/simple`) (always): authentication scopes overlap
+    error: Conflicting authentication policies for indexes `private` (`http://[LOCALHOST]/simple`) (always) and `mirror` (`http://[LOCALHOST]/simple`) (auto): authentication scopes overlap
     ");
     assert_eq!(
         context.read("tools/simple-launcher/uv-receipt.toml"),
