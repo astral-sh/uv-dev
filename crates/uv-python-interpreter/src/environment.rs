@@ -92,6 +92,7 @@ impl CreatedVirtualEnvironment {
         if env::var_os(EnvVars::PYTHONEXECUTABLE).is_some()
             || env::var_os(EnvVars::PYVENV_LAUNCHER).is_some()
         {
+            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
             return Ok(environment);
         }
 
@@ -100,6 +101,20 @@ impl CreatedVirtualEnvironment {
         // but for that, we first need to fix cache invalidation when it changes.
         // https://github.com/astral-sh/uv/issues/18510
         if system_site_packages {
+            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
+            return Ok(environment);
+        }
+
+        // Python can resolve executable-file symlinks differently inside a virtual environment.
+        // Query those environments while retaining inference through installation-directory aliases.
+        #[cfg(unix)]
+        if environment
+            .interpreter()
+            .to_base_python()?
+            .symlink_metadata()?
+            .is_symlink()
+        {
+            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
             return Ok(environment);
         }
 

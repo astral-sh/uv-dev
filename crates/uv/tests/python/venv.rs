@@ -180,6 +180,63 @@ fn create_venv_caches_interpreter_from_symlinked_installation() -> Result<()> {
     Ok(())
 }
 
+/// Executable-file symlinks require a query while installation-directory aliases remain cacheable.
+#[test]
+#[cfg(target_os = "linux")]
+fn create_venv_queries_symlinked_base_executable() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let base_executable = environment.interpreter().to_base_python()?;
+    let installation = base_executable
+        .parent()
+        .and_then(Path::parent)
+        .context("Python has no installation directory")?;
+    let relocated = context.temp_dir.child("python-installation");
+    let bin = relocated.child("bin");
+    bin.create_dir_all()?;
+    symlink(installation.join("lib"), relocated.join("lib"))?;
+    let executable_name = base_executable
+        .file_name()
+        .context("Python executable has no file name")?;
+    let executable = bin.join(executable_name);
+    fs_err::copy(&base_executable, &executable)?;
+    let alias = bin.child("python-link");
+    symlink(executable_name, alias.path())?;
+
+    let root = context.temp_dir.child("symlinked-venv");
+    context
+        .venv()
+        .arg(root.path())
+        .arg("--python")
+        .arg(alias.path())
+        .assert()
+        .success();
+
+    let site_packages = site_packages_path(root.path(), "python3.12");
+    fs_err::write(
+        site_packages.join("sitecustomize.py"),
+        indoc! {r#"
+            from pathlib import Path
+
+            Path(__file__).with_name("interpreter-started").touch()
+        "#},
+    )?;
+    let startup_marker = site_packages.join("interpreter-started");
+    let cached = PythonEnvironment::from_root(root.path(), &cache)?;
+    assert!(startup_marker.is_file());
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(root.path(), &fresh_cache)?;
+    assert_eq!(queried.interpreter().to_base_python()?, executable);
+    assert_eq!(cached, queried);
+
+    Ok(())
+}
+
 /// Creating a venv from another venv caches Python's metadata without starting Python again.
 #[test]
 fn create_venv_caches_interpreter_from_venv() -> Result<()> {
@@ -252,6 +309,60 @@ fn create_venv_system_site_packages_queries_interpreter() -> Result<()> {
         context.cache_files(CacheBucket::Interpreter)?.len(),
         cached_interpreters.len() + 1
     );
+
+    Ok(())
+}
+
+/// Recreating a fixed venv with system site-packages invalidates metadata before using its upgrade link.
+#[test]
+#[cfg(all(unix, feature = "test-python-managed"))]
+fn recreate_venv_system_site_packages_invalidates_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.12.9").assert().success();
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.12.9")
+        .assert()
+        .success();
+
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let fixed = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let site_packages = site_packages_path(context.venv.path(), "python3.12");
+    fs_err::write(
+        site_packages.join("sitecustomize.py"),
+        indoc! {r#"
+            from pathlib import Path
+
+            Path(__file__).with_name("interpreter-started").touch()
+        "#},
+    )?;
+    let startup_marker = site_packages.join("interpreter-started");
+
+    context
+        .venv()
+        .arg("--allow-existing")
+        .arg("--python")
+        .arg("3.12")
+        .arg("--system-site-packages")
+        .assert()
+        .success();
+    if startup_marker.is_file() {
+        fs_err::remove_file(&startup_marker)?;
+    }
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    assert!(startup_marker.is_file());
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+    assert_ne!(
+        fixed.interpreter().to_base_python()?,
+        queried.interpreter().to_base_python()?
+    );
+    assert_eq!(cached, queried);
 
     Ok(())
 }
