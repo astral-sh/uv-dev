@@ -23,6 +23,7 @@ case "${1:-}" in
 esac
 
 locked="${CARGO_LOCKED:-0}"
+auditable="${CARGO_AUDITABLE:-1}"
 # Only inspect global options. Aliases can forward later arguments to a program.
 skip_value=0
 for argument in "$@"; do
@@ -32,6 +33,12 @@ for argument in "$@"; do
     fi
     case "$argument" in
         --locked|--frozen) locked=0 ;;
+        # Metadata and version queries do not compile artifacts to embed an SBOM in.
+        --version|-V) auditable=0 ;;
+        metadata)
+            auditable=0
+            break
+            ;;
         --color|--config|-C|-Z) skip_value=1 ;;
         --|[!-]*|"") break ;;
     esac
@@ -40,7 +47,7 @@ if [ "$locked" = "1" ]; then
     set -- --locked "$@"
 fi
 
-if [ "${CARGO_AUDITABLE:-1}" != "0" ]; then
+if [ "$auditable" != "0" ]; then
     set -- auditable "$@"
 fi
 

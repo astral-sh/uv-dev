@@ -37,12 +37,16 @@ class CargoShimTests(unittest.TestCase):
         }
 
     def cargo(
-        self, *arguments: str, locked: str = "1"
+        self, *arguments: str, locked: str = "1", auditable: str = "0"
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [str(SHIM), *arguments],
             cwd=self.project,
-            env={**self.environment, "CARGO_LOCKED": locked},
+            env={
+                **self.environment,
+                "CARGO_LOCKED": locked,
+                "CARGO_AUDITABLE": auditable,
+            },
             capture_output=True,
             text=True,
             check=False,
@@ -80,7 +84,7 @@ class CargoShimTests(unittest.TestCase):
             self.manifest.read_text(encoding="utf-8").replace("0.1.0", "0.2.0"),
             encoding="utf-8",
         )
-        result = self.cargo("metadata", "--format-version", "1")
+        result = self.cargo("metadata", "--format-version", "1", auditable="1")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--locked", result.stderr)
         self.assertEqual(self.lockfile.read_bytes(), locked)

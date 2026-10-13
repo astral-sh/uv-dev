@@ -15,6 +15,8 @@ REM   maturin build --release
 setlocal DisableDelayedExpansion
 set "locked="
 if "%CARGO_LOCKED%"=="1" set "locked=--locked"
+set "auditable=auditable"
+if "%CARGO_AUDITABLE%"=="0" set "auditable="
 REM Only inspect global options; aliases can forward later arguments to a program.
 :scan
 if "%~1"=="" goto invoke
@@ -23,6 +25,8 @@ set "argument=%~1"
 if not "%argument:~0,1%"=="-" goto invoke
 if "%~1"=="--locked" set "locked="
 if "%~1"=="--frozen" set "locked="
+if "%~1"=="--version" set "auditable="
+if "%~1"=="-V" set "auditable="
 if "%~1"=="--color" goto skip_value
 if "%~1"=="--config" goto skip_value
 if "%~1"=="-C" goto skip_value
@@ -36,8 +40,8 @@ shift
 goto scan
 
 :invoke
-set "auditable=auditable"
-if "%CARGO_AUDITABLE%"=="0" set "auditable="
+REM Metadata and version queries do not compile artifacts to embed an SBOM in.
+if "%~1"=="metadata" set "auditable="
 
 if defined REAL_CARGO (
     "%REAL_CARGO%" %auditable% %locked% %*
