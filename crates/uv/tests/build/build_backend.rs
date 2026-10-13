@@ -15,7 +15,7 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
 #[cfg(feature = "test-pypi")]
 use uv_test::copy_dir_ignore;
-use uv_test::{TestContext, uv_snapshot, venv_bin_path};
+use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
 fn get_requires_for_build_returns_error() {
