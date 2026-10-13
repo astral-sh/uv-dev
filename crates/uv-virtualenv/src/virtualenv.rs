@@ -110,6 +110,7 @@ pub(crate) fn create(
     }
 
     // Validate the existing location.
+    let mut preserved_existing = false;
     match location.metadata() {
         Ok(metadata) if metadata.is_file() => {
             return Err(Error::Io(io::Error::new(
@@ -145,6 +146,7 @@ pub(crate) fn create(
             match on_existing {
                 OnExisting::Allow => {
                     debug!("Allowing existing {name} due to `--allow-existing`");
+                    preserved_existing = true;
                 }
                 OnExisting::Remove(reason) => {
                     if !is_virtualenv
@@ -626,6 +628,7 @@ pub(crate) fn create(
         executable,
         base_executable: base_python,
         system_site_packages,
+        preserved_existing,
     })
 }
 

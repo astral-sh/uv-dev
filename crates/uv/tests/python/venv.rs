@@ -11,9 +11,7 @@ use uv_cache_key::cache_digest;
 use uv_fs::PythonExt;
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-use uv_python_interpreter::Interpreter;
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_static::EnvVars;
 
 #[cfg(unix)]
@@ -94,7 +92,7 @@ fn create_venv_caches_interpreter() -> Result<()> {
     context
         .venv()
         .arg(&root_path)
-        .arg("--clear")
+        .arg("--allow-existing")
         .arg("--python")
         .arg(&base_executable)
         .assert()
@@ -122,6 +120,45 @@ fn create_venv_caches_interpreter() -> Result<()> {
     assert!(startup_marker.is_file());
     // Lazy tag computation must not change the interpreter's metadata identity.
     cached.interpreter().tags()?;
+    assert_eq!(cached, queried);
+
+    Ok(())
+}
+
+/// Clearing a nonempty environment leaves no startup configuration to query again.
+#[test]
+fn recreate_venv_caches_interpreter_after_clear() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let base_executable = fs_err::canonicalize(environment.interpreter().to_base_python()?)?;
+    let retained = context.venv.child("retained");
+    retained.touch()?;
+    Interpreter::clear_cache(context.interpreter(), &cache)?;
+    context
+        .venv()
+        .arg(context.venv.path())
+        .arg("--clear")
+        .arg("--python")
+        .arg(&base_executable)
+        .assert()
+        .success();
+    retained.assert(predicates::path::missing());
+
+    fs_err::write(
+        site_packages_path(context.venv.path(), "python3.12").join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
+    )?;
+    let startup_marker = context.venv.child("interpreter-started");
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    startup_marker.assert(predicates::path::missing());
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+    startup_marker.assert(predicates::path::is_file());
     assert_eq!(cached, queried);
 
     Ok(())
@@ -484,6 +521,45 @@ fn create_venv_queries_shadowed_manylinux_override() -> Result<()> {
         .context("Fresh interpreter cache is locked")?;
     let queried = PythonEnvironment::from_root(root.path(), &fresh_cache)?;
     assert_eq!(queried.interpreter().sys_base_prefix(), base.path());
+    assert_eq!(cached, queried);
+
+    Ok(())
+}
+
+/// Retained startup configuration must replace cached metadata inferred from the base interpreter.
+#[test]
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn recreate_venv_queries_retained_manylinux_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    assert!(environment.interpreter().manylinux_compatible());
+    let base_executable = fs_err::canonicalize(environment.interpreter().to_base_python()?)?;
+    let manylinux_override =
+        site_packages_path(context.venv.path(), "python3.12").join("_manylinux.py");
+    let contents = indoc! {r"
+        def manylinux_compatible(major, minor, arch):
+            return False
+    "};
+    fs_err::write(&manylinux_override, contents)?;
+    context
+        .venv()
+        .arg(context.venv.path())
+        .arg("--allow-existing")
+        .arg("--python")
+        .arg(&base_executable)
+        .assert()
+        .success();
+    assert_eq!(context.read(&manylinux_override), contents);
+
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    assert!(!cached.interpreter().manylinux_compatible());
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
     assert_eq!(cached, queried);
 
     Ok(())

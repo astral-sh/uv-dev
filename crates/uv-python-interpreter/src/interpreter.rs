@@ -247,7 +247,11 @@ impl Interpreter {
             site_packages,
             ..self
         };
-        CreatedVirtualEnvironment::new(interpreter, virtualenv.system_site_packages)
+        CreatedVirtualEnvironment::new(
+            interpreter,
+            virtualenv.system_site_packages,
+            virtualenv.preserved_existing,
+        )
     }
 
     /// Return a new [`Interpreter`] to install into the given `--target` directory.
@@ -1953,6 +1957,7 @@ mod tests {
                 base_executable,
                 scheme,
                 system_site_packages: false,
+                preserved_existing: false,
             })
             .cache(&cache)?;
 
@@ -2043,6 +2048,7 @@ mod tests {
             base_executable: base_executable.clone(),
             scheme,
             system_site_packages: false,
+            preserved_existing: false,
         });
 
         // Replace the regular executable after discovery, without relying on timestamp granularity.
