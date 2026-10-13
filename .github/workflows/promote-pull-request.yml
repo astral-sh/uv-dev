@@ -160,14 +160,6 @@ jobs:
             source_base_sha=$(jq --raw-output '.base.sha' <<< "$source")
             base_ref="$source_base"
             git check-ref-format "refs/heads/$base_ref" || return 1
-            if [ "$promotion_label" = bot:automerge ]; then
-              promoter_permission=$(gh api "repos/astral-sh/uv/collaborators/$promoter/permission") || return 1
-              if ! jq --exit-status '.permission | IN("admin", "maintain", "write")' \
-                <<< "$promoter_permission" > /dev/null; then
-                echo "Auto-merge requires approval from an upstream repository writer." >&2
-                return 1
-              fi
-            fi
             if [ "$GITHUB_REPOSITORY" = astral-sh/uv-security ]; then
               promoter_permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$promoter/permission") || return 1
               if ! jq --exit-status '.permission | IN("admin", "maintain", "write")' \
@@ -680,6 +672,20 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
+          check_automerge_permission() {
+            local promoter_permission
+            promoter_permission=$(gh api "repos/astral-sh/uv/collaborators/$PROMOTER/permission") || return 1
+            if ! jq --exit-status '.permission | IN("admin", "maintain", "write")' \
+              <<< "$promoter_permission" > /dev/null; then
+              echo "Auto-merge requires approval from an upstream repository writer." >&2
+              return 1
+            fi
+          }
+
+          # The publication token includes upstream metadata access; the planner token does not.
+          if [ "$PROMOTION_LABEL" = bot:automerge ]; then
+            check_automerge_permission
+          fi
           if [ "$GITHUB_REPOSITORY" = astral-sh/uv-security ]; then
             promotion_ref="automations/promote/security/$PULL_REQUEST_NUMBER"
             marker="<!-- uv-security-promotion:$PULL_REQUEST_NUMBER:$HEAD_SHA -->"
@@ -854,12 +860,7 @@ jobs:
             exit 1
           fi
           if [ "$PROMOTION_LABEL" = bot:automerge ]; then
-            promoter_permission=$(gh api "repos/astral-sh/uv/collaborators/$PROMOTER/permission")
-            if ! jq --exit-status '.permission | IN("admin", "maintain", "write")' \
-              <<< "$promoter_permission" > /dev/null; then
-              echo "Auto-merge is no longer approved by an upstream repository writer." >&2
-              exit 1
-            fi
+            check_automerge_permission
             gh pr merge "$upstream_number" --repo astral-sh/uv --auto --squash \
               --match-head-commit "$PROMOTED_HEAD"
           fi
