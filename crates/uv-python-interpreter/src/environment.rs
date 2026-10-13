@@ -10,6 +10,7 @@ use tracing::debug;
 use uv_cache::Cache;
 use uv_fs::{LockedFile, LockedFileError, Simplified};
 use uv_pep440::Version;
+use uv_platform_tags::Os;
 use uv_static::EnvVars;
 
 use crate::Interpreter;
@@ -90,6 +91,15 @@ impl CreatedVirtualEnvironment {
         // other implementations can report the virtual environment's executable as their base.
         let interpreter = environment.interpreter();
         if interpreter.implementation_name() != "cpython" || interpreter.python_tuple() < (3, 11) {
+            Interpreter::clear_cache(interpreter.sys_executable(), cache)?;
+            return Ok(environment);
+        }
+
+        // A parent can veto manylinux wheels through its own `_manylinux` module. An isolated
+        // child may not import that override, so query its compatibility directly.
+        if matches!(interpreter.platform().os(), Os::Manylinux { .. })
+            && !interpreter.manylinux_compatible()
+        {
             Interpreter::clear_cache(interpreter.sys_executable(), cache)?;
             return Ok(environment);
         }
