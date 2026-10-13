@@ -2973,6 +2973,12 @@ impl Lock {
         (self.version(), self.revision()) >= (1, 1)
     }
 
+    /// Returns `true` if this [`Lock`] records empty groups on non-project workspace roots.
+    pub fn supports_empty_workspace_groups(&self) -> bool {
+        // Empty root groups are recorded with the root group metadata in Version 1 Revision 5.
+        (self.version(), self.revision()) >= (1, 5)
+    }
+
     /// Returns `true` if this [`Lock`] includes entries for empty `dependency-group` metadata.
     fn includes_empty_groups(&self) -> bool {
         // Empty dependency groups are included as of https://github.com/astral-sh/uv/pull/8598,
@@ -4571,10 +4577,12 @@ impl Lock {
             if groups.includes != self.manifest.dependency_group_includes {
                 return Ok(SatisfiesResult::MismatchedWorkspaceGroupIncludes);
             }
-            // Empty groups still name valid selections even when they have no requirements.
+            // Empty root groups name valid selections, but older lockfiles omitted them.
+            let include_empty_groups = self.supports_empty_workspace_groups();
             let expected = groups
                 .requirements
                 .iter()
+                .filter(|(_, requirements)| include_empty_groups || !requirements.is_empty())
                 .map(|(group, requirements)| {
                     Ok((
                         group.clone(),
@@ -4586,6 +4594,7 @@ impl Lock {
                 .manifest
                 .dependency_groups
                 .iter()
+                .filter(|(_, requirements)| include_empty_groups || !requirements.is_empty())
                 .map(|(group, requirements)| {
                     Ok((
                         group.clone(),
