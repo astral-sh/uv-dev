@@ -88,24 +88,27 @@ impl CreatedVirtualEnvironment {
     ///
     /// If creation cannot infer the metadata Python would report, the next lookup queries Python.
     pub fn cache(self, cache: &Cache) -> Result<PythonEnvironment, Error> {
-        let Self {
-            environment,
-            system_site_packages,
-            preserved_existing,
-        } = self;
+        let interpreter = self.environment.interpreter();
+        if !self.is_cacheable()? || !interpreter.cache_virtualenv(cache)? {
+            // Recreating an environment can change its metadata without changing its executable.
+            Interpreter::clear_cache(interpreter.sys_executable(), cache)?;
+        }
+        Ok(self.environment)
+    }
 
+    /// Whether the base interpreter's metadata describes the created environment.
+    fn is_cacheable(&self) -> Result<bool, Error> {
+        let environment = &self.environment;
         let interpreter = environment.interpreter();
         // Retained startup files can change metadata independently of the base interpreter.
-        if preserved_existing {
-            Interpreter::clear_cache(interpreter.sys_executable(), cache)?;
-            return Ok(environment);
+        if self.preserved_existing {
+            return Ok(false);
         }
 
         // The inferred base executable follows CPython 3.11+ semantics. Older CPython and
         // other implementations can report the virtual environment's executable as their base.
         if interpreter.implementation_name() != "cpython" || interpreter.python_tuple() < (3, 11) {
-            Interpreter::clear_cache(interpreter.sys_executable(), cache)?;
-            return Ok(environment);
+            return Ok(false);
         }
 
         // A parent's `_manylinux` override may not be imported by an isolated child. Query the
@@ -114,8 +117,7 @@ impl CreatedVirtualEnvironment {
             && (interpreter.has_manylinux_compatibility_override()
                 || !interpreter.manylinux_compatible())
         {
-            Interpreter::clear_cache(interpreter.sys_executable(), cache)?;
-            return Ok(environment);
+            return Ok(false);
         }
 
         // Python removes parent components from the paths it reports. Query roots with `..`
@@ -125,8 +127,7 @@ impl CreatedVirtualEnvironment {
             .components()
             .any(|component| component == Component::ParentDir)
         {
-            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
-            return Ok(environment);
+            return Ok(false);
         }
 
         // Launcher overrides can change `sys.executable` and `sys.prefix`, while
@@ -134,17 +135,15 @@ impl CreatedVirtualEnvironment {
         if env::var_os(EnvVars::PYTHONEXECUTABLE).is_some()
             || env::var_os(EnvVars::PYVENV_LAUNCHER).is_some()
         {
-            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
-            return Ok(environment);
+            return Ok(false);
         }
 
         // TODO: Handle system-site-packages correctly.
         // We should infer the site packages path from the base interpreter,
         // but for that, we first need to fix cache invalidation when it changes.
         // https://github.com/astral-sh/uv/issues/18510
-        if system_site_packages {
-            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
-            return Ok(environment);
+        if self.system_site_packages {
+            return Ok(false);
         }
 
         // Python can resolve executable-file symlinks differently inside a virtual environment.
@@ -156,8 +155,7 @@ impl CreatedVirtualEnvironment {
             .symlink_metadata()?
             .is_symlink()
         {
-            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
-            return Ok(environment);
+            return Ok(false);
         }
 
         // An upgradeable venv can use a minor-version link instead of the selected base
@@ -169,14 +167,10 @@ impl CreatedVirtualEnvironment {
                 .parent()
                 .is_some_and(|base| base.simplified() != home.simplified())
         {
-            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
-            return Ok(environment);
+            return Ok(false);
         }
 
-        if !environment.interpreter().cache_virtualenv(cache)? {
-            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
-        }
-        Ok(environment)
+        Ok(true)
     }
 }
 
