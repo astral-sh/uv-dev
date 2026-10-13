@@ -17,8 +17,8 @@ use uv_configuration::{
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirementSpecification,
+    ExtraBuildRequires, IndexCapabilities, IndexLocations, NameRequirementSpecification,
+    Requirement, RequirementSource, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -515,6 +515,30 @@ pub async fn install(
         );
     }
     let options = ToolOptions::from(options);
+    // Credential promotion changes authentication policy before credentials are omitted from the
+    // receipt. Validate those persisted policies before changing an installed tool.
+    let receipt_indexes =
+        IndexLocations::from(ResolverInstallerOptions::from(options.clone()).indexes);
+    receipt_indexes.validate_pinned_indexes(
+        &receipt_indexes,
+        requirements
+            .iter()
+            .chain(&receipt_constraints)
+            .chain(&receipt_overrides)
+            .chain(
+                receipt_build_constraints
+                    .iter()
+                    .map(|constraint| &constraint.requirement),
+            )
+            .filter_map(|requirement| match &requirement.source {
+                RequirementSource::Registry { index, .. } => index.as_ref(),
+                RequirementSource::Url { .. }
+                | RequirementSource::GitDirectory { .. }
+                | RequirementSource::GitPath { .. }
+                | RequirementSource::Path { .. }
+                | RequirementSource::Directory { .. } => None,
+            }),
+    )?;
     let lock_manifest = ToolLock::manifest(
         &requirements,
         &receipt_constraints,

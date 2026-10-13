@@ -171,7 +171,7 @@ impl SourcedDependencyGroups {
                     .await
                     .map(|requirement| {
                         requirement
-                            .map(LoweredRequirement::into_inner)
+                            .and_then(|requirement| requirement.into_validated_inner(locations))
                             .map_err(|err| {
                                 MetadataError::GroupLoweringError(
                                     name.clone(),

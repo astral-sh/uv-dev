@@ -7139,3 +7139,214 @@ fn tool_install_pep723_receipt_retains_legacy_default_and_index_policy() -> Resu
     });
     Ok(())
 }
+
+/// Credential promotion must not replace a tool with a receipt that unchanged upgrades reject.
+#[tokio::test]
+async fn tool_install_pep723_receipt_rejects_promoted_alias_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let private = MockServer::start().await;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&launcher)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    let configuration = context.read("tools/simple-launcher/pyvenv.cfg");
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency", "other"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "auto"
+        # [[tool.uv.index]]
+        # name = "mirror"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "auto"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # other = {{ index = "mirror" }}
+        # ///
+    "#, url = private.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&launcher)
+        .args(["--with-requirements", "deps.py", "--force"])
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting authentication policies for indexes `mirror` (`http://[LOCALHOST]/simple`) (auto) and `private` (`http://[LOCALHOST]/simple`) (always): authentication scopes overlap
+    ");
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert_eq!(
+        context.read("tools/simple-launcher/pyvenv.cfg"),
+        configuration
+    );
+    assert!(
+        private
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Authentication promotion must also validate different endpoints with overlapping scopes.
+#[tokio::test]
+async fn tool_install_pep723_receipt_rejects_promoted_overlapping_scope() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let private = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency", "other"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "auto"
+        # [[tool.uv.index]]
+        # name = "mirror"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "auto"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # other = {{ index = "mirror" }}
+        # ///
+    "#, url = private.uri()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    uv_snapshot!(context.filters(), context.tool_install().arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting authentication policies for indexes `private` (`http://[LOCALHOST]/private/simple`) (always) and `mirror` (`http://[LOCALHOST]/simple`) (auto): authentication scopes overlap
+    ");
+    context
+        .temp_dir
+        .child("tools/simple-launcher/uv-receipt.toml")
+        .assert(predicate::path::missing());
+    assert!(
+        private
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Consistent promoted aliases remain valid across receipt persistence and unchanged upgrades.
+#[test]
+fn tool_install_pep723_receipt_accepts_consistent_promoted_aliases() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "receipt-authentication-aliases"
+        [root]
+        requires = ["dependency", "other"]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."1.0.0"]
+        sdist = false
+        [packages.other.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let private = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency", "other"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # authenticate = "auto"
+        # [[tool.uv.index]]
+        # name = "mirror"
+        # url = "{url}"
+        # explicit = true
+        # authenticate = "auto"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # other = {{ index = "mirror" }}
+        # ///
+    "#, url = private.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env("UV_INDEX_MIRROR_USERNAME", "username")
+        .env("UV_INDEX_MIRROR_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(receipt, @r#"
+        [tool]
+        requirements = [
+            { name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" },
+            { name = "dependency", index = "http://[LOCALHOST]/simple/" },
+            { name = "other", index = "http://[LOCALHOST]/simple/" },
+        ]
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        index = [{ name = "private", url = "http://[LOCALHOST]/simple/", explicit = true, default = false, format = "simple", authenticate = "always" }, { name = "mirror", url = "http://[LOCALHOST]/simple/", explicit = true, default = false, format = "simple", authenticate = "always" }]
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .arg("--no-cache")
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env("UV_INDEX_MIRROR_USERNAME", "username")
+        .env("UV_INDEX_MIRROR_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    ");
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    Ok(())
+}

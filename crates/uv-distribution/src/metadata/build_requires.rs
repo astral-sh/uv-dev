@@ -153,7 +153,7 @@ impl BuildRequires {
                 .await
                 .map(|requirement| {
                     requirement
-                        .map(LoweredRequirement::into_inner)
+                        .and_then(|requirement| requirement.into_validated_inner(locations))
                         .map_err(|err| {
                             MetadataError::LoweringError(requirement_name.clone(), Box::new(err))
                         })
@@ -229,7 +229,7 @@ impl BuildRequires {
                 .await
                 .map(|requirement| {
                     requirement
-                        .map(LoweredRequirement::into_inner)
+                        .and_then(|requirement| requirement.into_validated_inner(locations))
                         .map_err(|err| {
                             MetadataError::LoweringError(requirement_name.clone(), Box::new(err))
                         })
@@ -320,9 +320,13 @@ impl LoweredExtraBuildDependencies {
                             .await
                             .map(|requirement| {
                                 requirement
-                                    .map(|requirement| ExtraBuildRequirement {
-                                        requirement: requirement.into_inner(),
-                                        match_runtime,
+                                    .and_then(|requirement| {
+                                        requirement.into_validated_inner(index_locations).map(
+                                            |requirement| ExtraBuildRequirement {
+                                                requirement,
+                                                match_runtime,
+                                            },
+                                        )
                                     })
                                     .map_err(|err| {
                                         MetadataError::LoweringError(

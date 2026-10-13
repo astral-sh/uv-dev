@@ -20891,3 +20891,105 @@ fn pep723_requirements_equivalent_command_line_default() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Script-selected indexes do not discard credentials from shadowed configured declarations.
+#[tokio::test]
+async fn pep723_requirements_retain_shadowed_index_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let private = MockServer::start().await;
+    let source = MockServer::start().await;
+    let (private_filename, private_wheel) = generate_wheel(
+        &"privatepkg".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let (source_filename, source_wheel) = generate_wheel(
+        &"sourcepkg".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(2)
+        .mount(&private)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/privatepkg/"))
+        .and(header("Authorization", "Basic dXNlcm5hbWU6cGFzc3dvcmQ="))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("<a href=\"../../{private_filename}\">{private_filename}</a>"),
+            "text/html",
+        ))
+        .with_priority(1)
+        .mount(&private)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{private_filename}")))
+        .and(header("Authorization", "Basic dXNlcm5hbWU6cGFzc3dvcmQ="))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(private_wheel))
+        .with_priority(1)
+        .mount(&private)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/sourcepkg/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("<a href=\"../../{source_filename}\">{source_filename}</a>"),
+            "text/html",
+        ))
+        .mount(&source)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{source_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(source_wheel))
+        .mount(&source)
+        .await;
+    let mut configured = Url::parse(&format!("{}/simple", private.uri()))?;
+    configured.set_username("username").expect("valid username");
+    configured
+        .set_password(Some("password"))
+        .expect("valid password");
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        [[index]]
+        name = "private"
+        url = "{configured}"
+        authenticate = "always"
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["privatepkg", "sourcepkg"]
+        # [[tool.uv.index]]
+        # name = "source"
+        # url = "{url}/simple"
+        # explicit = true
+        # [tool.uv.sources]
+        # sourcepkg = {{ index = "source" }}
+        # ///
+    "#, url = source.uri()})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.py", "--index", &format!("private={}/simple", private.uri()), "--default-index", &format!("{}/simple", source.uri()), "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    privatepkg==1.0.0
+    sourcepkg==1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}

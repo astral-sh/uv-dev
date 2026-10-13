@@ -11,7 +11,7 @@ use uv_cache::Cache;
 use uv_distribution_filename::DistExtension;
 use uv_distribution_types::{
     Index, IndexCredentialsError, IndexLocations, IndexMetadata, IndexName, Origin, Requirement,
-    RequirementScope, RequirementSource,
+    RequirementScope, RequirementSource, SourceIndexError,
 };
 use uv_fs::{Simplified, normalize_absolute_path, normalize_path};
 use uv_git_types::{GitLfs, GitReference, GitUrl, GitUrlParseError};
@@ -569,7 +569,20 @@ impl LoweredRequirement {
         }))
     }
 
+    /// Validate the selected index policy before returning the lowered [`Requirement`].
+    pub fn into_validated_inner(
+        self,
+        locations: &IndexLocations,
+    ) -> Result<Requirement, LoweringError> {
+        if let Some(index) = &self.selected_index {
+            locations.validate_metadata_index(index)?;
+        }
+        Ok(self.requirement)
+    }
+
     /// Convert back into a [`Requirement`].
+    ///
+    /// Callers must validate selected-index policies or retain their definitions for composition.
     pub fn into_inner(self) -> Requirement {
         self.requirement
     }
@@ -579,6 +592,8 @@ impl LoweredRequirement {
 /// `project.{dependencies,optional-dependencies}`.
 #[derive(Debug, Error)]
 pub enum LoweringError {
+    #[error(transparent)]
+    IndexPolicy(#[from] SourceIndexError),
     #[error(
         "`{0}` is included as a workspace member, but is missing an entry in `tool.uv.sources` (e.g., `{0} = {{ workspace = true }}`)"
     )]

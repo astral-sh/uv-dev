@@ -521,7 +521,7 @@ impl<'lock> LockTarget<'lock> {
                         .await
                         .map(|requirement| {
                             requirement
-                                .map(LoweredRequirement::into_inner)
+                                .and_then(|requirement| requirement.into_validated_inner(locations))
                                 .map_err(|err| {
                                     uv_distribution::MetadataError::LoweringError(
                                         requirement_name.clone(),

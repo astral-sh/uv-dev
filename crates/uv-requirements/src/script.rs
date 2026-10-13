@@ -272,9 +272,13 @@ pub async fn script_extra_build_requires(
                 )
                 .await
                 .map(|requirement| {
-                    requirement.map(|requirement| ExtraBuildRequirement {
-                        requirement: requirement.into_inner(),
-                        match_runtime,
+                    requirement.and_then(|requirement| {
+                        requirement
+                            .into_validated_inner(index_locations)
+                            .map(|requirement| ExtraBuildRequirement {
+                                requirement,
+                                match_runtime,
+                            })
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
