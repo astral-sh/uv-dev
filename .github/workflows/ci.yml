@@ -110,7 +110,8 @@ jobs:
     if: ${{ needs.plan.outputs.test-code == 'true' }}
     uses: $/.github/workflows/check-generated-files.yml
     with:
-      base-sha: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+      # A mirror update can import introductions that upstream has already released.
+      base-sha: ${{ github.event_name == 'pull_request' && 'HEAD^1' || (github.repository != 'astral-sh/uv-dev' || github.ref != 'refs/heads/main') && github.event.before || '' }}
       schema-changed: ${{ needs.plan.outputs.check-schema }}
       save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
 
