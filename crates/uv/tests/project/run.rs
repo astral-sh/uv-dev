@@ -15,7 +15,9 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot};
+use uv_test::{
+    TestContext, copy_dir_ignore, packse::PackseServer, site_packages_path, uv_snapshot,
+};
 
 #[test]
 fn run_with_uses_current_system_site_packages() -> Result<()> {
@@ -2017,15 +2019,34 @@ fn run_with_overlay_interpreter() -> Result<()> {
         .assert()
         .success();
 
-    // Relocatable environments must expose the same metadata from the existing and fresh caches.
+    // Populate the recreated environment's entry before comparing cached and queried metadata.
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
         .init_no_wait()?
         .context("Interpreter cache is locked")?;
+    PythonEnvironment::from_root(context.venv.path(), &cache)?;
+
+    // A startup marker distinguishes a cache hit from another interpreter query.
+    let site_packages = site_packages_path(context.venv.path(), "python3.12");
+    let sitecustomize = site_packages.join("sitecustomize.py");
+    fs_err::write(
+        &sitecustomize,
+        indoc! {r#"
+            from pathlib import Path
+
+            Path(__file__).with_name("interpreter-started").touch()
+        "#},
+    )?;
+    let startup_marker = ChildPath::new(site_packages.join("interpreter-started"));
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    startup_marker.assert(predicate::path::missing());
+
     let fresh_cache = Cache::temp()?
         .init_no_wait()?
         .context("Fresh interpreter cache is locked")?;
-    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
     let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+    startup_marker.assert(predicate::path::is_file());
+    fs_err::remove_file(&sitecustomize)?;
+    fs_err::remove_file(&startup_marker)?;
     assert_eq!(cached.root(), queried.root());
     assert_eq!(
         cached.site_packages().collect::<Vec<_>>(),
