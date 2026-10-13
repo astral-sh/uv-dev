@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use uv_cache::{Cache, CacheBucket};
+use uv_cache::CacheBucket;
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
@@ -91,30 +91,13 @@ async fn accept_cached_environment_build(listener: &TcpListener, name: &str) -> 
     Ok(connection)
 }
 
-fn cached_environment_locks(context: &TestContext) -> Result<Vec<PathBuf>> {
-    let cache = Cache::from_path(context.cache_dir.path());
-    let mut locks = Vec::new();
-    for entry in walkdir::WalkDir::new(cache.bucket(CacheBucket::Environments)) {
-        let entry = entry?;
-        if entry
-            .path()
-            .extension()
-            .is_some_and(|extension| extension == "lock")
-        {
-            locks.push(entry.into_path());
-        }
-    }
-    Ok(locks)
-}
-
+/// Callers with the same resolution wait for and reuse one completed environment.
 #[tokio::test]
 async fn run_cached_environment_coordinates_misses() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
     let (source, _) =
         gated_cached_environment_package(&context, "demo", listener.local_addr()?.port())?;
-    let (_, other_wheel) =
-        gated_cached_environment_package(&context, "other", listener.local_addr()?.port())?;
 
     let mut command = context.run();
     command
@@ -123,7 +106,14 @@ async fn run_cached_environment_coordinates_misses() -> Result<()> {
         .args(["python", "-c", "import demo; print(demo.__file__)"]);
     let creator = cached_environment_command(command).spawn()?;
     let mut gate = accept_cached_environment_build(&listener, "demo").await?;
-    let locks = cached_environment_locks(&context)?;
+    let locks = context
+        .cache_files(CacheBucket::Environments)?
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "lock")
+        })
+        .collect::<Vec<_>>();
     if locks.len() != 1 {
         gate.write_all(b"F").await?;
         creator.wait_with_output().await?;
@@ -134,45 +124,6 @@ async fn run_cached_environment_coordinates_misses() -> Result<()> {
         LockedFile::acquire_no_wait(lock_path, LockedFileMode::Exclusive, "cached environment")
             .is_none()
     );
-
-    // A different resolution can finish while the first constructor is still in its build hook.
-    let mut command = context.run();
-    command
-        .args(["--no-project", "--offline", "--with"])
-        .arg(&other_wheel)
-        .args(["python", "-c", "import other; print(other.__file__)"]);
-    let independent = cached_environment_command(command).spawn()?;
-    tokio::time::timeout(Duration::from_secs(30), independent.wait_with_output())
-        .await??
-        .assert()
-        .success();
-
-    // Cancelling a queued caller must not leave a permanent claim behind.
-    let mut command = context.run();
-    command
-        .args(["--no-project", "--offline", "--with"])
-        .arg(&source)
-        .args(["python", "-c", "import demo; print(demo.__file__)"]);
-    let mut command = cached_environment_command(command);
-    command.env(EnvVars::RUST_LOG, "uv_fs=info");
-    let mut cancelled_waiter = command.spawn()?;
-    let stderr = cancelled_waiter
-        .stderr
-        .take()
-        .context("captured cancelled waiter stderr")?;
-    let mut lines = tokio::io::BufReader::new(stderr).lines();
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while let Some(line) = lines.next_line().await? {
-            if line.contains("Waiting to acquire exclusive lock") && line.contains("environments-v")
-            {
-                return Ok::<_, anyhow::Error>(());
-            }
-        }
-        anyhow::bail!("caller exited without waiting for the environment claim")
-    })
-    .await??;
-    cancelled_waiter.kill().await?;
-    drop(lines);
 
     // A live waiter reuses the completed environment after the constructor releases its claim.
     let mut command = context.run();
@@ -207,7 +158,130 @@ async fn run_cached_environment_coordinates_misses() -> Result<()> {
     let waiter = output.assert().success();
     assert_eq!(creator.get_output().stdout, waiter.get_output().stdout);
 
-    // Completed entries bypass the claim, including while another process owns its lock.
+    Ok(())
+}
+
+/// A different resolution can finish while another environment is being constructed.
+#[tokio::test]
+async fn run_cached_environment_independent_resolutions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let (source, _) =
+        gated_cached_environment_package(&context, "demo", listener.local_addr()?.port())?;
+    let (_, other_wheel) =
+        gated_cached_environment_package(&context, "other", listener.local_addr()?.port())?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let creator = cached_environment_command(command).spawn()?;
+    let mut gate = accept_cached_environment_build(&listener, "demo").await?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&other_wheel)
+        .args(["python", "-c", "import other; print(other.__file__)"]);
+    let independent = cached_environment_command(command).spawn()?;
+    tokio::time::timeout(Duration::from_secs(30), independent.wait_with_output())
+        .await??
+        .assert()
+        .success();
+
+    gate.write_all(b"S").await?;
+    creator.wait_with_output().await?.assert().success();
+    Ok(())
+}
+
+/// Cancelling a queued caller does not leave an environment claim behind.
+#[tokio::test]
+async fn run_cached_environment_cancelled_waiter() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let (source, _) =
+        gated_cached_environment_package(&context, "demo", listener.local_addr()?.port())?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let creator = cached_environment_command(command).spawn()?;
+    let mut gate = accept_cached_environment_build(&listener, "demo").await?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let mut command = cached_environment_command(command);
+    command.env(EnvVars::RUST_LOG, "uv_fs=info");
+    let mut cancelled_waiter = command.spawn()?;
+    let stderr = cancelled_waiter
+        .stderr
+        .take()
+        .context("captured cancelled waiter stderr")?;
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(line) = lines.next_line().await? {
+            if line.contains("Waiting to acquire exclusive lock") && line.contains("environments-v")
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+        anyhow::bail!("caller exited without waiting for the environment claim")
+    })
+    .await??;
+    cancelled_waiter.kill().await?;
+    drop(lines);
+
+    gate.write_all(b"S").await?;
+    creator.wait_with_output().await?.assert().success();
+    let locks = context
+        .cache_files(CacheBucket::Environments)?
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "lock")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(locks.len(), 1);
+    let _lock =
+        LockedFile::acquire_no_wait(&locks[0], LockedFileMode::Exclusive, "cached environment")
+            .context("constructor claim released after waiter cancellation")?;
+    Ok(())
+}
+
+/// A completed cache entry can be reused while another process holds its claim.
+#[tokio::test]
+async fn run_cached_environment_warm_bypasses_claim() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let (source, _) =
+        gated_cached_environment_package(&context, "demo", listener.local_addr()?.port())?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let creator = cached_environment_command(command).spawn()?;
+    let mut gate = accept_cached_environment_build(&listener, "demo").await?;
+    gate.write_all(b"S").await?;
+    let creator = creator.wait_with_output().await?.assert().success();
+    let locks = context
+        .cache_files(CacheBucket::Environments)?
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "lock")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(locks.len(), 1);
+    let lock_path = &locks[0];
+
     let _lock =
         LockedFile::acquire_no_wait(lock_path, LockedFileMode::Exclusive, "cached environment")
             .context("released constructor claim")?;
@@ -240,7 +314,14 @@ async fn run_cached_environment_failed_creator_releases_claim() -> Result<()> {
     let mut gate = accept_cached_environment_build(&listener, "demo").await?;
     gate.write_all(b"F").await?;
     failed.wait_with_output().await?.assert().failure();
-    let locks = cached_environment_locks(&context)?;
+    let locks = context
+        .cache_files(CacheBucket::Environments)?
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "lock")
+        })
+        .collect::<Vec<_>>();
     assert_eq!(locks.len(), 1);
     {
         let _lock =
