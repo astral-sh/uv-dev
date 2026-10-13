@@ -16,10 +16,11 @@ use assert_fs::{
 use indoc::indoc;
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
+use serde_json::json;
 use sha2::{Digest, Sha256};
-use url::Url;
 #[cfg(windows)]
 use uv_fs::Simplified;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -7095,7 +7096,7 @@ fn tool_install_pep723_receipt_retains_legacy_default_and_index_policy() -> Resu
     let wheel = context
         .workspace_root
         .join("test/links/ok-1.0.0-py3-none-any.whl");
-    let wheel = Url::from_file_path(wheel).expect("absolute wheel path");
+    let wheel = SafeUrl::from_file_path(wheel).expect("absolute wheel path");
     context
         .temp_dir
         .child("overrides.txt")
@@ -7478,6 +7479,317 @@ async fn tool_install_latest_with_pep723_index() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     1.0.0
+    ");
+    Ok(())
+}
+
+/// Tool installation recomputes latest after refining its initially discovered Python.
+#[tokio::test]
+async fn tool_install_latest_reselects_index_after_python_refinement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let requires_python = ">=3.13".parse()?;
+    let python312 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python312
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    let python313 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python313
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    context.temp_dir.child("deps.py").write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "python312"
+        # url = "{python312}"
+        # explicit = true
+        # [[tool.uv.index]]
+        # name = "python313"
+        # url = "{python313}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = [{{ index = "python312", marker = "python_version < '3.13'" }}, {{ index = "python313", marker = "python_version >= '3.13'" }}]
+        # ///
+    "#, python312 = python312.index_url(), python313 = python313.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["--with-requirements", "deps.py", "--default-index"])
+        .arg(python312.index_url())
+        .arg("a@latest")
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    Installed 1 executable: a
+    ");
+    let executable = bin.child(format!("a{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0 Python 3.13
+    ");
+    assert!(
+        !python312
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        !python313
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Latest lookup uses a retained tool interpreter instead of the preliminary discovery result.
+#[tokio::test]
+async fn tool_install_latest_uses_existing_interpreter_index() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let requires_python = ">=3.12".parse()?;
+    let python312 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python312
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    let python313 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python313
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    context.temp_dir.child("deps.py").write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "python312"
+        # url = "{python312}"
+        # explicit = true
+        # [[tool.uv.index]]
+        # name = "python313"
+        # url = "{python313}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = [{{ index = "python312", marker = "python_version < '3.13'" }}, {{ index = "python313", marker = "python_version >= '3.13'" }}]
+        # ///
+    "#, python312 = python312.index_url(), python313 = python313.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .args([
+            "--python",
+            "3.13",
+            "--with-requirements",
+            "deps.py",
+            "--default-index",
+        ])
+        .arg(python313.index_url())
+        .arg("a")
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let configuration = context.read("tools/a/pyvenv.cfg");
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["--no-cache", "--with-requirements", "deps.py", "--default-index"])
+        .arg(python313.index_url())
+        .arg("a@latest")
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    Installed 1 executable: a
+    ");
+    assert_eq!(context.read("tools/a/pyvenv.cfg"), configuration);
+    assert!(
+        python312
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    let executable = bin.child(format!("a{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0 Python 3.13
+    ");
+    Ok(())
+}
+
+/// Receipt policies are composed after collecting requirements and stdin build constraints.
+#[test]
+fn tool_install_pep723_combines_build_and_requirement_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("a/cli.py", "def main():\n    print('1.0.0')\n"),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    let wheel_path = context.temp_dir.child(&filename);
+    wheel_path.write_binary(&wheel)?;
+    let wheel_url = SafeUrl::from_file_path(wheel_path.path()).expect("absolute wheel path");
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str(&format!("a @ {wheel_url}"))?;
+    context.temp_dir.child("deps.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "https://example.com/simple"
+        # default = true
+        # [tool.uv.sources]
+        # a = { index = "private" }
+        # ///
+    "#})?;
+    let build = context.temp_dir.child("build.py");
+    build.write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["backend"]
+        # [[tool.uv.index]]
+        # name = "build-pypi"
+        # url = "https://pypi.org/simple"
+        # explicit = true
+        # exclude-newer = "2020-01-01T00:00:00Z"
+        # [tool.uv.sources]
+        # backend = { index = "build-pypi" }
+        # ///
+    "#})?;
+    let bin = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["--offline", "--preview-features", "index-exclude-newer",
+            "--build-constraint", "-", "--with-requirements", "deps.py",
+            "--override", "overrides.txt"])
+        .arg(wheel_path.path())
+        .env(EnvVars::PATH, bin.path())
+        .stdin(fs_err::File::open(build.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0 (from file://[TEMP_DIR]/a-1.0.0-py3-none-any.whl)
+    Installed 1 executable: a
     ");
     Ok(())
 }

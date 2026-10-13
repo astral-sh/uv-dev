@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::BaseClientBuilder;
 use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, Excludes, GitLfsSetting,
     Overrides, TargetTriple, ToolRunCommand,
@@ -24,8 +24,8 @@ use uv_configuration::{
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
-    IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    IndexUrl, Name, NameRequirementSpecification, Requirement, RequirementSource,
+    UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_errors::HintOrdering;
 use uv_installer::{BuildSettings, InstallationStrategy, SatisfiesResult, SitePackages};
@@ -53,13 +53,12 @@ use uv_command_support::{
 
 use crate::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::error::ToolError;
-use crate::requirements::{index_for_package, resolve_names};
+use crate::requirements::{resolve_names, with_latest_constraint};
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations as operations;
-use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::ResolverInstallerSettings;
@@ -850,12 +849,6 @@ async fn get_or_create_environment(
     .await?;
     let build_indexes = build_spec.indexes;
     let build_constraints = Constraints::from_specifications(build_spec.constraints);
-    let mut source_settings = settings.clone();
-    source_settings.resolver.index_locations = source_settings
-        .resolver
-        .index_locations
-        .with_source_indexes(build_indexes.clone())
-        .map_err(anyhow::Error::from)?;
 
     // Load source index policies before preliminary name and latest-version lookups.
     let mut spec = RequirementsSpecification::from_sources(
@@ -866,8 +859,8 @@ async fn get_or_create_environment(
         None,
         client_builder,
         LoweringContext::new(
-            &source_settings.resolver.sources,
-            &source_settings.resolver.index_locations,
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
             cache,
             workspace_cache,
             client_builder.credentials_cache(),
@@ -877,6 +870,7 @@ async fn get_or_create_environment(
     let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
 
     spec.extend_indexes(build_indexes)?;
+    let mut source_settings = settings.clone();
     source_settings.resolver.index_locations = source_settings
         .resolver
         .index_locations
@@ -1053,75 +1047,12 @@ async fn get_or_create_environment(
     )
     .await?;
 
-    // For `@latest`, fetch the latest version and create a constraint.
-    let latest = if let ToolRequest::Package {
+    let latest_package = if let ToolRequest::Package {
         target: Target::Latest(_, name, _),
         ..
     } = &request
     {
-        let index = index_for_package(
-            name,
-            &requirements,
-            &constraints,
-            &overrides,
-            &spec.override_dependencies,
-            &spec.excludes,
-            resolution_markers(None, python_platform.as_ref(), &interpreter),
-        )?;
-
-        // Build the registry client to fetch the latest version.
-        let client = RegistryClientBuilder::new(
-            client_builder
-                .clone()
-                .keyring(settings.resolver.keyring_provider),
-            cache.clone(),
-        )
-        .index_locations(settings.resolver.index_locations.clone())
-        .index_strategy(settings.resolver.index_strategy)
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
-
-        // Initialize the capabilities.
-        let capabilities = IndexCapabilities::default();
-        let download_concurrency = concurrency.downloads_semaphore.clone();
-
-        // Initialize the client to fetch the latest version.
-        let latest_client = LatestClient {
-            client: &client,
-            capabilities: &capabilities,
-            prerelease: &settings.resolver.prerelease,
-            exclude_newer: &settings.resolver.exclude_newer,
-            index_locations: &settings.resolver.index_locations,
-            tags: None,
-            requires_python: None,
-        };
-
-        // Fetch the latest version.
-        if let Some(dist_filename) = latest_client
-            .find_latest(name, index.as_ref().map(Into::into), &download_concurrency)
-            .await?
-        {
-            let version = dist_filename.version().clone();
-            debug!("Resolved `{name}@latest` to `{name}=={version}`");
-
-            // The constraint pins the version during resolution to prevent backtracking.
-            Some(Requirement {
-                name: name.clone(),
-                extras: vec![].into_boxed_slice(),
-                groups: Box::new([]),
-                marker: MarkerTree::default(),
-                source: RequirementSource::Registry {
-                    specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
-                    index: None,
-                    conflict: None,
-                },
-                scope: RequirementScope::Global,
-                origin: None,
-            })
-        } else {
-            None
-        }
+        Some(name)
     } else {
         None
     };
@@ -1180,7 +1111,7 @@ async fn get_or_create_environment(
                     if matches!(
                         site_packages.satisfies_requirements(
                             requirements.iter(),
-                            constraints.iter().chain(latest.iter()),
+                            constraints.iter(),
                             &DependencyModifiers::new(
                                 Overrides::from_requirements(overrides.clone()),
                                 exclusions,
@@ -1208,14 +1139,13 @@ async fn get_or_create_environment(
     }
 
     // Create a `RequirementsSpecification` from the resolved requirements, to avoid re-resolving.
-    let spec = EnvironmentSpecification::from(RequirementsSpecification {
+    let spec = RequirementsSpecification {
         requirements: requirements
             .into_iter()
             .map(UnresolvedRequirementSpecification::from)
             .collect(),
         constraints: constraints
             .into_iter()
-            .chain(latest)
             .map(NameRequirementSpecification::from)
             .collect(),
         overrides: overrides
@@ -1223,13 +1153,24 @@ async fn get_or_create_environment(
             .map(UnresolvedRequirementSpecification::from)
             .collect(),
         ..spec
-    });
+    };
 
     // TODO(zanieb): When implementing project-level tools, discover the project and check if it has the tool.
     // TODO(zanieb): Determine if we should layer on top of the project environment if it is present.
 
+    let resolution_spec = with_latest_constraint(
+        &spec,
+        latest_package,
+        &interpreter,
+        python_platform.as_ref(),
+        &settings.resolver,
+        client_builder,
+        concurrency,
+        cache,
+    )
+    .await?;
     let result = CachedEnvironment::from_spec(
-        spec.clone(),
+        EnvironmentSpecification::from(resolution_spec),
         build_constraints.clone(),
         &interpreter,
         python_platform.as_ref(),
@@ -1290,8 +1231,19 @@ async fn get_or_create_environment(
                     interpreter.sys_executable().display()
                 );
 
+                let resolution_spec = with_latest_constraint(
+                    &spec,
+                    latest_package,
+                    &interpreter,
+                    python_platform.as_ref(),
+                    &settings.resolver,
+                    client_builder,
+                    concurrency,
+                    cache,
+                )
+                .await?;
                 CachedEnvironment::from_spec(
-                    spec,
+                    EnvironmentSpecification::from(resolution_spec),
                     build_constraints,
                     &interpreter,
                     python_platform.as_ref(),

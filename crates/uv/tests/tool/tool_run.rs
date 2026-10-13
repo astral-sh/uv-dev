@@ -8,6 +8,8 @@ use assert_fs::prelude::*;
 #[cfg(unix)]
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
+use serde_json::json;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::generate_wheel_with_files;
@@ -4268,5 +4270,289 @@ async fn tool_run_latest_pep723_pin_respects_no_index() -> Result<()> {
             .expect("request recording")
             .is_empty()
     );
+    Ok(())
+}
+
+/// Latest lookup reselects the package index when resolution requires a newer Python.
+#[tokio::test]
+async fn tool_run_latest_reselects_index_after_python_refinement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let requires_python = ">=3.13".parse()?;
+    let python312 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python312
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    let python313 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python313
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    context.temp_dir.child("deps.py").write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "python312"
+        # url = "{python312}"
+        # explicit = true
+        # [[tool.uv.index]]
+        # name = "python313"
+        # url = "{python313}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = [{{ index = "python312", marker = "python_version < '3.13'" }}, {{ index = "python313", marker = "python_version >= '3.13'" }}]
+        # ///
+    "#, python312 = python312.index_url(), python313 = python313.index_url()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--default-index"])
+        .arg(python312.index_url())
+        .arg("a@latest"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0 Python 3.13
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    ");
+    assert!(
+        !python312
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        !python313
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// A fresh latest constraint does not replace a user's bound when the interpreter changes.
+#[tokio::test]
+async fn tool_run_latest_preserves_constraints_after_python_refinement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let requires_python = ">=3.13".parse()?;
+    let python312 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python312
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    let python313 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python313
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    context.temp_dir.child("deps.py").write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "python312"
+        # url = "{python312}"
+        # explicit = true
+        # [[tool.uv.index]]
+        # name = "python313"
+        # url = "{python313}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = [{{ index = "python312", marker = "python_version < '3.13'" }}, {{ index = "python313", marker = "python_version >= '3.13'" }}]
+        # ///
+    "#, python312 = python312.index_url(), python313 = python313.index_url()})?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("a<2\n")?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--constraints", "constraints.txt", "--default-index"])
+        .arg(python312.index_url())
+        .arg("a@latest"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving tool dependencies
+      cause: Because you require a<2 and a==2.0.0, we can conclude that your requirements are unsatisfiable.
+    ");
+    assert!(
+        !python313
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// A requirements-source default removes implicit PyPI before build-index policies are checked.
+#[test]
+fn tool_run_pep723_combines_build_and_requirement_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("a/cli.py", "def main():\n    print('1.0.0')\n"),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    let wheel_path = context.temp_dir.child(&filename);
+    wheel_path.write_binary(&wheel)?;
+    let wheel_url = SafeUrl::from_file_path(wheel_path.path()).expect("absolute wheel path");
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str(&format!("a @ {wheel_url}"))?;
+    context.temp_dir.child("deps.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "https://example.com/simple"
+        # default = true
+        # [tool.uv.sources]
+        # a = { index = "private" }
+        # ///
+    "#})?;
+    let build = context.temp_dir.child("build.py");
+    build.write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["backend"]
+        # [[tool.uv.index]]
+        # name = "build-pypi"
+        # url = "https://pypi.org/simple"
+        # explicit = true
+        # exclude-newer = "2020-01-01T00:00:00Z"
+        # [tool.uv.sources]
+        # backend = { index = "build-pypi" }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--offline", "--preview-features", "index-exclude-newer",
+            "--build-constraint", "-", "--with-requirements", "deps.py",
+            "--override", "overrides.txt", "--from"])
+        .arg(wheel_path.path())
+        .arg("a")
+        .stdin(fs_err::File::open(build.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0 (from file://[TEMP_DIR]/a-1.0.0-py3-none-any.whl)
+    ");
     Ok(())
 }

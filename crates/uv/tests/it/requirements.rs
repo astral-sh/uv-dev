@@ -6,10 +6,9 @@ use std::path::Path;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{NoSources, RequirementsInput};
-use uv_distribution::LoweringContext;
 use uv_distribution_types::IndexLocations;
 use uv_redacted::SafeUrl;
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
 use uv_workspace::WorkspaceCache;
 
 #[test]

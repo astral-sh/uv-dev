@@ -60,13 +60,8 @@ pub enum SourceIndexError {
 /// A conflicting index definition with credentials removed from its diagnostic URL.
 #[derive(Debug)]
 pub enum SourceIndexIdentity {
-    Named {
-        name: IndexName,
-        url: DisplaySafeUrl,
-    },
-    Unnamed {
-        url: DisplaySafeUrl,
-    },
+    Named { name: IndexName, url: SafeUrl },
+    Unnamed { url: SafeUrl },
 }
 
 impl From<&Index> for SourceIndexIdentity {

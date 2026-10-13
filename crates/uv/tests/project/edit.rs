@@ -2941,7 +2941,7 @@ fn add_absolute_file_url_from_script() -> Result<()> {
         name = "dependency"
         version = "1.0.0"
     "#})?;
-    let url = Url::from_directory_path(dependency.path())
+    let url = SafeUrl::from_directory_path(dependency.path())
         .map_err(|()| anyhow::anyhow!("dependency path cannot be represented as a file URL"))?;
     context
         .temp_dir

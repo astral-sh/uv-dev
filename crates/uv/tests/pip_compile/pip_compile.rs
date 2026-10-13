@@ -20951,7 +20951,7 @@ async fn pep723_requirements_retain_shadowed_index_credentials() -> Result<()> {
         .respond_with(ResponseTemplate::new(200).set_body_bytes(source_wheel))
         .mount(&source)
         .await;
-    let mut configured = Url::parse(&format!("{}/simple", private.uri()))?;
+    let mut configured = SafeUrl::parse(&format!("{}/simple", private.uri()))?;
     configured.set_username("username").expect("valid username");
     configured
         .set_password(Some("password"))

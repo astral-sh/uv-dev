@@ -49,7 +49,9 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::SafeUrl;
 use uv_redacted::policy::Raw;
-use uv_requirements::{NamedRequirementsResolver, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{
+    LoweringContext, NamedRequirementsResolver, RequirementsSource, RequirementsSpecification,
+};
 use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolver::FlatIndex;
