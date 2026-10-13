@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22094,
+        "title": "Use tar-codec by default",
+        "url": "https://github.com/astral-sh/uv/pull/22094",
+        "state": "merged",
+        "reason": "Merged October 1 and included in uv 0.13.0: switches archive extraction to tar-codec and adds UV_LEGACY_TAR_BACKEND=1. Confirms the release change and compatibility fallback, but does not track or fix the reported owner/group-field rejection."
+      },
+      {
+        "kind": "issue",
+        "number": 22492,
+        "title": "v0.13.0 fails to install pybabel-json==0.2.0",
+        "url": "https://github.com/astral-sh/uv/issues/22492",
+        "state": "open",
+        "reason": "Also reports sdist extraction breaking between 0.12.24 and 0.13.0, with maintainers recommending the legacy backend. Its explicit error rejects hard-link members, whereas this report rejects a non-NUL-terminated gname field; these are distinct validation failures."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using exact error fragments, gname, uname, ustar, PAX, tarfile, owner/group names, header length, and null termination; separately searched tar-codec, tar-framing, UV_LEGACY_TAR_BACKEND, and 0.13.0 for backend changes and fixes. PR keyword searches omitted even the known backend-switch PR, so also reviewed 600 recent PR listings and inspected relevant PRs directly. Read candidate discussions and followed historical fix references. Ruled out astral-sh/uv#5450 and its fix astral-sh/tokio-tar#40: lost PAX filename data during pending reads, fixed in uv 0.5.30, differs from this deterministic header rejection. Also ruled out astral-sh/uv#12762 (writing long paths), astral-sh/uv#21641 (download connection resets), and astral-sh/uv#19883 (format-conformance roadmap). No matching existing report or verified fix was found."
+  },
+  "type": "bug",
+  "type_reason": "Rejecting CPython-generated sdists at the 32-byte group-field boundary is a compatibility regression, not a new capability request. An independent in-memory tarfile check confirmed the reported header encoding and PAX override; repository source confirms the default-backend switch and fallback. No existing issue tracks the same failure. The hard-link report and previously fixed PAX streaming bug concern different mechanisms, so neither establishes a duplicate or a recurrence of that historical bug. The uv failure itself was not independently rerun.",
+  "summary": "No duplicate found. astral-sh/uv#22094 establishes the 0.13.0 backend switch; astral-sh/uv#22492 tracks a separate hard-link rejection.",
+  "draft_response": "Your example points to a tar-header compatibility regression following the switch to tar-codec in astral-sh/uv#22094. This is distinct from the hard-link rejection in astral-sh/uv#22492. For now, setting `UV_LEGACY_TAR_BACKEND=1` selects the previous parser. The next step is to verify and fix full-width `uname`/`gname` handling, including entries with PAX overrides; your 32- and 40-byte examples provide concrete regression cases."
+}
