@@ -1739,7 +1739,7 @@ mod tests {
                 },
                 "arch": "x86_64"
             },
-            "manylinux_compatible": false,
+            "manylinux_compatible": true,
             "manylinux_compatibility_override": false,
             "standalone": false,
             "markers": {
