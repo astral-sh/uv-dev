@@ -61,15 +61,17 @@ pub struct PreparedFilters {
 
 impl PreparedFilters {
     fn new(filters: &[(String, String)]) -> Self {
-        let context = filters
-            .iter()
-            .map(|(matcher, replacement)| {
-                (
-                    Regex::new(matcher).expect(INVALID_FILTER),
-                    replacement.clone(),
-                )
-            })
-            .collect();
+        let context = SNAPSHOT_FILTER_CACHE.with_borrow_mut(|compiled_filters| {
+            filters
+                .iter()
+                .map(|(matcher, replacement)| {
+                    let regex = compiled_filters
+                        .entry(matcher.clone())
+                        .or_insert_with(|| Regex::new(matcher).expect(INVALID_FILTER));
+                    (regex.clone(), replacement.clone())
+                })
+                .collect()
+        });
         LazyLock::force(&STANDARD_FILTERS);
         Self { context }
     }
@@ -159,6 +161,11 @@ mod tests {
                 r"C:\\Windows\\fixture".to_string(),
                 "[WINDOWS_ROOT]".to_string(),
             ),
+            (
+                r"\[DUPLICATE\]".to_string(),
+                "[DUPLICATE] first".to_string(),
+            ),
+            (r"\[DUPLICATE\]".to_string(), "second".to_string()),
         ]);
         let input = indoc! {r#"
             ----- stdout -----
@@ -168,6 +175,7 @@ mod tests {
             error: missing /fixture/root/example/metadata.json (os error 2)
             Resolved 21 packages in 12.5ms
             C:\Windows\fixture\file.py
+            [DUPLICATE]
         "#};
         let raw: Vec<_> = filters
             .iter()
@@ -184,6 +192,7 @@ mod tests {
         error: missing [PACKAGE:example]/metadata.json (os error 2)
         Resolved 21 packages in [TIME]
         [WINDOWS_ROOT]/file.py
+        second first
         "#);
     }
 
