@@ -114,7 +114,7 @@ jobs:
           plan_pull_request() {
             local number="$1" expected_head="$2"
             local source approval approval_id approval_event head_ref head_sha source_base source_base_sha
-            local promoter promoter_permission existing
+            local promoter promoter_permission existing existing_head_sha=''
             local base_ref base_sha='' previous_sha='' merge_sha='' merged_parent_number=''
             local parents parent parent_number promoted_parent ancestors ancestor comparison visited='[]'
             local record promotion_label
@@ -137,7 +137,6 @@ jobs:
             fi
             expected_head=$(jq --raw-output '.head_sha' <<< "$record")
             promotion_label=$(jq --raw-output '.approval.promotion_label' <<< "$record")
-            source=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number") || return 1
             promoter=$(jq --raw-output '.actor.login // empty' <<< "$approval")
             if [ -z "$promoter" ]; then
               echo "The pull request has no current human promotion event." >&2
@@ -145,26 +144,15 @@ jobs:
             fi
             approval_id=$(jq --raw-output '.id' <<< "$approval")
             approval_event=$(jq --raw-output '.event' <<< "$approval")
-            if ! jq --exit-status --arg expected_head "$expected_head" \
-              --arg expected_ref "$(jq --raw-output .head_ref <<< "$record")" \
-              --arg approval_event "$approval_event" --arg label "$promotion_label" \
-              --arg source_repository "$GITHUB_REPOSITORY" --argjson repository_id "$GITHUB_REPOSITORY_ID" '
-                .state == "open" and ((.draft | not) or $approval_event == "labeled")
-                and ($approval_event != "labeled" or any(.labels[]; .name == $label))
-                and .base.repo.id == $repository_id and .head.repo.id == $repository_id
-                and .base.repo.full_name == $source_repository and .head.repo.full_name == $source_repository
-                and (.head.ref | startswith("automations/promote/") | not)
-                and .head.sha == $expected_head and .head.ref == $expected_ref
-              ' <<< "$source" > /dev/null; then
-              echo "The source pull request is no longer eligible at its expected head." >&2
-              return 1
-            fi
+            source=$(python3 agents/scripts/pull-request-promotion-approval.py source "$GITHUB_REPOSITORY" "$number" \
+              --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$expected_head" --head-ref "$(jq --raw-output .head_ref <<< "$record")" \
+              --approval-id "$approval_id" --approval-event "$approval_event" \
+              --promotion-label "$promotion_label" --promoter "$promoter") || return 1
             head_ref=$(jq --raw-output '.head.ref' <<< "$source")
             head_sha=$(jq --raw-output '.head.sha' <<< "$source")
             source_base=$(jq --raw-output '.base.ref' <<< "$source")
             source_base_sha=$(jq --raw-output '.base.sha' <<< "$source")
             base_ref="$source_base"
-            git check-ref-format "refs/heads/$head_ref" || return 1
             git check-ref-format "refs/heads/$base_ref" || return 1
             if [ "$promotion_label" = bot:automerge ]; then
               promoter_permission=$(gh api "repos/astral-sh/uv/collaborators/$promoter/permission") || return 1
@@ -189,6 +177,7 @@ jobs:
                 return 1
               fi
               base_ref=$(jq --raw-output '.base.ref' <<< "$existing")
+              existing_head_sha=$(jq --raw-output '.head.sha' <<< "$existing")
             elif [ "$source_base" != main ]; then
               parents=$(gh pr list --repo "$GITHUB_REPOSITORY" --state all --head "$source_base" --limit 1000 \
                 --json number,headRefName,headRefOid,headRepository |
@@ -292,12 +281,13 @@ jobs:
               --arg approval_id "$approval_id" --arg approval_event "$approval_event" \
               --arg promotion_label "$promotion_label" \
               --arg head_ref "$head_ref" --arg head_sha "$head_sha" \
+              --arg existing_head_sha "$existing_head_sha" \
               --arg source_base "$source_base" --arg source_base_sha "$source_base_sha" \
               --arg base_ref "$base_ref" --arg base_sha "$base_sha" \
               --arg previous_sha "$previous_sha" --arg merge_sha "$merge_sha" \
               --arg merged_parent_number "$merged_parent_number" '
                 {$number, $promoter, $approval_id, $approval_event, $promotion_label,
-                 $head_ref, $head_sha, $source_base, $source_base_sha,
+                 $head_ref, $head_sha, $existing_head_sha, $source_base, $source_base_sha,
                  $base_ref, $base_sha, $previous_sha, $merge_sha, $merged_parent_number,
                  action: (if $previous_sha == "" then "promote" else "rebase" end)}'
           }
@@ -353,7 +343,7 @@ jobs:
   rebase:
     name: "Prepare promotion of ${{ github.repository }}#${{ matrix.number }}"
     needs: identify
-    if: needs.identify.outputs.rebase-count != '0'
+    if: always() && needs.identify.result == 'success' && needs.identify.outputs.rebase-count != '0'
     permissions:
       contents: read
       id-token: write
@@ -416,11 +406,18 @@ jobs:
           BASE_SHA: ${{ matrix.base_sha }}
           HEAD_SHA: ${{ matrix.head_sha }}
           PARENT_MERGE_SHA: ${{ matrix.merge_sha }}
+          EXISTING_HEAD_SHA: ${{ matrix.existing_head_sha }}
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
           promoted_head="$HEAD_SHA"
-          if [ "$ACTION" = "rebase" ]; then
+          if [ -n "$EXISTING_HEAD_SHA" ]; then
+            if [[ ! "$EXISTING_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || [ "$ACTION" != promote ]; then
+              echo "Invalid existing promotion revision." >&2
+              exit 1
+            fi
+            promoted_head="$EXISTING_HEAD_SHA"
+          elif [ "$ACTION" = "rebase" ]; then
             current_base=$(git rev-parse --verify "refs/remotes/origin/$BASE_REF^{commit}")
             if [ "$current_base" != "$BASE_SHA" ]; then
               echo "The promotion base changed; refusing to publish a stale rebase." >&2
@@ -448,30 +445,22 @@ jobs:
           BASE_SHA: ${{ matrix.base_sha }}
           PARENT_MERGE_SHA: ${{ matrix.merge_sha }}
           MERGED_PARENT_NUMBER: ${{ matrix.merged_parent_number }}
+          PROMOTED_HEAD: ${{ steps.verify.outputs.head_sha }}
           PROMOTER: ${{ matrix.promoter }}
           APPROVAL_ID: ${{ matrix.approval_id }}
           APPROVAL_EVENT: ${{ matrix.approval_event }}
         run: |
-          source_pull_request=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
-          if ! jq --exit-status --arg head_ref "$HEAD_REF" --arg head_sha "$HEAD_SHA" \
-            --arg approval_event "$APPROVAL_EVENT" --arg label "$PROMOTION_LABEL" \
-            --arg source_base "$SOURCE_BASE" --arg source_base_sha "$SOURCE_BASE_SHA" \
-            --arg source_repository "$GITHUB_REPOSITORY" --argjson repository_id "$GITHUB_REPOSITORY_ID" '
-              .state == "open" and ((.draft | not) or $approval_event == "labeled")
-              and ($approval_event != "labeled" or any(.labels[]; .name == $label))
-              and .base.repo.id == $repository_id and .head.repo.id == $repository_id
-              and .base.ref == $source_base and .head.ref == $head_ref and .head.sha == $head_sha
+          source_pull_request=$(python3 agents/scripts/pull-request-promotion-approval.py source "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" \
+            --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" \
+            --approval-id "$APPROVAL_ID" --approval-event "$APPROVAL_EVENT" \
+            --promotion-label "$PROMOTION_LABEL" --promoter "$PROMOTER")
+          if ! jq --exit-status --arg source_base "$SOURCE_BASE" --arg source_base_sha "$SOURCE_BASE_SHA" \
+            --arg source_repository "$GITHUB_REPOSITORY" '
+              .base.ref == $source_base
               and ($source_repository != "astral-sh/uv-security" or .base.sha == $source_base_sha)
               and ($source_repository != "astral-sh/uv-dev" or $source_base == "main" or .base.sha == $source_base_sha)
             ' <<< "$source_pull_request" > /dev/null; then
-            echo "The source pull request changed before publication." >&2
-            exit 1
-          fi
-          current_approval=$(python3 agents/scripts/pull-request-promotion-approval.py current "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER")
-          if [ "$(jq --raw-output '.id // empty' <<< "$current_approval")" != "$APPROVAL_ID" ] || \
-            [ "$(jq --raw-output '.promotion_label // empty' <<< "$current_approval")" != "$PROMOTION_LABEL" ] || \
-            [ "$(jq --raw-output '.actor.login // empty' <<< "$current_approval")" != "$PROMOTER" ]; then
-            echo "The human promotion event changed before publication." >&2
+            echo "The source base changed before publication." >&2
             exit 1
           fi
           if [ "$GITHUB_REPOSITORY" = astral-sh/uv-security ]; then
@@ -484,10 +473,10 @@ jobs:
           fi
           existing=$(bash agents/scripts/find-pull-request-promotion.sh "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" "$HEAD_REF" "$HEAD_SHA")
           if [ "$existing" != null ]; then
-            if ! jq --exit-status --arg base_ref "$BASE_REF" \
-              '(.state == "open" or .merged_at != null) and .base.ref == $base_ref' \
+            if ! jq --exit-status --arg base_ref "$BASE_REF" --arg promoted_head "$PROMOTED_HEAD" \
+              '(.state == "open" or .merged_at != null) and .base.ref == $base_ref and .head.sha == $promoted_head' \
               <<< "$existing" > /dev/null; then
-              echo "The existing promotion has a different state or base." >&2
+              echo "The existing promotion has a different state, base, or head." >&2
               exit 1
             fi
           elif [ -n "$PARENT_MERGE_SHA" ]; then
@@ -528,6 +517,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PULL_REQUEST_NUMBER: ${{ matrix.number }}
+          HEAD_REF: ${{ matrix.head_ref }}
           HEAD_SHA: ${{ matrix.head_sha }}
           SOURCE_BASE_SHA: ${{ matrix.source_base_sha }}
           BASE_REF: ${{ matrix.base_ref }}
@@ -552,26 +542,17 @@ jobs:
             promotion_repository=astral-sh/uv-dev
             promotion_repository_id="$UV_DEV_REPOSITORY_ID"
           fi
-          source_pull_request=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
+          source_pull_request=$(python3 agents/scripts/pull-request-promotion-approval.py source "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" \
+            --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" \
+            --approval-id "$APPROVAL_ID" --approval-event "$APPROVAL_EVENT" \
+            --promotion-label "$PROMOTION_LABEL" --promoter "$PROMOTER")
           if ! jq --exit-status --slurpfile expected "$RUNNER_TEMP/pull-request.json" \
-            --arg approval_event "$APPROVAL_EVENT" --arg label "$PROMOTION_LABEL" \
-            --arg source_repository "$GITHUB_REPOSITORY" --argjson repository_id "$GITHUB_REPOSITORY_ID" '
-              .state == "open" and ((.draft | not) or $approval_event == "labeled")
-              and ($approval_event != "labeled" or any(.labels[]; .name == $label))
-              and .base.repo.id == $repository_id and .head.repo.id == $repository_id
-              and .base.ref == $expected[0].base.ref
-              and .head.ref == $expected[0].head.ref and .head.sha == $expected[0].head.sha
+            --arg source_repository "$GITHUB_REPOSITORY" '
+              .base.ref == $expected[0].base.ref
               and ($source_repository != "astral-sh/uv-security" or .base.sha == $expected[0].base.sha)
               and ($source_repository != "astral-sh/uv-dev" or .base.ref == "main" or .base.sha == $expected[0].base.sha)
             ' <<< "$source_pull_request" > /dev/null; then
-            echo "The source pull request changed before publication." >&2
-            exit 1
-          fi
-          current_approval=$(python3 agents/scripts/pull-request-promotion-approval.py current "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER")
-          if [ "$(jq --raw-output '.id // empty' <<< "$current_approval")" != "$APPROVAL_ID" ] || \
-            [ "$(jq --raw-output '.promotion_label // empty' <<< "$current_approval")" != "$PROMOTION_LABEL" ] || \
-            [ "$(jq --raw-output '.actor.login // empty' <<< "$current_approval")" != "$PROMOTER" ]; then
-            echo "The human promotion event changed before publication." >&2
+            echo "The source base changed before publication." >&2
             exit 1
           fi
           if [ "$GITHUB_REPOSITORY" = astral-sh/uv-security ]; then
@@ -586,10 +567,11 @@ jobs:
             upstream_pull_request=$(gh api "repos/astral-sh/uv/pulls/$UPSTREAM_NUMBER")
             if ! jq --exit-status --slurpfile expected "$RUNNER_TEMP/upstream-pull-request.json" \
               --arg marker "$marker" --arg promotion_ref "$promotion_ref" \
-              --arg head_sha "$HEAD_SHA" --argjson uv_id "$UV_REPOSITORY_ID" '
+              --arg head_sha "$HEAD_SHA" --arg promoted_head "$PROMOTED_HEAD" --argjson uv_id "$UV_REPOSITORY_ID" '
                 (.state == "open" or .merged_at != null)
                 and .base.repo.id == $uv_id and .base.ref == $expected[0].base.ref
                 and .head.repo.id == $expected[0].head.repo.id and .head.ref == $expected[0].head.ref
+                and .head.sha == $promoted_head
                 and (if .head.ref == $promotion_ref then
                   .user.login == "astral-automations-bot[bot]"
                   and ((.body // "" | sub("\\s+$"; "")) | endswith($marker))
@@ -642,33 +624,20 @@ jobs:
                 test "$(promotion_git rev-parse refs/heads/approved)" = "$PROMOTED_HEAD"
                 promotion_git merge-base refs/heads/upstream-base refs/heads/approved > /dev/null
 
-                current_pull_request=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
-                if ! jq --exit-status --slurpfile expected "$RUNNER_TEMP/pull-request.json" \
-                  --arg approval_event "$APPROVAL_EVENT" --arg label "$PROMOTION_LABEL" \
-                  --argjson repository_id "$GITHUB_REPOSITORY_ID" '
-                    .state == "open" and ((.draft | not) or $approval_event == "labeled")
-                    and ($approval_event != "labeled" or any(.labels[]; .name == $label))
-                    and .base.repo.id == $repository_id and .head.repo.id == $repository_id
-                    and .base.ref == $expected[0].base.ref and .base.sha == $expected[0].base.sha
-                    and .head.ref == $expected[0].head.ref and .head.sha == $expected[0].head.sha
+                current_pull_request=$(python3 agents/scripts/pull-request-promotion-approval.py source "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" \
+                  --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" \
+                  --approval-id "$APPROVAL_ID" --approval-event "$APPROVAL_EVENT" \
+                  --promotion-label "$PROMOTION_LABEL" --promoter "$PROMOTER")
+                if ! jq --exit-status --slurpfile expected "$RUNNER_TEMP/pull-request.json" '
+                    .base.ref == $expected[0].base.ref and .base.sha == $expected[0].base.sha
                   ' <<< "$current_pull_request" > /dev/null; then
-                  echo "The private pull request changed before publication." >&2
+                  echo "The private pull request base changed before publication." >&2
                   exit 1
                 fi
-                current_approval=$(python3 agents/scripts/pull-request-promotion-approval.py current "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER")
-                current_promoter=$(jq --raw-output '.actor.login // empty' <<< "$current_approval")
-                promoter_permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$current_promoter/permission")
-                if [ "$(jq --raw-output '.id // empty' <<< "$current_approval")" != "$APPROVAL_ID" ] || \
-                  [ "$(jq --raw-output '.promotion_label // empty' <<< "$current_approval")" != "$PROMOTION_LABEL" ] || \
-                  [ "$current_promoter" != "$PROMOTER" ] || \
-                  ! jq --exit-status '.permission | IN("admin", "maintain", "write")' \
-                    <<< "$promoter_permission" > /dev/null; then
+                promoter_permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$PROMOTER/permission")
+                if ! jq --exit-status '.permission | IN("admin", "maintain", "write")' \
+                  <<< "$promoter_permission" > /dev/null; then
                   echo "The private pull request is no longer approved by its repository writer." >&2
-                  exit 1
-                fi
-                if ! jq --exit-status --arg label "$PROMOTION_LABEL" \
-                  '.labels | any(.name == $label)' <<< "$current_pull_request" > /dev/null; then
-                  echo "The private pull request requires the $PROMOTION_LABEL label." >&2
                   exit 1
                 fi
 
@@ -724,24 +693,13 @@ jobs:
           fi
           gh api --method POST "repos/astral-sh/uv/issues/$upstream_number/assignees" \
             --raw-field "assignees[]=$PROMOTER" --silent
-          current_source=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
+          current_source=$(python3 agents/scripts/pull-request-promotion-approval.py source "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" \
+            --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" \
+            --approval-id "$APPROVAL_ID" --approval-event "$APPROVAL_EVENT" \
+            --promotion-label "$PROMOTION_LABEL" --promoter "$PROMOTER")
           if ! jq --exit-status --slurpfile expected "$RUNNER_TEMP/pull-request.json" \
-            --arg approval_event "$APPROVAL_EVENT" --arg label "$PROMOTION_LABEL" \
-            --argjson repository_id "$GITHUB_REPOSITORY_ID" '
-              .state == "open" and ((.draft | not) or $approval_event == "labeled")
-              and ($approval_event != "labeled" or any(.labels[]; .name == $label))
-              and .base.repo.id == $repository_id and .head.repo.id == $repository_id
-              and .base.ref == $expected[0].base.ref
-              and .head.ref == $expected[0].head.ref and .head.sha == $expected[0].head.sha
-            ' <<< "$current_source" > /dev/null; then
-            echo "The source changed before it could be closed." >&2
-            exit 1
-          fi
-          current_approval=$(python3 agents/scripts/pull-request-promotion-approval.py current "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER")
-          if [ "$(jq --raw-output '.id // empty' <<< "$current_approval")" != "$APPROVAL_ID" ] || \
-            [ "$(jq --raw-output '.promotion_label // empty' <<< "$current_approval")" != "$PROMOTION_LABEL" ] || \
-            [ "$(jq --raw-output '.actor.login // empty' <<< "$current_approval")" != "$PROMOTER" ]; then
-            echo "The human promotion event changed before the source could be closed." >&2
+            '.base.ref == $expected[0].base.ref' <<< "$current_source" > /dev/null; then
+            echo "The source base changed before it could be closed." >&2
             exit 1
           fi
           if [ "$PROMOTION_LABEL" = bot:automerge ]; then

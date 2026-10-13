@@ -185,6 +185,106 @@ class PromotionApprovalTests(unittest.TestCase):
             APPROVAL.main()
         return json.loads(output.getvalue())
 
+    def check_source(self, **changes):
+        expected = {
+            "repository-id": str(REPOSITORY_ID),
+            "head-sha": HEAD,
+            "head-ref": "feature",
+            "approval-id": "11",
+            "approval-event": "labeled",
+            "promotion-label": "bot:automerge",
+            "promoter": "maintainer",
+        } | changes
+        return self.invoke(
+            "source",
+            *(value for key, item in expected.items() for value in ("--" + key, item)),
+        )
+
+    def test_source_rechecks_label_approved_draft_without_loading_artifacts(self):
+        self.assertEqual(self.check_source(), self.source)
+        self.assertFalse(any("/actions/" in endpoint for endpoint, _ in self.requests))
+
+    def test_source_rejects_replaced_repository_identity(self):
+        with self.assertRaisesRegex(
+            APPROVAL.ApprovalError, "repository identity changed"
+        ):
+            self.check_source(**{"repository-id": "999"})
+
+    def test_source_rejects_promotion_branches(self):
+        self.source["head"]["ref"] = "automations/promote/101"
+        with self.assertRaisesRegex(APPROVAL.ApprovalError, "cannot be promoted again"):
+            self.check_source(**{"head-ref": "automations/promote/101"})
+
+    def test_source_rejects_changed_approval_identity(self):
+        for key, value in {
+            "approval-id": "12",
+            "approval-event": "ready_for_review",
+            "promotion-label": "bot:promote",
+            "promoter": "another-maintainer",
+        }.items():
+            with (
+                self.subTest(field=key),
+                self.assertRaisesRegex(APPROVAL.ApprovalError, "event changed"),
+            ):
+                self.check_source(**{key: value})
+
+    def test_source_rejects_changed_revision_or_branch(self):
+        for key, value, message in (
+            ("head-sha", "b" * 40, "head changed"),
+            ("head-ref", "renamed", "branch changed"),
+        ):
+            with (
+                self.subTest(field=key),
+                self.assertRaisesRegex(APPROVAL.ApprovalError, message),
+            ):
+                self.check_source(**{key: value})
+
+    def test_source_checks_repository_identity_and_current_label(self):
+        for side in ("base", "head"):
+            for key, value in (("id", 999), ("full_name", "another/repository")):
+                with self.subTest(side=side, field=key):
+                    changed = copy.deepcopy(self.source)
+                    changed[side]["repo"] = changed[side]["repo"] | {key: value}
+                    with (
+                        patch.dict(
+                            self.api_values, {f"repos/{REPOSITORY}/pulls/101": changed}
+                        ),
+                        self.assertRaisesRegex(APPROVAL.ApprovalError, "repositories"),
+                    ):
+                        self.check_source()
+        self.source["labels"] = []
+        with self.assertRaisesRegex(APPROVAL.ApprovalError, "label was removed"):
+            self.check_source()
+
+    def test_source_refetches_state_at_each_boundary(self):
+        self.assertEqual(self.check_source()["state"], "open")
+        self.source["state"] = "closed"
+        with self.assertRaisesRegex(APPROVAL.ApprovalError, "no longer open"):
+            self.check_source()
+        self.assertEqual(
+            self.requests.count((f"repos/{REPOSITORY}/pulls/101", False)), 2
+        )
+
+    def test_source_rechecks_ready_approval_draft_eligibility(self):
+        self.event["event"] = "ready_for_review"
+        self.source["draft"] = False
+        self.assertFalse(
+            self.check_source(
+                **{
+                    "approval-event": "ready_for_review",
+                    "promotion-label": "bot:promote",
+                }
+            )["draft"]
+        )
+        self.source["draft"] = True
+        with self.assertRaisesRegex(APPROVAL.ApprovalError, "no longer approved"):
+            self.check_source(
+                **{
+                    "approval-event": "ready_for_review",
+                    "promotion-label": "bot:promote",
+                }
+            )
+
     def test_capture_retains_explicit_revision_and_automerge_mode(self):
         result = self.invoke(
             "capture", "--head-sha", HEAD, "--promotion-label", "bot:automerge"
