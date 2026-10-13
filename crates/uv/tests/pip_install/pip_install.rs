@@ -14734,6 +14734,88 @@ async fn pep_751_remote_install_uses_index_url_credentials_before_planning() -> 
     Ok(())
 }
 
+/// Successful lockfile authentication remains available when deferred services fetch its wheels.
+#[tokio::test]
+async fn pep_751_remote_install_retains_lockfile_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let hash = hex::encode(Sha256::digest(&wheel));
+    let lock = formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "foo"
+        version = "1.0.0"
+        wheels = [{{ url = "{url}/files/{filename}", size = {size}, hashes = {{ sha256 = "{hash}" }} }}]
+    "#, url = server.uri(), size = wheel.len()};
+    Mock::given(method("GET"))
+        .and(path("/locks/pylock.toml"))
+        .and(basic_auth("lock-user", "lock-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(lock))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(basic_auth("lock-user", "lock-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(basic_auth("index-user", "index-password"))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(2)
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(3)
+        .mount(&server)
+        .await;
+
+    let lock_url = format!(
+        "{}/locks/pylock.toml",
+        server
+            .uri()
+            .replace("http://", "http://lock-user:lock-password@")
+    );
+    let index_url = format!(
+        "{}/private/simple",
+        server
+            .uri()
+            .replace("http://", "http://index-user:index-password@")
+    );
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg(&lock_url)
+        .arg("--preview")
+        .arg("--index-url").arg(&index_url), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + foo==1.0.0
+    ");
+    context.assert_installed("foo", "1.0.0");
+    server.verify().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn pep_751_remote_install_uses_named_index_credentials_before_planning() -> Result<()> {
     let context = uv_test::test_context!("3.12");
