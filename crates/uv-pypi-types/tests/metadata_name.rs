@@ -55,23 +55,91 @@ fn missing_metadata_name() {
 }
 
 #[test]
-fn valid_metadata_names() -> Result<()> {
-    for name in ["unknown", "Unknown", "valid", "Foo_Bar"] {
-        let content = format!("Metadata-Version: 2.3\nName: {name}\nVersion: 1.0.0\n");
-        for (parser, result) in parse_names(&content) {
-            let expected = if parser == "Metadata23" {
-                name.to_string()
-            } else {
-                name.to_ascii_lowercase().replace('_', "-")
-            };
-            assert_eq!(result?, expected, "{parser}: {name}");
-        }
-    }
+fn valid_metadata_name() -> Result<()> {
+    let content = b"Metadata-Version: 2.3\nName: valid\nVersion: 1.0.0\n";
+    assert_eq!(Metadata10::parse_pkg_info(content)?.name.as_ref(), "valid");
+    assert_eq!(Metadata23::parse(content)?.name, "valid");
+    assert_eq!(
+        ResolutionMetadata::parse_metadata(content)?.name.as_ref(),
+        "valid"
+    );
+    assert_eq!(
+        ResolutionMetadata::parse_pkg_info(content)?.name.as_ref(),
+        "valid"
+    );
+    Ok(())
+}
 
-    let content = "Metadata-Version: 2.3\nName: valid\nName: UNKNOWN\nVersion: 1.0.0\n";
-    for (parser, result) in parse_names(content) {
-        assert_eq!(result?, "valid", "{parser}");
-    }
+#[test]
+fn lowercase_unknown_metadata_name() -> Result<()> {
+    let content = b"Metadata-Version: 2.3\nName: unknown\nVersion: 1.0.0\n";
+    assert_eq!(
+        Metadata10::parse_pkg_info(content)?.name.as_ref(),
+        "unknown"
+    );
+    assert_eq!(Metadata23::parse(content)?.name, "unknown");
+    assert_eq!(
+        ResolutionMetadata::parse_metadata(content)?.name.as_ref(),
+        "unknown"
+    );
+    assert_eq!(
+        ResolutionMetadata::parse_pkg_info(content)?.name.as_ref(),
+        "unknown"
+    );
+    Ok(())
+}
+
+#[test]
+fn mixed_case_unknown_metadata_name() -> Result<()> {
+    let content = b"Metadata-Version: 2.3\nName: Unknown\nVersion: 1.0.0\n";
+    assert_eq!(
+        Metadata10::parse_pkg_info(content)?.name.as_ref(),
+        "unknown"
+    );
+    assert_eq!(Metadata23::parse(content)?.name, "Unknown");
+    assert_eq!(
+        ResolutionMetadata::parse_metadata(content)?.name.as_ref(),
+        "unknown"
+    );
+    assert_eq!(
+        ResolutionMetadata::parse_pkg_info(content)?.name.as_ref(),
+        "unknown"
+    );
+    Ok(())
+}
+
+#[test]
+fn normalized_metadata_name() -> Result<()> {
+    let content = b"Metadata-Version: 2.3\nName: Foo_Bar\nVersion: 1.0.0\n";
+    assert_eq!(
+        Metadata10::parse_pkg_info(content)?.name.as_ref(),
+        "foo-bar"
+    );
+    assert_eq!(Metadata23::parse(content)?.name, "Foo_Bar");
+    assert_eq!(
+        ResolutionMetadata::parse_metadata(content)?.name.as_ref(),
+        "foo-bar"
+    );
+    assert_eq!(
+        ResolutionMetadata::parse_pkg_info(content)?.name.as_ref(),
+        "foo-bar"
+    );
+    Ok(())
+}
+
+#[test]
+fn first_metadata_name() -> Result<()> {
+    let content = b"Metadata-Version: 2.3\nName: valid\nName: UNKNOWN\nVersion: 1.0.0\n";
+    assert_eq!(Metadata10::parse_pkg_info(content)?.name.as_ref(), "valid");
+    assert_eq!(Metadata23::parse(content)?.name, "valid");
+    assert_eq!(
+        ResolutionMetadata::parse_metadata(content)?.name.as_ref(),
+        "valid"
+    );
+    assert_eq!(
+        ResolutionMetadata::parse_pkg_info(content)?.name.as_ref(),
+        "valid"
+    );
     Ok(())
 }
 
