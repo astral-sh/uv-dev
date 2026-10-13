@@ -3,6 +3,8 @@ use std::fmt::Display;
 use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -13,10 +15,14 @@ use fs_err::{DirEntry, File};
 use itertools::Itertools;
 use regex_automata::dfa::{Automaton, dense};
 use regex_automata::{Input, util::syntax};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace, warn};
 use walkdir::WalkDir;
+#[cfg(windows)]
+use windows::Win32::Globalization::{
+    CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN, CompareStringOrdinal,
+};
 
 use uv_fs::{PortablePath, Simplified, normalize_path_under, persist_with_retry_sync, relative_to};
 use uv_normalize::PackageName;
@@ -368,16 +374,14 @@ pub(crate) fn write_script_entrypoints(
     layout: &Layout,
     relocatable: bool,
     site_packages: &Path,
-    entrypoints: &[Script],
+    entrypoints: &PreparedEntryPoints<'_>,
     record: &mut Vec<RecordEntry>,
-    is_gui: bool,
 ) -> Result<(), Error> {
-    for script in entrypoints {
-        let script = ValidatedScript::try_from_script(script, layout)?;
+    for (script, is_gui) in &entrypoints.scripts {
         let entrypoint_relative = script.relative_to_site_package(site_packages)?;
 
         // Generate the launcher script.
-        let launcher_executable = get_script_executable(&layout.sys_executable, is_gui);
+        let launcher_executable = get_script_executable(&layout.sys_executable, *is_gui);
         let launcher_executable =
             get_relocatable_executable(launcher_executable, layout, relocatable)?;
         let launcher_python_script = get_script_launcher(
@@ -390,7 +394,7 @@ pub(crate) fn write_script_entrypoints(
             write_file_recorded(
                 site_packages,
                 &entrypoint_relative,
-                &windows_script_launcher(&launcher_python_script, is_gui, &launcher_executable)?,
+                &windows_script_launcher(&launcher_python_script, *is_gui, &launcher_executable)?,
                 record,
             )?;
         } else {
@@ -418,34 +422,161 @@ pub(crate) fn write_script_entrypoints(
     Ok(())
 }
 
-/// Reject entry points that normalize to the same final script destination.
-pub(crate) fn validate_script_entrypoints(
-    layout: &Layout,
-    console_scripts: &[Script],
-    gui_scripts: &[Script],
-) -> Result<(), Error> {
-    let mut destinations = FxHashMap::default();
-    for script in console_scripts.iter().chain(gui_scripts) {
-        let validated = ValidatedScript::try_from_script(script, layout)?;
-        let destination = script_destination_key(validated.as_path());
-        if let Some(previous) = destinations.insert(destination, script.name.as_str()) {
-            let mut entry_points = [previous, script.name.as_str()];
-            entry_points.sort_unstable();
-            return Err(Error::InvalidWheel(format!(
-                "Wheel entry points `{}` and `{}` install to the same destination",
-                entry_points[0], entry_points[1]
-            )));
+/// Entry points with validated paths and unique final script destinations.
+pub(crate) struct PreparedEntryPoints<'script> {
+    scripts: Vec<(ValidatedScript<'script>, bool)>,
+    destinations: ScriptDestinations<'script>,
+}
+
+impl<'script> PreparedEntryPoints<'script> {
+    pub(crate) fn new(
+        layout: &Layout,
+        console_scripts: &'script [Script],
+        gui_scripts: &'script [Script],
+    ) -> Result<Self, Error> {
+        let mut scripts = Vec::with_capacity(console_scripts.len() + gui_scripts.len());
+        let mut destinations = ScriptDestinations::default();
+        for (script, is_gui) in console_scripts
+            .iter()
+            .map(|script| (script, false))
+            .chain(gui_scripts.iter().map(|script| (script, true)))
+        {
+            let validated = ValidatedScript::try_from_script(script, layout)?;
+            let destination = script_destination_key(validated.as_path())?;
+            if let Some(previous) = destinations.insert(destination, script.name.as_str())? {
+                let mut entry_points = [previous, script.name.as_str()];
+                entry_points.sort_unstable();
+                return Err(Error::InvalidWheel(format!(
+                    "Wheel entry points `{}` and `{}` install to the same destination",
+                    entry_points[0], entry_points[1]
+                )));
+            }
+            scripts.push((validated, is_gui));
+        }
+        Ok(Self {
+            scripts,
+            destinations,
+        })
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.scripts.is_empty()
+    }
+}
+
+#[cfg(windows)]
+type ScriptDestinationKey = Vec<u16>;
+#[cfg(not(windows))]
+type ScriptDestinationKey = Vec<u8>;
+
+/// Final destinations compared using the platform's filename casing rules.
+#[derive(Default)]
+struct ScriptDestinations<'script> {
+    #[cfg(windows)]
+    paths: Vec<(ScriptDestinationKey, &'script str)>,
+    #[cfg(not(windows))]
+    paths: FxHashMap<ScriptDestinationKey, &'script str>,
+}
+
+impl<'script> ScriptDestinations<'script> {
+    #[cfg_attr(
+        not(windows),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "Windows ordinal comparisons can fail"
+        )
+    )]
+    fn insert(
+        &mut self,
+        destination: ScriptDestinationKey,
+        name: &'script str,
+    ) -> io::Result<Option<&'script str>> {
+        #[cfg(windows)]
+        {
+            match self.position(&destination)? {
+                Ok(index) => Ok(Some(self.paths[index].1)),
+                Err(index) => {
+                    self.paths.insert(index, (destination, name));
+                    Ok(None)
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(self.paths.insert(destination, name))
         }
     }
-    Ok(())
+
+    #[cfg_attr(
+        not(windows),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "Windows ordinal comparisons can fail"
+        )
+    )]
+    fn contains(&self, destination: &ScriptDestinationKey) -> io::Result<bool> {
+        #[cfg(windows)]
+        {
+            Ok(self.position(destination)?.is_ok())
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(self.paths.contains_key(destination))
+        }
+    }
+
+    /// Windows ordinal comparisons use the operating system uppercase table without linguistic
+    /// expansions. A sorted index bounds each lookup to logarithmically many API calls, and this
+    /// fallible search reports comparison errors instead of embedding them in an `Ord` implementation.
+    #[cfg(windows)]
+    fn position(&self, destination: &[u16]) -> io::Result<Result<usize, usize>> {
+        let mut start = 0;
+        let mut end = self.paths.len();
+        while start < end {
+            let middle = start + (end - start) / 2;
+            // SAFETY: Both UTF-16 slices remain valid for the call, and their lengths fit in an
+            // i32 because every key is created by `script_destination_key`.
+            #[expect(unsafe_code)]
+            let comparison =
+                unsafe { CompareStringOrdinal(&self.paths[middle].0, destination, true) };
+            match comparison {
+                CSTR_EQUAL => return Ok(Ok(middle)),
+                CSTR_LESS_THAN => start = middle + 1,
+                CSTR_GREATER_THAN => end = middle,
+                _ => return Err(io::Error::last_os_error()),
+            }
+        }
+        Ok(Err(start))
+    }
 }
 
 /// Return a key for a final script destination, accounting for common case-insensitive layouts.
-fn script_destination_key(path: &Path) -> Vec<u8> {
-    if cfg!(any(windows, target_os = "macos")) {
-        path.to_string_lossy().to_lowercase().into_bytes()
-    } else {
-        path.as_os_str().as_encoded_bytes().to_vec()
+#[cfg_attr(
+    not(windows),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "Windows ordinal comparison has a path length limit"
+    )
+)]
+fn script_destination_key(path: &Path) -> io::Result<ScriptDestinationKey> {
+    #[cfg(windows)]
+    {
+        let destination: Vec<_> = path.as_os_str().encode_wide().collect();
+        if destination.len() > i32::MAX as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "script path is too long",
+            ));
+        }
+        Ok(destination)
+    }
+    #[cfg(not(windows))]
+    {
+        if cfg!(target_os = "macos") {
+            Ok(path.to_string_lossy().to_lowercase().into_bytes())
+        } else {
+            Ok(path.as_os_str().as_encoded_bytes().to_vec())
+        }
     }
 }
 
@@ -803,16 +934,9 @@ pub(crate) fn install_data(
     site_packages: &Path,
     data_dir: &Path,
     dist_name: &PackageName,
-    console_scripts: &[Script],
-    gui_scripts: &[Script],
+    entrypoints: &PreparedEntryPoints<'_>,
     record: &mut [RecordEntry],
 ) -> Result<(), Error> {
-    let mut script_destinations = FxHashSet::default();
-    for script in console_scripts.iter().chain(gui_scripts) {
-        let validated = ValidatedScript::try_from_script(script, layout)?;
-        script_destinations.insert(script_destination_key(validated.as_path()));
-    }
-
     for entry in fs::read_dir(data_dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -852,13 +976,13 @@ pub(crate) fn install_data(
                         .or_else(|| name.strip_suffix("-script.py"))
                         .or_else(|| name.strip_suffix(".pya"))
                         .unwrap_or(&name);
-                    if console_scripts
+                    if entrypoints
+                        .scripts
                         .iter()
-                        .chain(gui_scripts)
-                        .any(|script| script.name == match_name)
-                        || script_destinations.contains(&script_destination_key(
+                        .any(|(script, _)| script.inner().name == match_name)
+                        || entrypoints.destinations.contains(&script_destination_key(
                             &layout.scheme.scripts.join(file.file_name()),
-                        ))
+                        )?)?
                     {
                         continue;
                     }
@@ -1324,6 +1448,62 @@ mod test {
         get_script_executable, parse_email_message_file, parse_scripts, read_record,
         write_installer_metadata,
     };
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_destination_aliases() -> Result<()> {
+        let mut destinations = super::ScriptDestinations::default();
+        assert_eq!(
+            destinations.insert(super::script_destination_key(Path::new("σ.exe"))?, "sigma")?,
+            None
+        );
+        assert_eq!(
+            destinations.insert(
+                super::script_destination_key(Path::new("ς.exe"))?,
+                "final-sigma"
+            )?,
+            Some("sigma")
+        );
+        assert!(destinations.contains(&super::script_destination_key(Path::new("Σ.EXE"))?)?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_destination_distinctions() -> Result<()> {
+        let mut destinations = super::ScriptDestinations::default();
+        assert_eq!(
+            destinations.insert(
+                super::script_destination_key(Path::new("ß.exe"))?,
+                "sharp-s"
+            )?,
+            None
+        );
+        assert_eq!(
+            destinations.insert(
+                super::script_destination_key(Path::new("ss.exe"))?,
+                "double-s"
+            )?,
+            None
+        );
+        assert_eq!(
+            destinations.insert(
+                super::script_destination_key(Path::new("é.exe"))?,
+                "composed"
+            )?,
+            None
+        );
+        assert_eq!(
+            destinations.insert(
+                super::script_destination_key(Path::new("e\u{301}.exe"))?,
+                "decomposed"
+            )?,
+            None
+        );
+        assert!(destinations.contains(&super::script_destination_key(Path::new("SS.EXE"))?)?);
+        assert!(!destinations.contains(&super::script_destination_key(Path::new("other.exe"))?)?);
+        Ok(())
+    }
 
     #[test]
     fn test_parse_email_message_file() {

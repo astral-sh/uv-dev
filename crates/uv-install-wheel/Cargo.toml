@@ -51,6 +51,7 @@ walkdir = { workspace = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 same-file = { workspace = true }
 self-replace = { workspace = true }
+windows = { workspace = true }
 
 [features]
 clap = ["uv-fs/clap"]
