@@ -170,14 +170,8 @@ impl ResolveError {
 
 impl uv_errors::Hinted for ResolveError {
     fn hints(&self) -> uv_errors::Hints<'_> {
-        if let Self::UnhashedPackageVersion(name, version, chain) = self
-            && !chain.is_empty()
-        {
-            return uv_errors::Hints::from(uv_distribution::format_derivation_chain(
-                name,
-                Some(version),
-                chain,
-            ));
+        if let Self::UnhashedPackageVersion(name, version, chain) = self {
+            return uv_distribution::format_derivation_chain(name, Some(version), chain);
         }
 
         match self {
