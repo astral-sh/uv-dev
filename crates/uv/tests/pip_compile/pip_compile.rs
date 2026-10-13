@@ -20982,7 +20982,8 @@ async fn pep723_requirements_retain_shadowed_index_credentials() -> Result<()> {
     "#, url = source.uri()})?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
-        .args(["requirements.py", "--index", &format!("private={}/simple", private.uri()), "--default-index", &format!("{}/simple", source.uri()), "--no-header", "--no-annotate"]), @"
+        .args(["requirements.py", "--index", &format!("private={}/simple", private.uri()), "--default-index", &format!("{}/simple", source.uri()), "--no-header", "--no-annotate"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 0 (success)
     ----- stdout -----
     privatepkg==1.0.0
