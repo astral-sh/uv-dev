@@ -19937,14 +19937,11 @@ async fn index_precedence_legacy_cli_default_over_modern_config() -> Result<()> 
         requires-python = ">=3.12"
         dependencies = ["ok"]
     "#})?;
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(&formatdoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {fallback_url:?}
         default = true
-    "#})?;
+    "})?;
 
     uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_INDEX)
@@ -20028,13 +20025,10 @@ async fn index_precedence_legacy_cli_extra_over_modern_config() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["ok"]
     "#})?;
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(&formatdoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {fallback_url:?}
-    "#})?;
+    "})?;
 
     uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_INDEX)
@@ -20118,12 +20112,9 @@ async fn index_precedence_modern_cli_default_over_legacy_config() -> Result<()> 
         requires-python = ">=3.12"
         dependencies = ["ok"]
     "#})?;
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(&formatdoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
         index-url = {fallback_url:?}
-    "#})?;
+    "})?;
 
     uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_INDEX)
@@ -20207,12 +20198,9 @@ async fn index_precedence_modern_cli_extra_over_legacy_config() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["ok"]
     "#})?;
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(&formatdoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
         extra-index-url = [{fallback_url:?}]
-    "#})?;
+    "})?;
 
     uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_INDEX)
@@ -20806,13 +20794,10 @@ async fn index_precedence_configured_extra_over_modern_cli_default() -> Result<(
         requires-python = ">=3.12"
         dependencies = ["ok"]
     "#})?;
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(&formatdoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {fallback_url:?}
-    "#})?;
+    "})?;
 
     uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_INDEX)
@@ -20896,13 +20881,10 @@ async fn index_precedence_configured_extra_over_legacy_cli_default() -> Result<(
         requires-python = ">=3.12"
         dependencies = ["ok"]
     "#})?;
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(&formatdoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {fallback_url:?}
-    "#})?;
+    "})?;
 
     uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_INDEX)
@@ -20990,19 +20972,16 @@ async fn index_precedence_legacy_project_default_over_modern_user_uv_toml() -> R
         requires-python = ">=3.12"
         dependencies = ["ok"]
     "#})?;
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(&formatdoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
         index-url = {preferred_url:?}
-    "#})?;
+    "})?;
     let user_dir = context.temp_dir.child("user");
     let system_dir = context.temp_dir.child("system");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {fallback_url:?}
         default = true
-    "#})?;
+    "})?;
     system_dir.child("uv/uv.toml").write_str("")?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -21095,19 +21074,16 @@ async fn index_precedence_modern_project_default_over_legacy_user_uv_toml() -> R
         requires-python = ">=3.12"
         dependencies = ["ok"]
     "#})?;
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(&formatdoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {preferred_url:?}
         default = true
-    "#})?;
+    "})?;
     let user_dir = context.temp_dir.child("user");
     let system_dir = context.temp_dir.child("system");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         index-url = {fallback_url:?}
-    "#})?;
+    "})?;
     system_dir.child("uv/uv.toml").write_str("")?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -21200,18 +21176,15 @@ async fn index_precedence_legacy_project_extra_over_modern_user_uv_toml() -> Res
         requires-python = ">=3.12"
         dependencies = ["ok"]
     "#})?;
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(&formatdoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
         extra-index-url = [{preferred_url:?}]
-    "#})?;
+    "})?;
     let user_dir = context.temp_dir.child("user");
     let system_dir = context.temp_dir.child("system");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {fallback_url:?}
-    "#})?;
+    "})?;
     system_dir.child("uv/uv.toml").write_str("")?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -21304,18 +21277,15 @@ async fn index_precedence_modern_project_extra_over_legacy_user_uv_toml() -> Res
         requires-python = ">=3.12"
         dependencies = ["ok"]
     "#})?;
-    context
-        .temp_dir
-        .child("uv.toml")
-        .write_str(&formatdoc! {r#"
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {preferred_url:?}
-    "#})?;
+    "})?;
     let user_dir = context.temp_dir.child("user");
     let system_dir = context.temp_dir.child("system");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         extra-index-url = [{fallback_url:?}]
-    "#})?;
+    "})?;
     system_dir.child("uv/uv.toml").write_str("")?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -21413,11 +21383,11 @@ async fn index_precedence_legacy_project_default_over_modern_user_pyproject() ->
     "#})?;
     let user_dir = context.temp_dir.child("user");
     let system_dir = context.temp_dir.child("system");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {fallback_url:?}
         default = true
-    "#})?;
+    "})?;
     system_dir.child("uv/uv.toml").write_str("")?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -21517,9 +21487,9 @@ async fn index_precedence_modern_project_default_over_legacy_user_pyproject() ->
     "#})?;
     let user_dir = context.temp_dir.child("user");
     let system_dir = context.temp_dir.child("system");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         index-url = {fallback_url:?}
-    "#})?;
+    "})?;
     system_dir.child("uv/uv.toml").write_str("")?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -21617,10 +21587,10 @@ async fn index_precedence_legacy_project_extra_over_modern_user_pyproject() -> R
     "#})?;
     let user_dir = context.temp_dir.child("user");
     let system_dir = context.temp_dir.child("system");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {fallback_url:?}
-    "#})?;
+    "})?;
     system_dir.child("uv/uv.toml").write_str("")?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -21719,9 +21689,9 @@ async fn index_precedence_modern_project_extra_over_legacy_user_pyproject() -> R
     "#})?;
     let user_dir = context.temp_dir.child("user");
     let system_dir = context.temp_dir.child("system");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         extra-index-url = [{fallback_url:?}]
-    "#})?;
+    "})?;
     system_dir.child("uv/uv.toml").write_str("")?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -21816,14 +21786,14 @@ async fn index_precedence_legacy_user_default_over_modern_system() -> Result<()>
     "#})?;
     let user_dir = context.temp_dir.child("user");
     let system_dir = context.temp_dir.child("system");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         index-url = {preferred_url:?}
-    "#})?;
-    system_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    "})?;
+    system_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {fallback_url:?}
         default = true
-    "#})?;
+    "})?;
 
     uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_INDEX)
@@ -21917,14 +21887,14 @@ async fn index_precedence_modern_user_default_over_legacy_system() -> Result<()>
     "#})?;
     let user_dir = context.temp_dir.child("user");
     let system_dir = context.temp_dir.child("system");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {preferred_url:?}
         default = true
-    "#})?;
-    system_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    "})?;
+    system_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         index-url = {fallback_url:?}
-    "#})?;
+    "})?;
 
     uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_INDEX)
@@ -22021,11 +21991,11 @@ async fn index_precedence_legacy_script_default_over_modern_user() -> Result<()>
         print(version("ok"))
     "#})?;
     let user_dir = context.temp_dir.child("user");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         [[index]]
         url = {fallback_url:?}
         default = true
-    "#})?;
+    "})?;
 
     uv_snapshot!(context.filters(), context.run()
         .env_remove(EnvVars::UV_INDEX)
@@ -22096,9 +22066,9 @@ async fn index_precedence_modern_script_default_over_legacy_user() -> Result<()>
         print(version("ok"))
     "#})?;
     let user_dir = context.temp_dir.child("user");
-    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r#"
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
         index-url = {fallback_url:?}
-    "#})?;
+    "})?;
 
     uv_snapshot!(context.filters(), context.run()
         .env_remove(EnvVars::UV_INDEX)
