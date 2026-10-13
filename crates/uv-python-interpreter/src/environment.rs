@@ -86,6 +86,14 @@ impl CreatedVirtualEnvironment {
             system_site_packages,
         } = self;
 
+        // The inferred base executable follows CPython 3.11+ semantics. Older CPython and
+        // other implementations can report the virtual environment's executable as their base.
+        let interpreter = environment.interpreter();
+        if interpreter.implementation_name() != "cpython" || interpreter.python_tuple() < (3, 11) {
+            Interpreter::clear_cache(interpreter.sys_executable(), cache)?;
+            return Ok(environment);
+        }
+
         // Python removes parent components from the paths it reports. Query roots with `..`
         // so cached paths do not depend on an intermediate directory remaining present.
         if environment
