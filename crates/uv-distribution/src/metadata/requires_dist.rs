@@ -175,7 +175,7 @@ impl RequiresDist {
                     .await
                     .map(|requirement| {
                         requirement
-                            .and_then(|requirement| requirement.into_validated_inner(locations))
+                            .map(LoweredRequirement::into_inner)
                             .map_err(|err| {
                                 MetadataError::GroupLoweringError(
                                     name.clone(),
@@ -220,7 +220,7 @@ impl RequiresDist {
                 .await
                 .map(|requirement| {
                     requirement
-                        .and_then(|requirement| requirement.into_validated_inner(locations))
+                        .map(LoweredRequirement::into_inner)
                         .map_err(|err| {
                             MetadataError::LoweringError(requirement_name.clone(), Box::new(err))
                         })

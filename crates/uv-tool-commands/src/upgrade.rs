@@ -354,28 +354,36 @@ async fn upgrade_tool(
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
     let options = args.clone().combine(receipt.combine(filesystem.clone()));
     let settings = ResolverInstallerSettings::from(options.clone());
-    settings.resolver.index_locations.validate_pinned_indexes(
-        &receipt_indexes,
-        existing_tool_receipt
-            .requirements()
-            .iter()
-            .chain(existing_tool_receipt.constraints())
-            .chain(existing_tool_receipt.overrides())
-            .chain(
-                existing_tool_receipt
-                    .build_constraints()
-                    .iter()
-                    .map(|constraint| &constraint.requirement),
-            )
-            .filter_map(|requirement| match &requirement.source {
-                RequirementSource::Registry { index, .. } => index.as_ref(),
-                RequirementSource::Url { .. }
-                | RequirementSource::GitDirectory { .. }
-                | RequirementSource::GitPath { .. }
-                | RequirementSource::Path { .. }
-                | RequirementSource::Directory { .. } => None,
-            }),
-    )?;
+    let pinned_indexes = existing_tool_receipt
+        .requirements()
+        .iter()
+        .chain(existing_tool_receipt.constraints())
+        .chain(existing_tool_receipt.overrides())
+        .chain(
+            existing_tool_receipt
+                .build_constraints()
+                .iter()
+                .map(|constraint| &constraint.requirement),
+        )
+        .filter_map(|requirement| match &requirement.source {
+            RequirementSource::Registry { index, .. } => index.as_ref(),
+            RequirementSource::Url { .. }
+            | RequirementSource::GitDirectory { .. }
+            | RequirementSource::GitPath { .. }
+            | RequirementSource::Path { .. }
+            | RequirementSource::Directory { .. } => None,
+        });
+    settings
+        .resolver
+        .index_locations
+        .validate_pinned_indexes(&receipt_indexes, pinned_indexes.clone())?;
+
+    // Credential promotion can change authentication policies even when the upgrade is a no-op.
+    // Validate the persisted options before updating the tool environment.
+    let options = ToolOptions::from(options);
+    let persisted_indexes =
+        IndexLocations::from(ResolverInstallerOptions::from(options.clone()).indexes);
+    persisted_indexes.validate_pinned_indexes(&persisted_indexes, pinned_indexes)?;
 
     let build_constraints = existing_tool_receipt.build_constraints().to_vec();
     let manifest_constraints = existing_tool_receipt
@@ -641,7 +649,7 @@ async fn upgrade_tool(
             name,
             &entrypoints,
             installed_tools,
-            &ToolOptions::from(options),
+            &options,
             true,
             existing_tool_receipt.python().to_owned(),
             existing_tool_receipt.requirements().to_vec(),
@@ -656,12 +664,8 @@ async fn upgrade_tool(
         if tool_locks {
             ToolLock::write(&tool_dir, tool_lock.as_ref())?;
         }
-        installed_tools.add_tool_receipt(
-            name,
-            existing_tool_receipt
-                .clone()
-                .with_options(ToolOptions::from(options)),
-        )?;
+        installed_tools
+            .add_tool_receipt(name, existing_tool_receipt.clone().with_options(options))?;
     }
 
     let constraint = match &outcome {

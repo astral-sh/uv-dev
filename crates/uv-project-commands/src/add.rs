@@ -126,7 +126,7 @@ pub async fn add(
     python: Option<String>,
     workspace: Option<bool>,
     install_mirrors: PythonInstallMirrors,
-    settings: ResolverInstallerSettings,
+    mut settings: ResolverInstallerSettings,
     client_builder: BaseClientBuilder<'_>,
     script: Option<ScriptPath>,
     python_preference: PythonPreference,
@@ -398,6 +398,7 @@ pub async fn add(
     let RequirementsSpecification {
         requirements,
         constraints,
+        indexes: source_indexes,
         ..
     } = RequirementsSpecification::from_sources(
         &requirements,
@@ -409,6 +410,12 @@ pub async fn add(
         lowering_context,
     )
     .await?;
+
+    // Retain selected source policies in every client used to lock and sync these requirements.
+    settings.resolver.index_locations = settings
+        .resolver
+        .index_locations
+        .with_source_indexes(source_indexes)?;
 
     // Initialize any shared state.
     let state = PlatformState::default();

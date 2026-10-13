@@ -6,8 +6,8 @@ use uv_cache::Cache;
 use uv_configuration::{NoSources, Override, PackageOverride};
 use uv_distribution::{LoweredExtraBuildDependencies, LoweredRequirement, LoweringError};
 use uv_distribution_types::{
-    ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, IndexUrlError, Origin,
-    SourceIndexError, SourceIndexes,
+    ExtraBuildRequirement, ExtraBuildRequires, Index, IndexLocations, IndexUrlError, Origin,
+    Requirement, SourceIndexError, SourceIndexes,
 };
 use uv_scripts::{Pep723ItemRef, Pep723Metadata};
 use uv_workspace::WorkspaceCache;
@@ -85,18 +85,18 @@ pub(crate) async fn script_metadata_specification(
     let script_sources = metadata.sources(sources);
 
     let mut selected_indexes = Vec::new();
-    let mut into_requirement = |requirement: LoweredRequirement| {
-        if let Some(index) = requirement.selected_index()
+    let mut into_requirement = |(requirement, index): (Requirement, Option<Index>)| {
+        if let Some(index) = index
             && index.origin != Some(Origin::Cli)
         {
-            selected_indexes.push(index.clone());
+            selected_indexes.push(index);
         }
-        requirement.into_inner()
+        requirement
     };
     let mut requirements = Vec::new();
     for requirement in metadata.dependencies.iter().flatten().cloned() {
         requirements.extend(
-            LoweredRequirement::from_non_workspace_requirement(
+            LoweredRequirement::from_non_workspace_requirement_deferred(
                 requirement,
                 script_dir,
                 script_sources.as_ref(),
@@ -122,7 +122,7 @@ pub(crate) async fn script_metadata_specification(
     let mut constraints = Vec::new();
     for requirement in constraint_dependencies {
         constraints.extend(
-            LoweredRequirement::from_non_workspace_requirement(
+            LoweredRequirement::from_non_workspace_requirement_deferred(
                 requirement,
                 script_dir,
                 script_sources.as_ref(),
@@ -151,7 +151,7 @@ pub(crate) async fn script_metadata_specification(
             match entry {
                 Override::Requirement(requirement) => {
                     overrides.extend(
-                        LoweredRequirement::from_non_workspace_requirement(
+                        LoweredRequirement::from_non_workspace_requirement_deferred(
                             requirement,
                             script_dir,
                             script_sources.as_ref(),
@@ -174,7 +174,7 @@ pub(crate) async fn script_metadata_specification(
                     let mut dependencies = Vec::new();
                     for requirement in package.dependencies.into_vec() {
                         dependencies.extend(
-                            LoweredRequirement::from_non_workspace_requirement(
+                            LoweredRequirement::from_non_workspace_requirement_deferred(
                                 requirement,
                                 script_dir,
                                 script_sources.as_ref(),
@@ -272,13 +272,9 @@ pub async fn script_extra_build_requires(
                 )
                 .await
                 .map(|requirement| {
-                    requirement.and_then(|requirement| {
-                        requirement
-                            .into_validated_inner(index_locations)
-                            .map(|requirement| ExtraBuildRequirement {
-                                requirement,
-                                match_runtime,
-                            })
+                    requirement.map(|requirement| ExtraBuildRequirement {
+                        requirement: requirement.into_inner(),
+                        match_runtime,
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
