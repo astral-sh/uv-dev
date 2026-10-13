@@ -11911,6 +11911,61 @@ fn frozen_lockfile_recorded_default_groups() -> Result<()> {
     Ok(())
 }
 
+/// A recorded group in a legacy frozen lock does not require flattening unrelated manifest groups.
+#[test]
+fn requirements_txt_legacy_recorded_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [dependency-groups]
+        tools = ["member"]
+        broken = [{ include-group = "missing" }]
+
+        [tool.uv.sources]
+        member = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 4
+        requires-python = ">=3.12"
+
+        [manifest]
+        members = ["member"]
+
+        [manifest.dependency-groups]
+        tools = [{ name = "member", virtual = "member" }]
+
+        [[package]]
+        name = "member"
+        version = "1.0.0"
+        source = { virtual = "member" }
+    "#})?;
+    let lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--offline", "--only-group", "tools", "--no-header"]), @"exit_code: 0 (success)");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    Ok(())
+}
+
 /// Legacy root locks use manifest declarations to identify otherwise unrecorded empty groups.
 #[test]
 fn requirements_txt_legacy_empty_root_group() -> Result<()> {

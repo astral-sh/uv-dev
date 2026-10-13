@@ -768,26 +768,29 @@ impl<'lock> InstallTarget<'lock> {
                     .into_iter()
                     .flat_map(|dependency_groups| dependency_groups.keys().map(Cow::Borrowed));
 
+                let mut known_groups = member_groups
+                    .chain(workspace_groups)
+                    .collect::<FxHashSet<_>>();
+
                 // Older locks omitted empty root groups; only their empty manifest declarations
                 // can supply names missing from the lock without introducing unlocked requirements.
-                let legacy_workspace_groups =
-                    if workspace.is_non_project() && !lock.supports_empty_workspace_groups() {
-                        workspace.workspace_dependency_groups()?
-                    } else {
-                        BTreeMap::new()
-                    };
-                let legacy_workspace_groups = legacy_workspace_groups
-                    .into_iter()
-                    .filter(|(_, group)| {
-                        group.requirements.iter().next().is_none()
-                            && group.workspace_includes.is_empty()
-                    })
-                    .map(|(group, _)| Cow::Owned(group));
-
-                let known_groups = member_groups
-                    .chain(workspace_groups)
-                    .chain(legacy_workspace_groups)
-                    .collect::<FxHashSet<_>>();
+                if workspace.is_non_project()
+                    && !lock.supports_empty_workspace_groups()
+                    && groups
+                        .explicit_names()
+                        .any(|group| !known_groups.contains(group))
+                {
+                    known_groups.extend(
+                        workspace
+                            .workspace_dependency_groups()?
+                            .into_iter()
+                            .filter(|(_, group)| {
+                                group.requirements.iter().next().is_none()
+                                    && group.workspace_includes.is_empty()
+                            })
+                            .map(|(group, _)| Cow::Owned(group)),
+                    );
+                }
 
                 for group in groups.explicit_names() {
                     if !known_groups.contains(group) {
