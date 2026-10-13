@@ -15,12 +15,6 @@ use assert_fs::{
     assert::PathAssert,
     fixture::{FileTouch, FileWriteBin, FileWriteStr, PathChild, PathCreateDir},
 };
-#[cfg(feature = "test-python-patch")]
-use async_zip::base::write::ZipFileWriter;
-#[cfg(feature = "test-python-patch")]
-use async_zip::{Compression, ZipEntryBuilder};
-#[cfg(feature = "test-python-patch")]
-use futures::executor::block_on;
 use indoc::indoc;
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
@@ -4291,38 +4285,17 @@ fn tool_install_python_preference() -> Result<()> {
     let wheel_dir = context.temp_dir.child("wheels");
     wheel_dir.create_dir_all()?;
 
-    // The wheel contains only metadata. Its entry point is installed, but never executed.
-    let mut writer = ZipFileWriter::new(Vec::new());
-    for (path, contents) in [
-        (
-            "preference_tool-1.0.0.dist-info/METADATA",
-            "Metadata-Version: 2.3\nName: preference-tool\nVersion: 1.0.0\n",
-        ),
-        (
-            "preference_tool-1.0.0.dist-info/WHEEL",
-            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-        ),
-        (
-            "preference_tool-1.0.0.dist-info/entry_points.txt",
-            "[console_scripts]\npreference-tool = preference_tool:main\n",
-        ),
-        (
-            "preference_tool-1.0.0.dist-info/RECORD",
-            concat!(
-                "preference_tool-1.0.0.dist-info/METADATA,,\n",
-                "preference_tool-1.0.0.dist-info/WHEEL,,\n",
-                "preference_tool-1.0.0.dist-info/entry_points.txt,,\n",
-                "preference_tool-1.0.0.dist-info/RECORD,,\n",
-            ),
-        ),
-    ] {
-        let entry = ZipEntryBuilder::new(path.into(), Compression::Stored);
-        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
-    }
-    fs_err::write(
-        wheel_dir.join("preference_tool-1.0.0-py3-none-any.whl"),
-        block_on(writer.close())?,
-    )?;
+    // The entry point is installed to exercise tool metadata, but is never executed.
+    let (filename, wheel) = generate_wheel(
+        &"preference-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["preference-tool".to_string()],
+    );
+    wheel_dir.child(filename).write_binary(&wheel)?;
 
     let cache = Cache::from_path(context.cache_dir.to_path_buf())
         .init_no_wait()?
@@ -4332,24 +4305,6 @@ fn tool_install_python_preference() -> Result<()> {
     assert_eq!(unmanaged.python_tuple(), managed.python_tuple());
     assert_ne!(unmanaged.python_version(), managed.python_version());
 
-    let install = || {
-        let mut command = context.tool_install();
-        command
-            .arg("preference-tool")
-            .arg("--find-links")
-            .arg(wheel_dir.as_os_str())
-            .arg("--offline")
-            .arg("--no-index")
-            .arg("--no-build")
-            .arg("--no-config")
-            .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
-            .env(EnvVars::PATH, bin_dir.as_os_str())
-            .env_remove("GH_TOKEN")
-            .env_remove("GITHUB_TOKEN")
-            .env_remove("GH_ENTERPRISE_TOKEN")
-            .env_remove("GITHUB_ENTERPRISE_TOKEN");
-        command
-    };
     let assert_interpreter = |expected: &Interpreter| -> Result<()> {
         let environment = PythonEnvironment::from_root(
             context.temp_dir.join("tools").join("preference-tool"),
@@ -4364,7 +4319,20 @@ fn tool_install_python_preference() -> Result<()> {
     };
 
     // Install with Python 3.12.
-    uv_snapshot!(context.filters(), install()
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("preference-tool")
+        .arg("--find-links")
+        .arg(wheel_dir.as_os_str())
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--no-build")
+        .arg("--no-config")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN")
         .arg("-p")
         .arg("3.12"), @r###"
     exit_code: 0 (success)
@@ -4377,7 +4345,20 @@ fn tool_install_python_preference() -> Result<()> {
     "###);
 
     // Install with Python 3.12 (compatible).
-    uv_snapshot!(context.filters(), install()
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("preference-tool")
+        .arg("--find-links")
+        .arg(wheel_dir.as_os_str())
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--no-build")
+        .arg("--no-config")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN")
         .arg("-p")
         .arg("3.12"), @r###"
     exit_code: 0 (success)
@@ -4386,7 +4367,20 @@ fn tool_install_python_preference() -> Result<()> {
     "###);
 
     // Install with system Python 3.13 (different version, incompatible).
-    uv_snapshot!(context.filters(), install()
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("preference-tool")
+        .arg("--find-links")
+        .arg(wheel_dir.as_os_str())
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--no-build")
+        .arg("--no-config")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN")
         .arg("-p")
         .arg("3.13")
         .arg("--python-preference")
@@ -4402,7 +4396,20 @@ fn tool_install_python_preference() -> Result<()> {
     assert_interpreter(&unmanaged)?;
 
     // Install with system Python 3.13 (compatible).
-    uv_snapshot!(context.filters(), install()
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("preference-tool")
+        .arg("--find-links")
+        .arg(wheel_dir.as_os_str())
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--no-build")
+        .arg("--no-config")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN")
         .arg("-p")
         .arg("3.13")
         .arg("--python-preference")
@@ -4413,7 +4420,20 @@ fn tool_install_python_preference() -> Result<()> {
     "###);
 
     // Install with managed Python 3.13 (same minor version, different source).
-    uv_snapshot!(context.filters(), install()
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("preference-tool")
+        .arg("--find-links")
+        .arg(wheel_dir.as_os_str())
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--no-build")
+        .arg("--no-config")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN")
         .arg("-p")
         .arg("3.13")
         .arg("--python-preference")
@@ -4429,7 +4449,20 @@ fn tool_install_python_preference() -> Result<()> {
     assert_interpreter(&managed)?;
 
     // Install with managed Python 3.13 (compatible).
-    uv_snapshot!(context.filters(), install()
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("preference-tool")
+        .arg("--find-links")
+        .arg(wheel_dir.as_os_str())
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--no-build")
+        .arg("--no-config")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN")
         .arg("-p")
         .arg("3.13")
         .arg("--python-preference")
