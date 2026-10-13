@@ -1,7 +1,6 @@
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use tempfile::TempDir;
 use uv_cache::{Cache, CleanReporter};
 
 struct NoopReporter;
@@ -12,13 +11,6 @@ impl CleanReporter for NoopReporter {
     fn on_complete(&self) {}
 }
 
-fn cache_directory() -> io::Result<(TempDir, PathBuf)> {
-    let temporary = tempfile::tempdir()?;
-    let root = temporary.path().join("cache");
-    fs_err::create_dir(&root)?;
-    Ok((temporary, root))
-}
-
 fn acquire_cache(root: &Path) -> io::Result<Cache> {
     Cache::from_path(root)
         .with_exclusive_lock_no_wait()
@@ -27,7 +19,9 @@ fn acquire_cache(root: &Path) -> io::Result<Cache> {
 
 #[test]
 fn clear_empty_cache_without_lock() -> io::Result<()> {
-    let (_temporary, root) = cache_directory()?;
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path().join("cache");
+    fs_err::create_dir(&root)?;
 
     let summary = Cache::from_path(&root).clear(Box::new(NoopReporter))?;
 
@@ -39,7 +33,9 @@ fn clear_empty_cache_without_lock() -> io::Result<()> {
 
 #[test]
 fn clear_populated_cache_without_lock() -> io::Result<()> {
-    let (_temporary, root) = cache_directory()?;
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path().join("cache");
+    fs_err::create_dir(&root)?;
     fs_err::write(root.join("payload"), "payload")?;
 
     let summary = Cache::from_path(&root).clear(Box::new(NoopReporter))?;
@@ -52,7 +48,9 @@ fn clear_populated_cache_without_lock() -> io::Result<()> {
 
 #[test]
 fn clear_cache_with_owned_lock() -> io::Result<()> {
-    let (_temporary, root) = cache_directory()?;
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path().join("cache");
+    fs_err::create_dir(&root)?;
     fs_err::write(root.join("payload"), "payload")?;
     let cache = acquire_cache(&root)?;
     assert!(root.join(".lock").is_file());
@@ -68,7 +66,9 @@ fn clear_cache_with_owned_lock() -> io::Result<()> {
 
 #[test]
 fn clear_cache_with_contended_lock() -> io::Result<()> {
-    let (_temporary, root) = cache_directory()?;
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path().join("cache");
+    fs_err::create_dir(&root)?;
     fs_err::write(root.join("payload"), "payload")?;
     let holder = acquire_cache(&root)?;
 
