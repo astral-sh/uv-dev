@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced with installed uv 0.13.0 on Linux x86_64 and Python 3.12.3. Created minimal setuptools sdists using tarfile.PAX_FORMAT with gname='g'*N, then ran `uv build --wheel demo-0.1.0.tar.gz`. N=31 built successfully; N=32 and N=40 exited 2 with `invalid ustar gname field: missing NUL terminator` at bytes 0 and 1024 respectively. uv 0.12.24 built both failing archives, and UV_LEGACY_TAR_BACKEND=1 restored the 40-byte build on 0.13.0. Analogous uname failures were also reproduced. No existing test covering these field boundaries was found. Updated $RUNNER_TEMP/issue-context/README.md with commands, results, and coverage findings. All reproduction files and caches remained temporary; checkout files were unchanged."
+}
