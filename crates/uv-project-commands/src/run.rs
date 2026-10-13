@@ -1163,7 +1163,7 @@ pub async fn run(
             // N.B. The order here matters — earlier interpreters take precedence over the
             // later ones.
             for interpreter in [requirements_env.interpreter(), &base_interpreter] {
-                copy_environment_entrypoints(interpreter, ephemeral_env, &BTreeSet::new(), None)?;
+                copy_environment_entrypoints(interpreter, ephemeral_env)?;
 
                 // Link data directories from the base environment to the ephemeral environment.
                 //
@@ -2082,17 +2082,63 @@ enum CopyEntrypointError {
     Trampoline(#[from] uv_trampoline_builder::Error),
 }
 
-/// Copy Python entrypoints into an overlay, rewriting them to use its interpreter.
+/// Copy Python entrypoints directly into a disposable overlay using its interpreter.
 fn copy_environment_entrypoints(
     source: &Interpreter,
     target: &PythonEnvironment,
-    owned_files: &BTreeSet<PathBuf>,
-    pending: Option<(&Path, BTreeMap<PathBuf, String>)>,
-) -> anyhow::Result<(Vec<PathBuf>, bool)> {
-    let (pending_path, mut pending) = match pending {
-        Some((path, pending)) => (Some(path), pending),
-        None => (None, BTreeMap::new()),
+) -> anyhow::Result<()> {
+    let scripts = match fs_err::read_dir(source.scripts()) {
+        Ok(scripts) => scripts,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
     };
+    for entry in scripts {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let target_path = target.scripts().join(entry.file_name());
+        if fs_err::symlink_metadata(&target_path).is_ok() {
+            continue;
+        }
+        let result = (|| -> Result<(), CopyEntrypointError> {
+            let Some(prepared) = prepare_entrypoint(
+                &entry.path(),
+                source.sys_executable(),
+                target.interpreter().sys_executable(),
+            )?
+            else {
+                return Ok(());
+            };
+            prepared.write(&target_path)
+        })();
+        match result {
+            Ok(()) => {}
+            Err(CopyEntrypointError::Io(err))
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::AlreadyExists | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                trace!(
+                    "Skipping copy of entrypoint `{}`: {err}",
+                    entry.path().display()
+                );
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
+}
+
+/// Stage rewritten launchers and record their ownership before persistent publication.
+fn publish_shared_entrypoints(
+    source: &Interpreter,
+    target: &PythonEnvironment,
+    owned_files: &BTreeSet<PathBuf>,
+    pending_path: &Path,
+    mut pending: BTreeMap<PathBuf, String>,
+) -> anyhow::Result<(Vec<PathBuf>, bool)> {
     let scripts = match fs_err::read_dir(source.scripts()) {
         Ok(scripts) => scripts,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), false)),
@@ -2107,13 +2153,8 @@ fn copy_environment_entrypoints(
             continue;
         }
         let name = PathBuf::from(entry.file_name());
-        let target_path = if pending_path.is_some() {
-            let Some(path) = shared_entrypoint_path(target, &name)? else {
-                continue;
-            };
-            path
-        } else {
-            target.scripts().join(&name)
+        let Some(target_path) = shared_entrypoint_path(target, &name)? else {
+            continue;
         };
         if owned_files.contains(normalize_path(&target_path).as_ref())
             || fs_err::symlink_metadata(&target_path).is_ok()
@@ -2129,26 +2170,21 @@ fn copy_environment_entrypoints(
             else {
                 return Ok(());
             };
-            if pending_path.is_some() {
-                // Stage only recognized launchers, keeping cache hits free of temporary files.
-                let directory = if let Some(directory) = staging.as_ref() {
-                    directory.path().to_path_buf()
-                } else {
-                    let directory = tempfile::Builder::new()
-                        .prefix(".uv-shared-")
-                        .tempdir_in(uv_fs::verbatim_path(target.scripts()))?;
-                    let path = directory.path().to_path_buf();
-                    staging = Some(directory);
-                    path
-                };
-                let staged_path = directory.join(&name);
-                prepared.write(&staged_path)?;
-                pending.insert(name.clone(), cache_digest(&fs_err::read(&staged_path)?));
-                staged.push((name.clone(), staged_path));
+            // Stage only recognized launchers, keeping cache hits free of temporary files.
+            let directory = if let Some(directory) = staging.as_ref() {
+                directory.path().to_path_buf()
             } else {
-                prepared.write(&target_path)?;
-                copied.push(name.clone());
-            }
+                let directory = tempfile::Builder::new()
+                    .prefix(".uv-shared-")
+                    .tempdir_in(uv_fs::verbatim_path(target.scripts()))?;
+                let path = directory.path().to_path_buf();
+                staging = Some(directory);
+                path
+            };
+            let staged_path = directory.join(&name);
+            prepared.write(&staged_path)?;
+            pending.insert(name.clone(), cache_digest(&fs_err::read(&staged_path)?));
+            staged.push((name.clone(), staged_path));
             Ok(())
         })();
         match result {
@@ -2168,9 +2204,7 @@ fn copy_environment_entrypoints(
         }
     }
     let mut journal_written = false;
-    if let Some(pending_path) = pending_path
-        && !staged.is_empty()
-    {
+    if !staged.is_empty() {
         // Persist ownership of the exact rewritten bytes before publishing any launcher.
         uv_fs::write_atomic_sync(pending_path, serde_json::to_vec(&pending)?)?;
         journal_written = true;
@@ -2318,11 +2352,12 @@ fn sync_shared_environment_files(
         .filter(|(name, _)| protected_entrypoints.contains(*name))
         .map(|(name, digest)| (name.clone(), digest.clone()))
         .collect();
-    let (copied_entrypoints, entrypoints_journal_written) = copy_environment_entrypoints(
+    let (copied_entrypoints, entrypoints_journal_written) = publish_shared_entrypoints(
         shared,
         environment,
         &owned_files,
-        Some((&pending_entrypoints_path, preserved_entrypoints)),
+        &pending_entrypoints_path,
+        preserved_entrypoints,
     )?;
     retained.extend(copied_entrypoints);
     retained.sort();
