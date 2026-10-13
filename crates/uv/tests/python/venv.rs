@@ -7,6 +7,8 @@ use indoc::indoc;
 use predicates::prelude::*;
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::cache_digest;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use uv_fs::PythonExt;
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -369,6 +371,119 @@ fn create_venv_queries_parent_manylinux_override() -> Result<()> {
         .init_no_wait()?
         .context("Fresh interpreter cache is locked")?;
     let queried = PythonEnvironment::from_root(root.path(), &fresh_cache)?;
+    assert_eq!(cached, queried);
+
+    Ok(())
+}
+
+/// A parent's positive manylinux override can shadow a base override that rejects the child.
+#[test]
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn create_venv_queries_shadowed_manylinux_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let interpreter = environment.interpreter();
+    let base_executable = fs_err::canonicalize(interpreter.to_base_python()?)?;
+
+    // Relocate the executable and stdlib so the base override cannot affect other tests.
+    let base = context.temp_dir.child("python-installation");
+    let bin = base.child("bin");
+    bin.create_dir_all()?;
+    let executable = bin.join(
+        base_executable
+            .file_name()
+            .context("Python executable has no file name")?,
+    );
+    fs_err::copy(&base_executable, &executable)?;
+    let stdlib = base.join(
+        interpreter
+            .stdlib()
+            .strip_prefix(interpreter.sys_base_prefix())?,
+    );
+    let libraries = stdlib.parent().context("Python stdlib has no parent")?;
+    fs_err::create_dir_all(libraries)?;
+    for entry in fs_err::read_dir(
+        interpreter
+            .stdlib()
+            .parent()
+            .context("Python stdlib has no parent")?,
+    )? {
+        let entry = entry?;
+        if entry.path().is_file() {
+            symlink(entry.path(), libraries.join(entry.file_name()))?;
+        }
+    }
+    context
+        .external_command(&base_executable)
+        .arg("-I")
+        .arg("-B")
+        .arg("-c")
+        .arg(indoc! {r#"
+            import shutil, sys
+            shutil.copytree(
+                sys.argv[1], sys.argv[2],
+                ignore=shutil.ignore_patterns("site-packages", "__pycache__", "*.pyc", "*.pyo"),
+            )
+        "#})
+        .arg(interpreter.stdlib())
+        .arg(&stdlib)
+        .assert()
+        .success();
+    fs_err::write(
+        stdlib.join("_manylinux.py"),
+        indoc! {r"
+            def manylinux_compatible(major, minor, arch):
+                return False
+        "},
+    )?;
+
+    let parent_root = context.temp_dir.child("parent");
+    context
+        .venv()
+        .arg(parent_root.path())
+        .arg("--python")
+        .arg(&executable)
+        .assert()
+        .success();
+    let parent_site_packages = site_packages_path(parent_root.path(), "python3.12");
+    fs_err::write(
+        parent_site_packages.join("_manylinux.py"),
+        indoc! {r"
+            def manylinux_compatible(major, minor, arch):
+                return True
+        "},
+    )?;
+    // Site-packages normally follows the stdlib; the parent explicitly reverses that order.
+    fs_err::write(
+        parent_site_packages.join("prioritize-local.pth"),
+        format!(
+            "import sys; sys.path.insert(0, {})\n",
+            parent_site_packages.escape_for_python()
+        ),
+    )?;
+    Interpreter::clear_cache(parent_root.join("bin/python"), &cache)?;
+    let parent = PythonEnvironment::from_root(parent_root.path(), &cache)?;
+    assert!(parent.interpreter().manylinux_compatible());
+
+    let root = context.temp_dir.child("isolated-child");
+    context
+        .venv()
+        .arg(root.path())
+        .arg("--python")
+        .arg(parent_root.path())
+        .assert()
+        .success();
+
+    let cached = PythonEnvironment::from_root(root.path(), &cache)?;
+    assert!(!cached.interpreter().manylinux_compatible());
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(root.path(), &fresh_cache)?;
+    assert_eq!(queried.interpreter().sys_base_prefix(), base.path());
     assert_eq!(cached, queried);
 
     Ok(())

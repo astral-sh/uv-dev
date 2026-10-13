@@ -628,6 +628,7 @@ def main() -> None:
     os_and_arch = get_operating_system_and_architecture()
 
     manylinux_compatible = False
+    manylinux_compatibility_override = False
 
     if os_and_arch["os"]["name"] == "manylinux":
         # noinspection PyProtectedMember
@@ -636,6 +637,8 @@ def main() -> None:
         manylinux_compatible = _is_compatible(
             arch=os_and_arch["arch"], version=_get_glibc_version()
         )
+        # A loaded override can depend on this environment's startup paths.
+        manylinux_compatibility_override = "_manylinux" in sys.modules
     elif os_and_arch["os"]["name"] == "musllinux":
         manylinux_compatible = True
 
@@ -706,6 +709,7 @@ def main() -> None:
         "virtualenv": get_virtualenv(),
         "platform": os_and_arch,
         "manylinux_compatible": manylinux_compatible,
+        "manylinux_compatibility_override": manylinux_compatibility_override,
         # The `t` abiflag for freethreading Python.
         # https://peps.python.org/pep-0703/#build-configuration-changes
         "gil_disabled": bool(sysconfig.get_config_var("Py_GIL_DISABLED")),

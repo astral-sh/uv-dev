@@ -48,6 +48,7 @@ pub struct Interpreter {
     scheme: Scheme,
     virtualenv: Scheme,
     manylinux_compatible: bool,
+    manylinux_compatibility_override: bool,
     sys_prefix: PathBuf,
     sys_base_prefix: PathBuf,
     sys_base_executable: Option<PathBuf>,
@@ -74,6 +75,7 @@ impl PartialEq for Interpreter {
             && self.scheme == other.scheme
             && self.virtualenv == other.virtualenv
             && self.manylinux_compatible == other.manylinux_compatible
+            && self.manylinux_compatibility_override == other.manylinux_compatibility_override
             && self.sys_prefix == other.sys_prefix
             && self.sys_base_prefix == other.sys_base_prefix
             && self.sys_base_executable == other.sys_base_executable
@@ -151,6 +153,7 @@ impl Interpreter {
             scheme: info.scheme,
             virtualenv: info.virtualenv,
             manylinux_compatible: info.manylinux_compatible,
+            manylinux_compatibility_override: info.manylinux_compatibility_override,
             sys_prefix: info.sys_prefix,
             pointer_size: info.pointer_size,
             gil_disabled: info.gil_disabled,
@@ -592,6 +595,11 @@ impl Interpreter {
     /// Return whether this interpreter is `manylinux` compatible.
     pub fn manylinux_compatible(&self) -> bool {
         self.manylinux_compatible
+    }
+
+    /// Whether the compatibility query loaded an environment-specific `_manylinux` override.
+    pub(crate) fn has_manylinux_compatibility_override(&self) -> bool {
+        self.manylinux_compatibility_override
     }
 
     /// Return the [`PointerSize`] of the Python interpreter (i.e., 32- vs. 64-bit).
@@ -1253,6 +1261,7 @@ struct InterpreterInfo {
     pointer_size: PointerSize,
     gil_disabled: bool,
     debug_enabled: bool,
+    manylinux_compatibility_override: bool,
 }
 
 impl TryFrom<&Interpreter> for InterpreterInfo {
@@ -1299,6 +1308,7 @@ impl TryFrom<&Interpreter> for InterpreterInfo {
             pointer_size: interpreter.pointer_size,
             gil_disabled: interpreter.gil_disabled,
             debug_enabled: interpreter.debug_enabled,
+            manylinux_compatibility_override: interpreter.manylinux_compatibility_override,
         })
     }
 }
@@ -1730,6 +1740,7 @@ mod tests {
                 "arch": "x86_64"
             },
             "manylinux_compatible": false,
+            "manylinux_compatibility_override": false,
             "standalone": false,
             "markers": {
                 "implementation_name": "cpython",
