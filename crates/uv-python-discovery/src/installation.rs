@@ -347,17 +347,17 @@ impl PythonInstallation {
         };
 
         let installed = ManagedPythonInstallation::new(path, download)?;
+        let (installed, lock) = installed.finalize(Arc::new(lock)).await?;
         Self::finish_installation(installed, installations, cache.clone(), lock).await
     }
 
-    /// Complete a managed installation while retaining its directory lock through cancellation.
+    /// Publish links and query a finalized installation while retaining its directory lock.
     async fn finish_installation(
         installed: ManagedPythonInstallation,
         installations: ManagedPythonInstallations,
         cache: Cache,
-        lock: LockedFile,
+        lock: Arc<LockedFile>,
     ) -> Result<Self, Error> {
-        let (installed, lock) = installed.finalize(Arc::new(lock)).await?;
         let span = Span::current();
         tokio::spawn(
             async move {
@@ -718,17 +718,20 @@ mod tests {
     use std::future::Future;
     use std::io;
     use std::pin::pin;
-    use std::sync::mpsc;
+    use std::sync::{Arc, mpsc};
     use std::task::{Context, Poll, Waker};
     use std::time::Duration;
 
+    use fs_err as fs;
     use tokio::runtime::Builder;
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::sync::oneshot;
     use uv_cache::Cache;
     use uv_fs::{LockedFile, LockedFileMode};
     use uv_python_managed::downloads::ManagedPythonDownloadList;
-    use uv_python_managed::{ManagedPythonInstallation, ManagedPythonInstallations};
+    use uv_python_managed::{
+        ManagedPythonInstallation, ManagedPythonInstallations, PythonMinorVersionLink,
+    };
     use uv_python_types::PythonDownloadRequest;
 
     use super::PythonInstallation;
@@ -737,6 +740,7 @@ mod tests {
         pin!(future).poll(&mut Context::from_waker(Waker::noop()))
     }
 
+    /// Cancellation during link publication must retain the installation lock until the worker ends.
     #[test]
     fn cancelled_automatic_finalization_retains_installation_lock()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -753,11 +757,40 @@ mod tests {
             ManagedPythonInstallations::from_settings(Some(cache.root().join("python")))?.init()?;
         let lock_path = installations.root().join(".lock");
         let downloads = ManagedPythonDownloadList::new_only_embedded()?;
-        let download = downloads.find(&PythonDownloadRequest::default())?;
-        let installed =
-            ManagedPythonInstallation::new(installations.root().join("missing"), download)?;
+        let download = downloads.find(&PythonDownloadRequest::default().fill()?)?;
+        let installed = ManagedPythonInstallation::new(
+            installations.root().join(download.key().to_string()),
+            download,
+        )?;
+        let stdlib = if cfg!(windows) {
+            installed.path().join("Lib")
+        } else {
+            installed.path().join("lib").join(format!(
+                "python{}{}",
+                installed.version().python_version(),
+                installed.key().variant().lib_suffix(),
+            ))
+        };
+        fs::create_dir_all(&stdlib)?;
+        #[cfg(unix)]
+        fs::write(
+            stdlib.join("_sysconfigdata__test.py"),
+            "# system configuration generated and used by the sysconfig module\nbuild_time_vars = {}\n",
+        )?;
+        let executable = installed.executable(false);
+        fs::create_dir_all(
+            executable
+                .parent()
+                .ok_or_else(|| io::Error::other("Python executable has no parent"))?,
+        )?;
+        // The empty executable makes the interpreter query fail after link publication.
+        fs::write(&executable, b"")?;
+        let minor_link = PythonMinorVersionLink::from_installation(&installed)
+            .ok_or_else(|| io::Error::other("CPython installation has no minor-version link"))?;
         runtime.block_on(async {
-            let lock = installations.lock().await?;
+            let lock = Arc::new(installations.lock().await?);
+            let (installed, lock) = installed.finalize(lock).await?;
+            assert!(!minor_link.exists());
             let (started, start) = oneshot::channel();
             let (release, finish) = mpsc::channel();
             let blocker = tokio::task::spawn_blocking(move || {
@@ -775,8 +808,8 @@ mod tests {
                 ))
                 .is_pending()
             );
-            // Wait until the finalizer is suspended on the occupied blocking pool before
-            // checking that cancellation has not released its lock.
+            // The shared finalizer has completed; the discovery worker is now waiting to
+            // publish its minor-version link on the occupied blocking pool.
             tokio::time::timeout(Duration::from_secs(10), park.recv())
                 .await?
                 .ok_or_else(|| {
@@ -790,6 +823,7 @@ mod tests {
                 )
                 .is_none()
             );
+            assert!(!minor_link.exists());
             release.send(())?;
             blocker.await??;
             let _reacquired = tokio::time::timeout(Duration::from_secs(10), async {
@@ -805,6 +839,7 @@ mod tests {
                 }
             })
             .await?;
+            assert!(minor_link.exists());
             Ok(())
         })
     }
