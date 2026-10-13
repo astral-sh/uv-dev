@@ -884,9 +884,9 @@ fn workspace_metadata_shared_script_module_owners() -> Result<()> {
     Ok(())
 }
 
-/// Syncing a script caches its interpreter so the next sync does not query Python.
+/// Script syncs reuse interpreter metadata after discovery has populated the cache.
 #[test]
-fn workspace_metadata_script_sync_caches_interpreter() -> Result<()> {
+fn workspace_metadata_script_sync_reuses_cached_interpreter() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -909,6 +909,16 @@ fn workspace_metadata_script_sync_caches_interpreter() -> Result<()> {
         .as_str()
         .context("Missing environment root")?;
     let site_packages = site_packages_path(Path::new(root), "python3.12");
+
+    // Discover the created environment before observing whether a later sync starts Python.
+    context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .assert()
+        .success();
+
     fs_err::write(
         site_packages.join("sitecustomize.py"),
         indoc! {r#"
