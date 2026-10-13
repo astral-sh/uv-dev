@@ -832,7 +832,7 @@ mod tests {
         alias.ignore_error_codes = Some(serde_json::from_str("[404, 403]")?);
 
         let locations = IndexLocations::new(vec![alias], Vec::new(), false)
-            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
         assert!(locations.ignores_error_code_for(&url, StatusCode::FORBIDDEN));
         assert!(locations.ignores_error_code_for(&url, StatusCode::NOT_FOUND));
         Ok(())
