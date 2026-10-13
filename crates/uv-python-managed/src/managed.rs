@@ -253,21 +253,6 @@ impl ManagedPythonInstallations {
         Ok(iter)
     }
 
-    /// Iterate over managed Python installations that satisfy the requested version on this platform.
-    ///
-    /// ## Errors
-    ///
-    /// - The platform metadata cannot be read
-    /// - A directory for the installation cannot be read
-    pub fn find_version<'a>(
-        &'a self,
-        version: &'a PythonVersion,
-    ) -> Result<impl DoubleEndedIterator<Item = ManagedPythonInstallation> + 'a, Error> {
-        let request = VersionRequest::from(version);
-        Ok(Self::find_matching_current_platform()?
-            .filter(move |installation| request.matches_installation_key(installation.key())))
-    }
-
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -1432,8 +1417,6 @@ mod tests {
 
     #[test]
     fn test_find_version_matching() {
-        use uv_python_types::PythonVersion;
-
         let platform = Platform::from_env().unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
 
@@ -1444,16 +1427,27 @@ mod tests {
             uv_static::EnvVars::UV_PYTHON_INSTALL_DIR,
             Some(temp_dir.path()),
             || {
-                let installations = ManagedPythonInstallations::from_settings(None).unwrap();
+                let installations: Vec<_> =
+                    ManagedPythonInstallations::find_matching_current_platform()
+                        .unwrap()
+                        .collect();
 
                 // Version 3.1 should NOT match 3.10
                 let v3_1 = PythonVersion::from_str("3.1").unwrap();
-                let matched: Vec<_> = installations.find_version(&v3_1).unwrap().collect();
+                let request = VersionRequest::from(&v3_1);
+                let matched: Vec<_> = installations
+                    .iter()
+                    .filter(|installation| request.matches_installation_key(installation.key()))
+                    .collect();
                 assert_eq!(matched.len(), 0);
 
                 // Check that 3.10 matches
                 let v3_10 = PythonVersion::from_str("3.10").unwrap();
-                let matched: Vec<_> = installations.find_version(&v3_10).unwrap().collect();
+                let request = VersionRequest::from(&v3_10);
+                let matched: Vec<_> = installations
+                    .iter()
+                    .filter(|installation| request.matches_installation_key(installation.key()))
+                    .collect();
                 assert_eq!(matched.len(), 1);
             },
         );
