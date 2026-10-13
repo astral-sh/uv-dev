@@ -17,8 +17,8 @@ use uv_configuration::{
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexCapabilities, IndexLocations, NameRequirementSpecification,
-    Requirement, RequirementSource, UnresolvedRequirementSpecification,
+    ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
+    RequirementSource, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -32,8 +32,8 @@ use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
 use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
-use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
-use uv_tool::{InstalledTools, Tool};
+use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions};
+use uv_tool::{InstalledTools, Tool, ToolConfiguration};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
@@ -45,7 +45,7 @@ use crate::common::{
     tool_environment_spec,
 };
 use crate::error::ToolLockError;
-use crate::requirements::resolve_names;
+use crate::requirements::{index_for_package, resolve_names};
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
@@ -335,69 +335,6 @@ pub async fn install(
         }
     };
 
-    // For `@latest`, fetch the latest version and create a constraint.
-    let latest = if let ToolRequest::Package {
-        target: Target::Latest(_, name, _),
-        ..
-    } = &request
-    {
-        // Build the registry client to fetch the latest version.
-        let client = RegistryClientBuilder::new(
-            client_builder
-                .clone()
-                .keyring(settings.resolver.keyring_provider),
-            cache.clone(),
-        )
-        .index_locations(settings.resolver.index_locations.clone())
-        .index_strategy(settings.resolver.index_strategy)
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
-
-        // Initialize the capabilities.
-        let capabilities = IndexCapabilities::default();
-        let download_concurrency = concurrency.downloads_semaphore.clone();
-
-        // Initialize the client to fetch the latest version.
-        let latest_client = LatestClient {
-            client: &client,
-            capabilities: &capabilities,
-            prerelease: &settings.resolver.prerelease,
-            exclude_newer: &settings.resolver.exclude_newer,
-            index_locations: &settings.resolver.index_locations,
-            tags: None,
-            requires_python: None,
-        };
-
-        // Fetch the latest version.
-        if let Some(dist_filename) = latest_client
-            .find_latest(name, None, &download_concurrency)
-            .await?
-        {
-            let version = dist_filename.version().clone();
-            debug!("Resolved `{name}@latest` to `{name}=={version}`");
-
-            // The constraint pins the version during resolution to prevent backtracking.
-            Some(Requirement {
-                name: name.clone(),
-                extras: vec![].into_boxed_slice(),
-                groups: Box::new([]),
-                marker: MarkerTree::default(),
-                source: RequirementSource::Registry {
-                    specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
-                    index: None,
-                    conflict: None,
-                },
-                scope: RequirementScope::Global,
-                origin: None,
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     let package_name = &requirement.name;
 
     // If the user passed, e.g., `ruff@latest`, we need to mark it as upgradable.
@@ -504,6 +441,79 @@ pub async fn install(
     // Resolve the excludes.
     let receipt_excludes = spec.excludes.clone();
 
+    // For `@latest`, fetch the latest version and create a constraint.
+    let latest = if let ToolRequest::Package {
+        target: Target::Latest(_, name, _),
+        ..
+    } = &request
+    {
+        let index = index_for_package(
+            name,
+            &requirements,
+            &receipt_constraints,
+            &receipt_overrides,
+            &spec.override_dependencies,
+            &receipt_excludes,
+            resolution_markers(None, python_platform.as_ref(), &interpreter),
+        )?;
+
+        // Build the registry client to fetch the latest version.
+        let client = RegistryClientBuilder::new(
+            client_builder
+                .clone()
+                .keyring(settings.resolver.keyring_provider),
+            cache.clone(),
+        )
+        .index_locations(settings.resolver.index_locations.clone())
+        .index_strategy(settings.resolver.index_strategy)
+        .markers(interpreter.markers())
+        .platform(interpreter.platform())
+        .build()?;
+
+        // Initialize the capabilities.
+        let capabilities = IndexCapabilities::default();
+        let download_concurrency = concurrency.downloads_semaphore.clone();
+
+        // Initialize the client to fetch the latest version.
+        let latest_client = LatestClient {
+            client: &client,
+            capabilities: &capabilities,
+            prerelease: &settings.resolver.prerelease,
+            exclude_newer: &settings.resolver.exclude_newer,
+            index_locations: &settings.resolver.index_locations,
+            tags: None,
+            requires_python: None,
+        };
+
+        // Fetch the latest version.
+        if let Some(dist_filename) = latest_client
+            .find_latest(name, index.as_ref().map(Into::into), &download_concurrency)
+            .await?
+        {
+            let version = dist_filename.version().clone();
+            debug!("Resolved `{name}@latest` to `{name}=={version}`");
+
+            // The constraint pins the version during resolution to prevent backtracking.
+            Some(Requirement {
+                name: name.clone(),
+                extras: vec![].into_boxed_slice(),
+                groups: Box::new([]),
+                marker: MarkerTree::default(),
+                source: RequirementSource::Registry {
+                    specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
+                    index: None,
+                    conflict: None,
+                },
+                scope: RequirementScope::Global,
+                origin: None,
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Keep legacy index flags separate so later upgrades can override them.
     let mut options = options;
     if !spec.indexes.is_empty() {
@@ -513,30 +523,13 @@ pub async fn install(
                 .merge_index_definitions(options.indexes.index.take().unwrap_or_default()),
         );
     }
-    let options = ToolOptions::from(options);
-    // Credential promotion changes authentication policy before credentials are omitted from the
-    // receipt. Validate those persisted policies before changing an installed tool.
-    let receipt_indexes =
-        IndexLocations::from(ResolverInstallerOptions::from(options.clone()).indexes);
-    receipt_indexes.validate_pinned_indexes(
-        &receipt_indexes,
-        requirements
-            .iter()
-            .chain(&receipt_constraints)
-            .chain(&receipt_overrides)
-            .chain(
-                receipt_build_constraints
-                    .iter()
-                    .map(|constraint| &constraint.requirement),
-            )
-            .filter_map(|requirement| match &requirement.source {
-                RequirementSource::Registry { index, .. } => index.as_ref(),
-                RequirementSource::Url { .. }
-                | RequirementSource::GitDirectory { .. }
-                | RequirementSource::GitPath { .. }
-                | RequirementSource::Path { .. }
-                | RequirementSource::Directory { .. } => None,
-            }),
+    let configuration = ToolConfiguration::new(
+        requirements.clone(),
+        receipt_constraints.clone(),
+        receipt_overrides.clone(),
+        receipt_excludes.clone(),
+        receipt_build_constraints.clone(),
+        options,
     )?;
     let lock_manifest = ToolLock::manifest(
         &requirements,
@@ -724,10 +717,10 @@ pub async fn install(
                 );
                 if already_installed {
                     // Then we're done! Though we might need to update the receipt.
-                    if *tool_receipt.options() != options {
+                    if tool_receipt.options() != configuration.options() {
                         installed_tools.add_tool_receipt(
                             package_name,
-                            tool_receipt.clone().with_options(options),
+                            tool_receipt.with_configuration(configuration),
                         )?;
                     }
 
@@ -888,14 +881,9 @@ pub async fn install(
                 installed_tools.add_tool_receipt(
                     package_name,
                     Tool::new(
-                        requirements.clone(),
-                        receipt_constraints.clone(),
-                        receipt_overrides.clone(),
-                        receipt_excludes.clone(),
-                        receipt_build_constraints.clone(),
+                        configuration.clone(),
                         python,
                         existing_tool_receipt.entrypoints().iter().cloned(),
-                        options.clone(),
                     ),
                 )?;
                 writeln!(
@@ -1141,7 +1129,7 @@ pub async fn install(
         package_name,
         entrypoints,
         &installed_tools,
-        &options,
+        configuration,
         force || invalid_tool_receipt,
         // Only persist the Python request if it was explicitly provided
         if explicit_python_request {
@@ -1149,11 +1137,6 @@ pub async fn install(
         } else {
             None
         },
-        requirements,
-        receipt_constraints,
-        receipt_overrides,
-        receipt_excludes,
-        receipt_build_constraints,
         tool_lock.as_ref(),
         printer,
     )?;

@@ -47,9 +47,9 @@ use uv_python_types::{
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
-use uv_settings::{PythonInstallMirrors, ToolOptions};
+use uv_settings::PythonInstallMirrors;
 use uv_shell::Shell;
-use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
+use uv_tool::{InstalledTools, Tool, ToolConfiguration, ToolEntrypoint, entrypoint_paths};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
@@ -745,14 +745,9 @@ pub(super) fn finalize_tool_install(
     name: &PackageName,
     entrypoints: &[PackageName],
     installed_tools: &InstalledTools,
-    options: &ToolOptions,
+    configuration: ToolConfiguration,
     force: bool,
     python: Option<PythonRequest>,
-    requirements: Vec<Requirement>,
-    constraints: Vec<Requirement>,
-    overrides: Vec<Requirement>,
-    excludes: Vec<ExcludeDependency>,
-    build_constraints: Vec<NameRequirementSpecification>,
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
@@ -941,16 +936,7 @@ pub(super) fn finalize_tool_install(
     }
 
     debug!("Adding receipt for tool `{name}`");
-    let tool = Tool::new(
-        requirements,
-        constraints,
-        overrides,
-        excludes,
-        build_constraints,
-        python,
-        installed_entrypoints,
-        options.clone(),
-    );
+    let tool = Tool::new(configuration, python, installed_entrypoints);
     ToolLock::write(&installed_tools.tool_dir(name), lock)?;
     installed_tools.add_tool_receipt(name, tool)?;
 

@@ -106,7 +106,7 @@ impl LatestClient<'_> {
     pub async fn find_latest(
         &self,
         package: &PackageName,
-        index: Option<&IndexUrl>,
+        index: Option<IndexMetadataRef<'_>>,
         download_concurrency: &Semaphore,
     ) -> Result<Option<DistFilename>, uv_client::Error> {
         debug!("Fetching latest version of: `{package}`");
@@ -127,12 +127,7 @@ impl LatestClient<'_> {
 
         let archives = match self
             .client
-            .simple_detail(
-                package,
-                index.map(IndexMetadataRef::from),
-                self.capabilities,
-                download_concurrency,
-            )
+            .simple_detail(package, index, self.capabilities, download_concurrency)
             .await
         {
             Ok(archives) => archives,

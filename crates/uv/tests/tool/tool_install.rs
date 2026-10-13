@@ -7446,6 +7446,7 @@ async fn tool_install_latest_with_pep723_index() -> Result<()> {
         # [[tool.uv.index]]
         # name = "private"
         # url = "{url}"
+        # explicit = true
         # [tool.uv.sources]
         # a = {{ index = "private" }}
         # ///

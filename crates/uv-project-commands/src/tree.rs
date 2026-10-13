@@ -344,7 +344,7 @@ pub async fn tree(
                 .map(async |(package, index)| {
                     // This probably already doesn't work for `--find-links`?
                     let Some(filename) = client
-                        .find_latest(package.name(), Some(&index), download_concurrency)
+                        .find_latest(package.name(), Some((&index).into()), download_concurrency)
                         .await?
                     else {
                         return Ok(None);

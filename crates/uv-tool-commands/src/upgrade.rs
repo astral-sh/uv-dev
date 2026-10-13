@@ -29,8 +29,8 @@ use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
 use uv_requirements::RequirementsSpecification;
-use uv_settings::{Combine, PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
-use uv_tool::{InstalledTools, Tool};
+use uv_settings::{Combine, PythonInstallMirrors, ResolverInstallerOptions};
+use uv_tool::{InstalledTools, Tool, ToolConfiguration};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
@@ -354,36 +354,17 @@ async fn upgrade_tool(
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
     let options = args.clone().combine(receipt.combine(filesystem.clone()));
     let settings = ResolverInstallerSettings::from(options.clone());
-    let pinned_indexes = existing_tool_receipt
-        .requirements()
-        .iter()
-        .chain(existing_tool_receipt.constraints())
-        .chain(existing_tool_receipt.overrides())
-        .chain(
-            existing_tool_receipt
-                .build_constraints()
-                .iter()
-                .map(|constraint| &constraint.requirement),
-        )
-        .filter_map(|requirement| match &requirement.source {
-            RequirementSource::Registry { index, .. } => index.as_ref(),
-            RequirementSource::Url { .. }
-            | RequirementSource::GitDirectory { .. }
-            | RequirementSource::GitPath { .. }
-            | RequirementSource::Path { .. }
-            | RequirementSource::Directory { .. } => None,
-        });
-    settings
-        .resolver
-        .index_locations
-        .validate_pinned_indexes(&receipt_indexes, pinned_indexes.clone())?;
+    existing_tool_receipt
+        .validate_pinned_indexes(&settings.resolver.index_locations, &receipt_indexes)?;
 
-    // Credential promotion can change authentication policies even when the upgrade is a no-op.
-    // Validate the persisted options before updating the tool environment.
-    let options = ToolOptions::from(options);
-    let persisted_indexes =
-        IndexLocations::from(ResolverInstallerOptions::from(options.clone()).indexes);
-    persisted_indexes.validate_pinned_indexes(&persisted_indexes, pinned_indexes)?;
+    let configuration = ToolConfiguration::new(
+        existing_tool_receipt.requirements().to_vec(),
+        existing_tool_receipt.constraints().to_vec(),
+        existing_tool_receipt.overrides().to_vec(),
+        existing_tool_receipt.excludes().to_vec(),
+        existing_tool_receipt.build_constraints().to_vec(),
+        options,
+    )?;
 
     let build_constraints = existing_tool_receipt.build_constraints().to_vec();
     let manifest_constraints = existing_tool_receipt
@@ -649,14 +630,9 @@ async fn upgrade_tool(
             name,
             &entrypoints,
             installed_tools,
-            &options,
+            configuration,
             true,
             existing_tool_receipt.python().to_owned(),
-            existing_tool_receipt.requirements().to_vec(),
-            existing_tool_receipt.constraints().to_vec(),
-            existing_tool_receipt.overrides().to_vec(),
-            existing_tool_receipt.excludes().to_vec(),
-            existing_tool_receipt.build_constraints().to_vec(),
             tool_lock.as_ref(),
             printer,
         )?;
@@ -664,8 +640,10 @@ async fn upgrade_tool(
         if tool_locks {
             ToolLock::write(&tool_dir, tool_lock.as_ref())?;
         }
-        installed_tools
-            .add_tool_receipt(name, existing_tool_receipt.clone().with_options(options))?;
+        installed_tools.add_tool_receipt(
+            name,
+            existing_tool_receipt.with_configuration(configuration),
+        )?;
     }
 
     let constraint = match &outcome {

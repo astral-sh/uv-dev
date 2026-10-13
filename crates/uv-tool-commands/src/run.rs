@@ -53,7 +53,7 @@ use uv_command_support::{
 
 use crate::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::error::ToolError;
-use crate::requirements::resolve_names;
+use crate::requirements::{index_for_package, resolve_names};
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
@@ -1001,69 +1001,6 @@ async fn get_or_create_environment(
         }
     };
 
-    // For `@latest`, fetch the latest version and create a constraint.
-    let latest = if let ToolRequest::Package {
-        target: Target::Latest(_, name, _),
-        ..
-    } = &request
-    {
-        // Build the registry client to fetch the latest version.
-        let client = RegistryClientBuilder::new(
-            client_builder
-                .clone()
-                .keyring(settings.resolver.keyring_provider),
-            cache.clone(),
-        )
-        .index_locations(settings.resolver.index_locations.clone())
-        .index_strategy(settings.resolver.index_strategy)
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
-
-        // Initialize the capabilities.
-        let capabilities = IndexCapabilities::default();
-        let download_concurrency = concurrency.downloads_semaphore.clone();
-
-        // Initialize the client to fetch the latest version.
-        let latest_client = LatestClient {
-            client: &client,
-            capabilities: &capabilities,
-            prerelease: &settings.resolver.prerelease,
-            exclude_newer: &settings.resolver.exclude_newer,
-            index_locations: &settings.resolver.index_locations,
-            tags: None,
-            requires_python: None,
-        };
-
-        // Fetch the latest version.
-        if let Some(dist_filename) = latest_client
-            .find_latest(name, None, &download_concurrency)
-            .await?
-        {
-            let version = dist_filename.version().clone();
-            debug!("Resolved `{name}@latest` to `{name}=={version}`");
-
-            // The constraint pins the version during resolution to prevent backtracking.
-            Some(Requirement {
-                name: name.clone(),
-                extras: vec![].into_boxed_slice(),
-                groups: Box::new([]),
-                marker: MarkerTree::default(),
-                source: RequirementSource::Registry {
-                    specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
-                    index: None,
-                    conflict: None,
-                },
-                scope: RequirementScope::Global,
-                origin: None,
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
         let mut requirements = Vec::with_capacity(1 + with.len());
@@ -1115,6 +1052,79 @@ async fn get_or_create_environment(
         lfs,
     )
     .await?;
+
+    // For `@latest`, fetch the latest version and create a constraint.
+    let latest = if let ToolRequest::Package {
+        target: Target::Latest(_, name, _),
+        ..
+    } = &request
+    {
+        let index = index_for_package(
+            name,
+            &requirements,
+            &constraints,
+            &overrides,
+            &spec.override_dependencies,
+            &spec.excludes,
+            resolution_markers(None, python_platform.as_ref(), &interpreter),
+        )?;
+
+        // Build the registry client to fetch the latest version.
+        let client = RegistryClientBuilder::new(
+            client_builder
+                .clone()
+                .keyring(settings.resolver.keyring_provider),
+            cache.clone(),
+        )
+        .index_locations(settings.resolver.index_locations.clone())
+        .index_strategy(settings.resolver.index_strategy)
+        .markers(interpreter.markers())
+        .platform(interpreter.platform())
+        .build()?;
+
+        // Initialize the capabilities.
+        let capabilities = IndexCapabilities::default();
+        let download_concurrency = concurrency.downloads_semaphore.clone();
+
+        // Initialize the client to fetch the latest version.
+        let latest_client = LatestClient {
+            client: &client,
+            capabilities: &capabilities,
+            prerelease: &settings.resolver.prerelease,
+            exclude_newer: &settings.resolver.exclude_newer,
+            index_locations: &settings.resolver.index_locations,
+            tags: None,
+            requires_python: None,
+        };
+
+        // Fetch the latest version.
+        if let Some(dist_filename) = latest_client
+            .find_latest(name, index.as_ref().map(Into::into), &download_concurrency)
+            .await?
+        {
+            let version = dist_filename.version().clone();
+            debug!("Resolved `{name}@latest` to `{name}=={version}`");
+
+            // The constraint pins the version during resolution to prevent backtracking.
+            Some(Requirement {
+                name: name.clone(),
+                extras: vec![].into_boxed_slice(),
+                groups: Box::new([]),
+                marker: MarkerTree::default(),
+                source: RequirementSource::Registry {
+                    specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
+                    index: None,
+                    conflict: None,
+                },
+                scope: RequirementScope::Global,
+                origin: None,
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     // Check if the tool is already installed in a compatible environment.
     if !isolated && !request.is_latest() {

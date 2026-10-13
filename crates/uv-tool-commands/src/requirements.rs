@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -5,17 +6,22 @@ use itertools::Itertools;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
-use uv_configuration::{Concurrency, Constraints, GitLfsSetting};
+use uv_configuration::{
+    Concurrency, Constraints, DependencyModifiers, ExcludeDependency, Excludes, GitLfsSetting,
+    Override, Overrides,
+};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    IndexMetadata, Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
+use uv_normalize::PackageName;
 use uv_preview::Preview;
+use uv_pypi_types::ResolverMarkerEnvironment;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::NamedRequirementsResolver;
 use uv_resolve_operations::reporters::ResolverReporter;
-use uv_resolver::FlatIndex;
+use uv_resolver::{Exclusions, FlatIndex, Manifest, Preferences, ResolverEnvironment};
 use uv_settings::ResolverSettings;
 use uv_torch::TorchStrategy;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
@@ -181,4 +187,40 @@ pub(super) async fn resolve_names(
     );
 
     Ok(requirements)
+}
+
+/// Select the same active package index as final resolution before fetching a latest version.
+pub(super) fn index_for_package(
+    package: &PackageName,
+    requirements: &[Requirement],
+    constraints: &[Requirement],
+    overrides: &[Requirement],
+    override_dependencies: &[Override<Requirement>],
+    excludes: &[ExcludeDependency],
+    markers: ResolverMarkerEnvironment,
+) -> Result<Option<IndexMetadata>, ToolError> {
+    let modifiers = DependencyModifiers::new(
+        Overrides::from_entries(
+            override_dependencies
+                .iter()
+                .cloned()
+                .chain(overrides.iter().cloned().map(Override::Requirement))
+                .collect(),
+        )
+        .map_err(uv_resolve_operations::Error::from)?,
+        Excludes::from_entries(excludes.iter().cloned()),
+    );
+    let manifest = Manifest::new(
+        requirements.to_vec(),
+        Constraints::from_requirements(constraints.iter().cloned()),
+        modifiers,
+        Preferences::default(),
+        None,
+        BTreeMap::new(),
+        Exclusions::default(),
+        Vec::new(),
+    );
+    Ok(manifest
+        .index_for(package, &ResolverEnvironment::specific(markers))
+        .map_err(uv_resolve_operations::Error::from)?)
 }
