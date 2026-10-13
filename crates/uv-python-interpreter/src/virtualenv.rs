@@ -30,6 +30,9 @@ pub struct VirtualEnvironment {
 
     /// Whether the environment includes the base interpreter's site-packages.
     pub system_site_packages: bool,
+
+    /// Whether creation retained contents of an existing nonempty directory.
+    pub preserved_existing: bool,
 }
 
 /// A parsed `pyvenv.cfg`

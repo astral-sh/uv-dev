@@ -63,13 +63,19 @@ struct PythonEnvironmentShared {
 pub struct CreatedVirtualEnvironment {
     environment: PythonEnvironment,
     system_site_packages: bool,
+    preserved_existing: bool,
 }
 
 impl CreatedVirtualEnvironment {
-    pub(crate) fn new(interpreter: Interpreter, system_site_packages: bool) -> Self {
+    pub(crate) fn new(
+        interpreter: Interpreter,
+        system_site_packages: bool,
+        preserved_existing: bool,
+    ) -> Self {
         Self {
             environment: PythonEnvironment::from_interpreter(interpreter),
             system_site_packages,
+            preserved_existing,
         }
     }
 
@@ -85,11 +91,18 @@ impl CreatedVirtualEnvironment {
         let Self {
             environment,
             system_site_packages,
+            preserved_existing,
         } = self;
+
+        let interpreter = environment.interpreter();
+        // Retained startup files can change metadata independently of the base interpreter.
+        if preserved_existing {
+            Interpreter::clear_cache(interpreter.sys_executable(), cache)?;
+            return Ok(environment);
+        }
 
         // The inferred base executable follows CPython 3.11+ semantics. Older CPython and
         // other implementations can report the virtual environment's executable as their base.
-        let interpreter = environment.interpreter();
         if interpreter.implementation_name() != "cpython" || interpreter.python_tuple() < (3, 11) {
             Interpreter::clear_cache(interpreter.sys_executable(), cache)?;
             return Ok(environment);
