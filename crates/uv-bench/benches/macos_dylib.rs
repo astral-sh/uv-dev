@@ -26,6 +26,7 @@ mod macos {
         Error as DownloadError, ManagedPythonDownload, ManagedPythonDownloadList,
     };
     use uv_python_types::PythonDownloadMirrors;
+    use uv_static::TarBackend;
 
     const DYLIB: &str = "lib/libpython3.13.dylib";
 
@@ -82,9 +83,15 @@ mod macos {
                 )
                 .await
                 .expect("Failed to download Python archive");
-                uv_extract::stream::archive(archive.as_ref(), extension, directory)
-                    .await
-                    .expect("Failed to extract Python archive")
+                let mut reader = archive.as_ref();
+                uv_extract::stream::archive(
+                    &mut reader,
+                    extension,
+                    directory,
+                    TarBackend::default(),
+                )
+                .await
+                .expect("Failed to extract Python archive")
             });
             let path = uv_extract::strip_component(directory.path())
                 .expect("Failed to find the Python archive root");
