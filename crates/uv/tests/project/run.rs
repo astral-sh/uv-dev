@@ -2011,19 +2011,25 @@ fn run_with_overlay_interpreter() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    // Switch to a relocatable virtual environment.
+    // Keep the base interpreter fixed when switching to a relocatable virtual environment.
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let base_python = PythonEnvironment::from_root(context.venv.path(), &cache)?
+        .interpreter()
+        .to_base_python()?;
     context
         .venv()
         .arg("--allow-existing")
         .arg("--relocatable")
+        .arg("--python")
+        .arg(&base_python)
         .assert()
         .success();
 
     // Populate the recreated environment's entry before comparing cached and queried metadata.
-    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
-        .init_no_wait()?
-        .context("Interpreter cache is locked")?;
-    PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let recreated = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    assert_eq!(recreated.interpreter().to_base_python()?, base_python);
 
     // A startup marker distinguishes a cache hit from another interpreter query.
     let site_packages = site_packages_path(context.venv.path(), "python3.12");
