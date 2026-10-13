@@ -95,10 +95,11 @@ impl CreatedVirtualEnvironment {
             return Ok(environment);
         }
 
-        // A parent can veto manylinux wheels through its own `_manylinux` module. An isolated
-        // child may not import that override, so query its compatibility directly.
+        // A parent's `_manylinux` override may not be imported by an isolated child. Query the
+        // child whenever an override was loaded or the parent vetoed manylinux compatibility.
         if matches!(interpreter.platform().os(), Os::Manylinux { .. })
-            && !interpreter.manylinux_compatible()
+            && (interpreter.has_manylinux_compatibility_override()
+                || !interpreter.manylinux_compatible())
         {
             Interpreter::clear_cache(interpreter.sys_executable(), cache)?;
             return Ok(environment);

@@ -368,6 +368,7 @@ mod tests {
                         "arch": "x86_64"
                     },
                     "manylinux_compatible": true,
+                    "manylinux_compatibility_override": false,
                     "standalone": true,
                     "markers": {
                         "implementation_name": "{IMPLEMENTATION}",
@@ -461,6 +462,7 @@ mod tests {
                         "arch": "wasm32"
                     },
                     "manylinux_compatible": false,
+                    "manylinux_compatibility_override": false,
                     "standalone": false,
                     "markers": {
                         "implementation_name": "cpython",
