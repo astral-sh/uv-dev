@@ -1,11 +1,11 @@
 @echo off
 REM Wrapper script for locked Cargo commands and auditable release builds.
 REM
-REM Set CARGO_LOCKED=1 to require an up-to-date Cargo.lock.
-REM Cargo extensions still need their own --locked flags.
-REM Set CARGO_AUDITABLE=0 to disable SBOM embedding outside release builds.
+REM Set `CARGO_LOCKED=1` to require an up-to-date `Cargo.lock`.
+REM Cargo extensions still need their own `--locked` flags.
+REM Set `CARGO_AUDITABLE=0` to disable SBOM embedding outside release builds.
 REM Use `scripts/install-cargo-extensions.sh` to install cargo-auditable.
-REM Select a Rust toolchain with RUSTUP_TOOLCHAIN.
+REM Select a Rust toolchain with `RUSTUP_TOOLCHAIN`.
 REM
 REM Usage:
 REM

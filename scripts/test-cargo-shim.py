@@ -12,6 +12,14 @@ SHIM = ROOT / "scripts" / ("cargo.cmd" if os.name == "nt" else "cargo.sh")
 
 
 class CargoShimTests(unittest.TestCase):
+    toolchain: str
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.toolchain = subprocess.check_output(
+            ["rustup", "show", "active-toolchain"], cwd=ROOT, text=True
+        ).split()[0]
+
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory(prefix="cargo shim ")
         self.addCleanup(self.directory.cleanup)
@@ -34,6 +42,7 @@ class CargoShimTests(unittest.TestCase):
             "CARGO_NET_OFFLINE": "true",
             "CARGO_TARGET_DIR": str(self.project / "target"),
             "CARGO_TERM_COLOR": "never",
+            "RUSTUP_TOOLCHAIN": self.toolchain,
         }
 
     def cargo(
@@ -141,10 +150,7 @@ class CargoShimTests(unittest.TestCase):
         os.name == "nt", "Windows selects toolchains with RUSTUP_TOOLCHAIN"
     )
     def test_toolchain_override(self) -> None:
-        toolchain = subprocess.check_output(
-            ["rustup", "show", "active-toolchain"], cwd=ROOT, text=True
-        ).split()[0]
-        result = self.cargo(f"+{toolchain}", "check")
+        result = self.cargo(f"+{self.toolchain}", "check")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--locked", result.stderr)
         self.assertFalse(self.lockfile.exists())

@@ -13,7 +13,7 @@
 
 set -eu
 
-# cargo-auditable must be installed before it can wrap Cargo invocations.
+# `cargo-auditable` must be installed before it can wrap Cargo invocations.
 export CARGO_AUDITABLE=0
 
 CARGO_AUDITABLE_INSTALL="cargo install cargo-auditable \
