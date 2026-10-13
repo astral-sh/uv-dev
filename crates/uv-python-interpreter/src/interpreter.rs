@@ -1928,7 +1928,7 @@ mod tests {
         let root = directory.path().join("venv");
         fs::create_dir_all(root.join("bin"))?;
         let executable = root.join("bin/python");
-        std::os::unix::fs::symlink(&base_executable, &executable)?;
+        fs::os::unix::fs::symlink(&base_executable, &executable)?;
         fs::write(
             root.join("pyvenv.cfg"),
             format!("home = {}\n", directory.path().display()),
@@ -1984,7 +1984,7 @@ mod tests {
             &executable,
             std::os::unix::fs::PermissionsExt::from_mode(0o770),
         )?;
-        std::os::unix::fs::symlink(&executable, &alias)?;
+        fs::os::unix::fs::symlink(&executable, &alias)?;
         let cache = Cache::temp()?.init().await?;
         let interpreter = Interpreter::query(&alias, &cache)?;
         fs::remove_file(&alias)?;
@@ -2026,7 +2026,7 @@ mod tests {
         let root = directory.path().join("venv");
         fs::create_dir_all(root.join("bin"))?;
         let executable = root.join("bin/python");
-        std::os::unix::fs::symlink(&base_executable, &executable)?;
+        fs::os::unix::fs::symlink(&base_executable, &executable)?;
         fs::write(
             root.join("pyvenv.cfg"),
             format!("home = {}\n", directory.path().display()),
