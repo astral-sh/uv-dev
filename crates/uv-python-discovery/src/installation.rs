@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::Arc;
 
 use reqwest_retry::policies::ExponentialBackoff;
 use tracing::{Instrument, Span, debug, info};
@@ -356,14 +357,10 @@ impl PythonInstallation {
         cache: Cache,
         lock: LockedFile,
     ) -> Result<Self, Error> {
+        let (installed, lock) = installed.finalize(Arc::new(lock)).await?;
         let span = Span::current();
         tokio::spawn(
             async move {
-                installed.ensure_externally_managed().await?;
-                installed.ensure_sysconfig_patched().await?;
-                installed.ensure_canonical_executables().await?;
-                installed.ensure_build_file().await?;
-
                 let minor_version = installed.minor_version_key();
                 let highest_patch = installations
                     .find_all()?
@@ -380,10 +377,6 @@ impl PythonInstallation {
 
                 tokio::task::spawn_blocking(move || {
                     let _lock = lock;
-                    if let Err(error) = installed.ensure_dylib_patched() {
-                        error.warn_user(&installed);
-                    }
-
                     Ok(Self {
                         source: PythonSource::Managed,
                         interpreter: Interpreter::query(installed.executable(false), &cache)?,
@@ -723,12 +716,14 @@ pub fn find_environment(
 #[cfg(test)]
 mod tests {
     use std::future::Future;
+    use std::io;
     use std::pin::pin;
     use std::sync::mpsc;
     use std::task::{Context, Poll, Waker};
     use std::time::Duration;
 
     use tokio::runtime::Builder;
+    use tokio::sync::mpsc::unbounded_channel;
     use tokio::sync::oneshot;
     use uv_cache::Cache;
     use uv_fs::{LockedFile, LockedFileMode};
@@ -745,9 +740,13 @@ mod tests {
     #[test]
     fn cancelled_automatic_finalization_retains_installation_lock()
     -> Result<(), Box<dyn std::error::Error>> {
+        let (parked, mut park) = unbounded_channel();
         let runtime = Builder::new_current_thread()
             .enable_all()
             .max_blocking_threads(1)
+            .on_thread_park(move || {
+                let _ = parked.send(());
+            })
             .build()?;
         let cache = Cache::temp()?;
         let installations =
@@ -766,6 +765,7 @@ mod tests {
                 finish.recv()
             });
             start.await?;
+            while park.try_recv().is_ok() {}
             assert!(
                 poll_once(PythonInstallation::finish_installation(
                     installed,
@@ -775,6 +775,13 @@ mod tests {
                 ))
                 .is_pending()
             );
+            // Wait until the finalizer is suspended on the occupied blocking pool before
+            // checking that cancellation has not released its lock.
+            tokio::time::timeout(Duration::from_secs(10), park.recv())
+                .await?
+                .ok_or_else(|| {
+                    io::Error::other("runtime stopped before the finalizer could block")
+                })?;
             assert!(
                 LockedFile::acquire_no_wait(
                     &lock_path,
@@ -783,7 +790,6 @@ mod tests {
                 )
                 .is_none()
             );
-            tokio::task::yield_now().await;
             release.send(())?;
             blocker.await??;
             let _reacquired = tokio::time::timeout(Duration::from_secs(10), async {

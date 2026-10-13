@@ -4095,28 +4095,28 @@ fn python_install_compile_bytecode_existing() {
     ");
 }
 
+/// One installation satisfies overlapping requests and is finalized and compiled once.
 #[test]
 fn python_install_compile_bytecode_overlapping_requests() {
     let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_compiled_file_count()
         .with_managed_python_dirs()
         .with_empty_python_install_mirror();
     context.python_install().arg("3.14.0").assert().success();
 
-    let assertion = context
-        .python_install()
+    uv_snapshot!(context.filters(), context.python_install()
         .arg("--compile-bytecode")
         .arg("3.14")
         .arg("3.14.0")
-        .env(EnvVars::RUST_LOG, "uv_python_commands::install=debug")
-        .assert()
-        .success();
-    let stderr = String::from_utf8_lossy(&assertion.get_output().stderr);
-    // One installation satisfies both requests; no second finalizer may overlap its compiler.
-    assert_eq!(
-        stderr.matches("Finalizing Python installation").count(),
-        1,
-        "{stderr}"
-    );
+        .env(EnvVars::RUST_LOG, "uv_python_managed::managed=debug"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Finalizing Python installation cpython-3.14.0-[PLATFORM]
+    DEBUG Created link `managed/cpython-3.14-[PLATFORM]` -> `managed/cpython-3.14.0-[PLATFORM]`
+    All requested versions already installed
+    Bytecode compiled [COUNT] files in [TIME]
+    ");
 }
 
 #[test]

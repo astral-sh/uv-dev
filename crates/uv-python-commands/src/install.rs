@@ -12,7 +12,7 @@ use itertools::Itertools;
 use owo_colors::{AnsiColors, OwoColorize};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
-use tracing::{Instrument, Span, debug, trace, warn};
+use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
@@ -668,7 +668,7 @@ async fn perform_install(
     for installation in &installations {
         // Bytecode compilation consumes finalized files, so those installations need no more writes.
         if bytecode_compilation_sender.is_none() {
-            finalize_installation((**installation).clone(), lock.clone()).await?;
+            (**installation).clone().finalize(lock.clone()).await?;
         }
 
         let upgradeable = (default || is_default_install)
@@ -1376,40 +1376,16 @@ async fn finalize_and_compile(
     lock: Arc<LockedFile>,
     sender: &mpsc::UnboundedSender<ManagedPythonInstallation>,
 ) -> Result<()> {
-    let installation = finalize_installation(installation, lock).await?;
+    let (installation, _lock) = installation.finalize(lock).await?;
     sender
         .send(installation)
         .map_err(|error| anyhow::anyhow!(error))?;
     Ok(())
 }
 
-/// Complete installation files while retaining the installation lock through cancellation.
-async fn finalize_installation(
-    installation: ManagedPythonInstallation,
-    lock: Arc<LockedFile>,
-) -> Result<ManagedPythonInstallation> {
-    let span = Span::current();
-    let installation = tokio::spawn(
-        async move {
-            debug!("Finalizing Python installation {}", installation.key());
-            installation.ensure_externally_managed().await?;
-            installation.ensure_sysconfig_patched().await?;
-            installation.ensure_canonical_executables().await?;
-            installation.ensure_build_file().await?;
-            if let Err(error) = installation.ensure_dylib_patched() {
-                error.warn_user(&installation);
-            }
-            let _lock = lock;
-            Ok::<_, uv_python_managed::Error>(installation)
-        }
-        .instrument(span),
-    )
-    .await??;
-    Ok(installation)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
@@ -1427,9 +1403,13 @@ mod tests {
 
     #[test]
     fn cancelled_finalization_retains_lock_and_defers_compilation() -> anyhow::Result<()> {
+        let (parked, mut park) = unbounded_channel();
         let runtime = Builder::new_current_thread()
             .enable_all()
             .max_blocking_threads(1)
+            .on_thread_park(move || {
+                let _ = parked.send(());
+            })
             .build()?;
         let cache = Cache::temp()?;
         let installations =
@@ -1450,11 +1430,19 @@ mod tests {
                 finish.recv()
             });
             start.await?;
+            while park.try_recv().is_ok() {}
             assert!(
                 finalize_and_compile(installation.clone(), lock, &sender)
                     .now_or_never()
                     .is_none()
             );
+            // The current-thread executor parks after the finalizer is waiting on the occupied
+            // blocking pool, so lock contention is checked after that task has started.
+            tokio::time::timeout(Duration::from_secs(10), park.recv())
+                .await?
+                .ok_or_else(|| {
+                    io::Error::other("runtime stopped before the finalizer could block")
+                })?;
             assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
             assert!(
                 LockedFile::acquire_no_wait(
@@ -1464,7 +1452,6 @@ mod tests {
                 )
                 .is_none()
             );
-            tokio::task::yield_now().await;
             release.send(())?;
             blocker.await??;
             let reacquired = tokio::time::timeout(Duration::from_secs(10), async {
