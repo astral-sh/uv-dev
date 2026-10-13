@@ -45,7 +45,8 @@ design issue is not evidence of a fix enforcing upper bounds.
 
 ### Report and metadata
 
-The event and live issue body agree; the live issue has no comments or labels.
+The event and supplied issue body agree. The supplied discussion includes a
+maintainer comment addressing the resolution/checker distinction below.
 The report separates into two observable claims:
 
 - Compilation selects a dependency outside its declared Python range despite
@@ -90,6 +91,16 @@ can succeed before the environment check fails.
 
 ### Maintainer discussion and timing
 
+On October 13, 2026, charliermarsh (MEMBER) confirmed in astral-sh/uv#22486
+that ignoring `Requires-Python` upper bounds is generally intended, citing
+the compatibility documentation. The maintainer separately described the
+subsequent `uv pip check` error as something that "feels like an inconsistency"
+(comment ID 6136056755). This focuses further investigation on the checker
+discrepancy; it is not a decision to enforce upper bounds during resolution
+or a commitment to change the checker. The comment supplies no new
+reproduction or fix and does not change the duplicate relationship to
+astral-sh/uv#7869.
+
 In astral-sh/uv#15666, a maintainer confirmed that LiteRT declared the backport
 unconditionally and that adding a marker to a separate first-party dependency
 does not change LiteRT's declaration. The suggested upstream correction was
@@ -126,8 +137,11 @@ work exists.
 
 ## Maintainer next step
 
-Centralize this report with astral-sh/uv#7869 and cross-reference the exact
-same-package history in astral-sh/uv#15666. The reporter's explicit version
+Investigate whether `uv pip check` should report an incompatibility for an
+upper bound deliberately ignored during resolution, using the existing
+reproduction and the maintainer's distinction above. Centralize that discussion
+with astral-sh/uv#7869 and cross-reference the exact same-package history in
+astral-sh/uv#15666. The reporter's explicit version
 constraint is an available workaround. Do not describe a clean dependency
 check as proof of runtime compatibility or claim that a resolver fix is
 scheduled.
