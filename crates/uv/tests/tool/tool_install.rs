@@ -7076,7 +7076,9 @@ async fn tool_install_pep723_receipt_rejects_conflicting_index_alias() -> Result
 /// Receipt declarations retain per-index policies without synthesizing an implicit default.
 #[test]
 fn tool_install_pep723_receipt_retains_legacy_default_and_index_policy() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
     context.temp_dir.child("deps.py").write_str(indoc! {r#"
         # /// script
         # dependencies = ["ok"]
@@ -7117,20 +7119,23 @@ fn tool_install_pep723_receipt_retains_legacy_default_and_index_policy() -> Resu
         .env(EnvVars::PATH, bin.path())
         .assert()
         .success();
-    let receipt: toml::Value =
-        toml::from_str(&context.read("tools/simple-launcher/uv-receipt.toml"))?;
-    let options = &receipt["tool"]["options"];
-    assert_eq!(
-        options["index-url"].as_str(),
-        Some("https://mirror.example/simple")
-    );
-    assert_eq!(options["index"].as_array().map(Vec::len), Some(1));
-    let index = &options["index"][0];
-    assert_eq!(index["name"].as_str(), Some("private"));
-    assert_eq!(index["url"].as_str(), Some("https://pypi.org/simple"));
-    assert_eq!(
-        index["exclude-newer"].as_str(),
-        Some("2020-01-01T00:00:00Z")
-    );
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/simple-launcher/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [
+            { name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" },
+            { name = "ok", index = "https://pypi.org/simple" },
+        ]
+        overrides = [{ name = "ok", path = "[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl" }]
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        index = [{ name = "private", url = "https://pypi.org/simple", explicit = true, default = false, format = "simple", authenticate = "auto", exclude-newer = "2020-01-01T00:00:00Z" }]
+        index-url = "https://mirror.example/simple"
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
     Ok(())
 }

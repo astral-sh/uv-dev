@@ -8875,3 +8875,41 @@ fn run_pep723_requirements_ignore_shadowed_configured_alias() -> Result<()> {
     ");
     Ok(())
 }
+
+/// A directly pinned script index must retain its policy when a CLI default replaces its role.
+#[tokio::test]
+async fn run_script_rejects_shadowed_selected_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # default = true
+        # exclude-newer = "2023-06-01T00:00:00Z"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--default-index", &format!("{}/unused/simple", server.uri()), "--preview-features", "index-exclude-newer", "script.py"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Index URL `http://[LOCALHOST]/simple` pinned by requirements no longer has its configured policy
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}

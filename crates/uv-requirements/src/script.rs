@@ -51,7 +51,7 @@ pub async fn script_specification(
     }
 
     let script_dir = script.directory()?;
-    script_metadata_specification(
+    let (specification, indexes) = script_metadata_specification(
         script.metadata(),
         &script_dir,
         sources,
@@ -60,9 +60,10 @@ pub async fn script_specification(
         workspace_cache,
         credentials_cache,
     )
-    .await
-    // Direct script commands already resolve the complete ordered index configuration.
-    .map(|(specification, _)| Some(specification))
+    .await?;
+    // Direct script settings contain every declared index in precedence order.
+    index_locations.validate_source_indexes(&indexes)?;
+    Ok(Some(specification))
 }
 
 /// Lower requirements from script metadata relative to its directory.
