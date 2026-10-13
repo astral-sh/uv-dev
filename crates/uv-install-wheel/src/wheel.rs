@@ -1437,7 +1437,13 @@ impl RenameOrCopy {
 mod test {
     use std::assert_matches;
     use std::io::{BufReader, Cursor, ErrorKind, Seek};
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
+    #[cfg(windows)]
+    use windows::Win32::Storage::FileSystem::{GetVolumeInformationW, GetVolumePathNameW};
+    #[cfg(windows)]
+    use windows::core::PCWSTR;
 
     use anyhow::Result;
     use assert_fs::prelude::*;
@@ -1459,12 +1465,84 @@ mod test {
         );
         assert_eq!(
             destinations.insert(
-                super::script_destination_key(Path::new("ς.exe"))?,
-                "final-sigma"
+                super::script_destination_key(Path::new("Σ.exe"))?,
+                "capital-sigma"
             )?,
             Some("sigma")
         );
         assert!(destinations.contains(&super::script_destination_key(Path::new("Σ.EXE"))?)?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn assert_ntfs(path: &Path) -> Result<()> {
+        let path: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut volume_path = vec![0; path.len()];
+        // SAFETY: The source is null-terminated and both buffers remain live for the call.
+        #[expect(unsafe_code)]
+        unsafe {
+            GetVolumePathNameW(PCWSTR(path.as_ptr()), &mut volume_path)?;
+        }
+        let mut file_system = vec![0; 260];
+        // SAFETY: The root is null-terminated by GetVolumePathNameW and the writable output
+        // slice has room for the filesystem name. All other outputs are unused.
+        #[expect(unsafe_code)]
+        unsafe {
+            GetVolumeInformationW(
+                PCWSTR(volume_path.as_ptr()),
+                None,
+                None,
+                None,
+                None,
+                Some(&mut file_system),
+            )?;
+        }
+        let length = file_system
+            .iter()
+            .position(|&unit| unit == 0)
+            .unwrap_or(file_system.len());
+        assert_eq!(String::from_utf16(&file_system[..length])?, "NTFS");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_destination_sigma_on_ntfs() -> Result<()> {
+        let Some(root) = std::env::var_os("UV_INTERNAL__TEST_LOWLINKS_FS") else {
+            return Ok(());
+        };
+        let directory = assert_fs::TempDir::new_in(root)?;
+        assert_ntfs(directory.path())?;
+        let sigma = directory.child("σ.exe");
+        let final_sigma = directory.child("ς.exe");
+        sigma.write_str("sigma")?;
+
+        let mut destinations = super::ScriptDestinations::default();
+        destinations.insert(super::script_destination_key(sigma.path())?, "sigma")?;
+        assert_eq!(
+            destinations.contains(&super::script_destination_key(final_sigma.path())?)?,
+            final_sigma.try_exists()?,
+            "the destination index must agree with the NTFS filename lookup"
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_destination_dotted_i_on_ntfs() -> Result<()> {
+        let Some(root) = std::env::var_os("UV_INTERNAL__TEST_LOWLINKS_FS") else {
+            return Ok(());
+        };
+        let directory = assert_fs::TempDir::new_in(root)?;
+        assert_ntfs(directory.path())?;
+        let composed = directory.child("İ.exe");
+        let decomposed = directory.child("i\u{307}.exe");
+        composed.write_str("composed")?;
+        assert!(!decomposed.try_exists()?);
+
+        let mut destinations = super::ScriptDestinations::default();
+        destinations.insert(super::script_destination_key(composed.path())?, "composed")?;
+        assert!(!destinations.contains(&super::script_destination_key(decomposed.path())?)?);
         Ok(())
     }
 

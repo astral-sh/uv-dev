@@ -741,7 +741,7 @@ fn install_python_wheel_entrypoint_over_data_script() -> Result<()> {
     Ok(())
 }
 
-/// Windows maps sigma and final sigma to the same filename despite their distinct lowercase forms.
+/// Windows compares the uppercase and lowercase forms of an entry-point filename.
 #[cfg(windows)]
 #[test]
 fn reject_windows_sigma_wheel_entrypoint_collision() -> Result<()> {
@@ -760,7 +760,7 @@ fn reject_windows_sigma_wheel_entrypoint_collision() -> Result<()> {
                     [console_scripts]
                     σ = sigma.cli:main
                     [gui_scripts]
-                    ς = sigma.cli:main
+                    Σ = sigma.cli:main
                 "},
             ),
             (
@@ -779,7 +779,7 @@ fn reject_windows_sigma_wheel_entrypoint_collision() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     error: Failed to install: sigma-1.0.0-py3-none-any.whl (sigma==1.0.0 (from file://[TEMP_DIR]/sigma-1.0.0-py3-none-any.whl))
-      cause: The wheel is invalid: Wheel entry points `ς` and `σ` install to the same destination
+      cause: The wheel is invalid: Wheel entry points `Σ` and `σ` install to the same destination
     ");
     ChildPath::new(context.site_packages().join("sigma")).assert(predicate::path::missing());
     ChildPath::new(context.site_packages().join("sigma-1.0.0.dist-info"))
@@ -818,7 +818,7 @@ fn install_windows_sigma_wheel_entrypoint_over_data_script() -> Result<()> {
                 "},
             ),
             (
-                "sigma_script-1.0.0.data/scripts/ς.exe",
+                "sigma_script-1.0.0.data/scripts/Σ.exe",
                 indoc! {"
                     #!python
                     print('DATA_SCRIPT')
@@ -976,6 +976,60 @@ fn install_distinct_windows_sharp_s_wheel_entrypoints() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     double-s
+    ");
+    Ok(())
+}
+
+/// Unicode lowercasing expands dotted I, but Windows keeps these two filenames distinct.
+#[cfg(windows)]
+#[test]
+fn install_distinct_windows_dotted_i_wheel_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"dotted-i".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "dotted_i-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    İ = dotted_i.cli:composed
+                    i̇ = dotted_i.cli:expanded
+                "},
+            ),
+            (
+                "dotted_i/cli.py",
+                indoc! {"
+                    def composed():
+                        print('composed-i')
+                    def expanded():
+                        print('expanded-i')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + dotted-i==1.0.0 (from file://[TEMP_DIR]/dotted_i-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join("İ.exe")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    composed-i
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join("i̇.exe")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    expanded-i
     ");
     Ok(())
 }
