@@ -20758,3 +20758,41 @@ async fn pep723_requirements_conflicting_flat_index_policy() -> Result<()> {
     );
     Ok(())
 }
+
+/// Distinct Simple API endpoints can share the same authentication scope.
+#[tokio::test]
+async fn pep723_requirements_conflicting_authentication_scope() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--index", &format!("mirror={}/+simple", server.uri()), "requirements.py"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}

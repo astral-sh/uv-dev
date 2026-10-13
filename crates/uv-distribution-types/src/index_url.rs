@@ -11,7 +11,7 @@ use itertools::Either;
 use rustc_hash::{FxHashMap, FxHashSet};
 use thiserror::Error;
 use url::ParseError;
-use uv_auth::RealmRef;
+use uv_auth::{Index as AuthIndex, RealmRef};
 use uv_cache_key::CanonicalUrl;
 use uv_pep508::{Scheme, VerbatimUrl, VerbatimUrlError, split_scheme};
 use uv_pypi_types::HashAlgorithm;
@@ -91,9 +91,13 @@ impl SourceIndexes {
     }
 }
 
-/// URL-based policy lookups must agree even when an endpoint has multiple names.
+/// Authentication scopes and endpoint-based policies must agree across selected definitions.
 fn validate_source_index_policy(existing: &Index, index: &Index) -> Result<(), SourceIndexError> {
-    if is_same_index(&existing.url, &index.url) && !existing.has_same_policy(index) {
+    let conflicting_authentication = existing.authenticate != index.authenticate
+        && AuthIndex::from(existing).has_overlapping_auth_scope(&AuthIndex::from(index));
+    if conflicting_authentication
+        || (is_same_index(&existing.url, &index.url) && !existing.has_same_policy(index))
+    {
         return Err(SourceIndexError::ConflictingUrl(index.url.clone()));
     }
     Ok(())
@@ -405,14 +409,15 @@ impl IndexLocations {
             else {
                 continue;
             };
-            let Some(retained) = retained_indexes
+            if !retained_indexes
                 .iter()
-                .rev()
-                .find(|index| is_same_index(&index.url, &pin.url))
-            else {
+                .any(|index| is_same_index(&index.url, &pin.url))
+            {
                 return Err(SourceIndexError::MissingPinnedIndex(pin.url.clone()));
-            };
-            validate_source_index_policy(original, retained)?;
+            }
+            for retained in &retained_indexes {
+                validate_source_index_policy(original, retained)?;
+            }
         }
         Ok(())
     }
@@ -701,21 +706,30 @@ impl<'a> IndexLocations {
     }
 }
 
+impl From<&Index> for AuthIndex {
+    fn from(index: &Index) -> Self {
+        let mut url = index.url().url().clone();
+        url.set_username("").ok();
+        url.set_password(None).ok();
+        let mut root_url = index.url().root().unwrap_or_else(|| url.clone());
+        root_url.set_username("").ok();
+        root_url.set_password(None).ok();
+        Self {
+            url,
+            root_url,
+            auth_policy: index.authenticate,
+        }
+    }
+}
+
 impl From<&IndexLocations> for uv_auth::Indexes {
     fn from(index_locations: &IndexLocations) -> Self {
-        Self::from_indexes(index_locations.allowed_indexes().into_iter().map(|index| {
-            let mut url = index.url().url().clone();
-            url.set_username("").ok();
-            url.set_password(None).ok();
-            let mut root_url = index.url().root().unwrap_or_else(|| url.clone());
-            root_url.set_username("").ok();
-            root_url.set_password(None).ok();
-            uv_auth::Index {
-                url,
-                root_url,
-                auth_policy: index.authenticate,
-            }
-        }))
+        Self::from_indexes(
+            index_locations
+                .allowed_indexes()
+                .into_iter()
+                .map(AuthIndex::from),
+        )
     }
 }
 
@@ -813,6 +827,111 @@ mod tests {
             .into_iter()
             .map(|index| index.url().url().as_str())
             .collect()
+    }
+
+    #[test]
+    fn source_indexes_reject_overlapping_auth_scopes() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let alias = Index::from_str("mirror=https://example.com/+simple")?;
+
+        let result = IndexLocations::new(vec![alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Conflicting policies for index URL `https://example.com/simple` in requirements sources".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_reject_credentialed_auth_scope_conflict() -> Result<(), Box<dyn Error>> {
+        let mut selected =
+            Index::from_str("private=https://private-user:private-password@example.com/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let alias =
+            Index::from_str("mirror=https://mirror-user:mirror-password@example.com/+simple")?;
+        let selected_auth = AuthIndex::from(&selected);
+        let alias_auth = AuthIndex::from(&alias);
+        assert_eq!(selected_auth.url.as_str(), "https://example.com/simple");
+        assert_eq!(selected_auth.root_url.as_str(), "https://example.com/");
+        assert_eq!(alias_auth.url.as_str(), "https://example.com/+simple");
+        assert_eq!(alias_auth.root_url.as_str(), "https://example.com/");
+
+        assert!(
+            IndexLocations::new(vec![alias], Vec::new(), false)
+                .with_source_indexes(SourceIndexes::try_from_iter([selected])?)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_allow_disjoint_auth_scopes() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/private/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let public = Index::from_str("public=https://example.com/public/simple")?;
+
+        IndexLocations::new(vec![public], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_keep_endpoint_policies_independent() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.ignore_error_codes = Some(serde_json::from_str("[403]")?);
+        let alias = Index::from_str("mirror=https://example.com/+simple")?;
+
+        IndexLocations::new(vec![alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_indexes_reject_conflicting_retained_alias() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let pin = IndexMetadata::from(selected.url.clone());
+        let original = IndexLocations::new(vec![selected.clone()], Vec::new(), false);
+        let alias = Index::from_str("mirror=https://example.com/simple")?;
+        let retained = IndexLocations::new(vec![selected, alias], Vec::new(), false);
+
+        assert_eq!(
+            retained.validate_pinned_indexes(&original, [&pin]).err().map(|err| err.to_string()),
+            Some("Conflicting policies for index URL `https://example.com/simple` in requirements sources".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_indexes_reject_overlapping_auth_scope() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let pin = IndexMetadata::from(selected.url.clone());
+        let original = IndexLocations::new(vec![selected.clone()], Vec::new(), false);
+        let alias = Index::from_str("mirror=https://example.com/+simple")?;
+        let retained = IndexLocations::new(vec![selected, alias], Vec::new(), false);
+
+        assert_eq!(
+            retained.validate_pinned_indexes(&original, [&pin]).err().map(|err| err.to_string()),
+            Some("Conflicting policies for index URL `https://example.com/+simple` in requirements sources".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_indexes_accept_compatible_alias() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let pin = IndexMetadata::from(selected.url.clone());
+        let original = IndexLocations::new(vec![selected.clone()], Vec::new(), false);
+        let mut alias = Index::from_str("mirror=https://example.com/simple")?;
+        alias.authenticate = AuthPolicy::Always;
+        let retained = IndexLocations::new(vec![selected, alias], Vec::new(), false);
+
+        retained.validate_pinned_indexes(&original, [&pin])?;
+        Ok(())
     }
 
     #[test]
