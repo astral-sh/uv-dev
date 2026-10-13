@@ -123,8 +123,8 @@ _Never_ modify the cache directly, such as by removing a file or directory.
 
 Use these commands to remove cache entries:
 
-- `uv cache clean` removes _all_ cache entries from the cache directory.
-  The directory and its lock file remain so that other uv processes can safely share the cache.
+- `uv cache clean` removes _all_ cache entries from the cache directory. The directory and its lock
+  file remain so that other uv processes can safely share the cache.
 - `uv cache clean ruff` removes all cache entries for the `ruff` package.
 - `uv cache prune` removes all _unused_ cache entries and all centralized project environments. For
   example, it removes entries from older uv versions that are no longer necessary. uv recreates
