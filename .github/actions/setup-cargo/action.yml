@@ -1,0 +1,33 @@
+name: "Set up Cargo shim"
+description: "Require locked Cargo commands without enabling release SBOM embedding."
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Install Cargo shim"
+      shell: bash
+      # Export only runner-owned paths, rejecting environment-file delimiters.
+      run: | # zizmor: ignore[github-env]
+        shim_dir="$RUNNER_TEMP/uv-cargo-shim"
+        real_cargo="${REAL_CARGO:-$(command -v cargo)}"
+        mkdir -p "$shim_dir"
+        cp "$GITHUB_WORKSPACE/scripts/cargo.sh" "$shim_dir/cargo"
+        cp "$GITHUB_WORKSPACE/scripts/cargo.cmd" "$shim_dir/cargo.cmd"
+        chmod +x "$shim_dir/cargo"
+
+        if [[ "$shim_dir$real_cargo" == *$'\n'* || "$shim_dir$real_cargo" == *$'\r'* ]]; then
+          echo "Cargo shim paths must not contain newlines." >&2
+          exit 1
+        fi
+
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          shim_dir="$(cygpath -m "$shim_dir")"
+          real_cargo="$(cygpath -m "$real_cargo")"
+          echo "CARGO=$shim_dir/cargo.cmd" >> "$GITHUB_ENV"
+        else
+          echo "CARGO=$shim_dir/cargo" >> "$GITHUB_ENV"
+        fi
+        echo "REAL_CARGO=$real_cargo" >> "$GITHUB_ENV"
+        echo "CARGO_LOCKED=1" >> "$GITHUB_ENV"
+        echo "CARGO_AUDITABLE=0" >> "$GITHUB_ENV"
+        echo "$shim_dir" >> "$GITHUB_PATH"

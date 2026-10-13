@@ -36,6 +36,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         run: rustup toolchain install --profile minimal
 
@@ -157,6 +159,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         run: rustup toolchain install --profile minimal
 
@@ -254,6 +258,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - uses: $/.github/actions/setup-cargo
 
       - name: Setup Dev Drive
         run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1

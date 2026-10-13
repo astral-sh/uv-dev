@@ -32,6 +32,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         run: rustup show
 
@@ -53,15 +55,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
-          cargo run --locked --bin uv -- venv --cache-dir .cache
+          cargo run --bin uv -- venv --cache-dir .cache
           # Resolve benchmark fixtures without the repository's tooling build policy.
-          cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
-          cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
 
       - name: "Build benchmarks"
         run: |
           # cargo-codspeed resolves metadata before passing --locked to Cargo.
-          cargo metadata --locked --format-version 1 > /dev/null
+          cargo metadata --format-version 1 > /dev/null
           uv run --only-dev cargo codspeed build --locked -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery --bench git_fetch --bench uv_pep508 --bench uv_settings
 
       - name: "Create artifact archive"
@@ -92,6 +94,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - uses: $/.github/actions/setup-cargo
 
       - name: "Install uv"
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -162,6 +166,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         run: rustup show
 
@@ -183,15 +189,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
-          cargo run --locked --bin uv -- venv --cache-dir .cache
+          cargo run --bin uv -- venv --cache-dir .cache
           # Resolve benchmark fixtures without the repository's tooling build policy.
-          cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
-          cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
 
       - name: "Build benchmarks"
         run: |
           # cargo-codspeed resolves metadata before passing --locked to Cargo.
-          cargo metadata --locked --format-version 1 > /dev/null
+          cargo metadata --format-version 1 > /dev/null
           uv run --only-dev cargo codspeed build --locked --profile profiling -p uv-bench
 
       - name: "Retain benchmark profiles"
