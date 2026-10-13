@@ -914,6 +914,7 @@ fn license_glob_without_matches_errors() -> Result<()> {
         name = "missing-license"
         version = "1.0.0"
         license-files = ["abc", "LICENSE.txt"]
+        classifiers = ["License :: OSI Approved :: MIT License"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -952,6 +953,7 @@ fn license_file_must_be_utf8() -> Result<()> {
         name = "license-utf8"
         version = "1.0.0"
         license-files = ["LICENSE.bin"]
+        classifiers = ["License :: OSI Approved :: MIT License"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1862,17 +1864,179 @@ fn warn_on_license_classifier() -> Result<()> {
     Ok(())
 }
 
-fn license_classifier_project(license_metadata: &str, classifiers: &str) -> Result<TestContext> {
+/// Warn when deprecated classifiers coexist with a PEP 639 license expression.
+#[test]
+fn warn_on_license_classifiers_with_expression() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&formatdoc! {r#"
+        .write_str(indoc! {r#"
         [project]
         name = "foo"
         version = "1.0.0"
-        {license_metadata}
-        classifiers = {classifiers}
+        license = "MIT"
+        classifiers = [
+            "License :: OSI Approved :: MIT License",
+            "License :: OSI Approved :: Apache Software License",
+            "License :: OSI Approved :: MIT License",
+        ]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/foo/__init__.py").touch()?;
+
+    uv_snapshot!(context.filters(), context.build(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    warning: Found license classifier `License :: OSI Approved :: MIT License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+    warning: Found license classifier `License :: OSI Approved :: Apache Software License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+    warning: `project.classifiers` contains license classifiers alongside `project.license` or `project.license-files`. Remove the deprecated `License ::` classifiers from `project.classifiers`.
+    Building wheel from source distribution...
+    Successfully built dist/foo-1.0.0.tar.gz
+    Successfully built dist/foo-1.0.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
+/// Even an empty license-file list is a PEP 639 declaration.
+#[test]
+fn warn_on_license_classifiers_with_license_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        license-files = []
+        classifiers = [
+            "License :: OSI Approved :: MIT License",
+            "License :: OSI Approved :: Apache Software License",
+            "License :: OSI Approved :: MIT License",
+        ]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/foo/__init__.py").touch()?;
+
+    uv_snapshot!(context.filters(), context.build(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    warning: Found license classifier `License :: OSI Approved :: MIT License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+    warning: Found license classifier `License :: OSI Approved :: Apache Software License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+    warning: `project.classifiers` contains license classifiers alongside `project.license` or `project.license-files`. Remove the deprecated `License ::` classifiers from `project.classifiers`.
+    Building wheel from source distribution...
+    Successfully built dist/foo-1.0.0.tar.gz
+    Successfully built dist/foo-1.0.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
+/// Emit one combined warning when both PEP 639 fields coexist with license classifiers.
+#[test]
+fn warn_once_on_license_classifiers_with_expression_and_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        license = "MIT"
+        license-files = []
+        classifiers = [
+            "License :: OSI Approved :: MIT License",
+            "License :: OSI Approved :: Apache Software License",
+            "License :: OSI Approved :: MIT License",
+        ]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/foo/__init__.py").touch()?;
+
+    uv_snapshot!(context.filters(), context.build(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    warning: Found license classifier `License :: OSI Approved :: MIT License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+    warning: Found license classifier `License :: OSI Approved :: Apache Software License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+    warning: `project.classifiers` contains license classifiers alongside `project.license` or `project.license-files`. Remove the deprecated `License ::` classifiers from `project.classifiers`.
+    Building wheel from source distribution...
+    Successfully built dist/foo-1.0.0.tar.gz
+    Successfully built dist/foo-1.0.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
+/// Legacy text licenses only trigger the individual classifier warnings.
+#[test]
+fn warn_on_license_classifiers_with_legacy_text() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        license = { text = "MIT" }
+        classifiers = [
+            "License :: OSI Approved :: MIT License",
+            "License :: OSI Approved :: Apache Software License",
+            "License :: OSI Approved :: MIT License",
+        ]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/foo/__init__.py").touch()?;
+
+    uv_snapshot!(context.filters(), context.build(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    warning: Found license classifier `License :: OSI Approved :: MIT License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+    warning: Found license classifier `License :: OSI Approved :: Apache Software License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+    Building wheel from source distribution...
+    Successfully built dist/foo-1.0.0.tar.gz
+    Successfully built dist/foo-1.0.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
+/// Legacy file licenses only trigger the individual classifier warnings.
+#[test]
+fn warn_on_license_classifiers_with_legacy_file() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        license = { file = "LICENSE" }
+        classifiers = [
+            "License :: OSI Approved :: MIT License",
+            "License :: OSI Approved :: Apache Software License",
+            "License :: OSI Approved :: MIT License",
+        ]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1880,66 +2044,42 @@ fn license_classifier_project(license_metadata: &str, classifiers: &str) -> Resu
     "#})?;
     context.temp_dir.child("src/foo/__init__.py").touch()?;
     context.temp_dir.child("LICENSE").write_str("MIT\n")?;
-    Ok(context)
+
+    uv_snapshot!(context.filters(), context.build(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    warning: Found license classifier `License :: OSI Approved :: MIT License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+    warning: Found license classifier `License :: OSI Approved :: Apache Software License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+    Building wheel from source distribution...
+    Successfully built dist/foo-1.0.0.tar.gz
+    Successfully built dist/foo-1.0.0-py3-none-any.whl
+    ");
+
+    Ok(())
 }
 
-/// Warn once more when deprecated classifiers coexist with PEP 639 declarations.
+/// Non-license classifiers can coexist with PEP 639 declarations without a warning.
 #[test]
-fn warn_on_structured_license_metadata() -> Result<()> {
-    let classifiers = r#"[
-        "License :: OSI Approved :: MIT License",
-        "License :: OSI Approved :: Apache Software License",
-        "License :: OSI Approved :: MIT License",
-    ]"#;
+fn no_license_classifier_warning_for_other_classifiers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        license = "MIT"
+        license-files = []
+        classifiers = ["Programming Language :: Python :: 3"]
 
-    allow_duplicates! {
-        for license_metadata in [
-            r#"license = "MIT""#,
-            "license-files = []",
-            "license = \"MIT\"\nlicense-files = []",
-        ] {
-            let context = license_classifier_project(license_metadata, classifiers)?;
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/foo/__init__.py").touch()?;
 
-            uv_snapshot!(context.filters(), context.build(), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Building source distribution...
-            warning: Found license classifier `License :: OSI Approved :: MIT License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
-            warning: Found license classifier `License :: OSI Approved :: Apache Software License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
-            warning: `project.classifiers` contains license classifiers alongside `project.license` or `project.license-files`. Remove the deprecated `License ::` classifiers from `project.classifiers`.
-            Building wheel from source distribution...
-            Successfully built dist/foo-1.0.0.tar.gz
-            Successfully built dist/foo-1.0.0-py3-none-any.whl
-            ");
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
-
-    allow_duplicates! {
-        for license_metadata in [
-            r#"license = { text = "MIT" }"#,
-            r#"license = { file = "LICENSE" }"#,
-        ] {
-            let context = license_classifier_project(license_metadata, classifiers)?;
-
-            uv_snapshot!(context.filters(), context.build(), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Building source distribution...
-            warning: Found license classifier `License :: OSI Approved :: MIT License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
-            warning: Found license classifier `License :: OSI Approved :: Apache Software License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
-            Building wheel from source distribution...
-            Successfully built dist/foo-1.0.0.tar.gz
-            Successfully built dist/foo-1.0.0-py3-none-any.whl
-            ");
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
-
-    let context = license_classifier_project(
-        "license = \"MIT\"\nlicense-files = []",
-        r#"["Programming Language :: Python :: 3"]"#,
-    )?;
     uv_snapshot!(context.filters(), context.build(), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -1952,12 +2092,26 @@ fn warn_on_structured_license_metadata() -> Result<()> {
     Ok(())
 }
 
-/// Invalid license metadata must fail before either classifier warning is emitted.
+/// Invalid SPDX expressions fail before classifier warnings are emitted.
 #[test]
-fn license_metadata_errors_before_warnings() -> Result<()> {
-    let classifiers = r#"["License :: OSI Approved :: MIT License"]"#;
+fn invalid_license_expression_before_classifier_warnings() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        license = "MIT XOR Apache-2"
+        classifiers = ["License :: OSI Approved :: MIT License"]
 
-    let context = license_classifier_project(r#"license = "MIT XOR Apache-2""#, classifiers)?;
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/foo/__init__.py").touch()?;
+
     uv_snapshot!(context
         .build_backend()
         .arg("build-wheel")
@@ -1970,39 +2124,30 @@ fn license_metadata_errors_before_warnings() -> Result<()> {
                  ^^^ unknown term
     ");
 
-    let context = license_classifier_project(
-        r#"license-files = ["missing-license", "LICENSE"]"#,
-        classifiers,
-    )?;
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-wheel")
-        .arg(context.temp_dir.path()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid project metadata
-      cause: `project.license-files` glob `missing-license` did not match any files
-    ");
+    Ok(())
+}
 
-    let context = license_classifier_project(r#"license-files = ["LICENSE.bin"]"#, classifiers)?;
+/// A legacy license combined with PEP 639 license files fails before classifier warnings.
+#[test]
+fn legacy_license_with_files_errors_before_classifier_warnings() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
-        .child("LICENSE.bin")
-        .write_binary(&[0xff])?;
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-wheel")
-        .arg(context.temp_dir.path()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid project metadata
-      cause: License file `LICENSE.bin` must be UTF-8 encoded
-    ");
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        license = { text = "MIT" }
+        license-files = []
+        classifiers = ["License :: OSI Approved :: MIT License"]
 
-    let context = license_classifier_project(
-        "license = { text = \"MIT\" }\nlicense-files = []",
-        classifiers,
-    )?;
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/foo/__init__.py").touch()?;
+
     uv_snapshot!(context
         .build_backend()
         .arg("build-wheel")
