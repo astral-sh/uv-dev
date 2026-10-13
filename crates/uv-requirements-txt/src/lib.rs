@@ -229,38 +229,6 @@ impl RequirementsTxt {
         .await
     }
 
-    /// Parse requirements from a string, using the given input for error messages and resolving
-    /// relative inputs.
-    pub async fn parse_str(
-        content: &str,
-        requirements_txt: impl Into<RequirementsInput>,
-        working_dir: impl AsRef<Path>,
-        client_builder: &BaseClientBuilder<'_>,
-        source_contents: &mut SourceCache,
-    ) -> Result<Self, RequirementsTxtFileError> {
-        let requirements_txt = requirements_txt.into();
-        let working_dir = working_dir.as_ref();
-
-        let mut visited = VisitedFiles::Requirements {
-            requirements: &mut FxHashSet::default(),
-            constraints: &mut FxHashSet::default(),
-        };
-
-        Self::parse_inner(
-            content,
-            working_dir,
-            client_builder,
-            &requirements_txt,
-            &mut visited,
-            source_contents,
-        )
-        .await
-        .map_err(|err| RequirementsTxtFileError {
-            file: Box::new(requirements_txt),
-            error: err,
-        })
-    }
-
     /// See module level documentation
     #[instrument(skip_all, fields(requirements_txt = %requirements_txt.user_display()))]
     async fn parse_impl(
