@@ -48752,7 +48752,7 @@ async fn lock_project_rejects_shadowed_selected_default() -> Result<()> {
         .args(["--default-index", &format!("{}/unused/simple", server.uri()), "--preview-features", "index-exclude-newer"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to build `project @ file://[TEMP_DIR]`
+    error: Failed to build `project @ file://[TEMP_DIR]/`
       cause: Failed to parse entry: `a`
       cause: Index URL `http://[LOCALHOST]/simple` pinned by requirements no longer has its configured policy
     ");
