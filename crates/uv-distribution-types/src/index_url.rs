@@ -803,6 +803,42 @@ mod tests {
     }
 
     #[test]
+    fn source_indexes_reject_implicit_artifact_error_policy() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://download.pytorch.org/whl/cpu")?;
+        selected.ignore_error_codes = Some(serde_json::from_str("[403]")?);
+        let alias = Index::from_str("mirror=https://download.pytorch.org/whl/cpu")?;
+        assert_eq!(
+            selected.status_code_strategy(),
+            alias.status_code_strategy()
+        );
+        assert!(selected.ignores_error_code(StatusCode::FORBIDDEN));
+        assert!(!alias.ignores_error_code(StatusCode::FORBIDDEN));
+
+        let result = IndexLocations::new(vec![alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Conflicting policies for index URL `https://download.pytorch.org/whl/cpu` in requirements sources".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_accept_reordered_artifact_error_codes() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://download.pytorch.org/whl/cpu")?;
+        selected.ignore_error_codes = Some(serde_json::from_str("[403, 404, 403]")?);
+        let url = selected.url.clone();
+        let mut alias = Index::from_str("mirror=https://download.pytorch.org/whl/cpu")?;
+        alias.ignore_error_codes = Some(serde_json::from_str("[404, 403]")?);
+
+        let locations = IndexLocations::new(vec![alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert!(locations.ignores_error_code_for(&url, StatusCode::FORBIDDEN));
+        assert!(locations.ignores_error_code_for(&url, StatusCode::NOT_FOUND));
+        Ok(())
+    }
+
+    #[test]
     fn test_index_url_parse_valid_paths() {
         // Absolute path
         assert!(is_disambiguated_path("/absolute/path"));

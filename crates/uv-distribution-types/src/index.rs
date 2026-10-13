@@ -2,6 +2,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use http::{HeaderValue, StatusCode};
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
@@ -438,8 +439,8 @@ impl Index {
             publish_url: _,
             format,
             authenticate,
-            // Compare these fields through their effective-policy accessors below.
-            ignore_error_codes: _,
+            ignore_error_codes,
+            // Compare cache control through its effective-policy accessors below.
             cache_control: _,
             hash_algorithm,
             exclude_newer,
@@ -447,6 +448,9 @@ impl Index {
         *format == other.format
             && *authenticate == other.authenticate
             && self.status_code_strategy() == other.status_code_strategy()
+            // Artifact requests use only explicitly ignored codes, independently of API defaults.
+            && ignore_error_codes.iter().flatten().collect::<FxHashSet<_>>()
+                == other.ignore_error_codes.iter().flatten().collect::<FxHashSet<_>>()
             && self.simple_api_cache_control() == other.simple_api_cache_control()
             && self.artifact_cache_control() == other.artifact_cache_control()
             && *hash_algorithm == other.hash_algorithm

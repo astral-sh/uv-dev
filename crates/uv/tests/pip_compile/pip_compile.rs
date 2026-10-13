@@ -23,9 +23,7 @@ use fs_err::{File, read};
 use fs_err::{read_to_string, remove_file, write};
 #[cfg(feature = "test-python-managed")]
 use http::StatusCode;
-#[cfg(feature = "test-universal")]
-use indoc::formatdoc;
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 #[cfg(feature = "test-universal")]
 use regex::Regex;
 use sha2::{Digest, Sha256, Sha512};
@@ -20618,5 +20616,76 @@ async fn compile_pep723_build_constraint_authentication() -> anyhow::Result<()> 
             .expect("request recording")
             .is_empty()
     );
+    Ok(())
+}
+
+/// A requirements-file index cannot discard a selected script index's authentication policy.
+#[tokio::test]
+async fn pep723_requirements_file_conflicting_index_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!("--extra-index-url {}/simple\n", server.uri()))?;
+
+    uv_snapshot!(context.filters(), context.pip_compile().args(["requirements.py", "requirements.txt"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Matching Simple API behavior cannot hide a selected index's artifact error policy.
+#[test]
+fn pep723_requirements_conflicting_artifact_error_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "https://download.pytorch.org/whl/cpu"
+        # explicit = true
+        # ignore-error-codes = [403]
+        # [tool.uv.sources]
+        # a = { index = "private" }
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--offline", "--index", "mirror=https://download.pytorch.org/whl/cpu", "requirements.py"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `https://download.pytorch.org/whl/cpu` in requirements sources
+    ");
     Ok(())
 }

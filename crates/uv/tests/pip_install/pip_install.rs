@@ -19067,3 +19067,44 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
 
     Ok(())
 }
+
+/// A requirements-file index cannot discard a selected script index's authentication policy.
+#[tokio::test]
+async fn pep723_requirements_file_conflicting_index_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!("--extra-index-url {}/simple\n", server.uri()))?;
+
+    uv_snapshot!(context.filters(), context.pip_install().args(["-r", "requirements.py", "-r", "requirements.txt"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `http://[LOCALHOST]/simple` in requirements sources
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}

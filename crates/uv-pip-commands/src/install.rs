@@ -439,20 +439,22 @@ pub async fn pip_install(
     };
 
     // Incorporate any index locations from the provided sources.
-    let index_locations = index_locations.with_source_indexes(indexes)?.combine(
-        extra_index_urls
-            .into_iter()
-            .map(Index::from_extra_index_url)
-            .chain(index_url.map(Index::from_index_url))
-            .map(|index| index.with_origin(Origin::RequirementsTxt))
-            .collect(),
-        find_links
-            .into_iter()
-            .map(Index::from_find_links)
-            .map(|index| index.with_origin(Origin::RequirementsTxt))
-            .collect(),
-        no_index,
-    );
+    let index_locations = index_locations
+        .combine(
+            extra_index_urls
+                .into_iter()
+                .map(Index::from_extra_index_url)
+                .chain(index_url.map(Index::from_index_url))
+                .map(|index| index.with_origin(Origin::RequirementsTxt))
+                .collect(),
+            find_links
+                .into_iter()
+                .map(Index::from_find_links)
+                .map(|index| index.with_origin(Origin::RequirementsTxt))
+                .collect(),
+            no_index,
+        )
+        .with_source_indexes(indexes)?;
 
     // Determine the PyTorch backend.
     let torch_backend = torch_backend
