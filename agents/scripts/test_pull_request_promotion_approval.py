@@ -63,11 +63,12 @@ class PromotionApprovalTests(unittest.TestCase):
             "created_at": "2026-01-01T12:00:01Z",
         }
         self.record = {
-            "schema": 1,
+            "schema": 2,
             "repository": self.repository,
             "number": 101,
             "head_ref": "feature",
             "head_sha": HEAD,
+            "base_ref": "main",
             "approval": self.approval,
             "run": {
                 "id": 1000,
@@ -204,6 +205,7 @@ class PromotionApprovalTests(unittest.TestCase):
             "repository-id": str(REPOSITORY_ID),
             "head-sha": HEAD,
             "head-ref": "feature",
+            "base-ref": "main",
             "approval-id": "11",
             "approval-event": "labeled",
             "promotion-label": "bot:automerge",
@@ -320,7 +322,11 @@ class PromotionApprovalTests(unittest.TestCase):
             "merged_parent_number": "1000",
             "action": "rebase",
         }
-        self.candidate_record = copy.deepcopy(self.record) | {
+        self.candidate_record = {
+            key: copy.deepcopy(value)
+            for key, value in self.record.items()
+            if key != "base_ref"
+        } | {
             "schema": 2,
             "candidate": {
                 "head_sha": "6" * 40,
@@ -777,7 +783,13 @@ class PromotionApprovalTests(unittest.TestCase):
 
     def test_capture_retains_explicit_revision_and_automerge_mode(self):
         result = self.invoke(
-            "capture", "--head-sha", HEAD, "--promotion-label", "bot:automerge"
+            "capture",
+            "--base-ref",
+            "main",
+            "--head-sha",
+            HEAD,
+            "--promotion-label",
+            "bot:automerge",
         )
         self.assertEqual(result["record"], self.record)
         self.assertTrue(result["upload"])
@@ -786,34 +798,64 @@ class PromotionApprovalTests(unittest.TestCase):
         os.environ["GITHUB_EVENT_NAME"] = "push"
         with self.assertRaisesRegex(APPROVAL.ApprovalError, "explicit dispatch"):
             self.invoke(
-                "capture", "--head-sha", HEAD, "--promotion-label", "bot:automerge"
+                "capture",
+                "--base-ref",
+                "main",
+                "--head-sha",
+                HEAD,
+                "--promotion-label",
+                "bot:automerge",
             )
 
     def test_capture_rejects_newer_approval_after_dispatch(self):
         self.event["created_at"] = "2026-01-01T12:00:05Z"
         with self.assertRaisesRegex(APPROVAL.ApprovalError, "newer approval"):
             self.invoke(
-                "capture", "--head-sha", HEAD, "--promotion-label", "bot:automerge"
+                "capture",
+                "--base-ref",
+                "main",
+                "--head-sha",
+                HEAD,
+                "--promotion-label",
+                "bot:automerge",
             )
 
     def test_capture_rejects_changed_dispatch_head(self):
         self.source["head"]["sha"] = "b" * 40
         with self.assertRaisesRegex(APPROVAL.ApprovalError, "head changed"):
             self.invoke(
-                "capture", "--head-sha", HEAD, "--promotion-label", "bot:automerge"
+                "capture",
+                "--base-ref",
+                "main",
+                "--head-sha",
+                HEAD,
+                "--promotion-label",
+                "bot:automerge",
             )
 
     def test_capture_rejects_superseded_mode(self):
         with self.assertRaisesRegex(APPROVAL.ApprovalError, "mode was superseded"):
             self.invoke(
-                "capture", "--head-sha", HEAD, "--promotion-label", "bot:promote"
+                "capture",
+                "--base-ref",
+                "main",
+                "--head-sha",
+                HEAD,
+                "--promotion-label",
+                "bot:promote",
             )
 
     def test_capture_reuses_identical_record(self):
         self.add_artifact()
         self.assertFalse(
             self.invoke(
-                "capture", "--head-sha", HEAD, "--promotion-label", "bot:automerge"
+                "capture",
+                "--base-ref",
+                "main",
+                "--head-sha",
+                HEAD,
+                "--promotion-label",
+                "bot:automerge",
             )["upload"]
         )
 
@@ -822,7 +864,61 @@ class PromotionApprovalTests(unittest.TestCase):
         self.source["head"]["sha"] = "b" * 40
         with self.assertRaisesRegex(APPROVAL.ApprovalError, "another revision"):
             self.invoke(
-                "capture", "--head-sha", "b" * 40, "--promotion-label", "bot:automerge"
+                "capture",
+                "--base-ref",
+                "main",
+                "--head-sha",
+                "b" * 40,
+                "--promotion-label",
+                "bot:automerge",
+            )
+
+    def test_capture_rejects_retarget_while_signed_dispatch_is_queued(self):
+        with self.assertRaisesRegex(APPROVAL.ApprovalError, "source base changed"):
+            self.invoke(
+                "capture",
+                "--base-ref",
+                "stack/parent",
+                "--head-sha",
+                HEAD,
+                "--promotion-label",
+                "bot:automerge",
+            )
+
+    def test_capture_requires_the_explicitly_approved_base(self):
+        with self.assertRaisesRegex(APPROVAL.ApprovalError, "approved source base"):
+            self.invoke(
+                "capture", "--head-sha", HEAD, "--promotion-label", "bot:automerge"
+            )
+
+    def test_sweep_rejects_retarget_after_capture(self):
+        self.record["base_ref"] = "stack/parent"
+        self.add_artifact()
+        with self.assertRaisesRegex(APPROVAL.ApprovalError, "source base changed"):
+            self.invoke("load")
+
+    def test_source_recheck_rejects_a_retarget(self):
+        with self.assertRaisesRegex(APPROVAL.ApprovalError, "source base changed"):
+            self.check_source(**{"base-ref": "stack/parent"})
+
+    def test_base_branch_advancement_does_not_revoke_approval(self):
+        self.add_artifact()
+        self.source["base"]["sha"] = "b" * 40
+        self.assertEqual(self.invoke("load"), self.record)
+        self.assertEqual(self.check_source(), self.source)
+
+    def test_existing_approval_cannot_be_rebound_to_a_new_base(self):
+        self.add_artifact()
+        self.source["base"]["ref"] = "another-base"
+        with self.assertRaisesRegex(APPROVAL.ApprovalError, "another revision"):
+            self.invoke(
+                "capture",
+                "--base-ref",
+                "another-base",
+                "--head-sha",
+                HEAD,
+                "--promotion-label",
+                "bot:automerge",
             )
 
     def test_sweep_rejects_head_changed_since_approval(self):
@@ -992,7 +1088,7 @@ class PromotionApprovalTests(unittest.TestCase):
 
     def test_unknown_record_schema_is_rejected(self):
         record = copy.deepcopy(self.record)
-        record["schema"] = 2
+        record["schema"] = 3
         self.add_artifact(record)
         with self.assertRaisesRegex(APPROVAL.ApprovalError, "record version"):
             self.stored()
