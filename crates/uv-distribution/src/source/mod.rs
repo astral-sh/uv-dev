@@ -9,6 +9,7 @@
 #![expect(clippy::redundant_closure_for_method_calls)]
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::ops::Bound;
 use std::path::Path;
 use std::str::FromStr;
@@ -683,7 +684,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         let _lock = source_cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
-        let revision = self
+        let (revision, _source_is_pristine) = self
             .url_revision(source, ext, url, index, source_cache_shard, hashes, client)
             .await?;
 
@@ -828,7 +829,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         let _lock = source_cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
-        let revision = self
+        let (revision, source_is_pristine) = self
             .url_revision(source, ext, url, index, source_cache_shard, hashes, client)
             .await?;
 
@@ -847,19 +848,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             authority_build_shard(client.unmanaged, source_cache_shard.shard(revision.id()));
         let source_dist_entry = cache_shard.entry(SOURCE);
 
-        // If the metadata is static, return it.
-        let mut dynamic =
-            match StaticMetadata::read(source, source_dist_entry.path(), subdirectory).await? {
-                StaticMetadata::Some(metadata) => {
-                    return Ok(ArchiveMetadata {
-                        metadata: Metadata::from_metadata23(metadata),
-                        hashes: revision.into_hashes(),
-                    });
-                }
-                StaticMetadata::Dynamic => true,
-                StaticMetadata::None => false,
-            };
-
         // Dynamic metadata and wheels must use the same build settings.
         let config_settings = self.config_settings_for(source.name());
         let extra_build_deps = self.extra_build_dependencies_for(source.name());
@@ -874,8 +862,29 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map(|digest| cache_shard.shard(digest))
             .unwrap_or(cache_shard);
 
-        // If the cache contains compatible metadata, return it.
         let metadata_entry = cache_shard.entry(METADATA);
+        let requires_authorization = client.unmanaged.checksum_authority().is_some();
+
+        // Backends can write source metadata, so only a fresh verified extraction can bypass
+        // build-receipt authorization.
+        let mut dynamic = false;
+        if !requires_authorization || source_is_pristine {
+            match StaticMetadata::read(source, source_dist_entry.path(), subdirectory).await? {
+                StaticMetadata::Some(metadata) => {
+                    if requires_authorization {
+                        CachedMetadata::write(&metadata, &metadata_entry, client.unmanaged).await?;
+                    }
+                    return Ok(ArchiveMetadata {
+                        metadata: Metadata::from_metadata23(metadata),
+                        hashes: revision.into_hashes(),
+                    });
+                }
+                StaticMetadata::Dynamic => dynamic = true,
+                StaticMetadata::None => {}
+            }
+        }
+
+        // If the cache contains compatible metadata, return it.
         let cached_metadata = if read_authority_receipt(client.unmanaged, &metadata_entry)
             .await?
             .is_some()
@@ -901,10 +910,20 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             }
         }
 
-        // Otherwise, we need a wheel.
-        let revision = if source_dist_entry.path().is_dir() {
+        // A cached workspace may contain backend-generated files even when its metadata receipt
+        // is missing. Restore verified source before reading metadata or invoking the backend.
+        let revision = if source_dist_entry.path().is_dir()
+            && (!requires_authorization || source_is_pristine)
+        {
             revision
         } else {
+            if requires_authorization && !source_is_pristine {
+                match fs::remove_dir_all(source_dist_entry.path()).await {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(Error::CacheWrite(error)),
+                }
+            }
             let revision = self
                 .heal_url_revision(
                     source,
@@ -921,6 +940,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             // Healing can restore complete static metadata without requiring a backend.
             match StaticMetadata::read(source, source_dist_entry.path(), subdirectory).await? {
                 StaticMetadata::Some(metadata) => {
+                    if requires_authorization {
+                        CachedMetadata::write(&metadata, &metadata_entry, client.unmanaged).await?;
+                    }
                     return Ok(ArchiveMetadata {
                         metadata: Metadata::from_metadata23(metadata),
                         hashes: revision.into_hashes(),
@@ -965,13 +987,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             };
 
             // Store the metadata.
-            fs::create_dir_all(metadata_entry.dir())
-                .await
-                .map_err(Error::CacheWrite)?;
-            write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-                .await
-                .map_err(Error::CacheWrite)?;
-            let _ = write_authority_receipt(client.unmanaged, &metadata_entry).await?;
+            CachedMetadata::write(&metadata, &metadata_entry, client.unmanaged).await?;
 
             return Ok(ArchiveMetadata {
                 metadata: Metadata::from_metadata23(metadata),
@@ -1014,10 +1030,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
 
         // Store the metadata.
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
-        let _ = write_authority_receipt(client.unmanaged, &metadata_entry).await?;
+        CachedMetadata::write(&metadata, &metadata_entry, client.unmanaged).await?;
 
         Ok(ArchiveMetadata {
             metadata: Metadata::from_metadata23(metadata),
@@ -1025,7 +1038,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         })
     }
 
-    /// Return the [`Revision`] for a remote URL, refreshing it if necessary.
+    /// Return the [`Revision`] for a remote URL and whether its source was freshly extracted.
     async fn url_revision(
         &self,
         source: &BuildableSource<'_>,
@@ -1035,7 +1048,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         cache_shard: &CacheShard,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
-    ) -> Result<Revision, Error> {
+    ) -> Result<(Revision, bool), Error> {
         let cache_entry = cache_shard.entry(HTTP_REVISION);
         let authority = client
             .unmanaged
@@ -1065,6 +1078,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
+        let source_is_pristine = Cell::new(false);
         let download = |response, _: &mut RetryState| {
             async {
                 // At this point, we're seeing a new or updated source distribution. Initialize a
@@ -1087,6 +1101,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         &[],
                     )
                     .await?;
+                source_is_pristine.set(true);
 
                 Ok(revision
                     .with_hashes(HashDigests::from(hashes))
@@ -1129,11 +1144,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // If the archive is missing the required hashes or size, force a refresh.
-        if revision.has_digests(hashes)
+        let revision = if revision.has_digests(hashes)
             && (expected_size.is_none() || revision.size().is_some())
             && matches_authority(authority.as_ref(), revision.hashes(), revision.size())
         {
-            Ok(revision)
+            revision
         } else {
             client
                 .managed(async |client| {
@@ -1151,8 +1166,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                             CachedClientError::Client(err) => Error::Client(err),
                         })
                 })
-                .await
-        }
+                .await?
+        };
+        Ok((revision, source_is_pristine.get()))
     }
 
     /// Build a source distribution from a local archive (e.g., `.tar.gz` or `.zip`).
@@ -3768,11 +3784,27 @@ async fn read_pyproject_toml(
     Ok(pyproject_toml)
 }
 
-/// Wheel metadata stored in the source distribution cache.
+/// Resolved metadata stored in the source distribution cache.
 #[derive(Debug, Clone)]
 struct CachedMetadata(ResolutionMetadata);
 
 impl CachedMetadata {
+    /// Store metadata together with the inputs that authorize its reuse.
+    async fn write(
+        metadata: &ResolutionMetadata,
+        cache_entry: &CacheEntry,
+        client: &RegistryClient,
+    ) -> Result<(), Error> {
+        fs::create_dir_all(cache_entry.dir())
+            .await
+            .map_err(Error::CacheWrite)?;
+        write_atomic(cache_entry.path(), rmp_serde::to_vec(metadata)?)
+            .await
+            .map_err(Error::CacheWrite)?;
+        let _ = write_authority_receipt(client, cache_entry).await?;
+        Ok(())
+    }
+
     /// Read an existing cached [`ResolutionMetadata`], if it exists.
     async fn read(cache_entry: &CacheEntry) -> Result<Option<Self>, Error> {
         match fs::read(&cache_entry.path()).await {
