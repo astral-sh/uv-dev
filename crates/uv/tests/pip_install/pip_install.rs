@@ -1540,9 +1540,9 @@ fn install_require_hashes_in_nested_requirements_txt() -> Result<()> {
     Ok(())
 }
 
-/// Identify hash checking enabled by a separate constraints or overrides input.
+/// Identify hash checking enabled by a separate constraints input.
 #[test]
-fn install_require_hashes_in_constraints_and_overrides() -> Result<()> {
+fn install_require_hashes_in_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     context
@@ -1565,6 +1565,23 @@ fn install_require_hashes_in_constraints_and_overrides() -> Result<()> {
 
     hint: `--require-hashes` was enabled in `hashes.txt`
     ");
+
+    Ok(())
+}
+
+/// Identify hash checking enabled by a separate overrides input.
+#[test]
+fn install_require_hashes_in_overrides() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==2.0.0")?;
+    context
+        .temp_dir
+        .child("hashes.txt")
+        .write_str("--require-hashes")?;
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -9605,7 +9622,6 @@ fn require_hashes_cli_constraint_declaration_order() -> Result<()> {
 
 /// Constraints read from stdin retain the order of direct pins and nested includes.
 #[test]
-#[expect(clippy::disallowed_types)]
 fn require_hashes_stdin_constraint_declaration_order() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
@@ -9625,7 +9641,7 @@ fn require_hashes_stdin_constraint_declaration_order() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r").arg("requirements.txt").arg("-c").arg("-").arg("--no-deps").stdin(std::fs::File::open(&constraints)?), @"
+        .arg("-r").arg("requirements.txt").arg("-c").arg("-").arg("--no-deps").stdin(File::open(constraints.path())?.into_file()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -9640,7 +9656,7 @@ fn require_hashes_stdin_constraint_declaration_order() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r").arg("requirements.txt").arg("-c").arg("-").arg("--reinstall").arg("--no-deps").stdin(std::fs::File::open(&constraints)?), @"
+        .arg("-r").arg("requirements.txt").arg("-c").arg("-").arg("--reinstall").arg("--no-deps").stdin(File::open(constraints.path())?.into_file()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but there were no overlapping hashes between the requirements and constraints for: anyio==4.0.0
