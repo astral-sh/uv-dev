@@ -64,7 +64,7 @@ impl FilesystemOptions {
             Ok(options) => {
                 tracing::debug!("Found user configuration in: {}", file.display());
                 validate_uv_toml(&file, &options)?;
-                Ok(Some(Self(options.with_origin(Origin::User))))
+                Ok(Some(Self::from(options.with_origin(Origin::User))))
             }
             Err(Error::Io(err))
                 if matches!(
@@ -92,7 +92,7 @@ impl FilesystemOptions {
         tracing::debug!("Found system configuration in: {}", file.display());
         let options = read_file(&file)?;
         validate_uv_toml(&file, &options)?;
-        Ok(Some(Self(options.with_origin(Origin::System))))
+        Ok(Some(Self::from(options.with_origin(Origin::System))))
     }
 
     /// Find the [`FilesystemOptions`] for the given path.
@@ -159,7 +159,7 @@ impl FilesystemOptions {
 
                 tracing::debug!("Found workspace configuration at `{}`", path.display());
                 validate_uv_toml(&path, &options)?;
-                return Ok(Some(Self(options.with_origin(Origin::Project))));
+                return Ok(Some(Self::from(options.with_origin(Origin::Project))));
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => return Err(err.into()),
@@ -210,7 +210,7 @@ impl FilesystemOptions {
 
         let options = read_file(path)?;
         validate_uv_toml(path, &options)?;
-        Ok(Self(options.normalize_indexes()))
+        Ok(Self::from(options))
     }
 }
 

@@ -245,7 +245,7 @@ impl Options {
                 }
             }
         }
-        self.normalize_indexes()
+        self
     }
 
     /// Normalize index spellings while this configuration source is still independent.

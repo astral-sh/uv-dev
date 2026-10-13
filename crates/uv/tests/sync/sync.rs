@@ -5,7 +5,7 @@ use assert_cmd::prelude::*;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
-use predicates::prelude::{PredicateStrExt, predicate};
+use predicates::prelude::predicate;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 #[cfg(feature = "test-git")]
