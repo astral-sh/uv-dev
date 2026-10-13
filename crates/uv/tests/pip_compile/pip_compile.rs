@@ -6479,24 +6479,18 @@ fn requires_python_extra_causality() -> Result<()> {
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("python-causality==1.0.0")?;
 
-    let compile = |python_version: &str| {
-        let mut command = context.pip_compile();
-        command
-            .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-            .arg("--offline")
-            .arg("--no-build")
-            .arg("--default-index")
-            .arg(index_url.as_str())
-            .arg("--python")
-            .arg("3.12")
-            .arg("--python-version")
-            .arg(python_version)
-            .arg("--no-header")
-            .arg("requirements.in");
-        command
-    };
-
-    uv_snapshot!(context.filters(), compile("3.12"), @"
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--offline")
+        .arg("--no-build")
+        .arg("--default-index")
+        .arg(index_url.as_str())
+        .arg("--python")
+        .arg("3.12")
+        .arg("--python-version")
+        .arg("3.12")
+        .arg("--no-header")
+        .arg("requirements.in"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
@@ -6507,7 +6501,18 @@ fn requires_python_extra_causality() -> Result<()> {
     ");
 
     requirements_in.write_str("python-causality[feature]==1.0.0")?;
-    uv_snapshot!(context.filters(), compile("3.12"), @"
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--offline")
+        .arg("--no-build")
+        .arg("--default-index")
+        .arg(index_url.as_str())
+        .arg("--python")
+        .arg("3.12")
+        .arg("--python-version")
+        .arg("3.12")
+        .arg("--no-header")
+        .arg("requirements.in"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
@@ -6517,7 +6522,18 @@ fn requires_python_extra_causality() -> Result<()> {
     hint: The `--python-version` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., python-causality==1.0.0 only supports >=3.13). Consider using a higher `--python-version` value.
     ");
 
-    uv_snapshot!(context.filters(), compile("3.13"), @"
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--offline")
+        .arg("--no-build")
+        .arg("--default-index")
+        .arg(index_url.as_str())
+        .arg("--python")
+        .arg("3.12")
+        .arg("--python-version")
+        .arg("3.13")
+        .arg("--no-header")
+        .arg("requirements.in"), @"
     exit_code: 0 (success)
     ----- stdout -----
     python-causality==1.0.0
