@@ -295,18 +295,9 @@ def read_artifact(
     ):
         return None
     run = gh_json(f"repos/{repository}/actions/runs/{origin['id']}")
-    if not (
-        run.get("workflow_id") == workflow_id
-        and run.get("path", "").split("@", 1)[0] == WORKFLOW_PATH
-        and run.get("event")
-        in ({"push", "workflow_dispatch"} if candidate else {"workflow_dispatch"})
-        and run.get("head_branch") == "main"
-        and all(
-            (run.get(key) or {}).get("id") == repository_id
-            and (run.get(key) or {}).get("full_name") == repository
-            for key in ("repository", "head_repository")
-        )
-    ):
+    try:
+        validate_run(run, repository, repository_id, workflow_id, candidate=candidate)
+    except ApprovalError:
         return None
     require(
         run.get("id") == origin["id"] and origin.get("head_sha") == run.get("head_sha"),
