@@ -107,11 +107,12 @@ struct InterpreterCacheSource {
 
 impl InterpreterCacheSource {
     fn read(executable: &Path) -> io::Result<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+
         let executable = std::path::absolute(executable)?;
         let canonical = canonicalize_executable(&executable)?;
         let metadata = fs::metadata(&canonical)?;
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt;
         Ok(Self {
             executable,
             canonical,
