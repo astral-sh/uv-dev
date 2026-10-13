@@ -1,7 +1,7 @@
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
@@ -10,11 +10,10 @@ use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, Modifications,
 };
 use uv_dispatch::UniversalState;
-use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
-    LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, ScriptEnvironment,
+    LinkErrorReporting, PreparedScriptInterpreter, ProjectEnvironment, ProjectEnvironmentPolicy,
+    ProjectEnvironmentTarget, ProjectInterpreter, ScriptEnvironment,
 };
 use uv_lock::{Lock, Metadata, Package};
 use uv_lock_operations::{
@@ -24,8 +23,6 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
-use uv_python_interpreter::{Interpreter, RequestedInterpreter};
-use uv_python_managed::ManagedPythonInstallation;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -98,7 +95,7 @@ pub async fn metadata(
 
     // Don't enable any groups' requires-python for interpreter discovery.
     let groups = DependencyGroupsWithDefaults::none();
-    let mut script_interpreter_request = None;
+    let mut prepared_script_interpreter = None;
     let state = UniversalState::default();
 
     let resolved_lock;
@@ -138,25 +135,11 @@ pub async fn metadata(
                             } => (environment.into_interpreter(), request),
                         };
                         if sync.is_some() {
-                            let mut base_interpreter =
-                                CachedEnvironment::base_interpreter(&interpreter, cache)?;
-                            // Managed minor-version links can move during resolution. Save the
-                            // selected installation while retaining the request's upgrade policy.
-                            if let Some(executable) =
-                                ManagedPythonInstallation::try_from_interpreter(&base_interpreter)
-                                    .map(|installation| installation.executable(false))
-                                && executable != base_interpreter.sys_executable()
-                            {
-                                base_interpreter = Interpreter::query(executable, cache)?;
-                            }
-                            ensure!(
-                                base_interpreter.key() == interpreter.key(),
-                                "The base interpreter ({}) does not match the selected interpreter ({})",
-                                base_interpreter.key(),
-                                interpreter.key(),
-                            );
-                            script_interpreter_request =
-                                Some(RequestedInterpreter::new(base_interpreter, request));
+                            prepared_script_interpreter = Some(PreparedScriptInterpreter::new(
+                                &interpreter,
+                                request,
+                                cache,
+                            )?);
                         }
                         // Keep environment discovery consistent with the interpreter used for
                         // resolution. The environment itself is still rediscovered under its lock.
@@ -274,7 +257,7 @@ pub async fn metadata(
             MetadataSource::Manifest(LockTarget::Script(script)) => ScriptEnvironment::get_or_init(
                 (*script).into(),
                 python.as_deref().map(PythonRequest::parse),
-                script_interpreter_request,
+                prepared_script_interpreter,
                 &client_builder,
                 python_preference,
                 python_arch,

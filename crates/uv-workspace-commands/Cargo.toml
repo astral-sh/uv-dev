@@ -19,7 +19,6 @@ workspace = true
 [dependencies]
 uv-python-types = { workspace = true }
 uv-python-interpreter = { workspace = true }
-uv-python-managed = { workspace = true }
 uv-cache = { workspace = true }
 uv-client = { workspace = true }
 uv-command-support = { workspace = true }
