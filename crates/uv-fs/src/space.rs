@@ -1,6 +1,16 @@
 use std::io;
 use std::path::Path;
 
+#[cfg(any(
+    all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ),
+    target_os = "macos",
+    target_os = "ios"
+))]
+use std::ops::Range;
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use std::ffi::CString;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -78,7 +88,7 @@ pub const fn supports_fine_grained_accounting() -> bool {
 pub fn physical_disk_usage(path: &Path) -> io::Result<u64> {
     let mut seen_files = FxHashSet::default();
     let mut filesystem_block_sizes = FxHashMap::default();
-    let mut physical_extents: FxHashMap<(u64, u64), Vec<(u64, u64)>> = FxHashMap::default();
+    let mut physical_extents: FxHashMap<(u64, u64), Vec<Range<u64>>> = FxHashMap::default();
     let mut untracked_bytes = 0_u64;
 
     for entry in walkdir::WalkDir::new(path).follow_links(false) {
@@ -158,7 +168,7 @@ pub fn physical_disk_usage(path: &Path) -> io::Result<u64> {
                                 "an aligned physical extent exceeds the filesystem address space",
                             )
                         })?;
-                    device_extents.push((aligned_start, aligned_end));
+                    device_extents.push(aligned_start..aligned_end);
                 }
             }
             Err(error) => {
@@ -172,25 +182,26 @@ pub fn physical_disk_usage(path: &Path) -> io::Result<u64> {
     }
 
     for extents in physical_extents.values_mut() {
-        extents.sort_unstable_by_key(|&(start, _)| start);
-        let mut current: Option<(u64, u64)> = None;
+        extents.sort_unstable_by_key(|extent| extent.start);
+        let mut current: Option<Range<u64>> = None;
 
-        for &(start, end) in extents.iter() {
-            if let Some((current_start, current_end)) = current {
-                if start <= current_end {
-                    current = Some((current_start, current_end.max(end)));
+        for extent in extents.iter().cloned() {
+            if let Some(current) = &mut current {
+                if extent.start <= current.end {
+                    current.end = current.end.max(extent.end);
                 } else {
                     untracked_bytes =
-                        untracked_bytes.saturating_add(current_end.saturating_sub(current_start));
-                    current = Some((start, end));
+                        untracked_bytes.saturating_add(current.end.saturating_sub(current.start));
+                    *current = extent;
                 }
             } else {
-                current = Some((start, end));
+                current = Some(extent);
             }
         }
 
-        if let Some((start, end)) = current {
-            untracked_bytes = untracked_bytes.saturating_add(end.saturating_sub(start));
+        if let Some(current) = current {
+            untracked_bytes =
+                untracked_bytes.saturating_add(current.end.saturating_sub(current.start));
         }
     }
 
