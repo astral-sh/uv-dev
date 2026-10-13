@@ -39,7 +39,6 @@ use walkdir::WalkDir;
 use uv_cache::{Cache, CacheBucket};
 use uv_fs::Simplified;
 use uv_python_discovery::PythonInstallation;
-use uv_python_managed::ManagedPythonInstallations;
 use uv_python_types::{EnvironmentPreference, PythonPreference, PythonRequest, PythonVersion};
 use uv_static::EnvVars;
 
@@ -140,8 +139,8 @@ pub struct TestContext {
     pub venv: ChildPath,
     pub workspace_root: PathBuf,
 
-    /// The Python version used for the virtual environment, if any.
-    python_version: Option<PythonVersion>,
+    /// The requested version and selected executable used for the virtual environment, if any.
+    venv_python: Option<(PythonVersion, PathBuf)>,
 
     /// All the Python versions available during this test context.
     pub python_versions: Vec<(PythonVersion, PathBuf)>,
@@ -1208,7 +1207,9 @@ impl TestContext {
             bin_dir,
             venv,
             workspace_root,
-            python_version,
+            venv_python: python_versions
+                .first()
+                .map(|(requested, _, executable)| (requested.clone(), executable.clone())),
             python_versions: python_versions
                 .into_iter()
                 .map(|(requested, _, executable)| (requested, executable))
@@ -2006,16 +2007,11 @@ impl TestContext {
 
     /// Returns the site-packages folder inside the venv.
     pub fn site_packages(&self) -> PathBuf {
-        site_packages_path(
-            &self.venv,
-            &format!(
-                "{}{}",
-                self.python_kind(),
-                self.python_version.as_ref().expect(
-                    "A Python version must be provided to retrieve the test site packages path"
-                )
-            ),
-        )
+        let (version, _) = self
+            .venv_python
+            .as_ref()
+            .expect("A Python version must be provided to retrieve the test site packages path");
+        site_packages_path(&self.venv, &format!("{}{version}", self.python_kind()))
     }
 
     /// Reset the virtual environment in the test context.
@@ -2025,12 +2021,11 @@ impl TestContext {
 
     /// Create a new virtual environment named `.venv` in the test context.
     fn create_venv(&self) {
-        let executable = get_python(
-            self.python_version
-                .as_ref()
-                .expect("A Python version must be provided to create a test virtual environment"),
-        );
-        create_venv_from_executable(&self.venv, &self.cache_dir, &executable, &self.uv_bin);
+        let (_, executable) = self
+            .venv_python
+            .as_ref()
+            .expect("A Python version must be provided to create a test virtual environment");
+        create_venv_from_executable(&self.venv, &self.cache_dir, executable, &self.uv_bin);
     }
 
     /// Copies the files from the ecosystem project given into this text
@@ -2228,23 +2223,6 @@ pub fn venv_bin_path(venv: impl AsRef<Path>) -> PathBuf {
     } else {
         unimplemented!("Only Windows and Unix are supported")
     }
-}
-
-/// Get the path to the python interpreter for a specific python version.
-fn get_python(version: &PythonVersion) -> PathBuf {
-    ManagedPythonInstallations::from_settings(None)
-        .map(|installed_pythons| {
-            installed_pythons
-                .find_version(version)
-                .expect("Tests are run on a supported platform")
-                .next()
-                .as_ref()
-                .map(|python| python.executable(false))
-        })
-        // We'll search for the request Python on the PATH if not found in the python versions
-        // We hack this into a `PathBuf` to satisfy the compiler but it's just a string
-        .unwrap_or_default()
-        .unwrap_or(PathBuf::from(version.to_string()))
 }
 
 /// Create a virtual environment at the given path.
