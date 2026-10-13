@@ -62,6 +62,32 @@ enum RequirementsFileKind {
     Constraints,
 }
 
+impl RequirementsFileKind {
+    /// Parse an input using its role, reusing content cached during format detection.
+    async fn parse_with_cache(
+        self,
+        input: &RequirementsInput,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &mut SourceCache,
+    ) -> Result<RequirementsTxt> {
+        Ok(match self {
+            Self::Requirements => {
+                RequirementsTxt::parse_with_cache(input.clone(), &*CWD, client_builder, cache)
+                    .await?
+            }
+            Self::Constraints => {
+                RequirementsTxt::parse_constraints_with_cache(
+                    input.clone(),
+                    &*CWD,
+                    client_builder,
+                    cache,
+                )
+                .await?
+            }
+        })
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct RequirementsSpecification {
     /// The name of the project specifying requirements.
@@ -296,26 +322,7 @@ impl RequirementsSpecification {
                     return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
                 }
 
-                let requirements_txt = match kind {
-                    RequirementsFileKind::Requirements => {
-                        RequirementsTxt::parse_with_cache(
-                            input.clone(),
-                            &*CWD,
-                            client_builder,
-                            cache,
-                        )
-                        .await?
-                    }
-                    RequirementsFileKind::Constraints => {
-                        RequirementsTxt::parse_constraints_with_cache(
-                            input.clone(),
-                            &*CWD,
-                            client_builder,
-                            cache,
-                        )
-                        .await?
-                    }
-                };
+                let requirements_txt = kind.parse_with_cache(input, client_builder, cache).await?;
 
                 if requirements_txt == RequirementsTxt::default() {
                     warn_user!(
@@ -422,14 +429,8 @@ impl RequirementsSpecification {
                     Self::from_pep723_metadata(&metadata)
                 } else {
                     // If it's not a PEP 723 script, assume it's a `requirements.txt` file.
-                    let requirements_txt = RequirementsTxt::parse_str(
-                        &content,
-                        input.clone(),
-                        &*CWD,
-                        client_builder,
-                        cache,
-                    )
-                    .await?;
+                    let requirements_txt =
+                        kind.parse_with_cache(input, client_builder, cache).await?;
 
                     if requirements_txt == RequirementsTxt::default() {
                         match input {
