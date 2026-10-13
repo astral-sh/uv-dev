@@ -2033,16 +2033,12 @@ fn run_with_overlay_interpreter() -> Result<()> {
 
     // A startup marker distinguishes a cache hit from another interpreter query.
     let site_packages = site_packages_path(context.venv.path(), "python3.12");
-    let sitecustomize = site_packages.join("sitecustomize.py");
+    let startup_probe = site_packages.join("interpreter-started.pth");
     fs_err::write(
-        &sitecustomize,
-        indoc! {r#"
-            from pathlib import Path
-
-            Path(__file__).with_name("interpreter-started").touch()
-        "#},
+        &startup_probe,
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
     )?;
-    let startup_marker = ChildPath::new(site_packages.join("interpreter-started"));
+    let startup_marker = context.venv.child("interpreter-started");
     let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
     startup_marker.assert(predicate::path::missing());
 
@@ -2051,7 +2047,7 @@ fn run_with_overlay_interpreter() -> Result<()> {
         .context("Fresh interpreter cache is locked")?;
     let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
     startup_marker.assert(predicate::path::is_file());
-    fs_err::remove_file(&sitecustomize)?;
+    fs_err::remove_file(&startup_probe)?;
     fs_err::remove_file(&startup_marker)?;
     assert_eq!(cached.root(), queried.root());
     assert_eq!(
