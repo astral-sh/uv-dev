@@ -105,10 +105,7 @@ impl<'lock> ExportableRequirements<'lock> {
 
             if root_kind == InstallableRootKind::Production && groups.prod() {
                 // Track the activated package in the list of known conflicts.
-                activated_items.insert(
-                    ConflictItem::from(dist.id.name.clone()),
-                    MarkerTree::TRUE,
-                );
+                activated_items.insert(ConflictItem::from(dist.id.name.clone()), MarkerTree::TRUE);
 
                 let package_index = target.lock().by_id[&dist.id];
 
