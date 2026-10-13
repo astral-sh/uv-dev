@@ -122,6 +122,8 @@ fn attribute_value(attrs: &[Attribute], name: &str) -> Result<Option<String>> {
 
 #[cfg(test)]
 mod tests {
+    use insta::assert_snapshot;
+
     use super::check_new_env_vars;
 
     const BASE: &str = r#"
@@ -160,10 +162,10 @@ mod tests {
         );
 
         let error = check_new_env_vars(BASE, &current).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "new environment variables must use `#[attr_added_in(\"next release\")]`:\n`NEW` uses `0.12.7`"
-        );
+        assert_snapshot!(error.to_string(), @r#"
+        new environment variables must use `#[attr_added_in("next release")]`:
+        `NEW` uses `0.12.7`
+        "#);
     }
 
     #[test]
@@ -178,10 +180,10 @@ mod tests {
         );
 
         let error = check_new_env_vars(BASE, &current).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "new environment variables must use `#[attr_added_in(\"next release\")]`:\n`NEW` is missing `#[attr_added_in(...)]`"
-        );
+        assert_snapshot!(error.to_string(), @r#"
+        new environment variables must use `#[attr_added_in("next release")]`:
+        `NEW` is missing `#[attr_added_in(...)]`
+        "#);
     }
 
     #[test]
@@ -206,10 +208,9 @@ mod tests {
         );
 
         let error = check_new_env_vars(BASE, &current).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("`UV_INDEX_{name}_TOKEN` uses `0.12.7`")
-        );
+        assert_snapshot!(error.to_string(), @r#"
+        new environment variables must use `#[attr_added_in("next release")]`:
+        `UV_INDEX_{name}_TOKEN` uses `0.12.7`
+        "#);
     }
 }
