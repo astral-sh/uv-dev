@@ -1596,7 +1596,7 @@ async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
         ]
 
         [tool.options]
-        index = [{ url = "http://[LOCALHOST]/basic-auth/simple", explicit = false, default = true, format = "simple", authenticate = "always" }, { name = "unrelated", url = "http://[LOCALHOST]/basic-auth/simple/", explicit = true, default = false, format = "simple", authenticate = "always" }, { url = "http://[LOCALHOST]/basic-auth/simple/", explicit = false, default = true, format = "simple", authenticate = "always" }]
+        index = [{ url = "http://[LOCALHOST]/basic-auth/simple", explicit = false, default = true, format = "simple", authenticate = "always" }, { name = "unrelated", url = "http://[LOCALHOST]/basic-auth/simple/", explicit = true, default = false, format = "simple", authenticate = "always" }]
         keyring-provider = "subprocess"
         exclude-newer = "2025-01-18T00:00:00Z"
         "#);

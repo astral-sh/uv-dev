@@ -3753,6 +3753,82 @@ async fn tool_run_latest_keyring_auth() {
     ");
 }
 
+/// Changing the default index during an upgrade still permits offline reuse of the installed tool.
+#[tokio::test]
+async fn tool_run_from_install_after_default_index_change() -> Result<()> {
+    let name = "example".parse()?;
+    let original = PackageServer::new(&name).await;
+    let replacement = PackageServer::new(&name).await;
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let original_url = original.index_url();
+    let replacement_url = replacement.index_url();
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["example".to_string()],
+    );
+    original.serve(&filename, &bytes, None).await;
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["example".to_string()],
+    );
+    replacement.serve(&filename, &bytes, None).await;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("--index-url").arg(&original_url)
+        .arg("example")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    Installed 1 executable: example
+    ");
+
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--index-url").arg(&replacement_url)
+        .arg("example")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated example v1.0.0 -> v2.0.0
+     - example==1.0.0
+     + example==2.0.0
+    Installed 1 executable: example
+    ");
+
+    let receipt: toml::Value = toml::from_str(&context.read("tools/example/uv-receipt.toml"))?;
+    let indexes = &receipt["tool"]["options"]["index"];
+    assert_eq!(indexes.as_array().map(Vec::len), Some(1));
+    assert_eq!(indexes[0]["url"].as_str(), Some(replacement_url.as_str()));
+
+    // With an empty cache, offline execution can only succeed by reusing the installed tool.
+    fs_err::remove_dir_all(&context.cache_dir)?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--offline")
+        .arg("--index-url").arg(&replacement_url)
+        .arg("example"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from example!
+    ");
+    Ok(())
+}
+
 /// Repeated upgrades retain the default index receipt used to reuse an installed tool.
 #[tokio::test]
 async fn tool_run_from_install_after_default_index_upgrades() -> Result<()> {

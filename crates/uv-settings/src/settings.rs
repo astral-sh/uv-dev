@@ -2502,12 +2502,33 @@ pub struct ToolOptionsWire {
     torch_backend: Option<TorchMode>,
 }
 
-/// Keep receipt comparisons independent of repeated declarations in configuration layers.
-fn deduplicate_tool_indexes(indexes: Option<Vec<Index>>) -> Option<Vec<Index>> {
+/// Ignore repeated declarations and overridden unnamed defaults in tool receipts.
+fn normalize_tool_indexes(indexes: Option<Vec<Index>>) -> Option<Vec<Index>> {
     indexes.map(|mut indexes| {
+        // Match default selection after applying first-name precedence to named declarations.
+        let default_position = indexes
+            .iter()
+            .enumerate()
+            .find(|(position, index)| {
+                index.default
+                    && index.name.as_ref().is_none_or(|name| {
+                        !indexes[..*position]
+                            .iter()
+                            .any(|previous| previous.name.as_ref() == Some(name))
+                    })
+            })
+            .map(|(position, _)| position);
+
         // Keep the first occurrence and the order of distinct indexes. Equality includes policy.
         let mut unique = 0;
         for position in 0..indexes.len() {
+            // Named defaults can still be selected explicitly by a source declaration.
+            if indexes[position].default
+                && indexes[position].name.is_none()
+                && Some(position) != default_position
+            {
+                continue;
+            }
             if !indexes[..unique].contains(&indexes[position]) {
                 indexes.swap(unique, position);
                 unique += 1;
@@ -2522,7 +2543,7 @@ impl From<ResolverInstallerOptions> for ToolOptions {
     fn from(mut value: ResolverInstallerOptions) -> Self {
         value.indexes = value.indexes.normalize();
         Self {
-            index: deduplicate_tool_indexes(value.indexes.index.map(|indexes| {
+            index: normalize_tool_indexes(value.indexes.index.map(|indexes| {
                 indexes
                     .into_iter()
                     .map(Index::with_promoted_auth_policy)
@@ -2584,7 +2605,7 @@ impl From<ToolOptionsWire> for ToolOptions {
             });
 
         Self {
-            index: deduplicate_tool_indexes(value.index),
+            index: normalize_tool_indexes(value.index),
             index_url: value.index_url,
             extra_index_url: value.extra_index_url,
             no_index: value.no_index,
@@ -3309,5 +3330,66 @@ impl PreviewOption {
             Self::Preview(true) | Self::PreviewFeatures(Toggle(true)) => Preview::all(),
             Self::PreviewFeatures(Features(features)) => Preview::from_feature_names(features),
         }
+    }
+}
+
+#[cfg(test)]
+mod tool_index_tests {
+    use uv_distribution_types::IndexLocations;
+
+    use super::{ResolverInstallerOptions, ToolOptions};
+
+    #[test]
+    fn receipt_retains_named_defaults() -> Result<(), toml::de::Error> {
+        let options: ToolOptions = toml::from_str(
+            r#"
+            index = [
+                { url = "https://default.example.com/simple", default = true },
+                { name = "source", url = "https://source.example.com/simple", default = true, explicit = true },
+                { url = "https://old.example.com/simple", default = true },
+            ]
+            "#,
+        )?;
+        let options = ResolverInstallerOptions::from(options);
+        let locations = IndexLocations::from(options.indexes);
+        assert_eq!(
+            locations
+                .default_index()
+                .map(|index| index.raw_url().as_str()),
+            Some("https://default.example.com/simple")
+        );
+        assert!(locations.known_indexes().any(|index| {
+            index.name.as_deref() == Some("source")
+                && index.raw_url().as_str() == "https://source.example.com/simple"
+        }));
+        assert!(
+            !locations
+                .known_indexes()
+                .any(|index| { index.raw_url().as_str() == "https://old.example.com/simple" })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn shadowed_named_default_does_not_hide_the_active_default() -> Result<(), toml::de::Error> {
+        let options: ToolOptions = toml::from_str(
+            r#"
+            index = [
+                { name = "named", url = "https://preferred.example.com/simple" },
+                { name = "named", url = "https://shadowed.example.com/simple", default = true },
+                { url = "https://active.example.com/simple", default = true },
+                { url = "https://old.example.com/simple", default = true },
+            ]
+            "#,
+        )?;
+        let options = ResolverInstallerOptions::from(options);
+        let locations = IndexLocations::from(options.indexes);
+        assert_eq!(
+            locations
+                .default_index()
+                .map(|index| index.raw_url().as_str()),
+            Some("https://active.example.com/simple")
+        );
+        Ok(())
     }
 }
