@@ -18,11 +18,15 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
-use uv_python_interpreter::PyVenvConfiguration;
+use uv_cache::Cache;
+#[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
+use uv_fs::PythonExt;
+#[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
+use uv_python_interpreter::Interpreter;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 #[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
-use uv_test::assert_link_target;
+use uv_test::{assert_link_target, site_packages_path};
 use uv_test::{copy_dir_ignore, uv_snapshot};
 
 fn write_wheel(
@@ -1087,15 +1091,15 @@ async fn workspace_metadata_script_keeps_patch_when_managed_link_changes() -> Re
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&initial.get_output().stdout)?;
     assert_eq!(metadata["environment"]["python"]["version"], "3.12.9");
-    let environment = Path::new(
-        metadata["environment"]["root"]
+    let executable = Path::new(
+        metadata["environment"]["python"]["path"]
             .as_str()
-            .context("expected an environment root")?,
+            .context("expected a Python executable")?,
     );
-    let configuration = PyVenvConfiguration::parse(environment.join("pyvenv.cfg"))?;
-    let home = configuration.home.context("expected a Python home")?;
-    let minor_version_link = home
+    let base_executable = fs_err::read_link(executable)?;
+    let minor_version_link = base_executable
         .parent()
+        .and_then(Path::parent)
         .context("expected a managed directory")?
         .to_path_buf();
     let selected_installation = fs_err::read_link(&minor_version_link)?;
@@ -1240,6 +1244,95 @@ async fn workspace_metadata_script_keeps_patch_when_managed_link_changes() -> Re
         prompt = script.py
         "#);
     });
+
+    Ok(())
+}
+
+/// A managed link that changes while querying the selected environment cannot change the captured identity.
+#[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
+#[test]
+fn workspace_metadata_script_rejects_python_change_during_capture() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+    context.python_install().arg("3.12.9").assert().success();
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+        "#})?;
+    let initial = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--python")
+        .arg("3.12")
+        .arg("--managed-python")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&initial.get_output().stdout)?;
+    assert_eq!(metadata["environment"]["python"]["version"], "3.12.9");
+    let environment = Path::new(
+        metadata["environment"]["root"]
+            .as_str()
+            .context("expected an environment root")?,
+    );
+    let executable = Path::new(
+        metadata["environment"]["python"]["path"]
+            .as_str()
+            .context("expected a Python executable")?,
+    );
+    let base_executable = fs_err::read_link(executable)?;
+    let minor_version_link = base_executable
+        .parent()
+        .and_then(Path::parent)
+        .context("expected a managed directory")?;
+    let selected_installation = fs_err::read_link(minor_version_link)?;
+
+    context.python_install().arg("3.12.13").assert().success();
+    let upgraded_installation = fs_err::read_link(minor_version_link)?;
+    assert_ne!(selected_installation, upgraded_installation);
+    uv_fs::replace_symlink(&selected_installation, minor_version_link)?;
+
+    let site_packages = site_packages_path(environment, "python3.12");
+    fs_err::write(
+        site_packages.join("sitecustomize.py"),
+        formatdoc! {r#"
+            import os
+            from pathlib import Path
+
+            staged = Path({staged})
+            staged.symlink_to({upgraded}, target_is_directory=True)
+            os.replace(staged, {minor_link})
+            "#,
+            staged = context.temp_dir.join("upgraded-link").escape_for_python(),
+            upgraded = upgraded_installation.escape_for_python(),
+            minor_link = minor_version_link.escape_for_python(),
+        },
+    )?;
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    Interpreter::clear_cache(executable, &cache)?;
+
+    uv_snapshot!(context.filters(), context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--python")
+        .arg("3.12.9")
+        .arg("--managed-python"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    error: The base interpreter (cpython-3.12.13-[PLATFORM]) does not match the selected interpreter (cpython-3.12.9-[PLATFORM])
+    ");
+    assert_link_target(minor_version_link, &upgraded_installation);
 
     Ok(())
 }
