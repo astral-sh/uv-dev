@@ -36,9 +36,7 @@ use uv_test::archive::write_tar_gz;
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
 use uv_test::package_server::PackageServer;
-#[cfg(windows)]
-use uv_test::packse::generate_wheel_with_files;
-use uv_test::packse::{PackseServer, generate_wheel};
+use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, apply_filters, copy_dir_ignore, download_to_disk, get_bin,
     uv_snapshot, venv_bin_path,
@@ -16304,6 +16302,171 @@ fn reject_windowed_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+/// Debug launcher aliases are interpreter-owned, even when installing into a release environment.
+#[test]
+fn reject_debug_python_wheel_entrypoint_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["python_d".to_string()],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    let launcher = venv_bin_path(&context.venv).join(if cfg!(windows) {
+        "python_d.exe"
+    } else {
+        "python_d"
+    });
+    fs::write(&launcher, "interpreter launcher")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel_path.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
+      cause: Scripts must not use the reserved name `python_d`, got: `python_d`
+    ");
+
+    assert_eq!(context.read(&launcher), "interpreter launcher");
+    Ok(())
+}
+
+#[test]
+fn reject_debug_windowed_python_wheel_entrypoint_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "foo-0.1.0.dist-info/entry_points.txt",
+            "[gui_scripts]\npythonw_d = foo:main\n",
+        )],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    let launcher = venv_bin_path(&context.venv).join(if cfg!(windows) {
+        "pythonw_d.exe"
+    } else {
+        "pythonw_d"
+    });
+    fs::write(&launcher, "interpreter launcher")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel_path.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
+      cause: Scripts must not use the reserved name `pythonw_d`, got: `pythonw_d`
+    ");
+
+    assert_eq!(context.read(&launcher), "interpreter launcher");
+    Ok(())
+}
+
+#[test]
+fn reject_debug_free_threaded_python_wheel_data_script_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("foo-0.1.0.data/scripts/python3.13t_d.exe", "replacement"),
+            ("foo-0.1.0.data/data/harmless.txt", "must not be installed"),
+        ],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    let launcher = venv_bin_path(&context.venv).join("python3.13t_d.exe");
+    fs::write(&launcher, "interpreter launcher")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel_path.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
+      cause: Scripts must not use the reserved name `python3.13t_d`, got: `python3.13t_d.exe`
+    ");
+
+    assert_eq!(context.read(&launcher), "interpreter launcher");
+    context
+        .venv
+        .child("harmless.txt")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child(context.site_packages().join("foo"))
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child(context.site_packages().join("foo-0.1.0.dist-info"))
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Wheel data targeting the scripts directory must protect the same aliases as `.data/scripts`.
+#[test]
+fn reject_debug_windowed_python_wheel_data_script_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scripts = if cfg!(windows) { "Scripts" } else { "bin" };
+    let data_path = format!("foo-0.1.0.data/data/{scripts}/pythonw3.13t_d.exe");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (&data_path, "replacement"),
+            ("foo-0.1.0.data/data/harmless.txt", "must not be installed"),
+        ],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    let launcher = venv_bin_path(&context.venv).join("pythonw3.13t_d.exe");
+    fs::write(&launcher, "interpreter launcher")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel_path.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
+      cause: Scripts must not use the reserved name `pythonw3.13t_d`, got: `pythonw3.13t_d.exe`
+    ");
+
+    assert_eq!(context.read(&launcher), "interpreter launcher");
+    context
+        .venv
+        .child("harmless.txt")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child(context.site_packages().join("foo"))
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child(context.site_packages().join("foo-0.1.0.dist-info"))
+        .assert(predicate::path::missing());
     Ok(())
 }
 

@@ -136,8 +136,16 @@ fn get_script_executable(python_executable: &Path, is_gui: bool) -> PathBuf {
     }
 }
 
-const RESERVED_SCRIPT_NAMES_ERROR: &[&str; 7] = &[
-    "python", "pythonw", "python3", "graalpy", "pypy", "pypy2", "pypy3",
+const RESERVED_SCRIPT_NAMES_ERROR: &[&str; 9] = &[
+    "python",
+    "pythonw",
+    "python3",
+    "python_d",
+    "pythonw_d",
+    "graalpy",
+    "pypy",
+    "pypy2",
+    "pypy3",
 ];
 const RESERVED_VERSIONED_SCRIPT_NAME_PREFIX_ERROR: &str = "python3.";
 const RESERVED_FREE_THREADED_SCRIPT_NAME_PREFIXES_ERROR: &[&str; 2] = &["python3.", "pythonw3."];
@@ -156,6 +164,8 @@ pub fn reserved_script_name(name: &str) -> Option<&str> {
             .iter()
             .any(|prefix| {
                 normalized_name
+                    .strip_suffix("_d")
+                    .unwrap_or(normalized_name)
                     .strip_prefix(prefix)
                     .and_then(|minor| minor.strip_suffix('t'))
                     .is_some_and(|minor| minor.parse::<u8>().is_ok())
