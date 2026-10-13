@@ -98,24 +98,31 @@ impl BuildOptions {
         }
     }
 
-    /// Return the effective wheel and source restrictions for a package.
-    fn package_restrictions(&self, package_name: &PackageName) -> (bool, bool) {
+    /// Return the configured policy when no legacy restriction overrides it for this package.
+    pub fn effective_build_policy(&self, package_name: &PackageName) -> Option<BuildPolicy> {
+        self.package_restrictions(package_name).2
+    }
+
+    /// Return the effective wheel and source restrictions and their configured policy, if any.
+    fn package_restrictions(
+        &self,
+        package_name: &PackageName,
+    ) -> (bool, bool, Option<BuildPolicy>) {
         let no_binary = self.legacy_no_binary_package(package_name);
         let no_build = self.legacy_no_build_package(package_name);
 
         // The legacy options take precedence over the configured build policy.
         if no_binary || no_build {
-            return (no_binary, no_build);
+            return (no_binary, no_build, None);
         }
 
-        match self
-            .configured_build_policy(package_name)
-            .unwrap_or_default()
-        {
+        let policy = self.configured_build_policy(package_name);
+        let (no_binary, no_build) = match policy.unwrap_or_default() {
             BuildPolicy::Allow => (false, false),
             BuildPolicy::Disallow => (false, true),
             BuildPolicy::Force => (true, false),
-        }
+        };
+        (no_binary, no_build, policy)
     }
 
     /// Return whether a source build is disabled for a known or unknown package identity.
@@ -451,15 +458,29 @@ mod tests {
         assert!(!options.no_build_package(&package));
         assert!(options.no_build_package(&other));
         assert!(options.no_build_requirement(None, false));
+        assert_eq!(
+            options.effective_build_policy(&package),
+            Some(BuildPolicy::Allow)
+        );
+        assert_eq!(
+            options.effective_build_policy(&other),
+            Some(BuildPolicy::Disallow)
+        );
 
         // Explicit legacy restrictions take precedence over the new policy.
         let options = options.combine(NoBinary::Packages(vec![other.clone()]), NoBuild::None);
         assert!(options.no_binary_package(&other));
         assert!(!options.no_build_package(&other));
+        assert_eq!(options.effective_build_policy(&other), None);
+        assert_eq!(
+            options.effective_build_policy(&package),
+            Some(BuildPolicy::Allow)
+        );
         let options = BuildOptions::new(NoBinary::None, NoBuild::All)
             .with_build_policy(Some(BuildPolicy::Force), BuildPolicyPackage::default());
         assert!(options.no_build_package(&package));
         assert!(!options.no_binary_package(&package));
+        assert_eq!(options.effective_build_policy(&package), None);
 
         Ok(())
     }

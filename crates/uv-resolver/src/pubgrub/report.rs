@@ -813,7 +813,7 @@ impl PubGrubReportFormatter<'_> {
                                         option: options.build_options.no_binary().clone(),
                                         policy: options
                                             .build_options
-                                            .configured_build_policy(name)
+                                            .effective_build_policy(name)
                                             .filter(|policy| *policy == BuildPolicy::Force),
                                     });
                                 }
@@ -823,7 +823,7 @@ impl PubGrubReportFormatter<'_> {
                                         option: options.build_options.no_build().clone(),
                                         policy: options
                                             .build_options
-                                            .configured_build_policy(name)
+                                            .effective_build_policy(name)
                                             .filter(|policy| *policy == BuildPolicy::Disallow),
                                     });
                                 }

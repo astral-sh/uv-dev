@@ -5739,6 +5739,168 @@ fn build_policy_modes() -> Result<()> {
     Ok(())
 }
 
+/// Legacy no-build restrictions explain failures even when a build policy is configured.
+#[test]
+fn build_policy_hint_legacy_no_build() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "build-policy-hint-legacy-no-build"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.source-only.versions."1.0.0"]
+        wheel = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("source-only==1.0.0")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url").arg(server.index_url())
+        .args(["--no-build", "--build-policy", "disallow"])
+        .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because source-only==1.0.0 has no usable wheels and you require source-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `source-only` because building from source is disabled for all packages (i.e., with `--no-build`)
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url").arg(server.index_url())
+        .args(["--no-build", "--build-policy", "allow"])
+        .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because source-only==1.0.0 has no usable wheels and you require source-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `source-only` because building from source is disabled for all packages (i.e., with `--no-build`)
+    ");
+
+    Ok(())
+}
+
+/// Legacy no-binary restrictions explain failures even when a build policy is configured.
+#[test]
+fn build_policy_hint_legacy_no_binary() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "build-policy-hint-legacy-no-binary"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.wheel-only.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("wheel-only==1.0.0")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url").arg(server.index_url())
+        .args(["--no-binary", ":all:", "--build-policy", "force"])
+        .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because wheel-only==1.0.0 has no source distribution and you require wheel-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: A source distribution is required for `wheel-only` because using pre-built wheels is disabled for all packages (i.e., with `--no-binary`)
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url").arg(server.index_url())
+        .args(["--no-binary", ":all:", "--build-policy", "allow"])
+        .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because wheel-only==1.0.0 has no source distribution and you require wheel-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: A source distribution is required for `wheel-only` because using pre-built wheels is disabled for all packages (i.e., with `--no-binary`)
+    ");
+
+    Ok(())
+}
+
+/// A legacy source restriction for another package does not hide the selected build policy.
+#[test]
+fn build_policy_hint_unrelated_no_build() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "build-policy-hint-unrelated-no-build"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.source-only.versions."1.0.0"]
+        wheel = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("source-only==1.0.0")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url").arg(server.index_url())
+        .args(["--only-binary", "unrelated", "--build-policy-package", "source-only=disallow"])
+        .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because source-only==1.0.0 has no usable wheels and you require source-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `source-only` because its build policy is `disallow`
+    ");
+
+    Ok(())
+}
+
+/// A legacy wheel restriction for another package does not hide the selected build policy.
+#[test]
+fn build_policy_hint_unrelated_no_binary() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "build-policy-hint-unrelated-no-binary"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.wheel-only.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("wheel-only==1.0.0")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url").arg(server.index_url())
+        .args(["--no-binary", "unrelated", "--build-policy-package", "wheel-only=force"])
+        .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because wheel-only==1.0.0 has no source distribution and you require wheel-only==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: A source distribution is required for `wheel-only` because its build policy is `force`
+    ");
+
+    Ok(())
+}
+
 /// Merge global and package policies across top-level, pip, and command-line settings.
 #[test]
 fn build_policy_configuration_precedence() -> Result<()> {
