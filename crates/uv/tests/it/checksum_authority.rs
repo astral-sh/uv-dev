@@ -1107,6 +1107,116 @@ async fn checksum_authority_isolates_mutated_source_workspace() -> Result<()> {
     Ok(())
 }
 
+/// Backend-generated source metadata still requires approval of the backend's build inputs.
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_reauthorizes_generated_source_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "checksum_example-1.0.0.tar.gz";
+    let metadata = "Metadata-Version: 2.3\nName: checksum-example\nVersion: 1.0.0\n";
+    let marker = context.temp_dir.child("preparations");
+    let backend = formatdoc! {r"
+        from pathlib import Path
+        import checksum_build
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            with Path({marker:?}).open('a') as file:
+                file.write('prepared\n')
+            Path('PKG-INFO').write_text({metadata:?})
+            directory = Path(metadata_directory, 'checksum_example-1.0.0.dist-info')
+            directory.mkdir()
+            (directory / 'METADATA').write_text({metadata:?})
+            return directory.name
+    ", marker = marker.path().to_string_lossy()};
+    let mut bytes = Vec::new();
+    write_tar_gz(
+        &mut bytes,
+        &[
+            (
+                "checksum_example-1.0.0/pyproject.toml",
+                "[build-system]\nrequires = ['checksum-build==1.0.0']\nbuild-backend = 'backend'\nbackend-path = ['.']\n[project]\nname = 'checksum-example'\nversion = '1.0.0'\ndynamic = ['dependencies']\n",
+            ),
+            ("checksum_example-1.0.0/backend.py", &backend),
+        ],
+    )?;
+    let (build_filename, build_bytes) = generate_wheel(
+        &"checksum-build".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    index(&server, filename, &bytes, false).await;
+    index(&server, &build_filename, &build_bytes, false).await;
+    let index_url = format!("{}/simple", server.uri());
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("checksum-example")?;
+    let authority = Authority::start(vec![
+        record(&index_url, filename, &bytes)?,
+        record(&index_url, &build_filename, &build_bytes)?,
+    ])
+    .await?;
+    authority
+        .configure(
+            context
+                .pip_compile()
+                .arg("requirements.in")
+                .arg("--index-url")
+                .arg(&index_url),
+        )
+        .assert()
+        .success();
+    let generated_metadata = WalkDir::new(context.cache_dir.path())
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|entry| entry.file_name() == "PKG-INFO")
+        .ok_or_else(|| anyhow!("expected backend-generated source metadata"))?;
+    assert_eq!(context.read(generated_metadata.path()), metadata);
+
+    authority
+        .configure(
+            context
+                .pip_compile()
+                .arg("requirements.in")
+                .arg("--index-url")
+                .arg(&index_url),
+        )
+        .assert()
+        .success();
+    assert_eq!(context.read("preparations"), "prepared\n");
+
+    // The key remains the same, but the build dependency is no longer admitted.
+    let restricted = Authority::start(vec![record(&index_url, filename, &bytes)?]).await?;
+    assert_eq!(restricted.public_key, authority.public_key);
+    uv_snapshot!(context.filters(), restricted.configure(context.pip_compile()
+        .arg("requirements.in").arg("--index-url").arg(&index_url)), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `checksum-example==1.0.0`
+      cause: Checksum authority has no trusted record for `checksum_build-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
+    ");
+
+    // A different build-settings shard cannot turn the shared source metadata into static input.
+    uv_snapshot!(context.filters(), restricted.configure(context.pip_compile()
+        .arg("requirements.in").arg("--index-url").arg(&index_url)
+        .args(["--config-settings", "changed=true"])), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `checksum-example==1.0.0`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: No solution found when resolving: `checksum-build==1.0.0`
+      cause: Failed to download `checksum-build==1.0.0`
+      cause: Checksum authority has no trusted record for `checksum_build-1.0.0-py3-none-any.whl` from `http://[LOCALHOST]/simple`
+    ");
+    assert_eq!(context.read("preparations"), "prepared\n");
+    Ok(())
+}
+
 /// Entering authority mode can heal static metadata without running a build backend.
 #[tokio::test(flavor = "multi_thread")]
 async fn checksum_authority_healed_static_metadata_without_building() -> Result<()> {
@@ -1164,6 +1274,17 @@ async fn checksum_authority_healed_static_metadata_without_building() -> Result<
     ----- stderr -----
     Resolved 1 package in [TIME]
     "#);
+    // Reusing the authenticated static result needs neither another source request nor a backend.
+    authority
+        .configure(
+            context
+                .pip_compile()
+                .arg("requirements.in")
+                .args(["--no-index", "--no-build"]),
+        )
+        .assert()
+        .success();
+    server.verify().await;
     marker.assert(predicates::path::missing());
     Ok(())
 }
