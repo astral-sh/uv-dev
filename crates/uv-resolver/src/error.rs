@@ -907,30 +907,10 @@ impl std::error::Error for NoSolutionError {}
 
 impl uv_errors::Hinted for NoSolutionError {
     fn hints(&self) -> uv_errors::Hints<'_> {
-        let mut hints: uv_errors::Hints<'_> = self
-            .pubgrub_hints()
+        self.pubgrub_hints()
             .iter()
             .map(ToString::to_string)
-            .collect();
-        if self.index_locations.no_index()
-            && derivation_tree_packages(&self.error)
-                .filter_map(PubGrubPackage::name_no_root)
-                .any(|name| {
-                    matches!(
-                        self.unavailable_packages.get(name),
-                        Some(UnavailablePackage::NoIndex)
-                    )
-                })
-        {
-            for hint in self
-                .index_locations
-                .no_index_sources()
-                .enabled_hints("--no-index")
-            {
-                hints.push(hint);
-            }
-        }
-        hints
+            .collect()
     }
 }
 

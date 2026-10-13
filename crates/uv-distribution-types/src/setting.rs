@@ -145,8 +145,14 @@ impl<T: JsonSchema> JsonSchema for Sourced<T> {
 pub struct SettingSources(Box<[SettingSource]>);
 
 impl SettingSources {
-    fn iter(&self) -> impl Iterator<Item = &SettingSource> {
-        self.0.iter()
+    /// Declarations whose effects need attribution beyond an explicit command-line flag.
+    pub fn indirect_sources(&self) -> impl Iterator<Item = &SettingSource> {
+        self.0.iter().filter(|source| match source {
+            SettingSource::CommandLine(_) => false,
+            SettingSource::Environment(_)
+            | SettingSource::Configuration { .. }
+            | SettingSource::Requirements { .. } => true,
+        })
     }
 
     pub fn extend(&mut self, other: &Self) {
@@ -161,19 +167,13 @@ impl SettingSources {
 
     /// Explain indirect enabling declarations. An explicit command-line flag needs no extra hint.
     pub fn enabled_hints(&self, flag: &'static str) -> impl Iterator<Item = String> + '_ {
-        self.iter().filter_map(move |source| match source {
-            SettingSource::CommandLine(_) => None,
-            SettingSource::Environment(_)
-            | SettingSource::Configuration { .. }
-            | SettingSource::Requirements { .. } => {
-                Some(format!("`{flag}` was enabled by {source}"))
-            }
-        })
+        self.indirect_sources()
+            .map(move |source| format!("`{flag}` was enabled by {source}"))
     }
 }
 
 /// The source of a setting. Environment values are omitted and remote inputs use redacted URLs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SettingSource {
     CommandLine(&'static str),
     Environment(&'static str),
@@ -221,7 +221,7 @@ impl fmt::Display for SettingSource {
 }
 
 /// A declaration or include site in a requirements input.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RequirementsLocation {
     pub input: RequirementsInput,
     /// The one-based line number.
