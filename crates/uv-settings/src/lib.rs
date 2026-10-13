@@ -243,7 +243,7 @@ fn read_file(path: &Path) -> Result<Options, Error> {
     } else {
         options
     };
-    Ok(options.with_config_source(&path.into(), ""))
+    Ok(options.with_config_source(&RequirementsInput::Local(path.to_path_buf()), ""))
 }
 
 /// If `required_version` is set and incompatible with the running uv, return the corresponding

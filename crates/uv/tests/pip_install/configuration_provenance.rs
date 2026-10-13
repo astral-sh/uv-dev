@@ -85,6 +85,29 @@ fn hash_explicit_configuration() -> Result<()> {
     Ok(())
 }
 
+/// A literal `-` configuration filename is a filesystem source, not standard input.
+#[test]
+fn hash_literal_dash_configuration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("-").write_str(indoc! {r"
+        [pip]
+        require-hashes = true
+    "})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("iniconfig")
+        .arg("--config-file")
+        .arg("-"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: iniconfig
+
+    hint: `--require-hashes` was enabled by `pip.require-hashes` in `-`
+    ");
+
+    Ok(())
+}
+
 /// A project setting retains its fully qualified TOML key.
 #[test]
 fn hash_pyproject_configuration() -> Result<()> {
