@@ -646,24 +646,22 @@ fn recreate_venv_system_site_packages_invalidates_interpreter() -> Result<()> {
         .init_no_wait()?
         .context("Interpreter cache is locked")?;
     let fixed = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+
+    context
+        .venv()
+        .arg("--clear")
+        .arg("--python")
+        .arg("3.12")
+        .arg("--system-site-packages")
+        .assert()
+        .success();
+
     let site_packages = site_packages_path(context.venv.path(), "python3.12");
     fs_err::write(
         site_packages.join("interpreter-started.pth"),
         "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
     )?;
     let startup_marker = context.venv.join("interpreter-started");
-
-    context
-        .venv()
-        .arg("--allow-existing")
-        .arg("--python")
-        .arg("3.12")
-        .arg("--system-site-packages")
-        .assert()
-        .success();
-    if startup_marker.is_file() {
-        fs_err::remove_file(&startup_marker)?;
-    }
     let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
     assert!(startup_marker.is_file());
     let fresh_cache = Cache::temp()?
