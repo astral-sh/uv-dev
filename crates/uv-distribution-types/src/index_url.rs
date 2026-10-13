@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::path::Path;
+use std::ptr;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock, RwLock};
 
@@ -447,16 +448,27 @@ impl IndexLocations {
             .filter(&mut keep_first_name)
             .collect::<Vec<_>>();
         configured.retain(keep_first_name);
-        for index in &indexes {
-            for existing in command_line.iter().chain(&configured) {
-                validate_source_index_policy(existing, index)?;
-            }
-        }
+        let source_range = command_line.len()..command_line.len() + indexes.len();
         self.indexes = command_line
             .into_iter()
             .chain(indexes)
             .chain(configured)
             .collect();
+
+        // Clients also retain flat indexes and may add implicit PyPI. Only selected source
+        // definitions that survive name, default, and no-index filtering can impose a policy.
+        let allowed_indexes = self.allowed_indexes();
+        for index in &self.indexes[source_range] {
+            if !allowed_indexes
+                .iter()
+                .any(|existing| ptr::eq(*existing, index))
+            {
+                continue;
+            }
+            for existing in &allowed_indexes {
+                validate_source_index_policy(existing, index)?;
+            }
+        }
         Ok(self)
     }
 
@@ -794,6 +806,7 @@ mod tests {
     use super::*;
     use crate::{IndexCacheControl, IndexFormat, IndexName};
     use http::HeaderValue;
+    use uv_auth::AuthPolicy;
 
     fn index_urls<'a>(indexes: impl IntoIterator<Item = &'a Index>) -> Vec<&'a str> {
         indexes
@@ -835,6 +848,121 @@ mod tests {
             .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
         assert!(locations.ignores_error_code_for(&url, StatusCode::FORBIDDEN));
         assert!(locations.ignores_error_code_for(&url, StatusCode::NOT_FOUND));
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_reject_conflicting_implicit_default() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://pypi.org/simple")?;
+        selected.explicit = true;
+        selected.authenticate = AuthPolicy::Always;
+
+        let result = IndexLocations::default()
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Conflicting policies for index URL `https://pypi.org/simple` in requirements sources".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_default_replaces_implicit_default() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://pypi.org/simple")?;
+        selected.explicit = true;
+        selected.authenticate = AuthPolicy::Always;
+        let selected_url = selected.url.clone();
+        let default = Index::from_index_url(IndexUrl::from_str("https://example.com/simple")?);
+
+        let locations = IndexLocations::default()
+            .with_source_indexes(SourceIndexes::try_from_iter([selected, default])?)?;
+        assert_eq!(
+            index_urls(locations.default_index()),
+            ["https://example.com/simple"]
+        );
+        let selected_policies = locations
+            .allowed_indexes()
+            .into_iter()
+            .filter(|index| is_same_index(&index.url, &selected_url))
+            .map(|index| index.authenticate)
+            .collect::<Vec<_>>();
+        assert_eq!(selected_policies, [AuthPolicy::Always]);
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_reject_retained_flat_policy() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/links")?;
+        selected.format = IndexFormat::Flat;
+        selected.authenticate = AuthPolicy::Always;
+        let flat = Index::from_find_links(selected.url.clone());
+
+        let result = IndexLocations::new(Vec::new(), vec![flat], false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Conflicting policies for index URL `https://example.com/links` in requirements sources".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_ignore_shadowed_flat_policy() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/links")?;
+        selected.format = IndexFormat::Flat;
+        selected.authenticate = AuthPolicy::Always;
+        let mut flat = Index::from_find_links(selected.url.clone());
+        flat.name = selected.name.clone();
+        let selected_url = selected.url.clone();
+
+        let locations = IndexLocations::new(Vec::new(), vec![flat], false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        let selected_policies = locations
+            .allowed_indexes()
+            .into_iter()
+            .filter(|index| is_same_index(&index.url, &selected_url))
+            .map(|index| index.authenticate)
+            .collect::<Vec<_>>();
+        assert_eq!(selected_policies, [AuthPolicy::Always]);
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_retain_command_line_name_precedence() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/links")?;
+        selected.format = IndexFormat::Flat;
+        selected.authenticate = AuthPolicy::Always;
+        let mut command_line = selected.clone();
+        command_line.authenticate = AuthPolicy::Auto;
+        command_line.origin = Some(Origin::Cli);
+        let selected_url = selected.url.clone();
+
+        let locations = IndexLocations::new(vec![command_line], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        let selected_policies = locations
+            .allowed_indexes()
+            .into_iter()
+            .filter(|index| is_same_index(&index.url, &selected_url))
+            .map(|index| index.authenticate)
+            .collect::<Vec<_>>();
+        assert_eq!(selected_policies, [AuthPolicy::Auto]);
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_have_no_implicit_default_without_index() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://pypi.org/simple")?;
+        selected.explicit = true;
+        selected.authenticate = AuthPolicy::Always;
+
+        let flat = Index::from_find_links(selected.url.clone());
+        let locations = IndexLocations::new(Vec::new(), vec![flat], true)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert!(locations.default_index().is_none());
+        let allowed = locations.allowed_indexes();
+        assert_eq!(allowed.len(), 1);
+        assert_eq!(allowed[0].format, IndexFormat::Flat);
+        assert_eq!(allowed[0].authenticate, AuthPolicy::Auto);
         Ok(())
     }
 

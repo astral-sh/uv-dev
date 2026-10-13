@@ -908,41 +908,6 @@ fn run_pep723_script_relative_index() -> Result<()> {
      + validation==1.0.0
     ");
 
-    let requirements = scripts.child("requirements.py");
-    requirements.write_str(indoc! { r#"
-        # /// script
-        # dependencies = ["ok", "validation"]
-        #
-        # [[tool.uv.index]]
-        # name = "local"
-        # url = "./links"
-        # format = "flat"
-        # explicit = true
-        #
-        # [tool.uv.sources]
-        # ok = { path = "./links/ok-1.0.0-py3-none-any.whl" }
-        # validation = { index = "local" }
-        # ///
-        "#
-    })?;
-
-    uv_snapshot!(context.filters(), context.run()
-        .current_dir(&elsewhere)
-        .arg("--offline")
-        .arg("--with-requirements")
-        .arg(requirements.path())
-        .arg("python")
-        .arg("-c")
-        .arg("import ok, validation"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 2 packages in [TIME]
-     + ok==1.0.0 (from file://[TEMP_DIR]/scripts/links/ok-1.0.0-py3-none-any.whl)
-     + validation==1.0.0
-    ");
-
     Ok(())
 }
 
@@ -3494,67 +3459,63 @@ fn run_requirements_txt() -> Result<()> {
     Ok(())
 }
 
-/// PEP 723 files used with `--with-requirements` retain relative sources and named indexes.
+/// PEP 723 requirements sources resolve relative paths and indexes from their own directory.
 #[test]
 fn run_with_pep723_requirements_sources_and_indexes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let scripts = context.temp_dir.child("scripts");
-    scripts.create_dir_all()?;
-    let links = context.temp_dir.child("links");
-    links.create_dir_all()?;
-    for wheel in [
-        "ok-1.0.0-py3-none-any.whl",
-        "tqdm-1000.0.0-py3-none-any.whl",
-    ] {
-        fs_err::copy(
-            context.workspace_root.join("test/links").join(wheel),
-            links.child(wheel),
-        )?;
-    }
 
-    let Ok(links_url) = Url::from_directory_path(links.path()) else {
-        anyhow::bail!("Failed to convert links directory to a URL");
-    };
+    let scripts = context.temp_dir.child("scripts");
+    let links = scripts.child("links");
+    links.create_dir_all()?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        links.child("ok-1.0.0-py3-none-any.whl"),
+    )?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/validation-1.0.0-py3-none-any.whl"),
+        links.child("validation-1.0.0-py3-none-any.whl"),
+    )?;
+
+    let elsewhere = context.temp_dir.child("elsewhere");
+    elsewhere.create_dir_all()?;
+
     let requirements = scripts.child("requirements.py");
-    requirements.write_str(&formatdoc! {r#"
+    requirements.write_str(indoc! { r#"
         # /// script
-        # requires-python = ">=3.12"
-        # dependencies = ["ok", "tqdm"]
+        # dependencies = ["ok", "validation"]
         #
         # [[tool.uv.index]]
         # name = "local"
-        # url = "{}"
+        # url = "./links"
         # format = "flat"
         # explicit = true
         #
         # [tool.uv.sources]
-        # ok = {{ path = "../links/ok-1.0.0-py3-none-any.whl" }}
-        # tqdm = {{ index = "local" }}
+        # ok = { path = "./links/ok-1.0.0-py3-none-any.whl" }
+        # validation = { index = "local" }
         # ///
-    "#, links_url})?;
-
-    let script = context.temp_dir.child("main.py");
-    script.write_str(indoc! {r#"
-        import importlib.metadata
-        print(importlib.metadata.version("ok"))
-        print(importlib.metadata.version("tqdm"))
-    "#})?;
+        "#
+    })?;
 
     uv_snapshot!(context.filters(), context.run()
+        .current_dir(&elsewhere)
+        .arg("--offline")
         .arg("--with-requirements")
         .arg(requirements.path())
-        .arg(script.path()), @r"
+        .arg("python")
+        .arg("-c")
+        .arg("import ok, validation"), @r"
     exit_code: 0 (success)
-    ----- stdout -----
-    1.0.0
-    1000.0.0
-
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
-     + ok==1.0.0 (from file://[TEMP_DIR]/links/ok-1.0.0-py3-none-any.whl)
-     + tqdm==1000.0.0
+     + ok==1.0.0 (from file://[TEMP_DIR]/scripts/links/ok-1.0.0-py3-none-any.whl)
+     + validation==1.0.0
     ");
 
     Ok(())

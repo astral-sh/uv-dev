@@ -20689,3 +20689,72 @@ fn pep723_requirements_conflicting_artifact_error_policy() -> Result<()> {
     ");
     Ok(())
 }
+
+/// An implicit default cannot introduce a different policy for a selected source endpoint.
+#[test]
+fn pep723_requirements_conflicting_implicit_default_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "https://pypi.org/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = { index = "private" }
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--offline", "requirements.py"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `https://pypi.org/simple` in requirements sources
+    ");
+    Ok(())
+}
+
+/// A retained find-links endpoint cannot discard a selected flat index's authentication policy.
+#[tokio::test]
+async fn pep723_requirements_conflicting_flat_index_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/links"
+        # format = "flat"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["--find-links", &format!("{}/links", server.uri()), "requirements.py"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting policies for index URL `http://[LOCALHOST]/links` in requirements sources
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
