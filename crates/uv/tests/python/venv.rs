@@ -100,9 +100,14 @@ fn create_venv_caches_interpreter() -> Result<()> {
         fs_err::write(
             site_packages.join("sitecustomize.py"),
             indoc! {r#"
+                import atexit
+                import sys
                 from pathlib import Path
 
                 Path(__file__).with_name("interpreter-started").touch()
+                sys.stdout.reconfigure(newline="\r\n")
+                sys.stdout.write("sitecustomize prefix without newline")
+                atexit.register(print, "sitecustomize output at exit")
             "#},
         )?;
         let startup_marker = site_packages.join("interpreter-started");
