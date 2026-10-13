@@ -946,7 +946,7 @@ async fn workspace_metadata_script_uses_base_of_replaced_project_environment() -
 #[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
 #[tokio::test]
 async fn workspace_metadata_script_replaces_changed_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+    let context = uv_test::test_context_with_versions!(&["3.11"])
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_python_keys()
@@ -954,8 +954,8 @@ async fn workspace_metadata_script_replaces_changed_environment() -> Result<()> 
         .with_empty_python_install_mirror()
         .with_filters([(r"uv = [^\n]+".to_owned(), "uv = [UV_VERSION]".to_owned())]);
     context.python_install().arg("3.12.13").assert().success();
-    let [(_, _), (_, replacement_python)] = context.python_versions.as_slice() else {
-        return Err(anyhow::anyhow!("expected Python 3.12 and 3.11"));
+    let [(_, replacement_python)] = context.python_versions.as_slice() else {
+        return Err(anyhow::anyhow!("expected Python 3.11"));
     };
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r"
@@ -998,7 +998,7 @@ async fn workspace_metadata_script_replaces_changed_environment() -> Result<()> 
         "changing_python-0.1.0",
         &[("changing_python.py", "")],
     )?;
-    let wheel_bytes = fs_err::read(wheel.path())?;
+    let wheel_bytes = context.read_bytes(wheel.path());
     let server = MockServer::start().await;
     let replaced = Arc::new(OnceLock::new());
     let replace_once = Arc::clone(&replaced);
@@ -1038,20 +1038,20 @@ async fn workspace_metadata_script_replaces_changed_environment() -> Result<()> 
     assert!(replaced.get().is_some_and(Result::is_ok));
     let metadata: serde_json::Value = serde_json::from_slice(&result.get_output().stdout)?;
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(metadata["environment"]["python"]["version"], @r#""3.12.[X]""#);
+        insta::assert_json_snapshot!(metadata["environment"]["python"]["version"], @r#""3.12.13""#);
     });
     let environment = Path::new(
         metadata["environment"]["root"]
             .as_str()
             .context("expected an environment root")?,
     );
-    let configuration = fs_err::read_to_string(environment.join("pyvenv.cfg"))?;
+    let configuration = context.read(environment.join("pyvenv.cfg"));
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_snapshot!(configuration, @r#"
-    home = [TEMP_DIR]/managed/cpython-3.12.[X]-[PLATFORM]/[BIN]
+    home = [TEMP_DIR]/managed/cpython-3.12.13-[PLATFORM]/[BIN]
     implementation = CPython
     uv = [UV_VERSION]
-    version_info = 3.12.[X]
+    version_info = 3.12.13
     include-system-site-packages = false
     prompt = script.py
     "#);
@@ -1301,14 +1301,14 @@ fn workspace_metadata_script_rejects_python_change_during_capture() -> Result<()
     let site_packages = site_packages_path(environment, "python3.12");
     fs_err::write(
         site_packages.join("sitecustomize.py"),
-        formatdoc! {r#"
+        formatdoc! {r"
             import os
             from pathlib import Path
 
             staged = Path({staged})
             staged.symlink_to({upgraded}, target_is_directory=True)
             os.replace(staged, {minor_link})
-            "#,
+            ",
             staged = context.temp_dir.join("upgraded-link").escape_for_python(),
             upgraded = upgraded_installation.escape_for_python(),
             minor_link = minor_version_link.escape_for_python(),
