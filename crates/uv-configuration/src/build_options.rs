@@ -167,7 +167,7 @@ impl BuildOptions {
     }
 
     /// Return the policy configured for a package, falling back to the global policy.
-    pub fn configured_build_policy(&self, package_name: &PackageName) -> Option<BuildPolicy> {
+    fn configured_build_policy(&self, package_name: &PackageName) -> Option<BuildPolicy> {
         self.build_policy_package
             .get(package_name)
             .copied()
