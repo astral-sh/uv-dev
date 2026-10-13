@@ -116,6 +116,8 @@ fn create_venv_caches_interpreter() -> Result<()> {
         .context("Fresh interpreter cache is locked")?;
     let queried = PythonEnvironment::from_root(&root_path, &fresh_cache)?;
     assert!(startup_marker.is_file());
+    // Lazy tag computation must not change the interpreter's metadata identity.
+    cached.interpreter().tags()?;
     assert_eq!(cached, queried);
 
     Ok(())

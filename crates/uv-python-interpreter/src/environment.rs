@@ -13,7 +13,6 @@ use uv_pep440::Version;
 use uv_static::EnvVars;
 
 use crate::Interpreter;
-use crate::interpreter::InterpreterInfo;
 use crate::virtualenv::{PyVenvConfiguration, virtualenv_python_executable};
 use uv_python_types::{EnvironmentPreference, Prefix, PythonRequest, Target};
 
@@ -142,8 +141,9 @@ impl CreatedVirtualEnvironment {
             return Ok(environment);
         }
 
-        let info = InterpreterInfo::try_from(environment.interpreter())?;
-        info.cache(environment.interpreter().sys_executable(), cache)?;
+        if !environment.interpreter().cache_virtualenv(cache)? {
+            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
+        }
         Ok(environment)
     }
 }
