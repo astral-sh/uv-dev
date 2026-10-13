@@ -13,6 +13,10 @@ on:
         description: "The source pull request head SHA approved for promotion"
         required: false
         type: string
+      base_ref:
+        description: "The source base branch approved for promotion"
+        required: false
+        type: string
       promotion_label:
         description: "The label approving promotion"
         required: false
@@ -56,10 +60,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
           HEAD_SHA: ${{ inputs.head_sha }}
+          APPROVED_BASE_REF: ${{ inputs.base_ref }}
         run: |
           result=$(python3 agents/scripts/pull-request-promotion-approval.py capture \
             "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" \
-            --head-sha "$HEAD_SHA" --promotion-label "$PROMOTION_LABEL")
+            --head-sha "$HEAD_SHA" --base-ref "$APPROVED_BASE_REF" --promotion-label "$PROMOTION_LABEL")
           mkdir -p "$RUNNER_TEMP/promotion-approval"
           jq '.record' <<< "$result" > "$RUNNER_TEMP/promotion-approval/approval.json"
           {
@@ -127,7 +132,7 @@ jobs:
             if ! jq --exit-status --argjson approval "$approval" --argjson number "$number" \
               --arg expected_head "$expected_head" --arg repository "$GITHUB_REPOSITORY" \
               --argjson repository_id "$GITHUB_REPOSITORY_ID" '
-                .schema == 1 and .number == $number
+                .schema == 2 and .number == $number
                 and .repository.id == $repository_id and .repository.full_name == $repository
                 and .approval == $approval and .approval != null
                 and ($expected_head == "" or .head_sha == $expected_head)
@@ -146,6 +151,7 @@ jobs:
             approval_event=$(jq --raw-output '.event' <<< "$approval")
             source=$(python3 agents/scripts/pull-request-promotion-approval.py source "$GITHUB_REPOSITORY" "$number" \
               --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$expected_head" --head-ref "$(jq --raw-output .head_ref <<< "$record")" \
+              --base-ref "$(jq --raw-output .base_ref <<< "$record")" \
               --approval-id "$approval_id" --approval-event "$approval_event" \
               --promotion-label "$promotion_label" --promoter "$promoter") || return 1
             head_ref=$(jq --raw-output '.head.ref' <<< "$source")
@@ -386,6 +392,7 @@ jobs:
     uses: $/.github/workflows/update-pull-request-parent.yml
     with:
       number: ${{ format('{0}', matrix.number) }}
+      source-base-ref: ${{ matrix.source_base }}
       base-ref: ${{ matrix.base_ref }}
       base-sha: ${{ matrix.base_sha }}
       base-previous-sha: ${{ matrix.previous_sha }}
@@ -420,8 +427,65 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Download rebased pull request
+      - name: Download parent update outcome
         if: matrix.action == 'rebase'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: parent-update-outcome-${{ matrix.number }}-${{ matrix.head_sha }}
+          path: ${{ runner.temp }}/parent-update-outcome
+
+      - name: Check parent update outcome
+        id: parent-update
+        if: matrix.action == 'rebase'
+        env:
+          PULL_REQUEST_NUMBER: ${{ matrix.number }}
+          SOURCE_BASE: ${{ matrix.source_base }}
+          BASE_REF: ${{ matrix.base_ref }}
+          BASE_SHA: ${{ matrix.base_sha }}
+          BASE_PREVIOUS_SHA: ${{ matrix.previous_sha }}
+          PARENT_MERGE_SHA: ${{ matrix.merge_sha }}
+          HEAD_REF: ${{ matrix.head_ref }}
+          HEAD_SHA: ${{ matrix.head_sha }}
+        run: |
+          result="$RUNNER_TEMP/parent-update-outcome/parent-update-outcome.json"
+          jq --exit-status \
+            --arg number "$PULL_REQUEST_NUMBER" --arg source_base "$SOURCE_BASE" \
+            --arg base_ref "$BASE_REF" --arg base_sha "$BASE_SHA" \
+            --arg previous_sha "$BASE_PREVIOUS_SHA" --arg merge_sha "$PARENT_MERGE_SHA" \
+            --arg head_ref "$HEAD_REF" --arg head_sha "$HEAD_SHA" '
+              .schema == 1 and .number == $number and .source_base_ref == $source_base
+              and .base_ref == $base_ref and .base_sha == $base_sha
+              and .previous_sha == $previous_sha and .merge_sha == $merge_sha
+              and .head_ref == $head_ref and .head_sha == $head_sha
+              and (.outcome | IN("clean", "conflicts", "empty", "rejected", "failed"))
+              and (.candidate_head | type == "string")
+              and (.rejection_reason | type == "string" and length <= 1000 and (test("[\\r\\n]") | not))
+            ' "$result" > /dev/null
+          outcome=$(jq --raw-output .outcome "$result")
+          reason=$(jq --raw-output .rejection_reason "$result")
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          case "$outcome" in
+            clean)
+              candidate_head=$(jq --raw-output .candidate_head "$result")
+              if [[ ! "$candidate_head" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "The clean parent update has no valid candidate revision." >&2
+                exit 1
+              fi
+              echo "head_sha=$candidate_head" >> "$GITHUB_OUTPUT"
+              ;;
+            conflicts) reason="The parent update has merge conflicts; resolve them before approving promotion." ;;
+            empty) reason="The parent update has no changes to promote." ;;
+            rejected) reason="${reason:-The source or destination changed before its parent update.}" ;;
+            failed) reason="${reason:-The parent update failed mechanical verification; inspect its job log.}" ;;
+          esac
+          if [ "$outcome" != clean ]; then
+            echo "rejection_reason=$reason" >> "$GITHUB_OUTPUT"
+            echo "$reason" >&2
+            exit 1
+          fi
+
+      - name: Download rebased pull request
+        if: matrix.action == 'rebase' && steps.parent-update.outputs.outcome == 'clean'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: updated-pull-request-parent-${{ matrix.number }}-${{ matrix.head_sha }}
@@ -436,6 +500,7 @@ jobs:
           HEAD_SHA: ${{ matrix.head_sha }}
           PARENT_MERGE_SHA: ${{ matrix.merge_sha }}
           EXISTING_HEAD_SHA: ${{ matrix.existing_head_sha }}
+          PARENT_UPDATE_HEAD: ${{ steps.parent-update.outputs.head_sha }}
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
@@ -457,6 +522,10 @@ jobs:
             git bundle verify "$bundle"
             git -c core.hooksPath=/dev/null fetch --no-tags "$bundle" HEAD
             promoted_head=$(git rev-parse 'FETCH_HEAD^{commit}')
+            if [ "$promoted_head" != "$PARENT_UPDATE_HEAD" ]; then
+              echo "The parent-update bundle does not match its recorded outcome." >&2
+              exit 1
+            fi
             git merge-base --is-ancestor "$BASE_SHA" "$promoted_head"
           fi
           echo "head_sha=$promoted_head" >> "$GITHUB_OUTPUT"
@@ -481,7 +550,7 @@ jobs:
           APPROVAL_EVENT: ${{ matrix.approval_event }}
         run: |
           source_pull_request=$(python3 agents/scripts/pull-request-promotion-approval.py source "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" \
-            --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" \
+            --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" --base-ref "$SOURCE_BASE" \
             --approval-id "$APPROVAL_ID" --approval-event "$APPROVAL_EVENT" \
             --promotion-label "$PROMOTION_LABEL" --promoter "$PROMOTER")
           if ! jq --exit-status --arg source_base "$SOURCE_BASE" --arg source_base_sha "$SOURCE_BASE_SHA" \
@@ -598,6 +667,7 @@ jobs:
           PULL_REQUEST_NUMBER: ${{ matrix.number }}
           HEAD_REF: ${{ matrix.head_ref }}
           HEAD_SHA: ${{ matrix.head_sha }}
+          SOURCE_BASE: ${{ matrix.source_base }}
           SOURCE_BASE_SHA: ${{ matrix.source_base_sha }}
           BASE_REF: ${{ matrix.base_ref }}
           BASE_SHA: ${{ matrix.base_sha }}
@@ -622,7 +692,7 @@ jobs:
             promotion_repository_id="$UV_DEV_REPOSITORY_ID"
           fi
           source_pull_request=$(python3 agents/scripts/pull-request-promotion-approval.py source "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" \
-            --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" \
+            --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" --base-ref "$SOURCE_BASE" \
             --approval-id "$APPROVAL_ID" --approval-event "$APPROVAL_EVENT" \
             --promotion-label "$PROMOTION_LABEL" --promoter "$PROMOTER")
           if ! jq --exit-status --slurpfile expected "$RUNNER_TEMP/pull-request.json" \
@@ -704,7 +774,7 @@ jobs:
                 promotion_git merge-base refs/heads/upstream-base refs/heads/approved > /dev/null
 
                 current_pull_request=$(python3 agents/scripts/pull-request-promotion-approval.py source "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" \
-                  --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" \
+                  --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" --base-ref "$SOURCE_BASE" \
                   --approval-id "$APPROVAL_ID" --approval-event "$APPROVAL_EVENT" \
                   --promotion-label "$PROMOTION_LABEL" --promoter "$PROMOTER")
                 if ! jq --exit-status --slurpfile expected "$RUNNER_TEMP/pull-request.json" '
@@ -775,7 +845,7 @@ jobs:
           gh api --method POST "repos/astral-sh/uv/issues/$upstream_number/assignees" \
             --raw-field "assignees[]=$PROMOTER" --silent
           current_source=$(python3 agents/scripts/pull-request-promotion-approval.py source "$GITHUB_REPOSITORY" "$PULL_REQUEST_NUMBER" \
-            --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" \
+            --repository-id "$GITHUB_REPOSITORY_ID" --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" --base-ref "$SOURCE_BASE" \
             --approval-id "$APPROVAL_ID" --approval-event "$APPROVAL_EVENT" \
             --promotion-label "$PROMOTION_LABEL" --promoter "$PROMOTER")
           if ! jq --exit-status --slurpfile expected "$RUNNER_TEMP/pull-request.json" \
@@ -814,6 +884,9 @@ jobs:
           GH_TOKEN: ${{ steps.recovery-token.outputs.token }}
           PULL_REQUEST_NUMBER: ${{ matrix.number }}
           HEAD_SHA: ${{ matrix.head_sha }}
+          SOURCE_BASE: ${{ matrix.source_base }}
+          PARENT_UPDATE_OUTCOME: ${{ steps.parent-update.outputs.outcome }}
+          PARENT_UPDATE_REASON: ${{ steps.parent-update.outputs.rejection_reason }}
           PROMOTER: ${{ matrix.promoter }}
           APPROVAL_ID: ${{ matrix.approval_id }}
           UPSTREAM_NUMBER: ${{ steps.publish.outputs.upstream_number || steps.recheck.outputs.upstream_number }}
@@ -827,7 +900,9 @@ jobs:
           if [ "$(jq --raw-output '.id // empty' <<< "$current_approval")" != "$APPROVAL_ID" ] || \
             [ "$(jq --raw-output '.promotion_label // empty' <<< "$current_approval")" != "$PROMOTION_LABEL" ] || \
             ! jq --exit-status --argjson repository_id "$GITHUB_REPOSITORY_ID" \
-              '.state == "open" and .base.repo.id == $repository_id and .head.repo.id == $repository_id' \
+              --arg source_base "$SOURCE_BASE" --arg head_sha "$HEAD_SHA" \
+              '.state == "open" and .base.repo.id == $repository_id and .head.repo.id == $repository_id
+                and .base.ref == $source_base and .head.sha == $head_sha' \
               <<< "$pull_request" > /dev/null; then
             echo "The rejected promotion was superseded; leaving the pull request unchanged."
             exit 0
@@ -841,6 +916,9 @@ jobs:
             --raw-field "assignees[]=$PROMOTER" --silent
 
           comment="Promotion stopped."
+          if [ -n "$PARENT_UPDATE_REASON" ]; then
+            comment="$comment Parent update ($PARENT_UPDATE_OUTCOME): $PARENT_UPDATE_REASON"
+          fi
           if [ "$GITHUB_REPOSITORY" = astral-sh/uv-dev ]; then
             comment="$comment Returned this pull request to draft."
           fi
@@ -856,7 +934,9 @@ jobs:
           if [ "$(jq --raw-output '.id // empty' <<< "$current_approval")" != "$APPROVAL_ID" ] || \
             [ "$(jq --raw-output '.promotion_label // empty' <<< "$current_approval")" != "$PROMOTION_LABEL" ] || \
             ! jq --exit-status --argjson repository_id "$GITHUB_REPOSITORY_ID" \
-              '.state == "open" and .base.repo.id == $repository_id and .head.repo.id == $repository_id' \
+              --arg source_base "$SOURCE_BASE" --arg head_sha "$HEAD_SHA" \
+              '.state == "open" and .base.repo.id == $repository_id and .head.repo.id == $repository_id
+                and .base.ref == $source_base and .head.sha == $head_sha' \
               <<< "$pull_request" > /dev/null; then
             echo "The rejected promotion was superseded during recovery; leaving its label unchanged."
             exit 0

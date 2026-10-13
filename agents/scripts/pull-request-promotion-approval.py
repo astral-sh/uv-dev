@@ -129,7 +129,13 @@ def current_approval(repository, number):
 
 
 def eligible_source(
-    repository, repository_id, number, approval, expected_head, expected_ref=None
+    repository,
+    repository_id,
+    number,
+    approval,
+    expected_head,
+    expected_ref=None,
+    expected_base=None,
 ):
     source = gh_json(f"repos/{repository}/pulls/{number}")
     require(source.get("state") == "open", "The source pull request is no longer open.")
@@ -160,6 +166,10 @@ def eligible_source(
         "The approved source branch changed.",
     )
     require(
+        expected_base is None or source["base"]["ref"] == expected_base,
+        "The approved source base changed; a fresh approval is required.",
+    )
+    require(
         not source["head"]["ref"].startswith("automations/promote/"),
         "Promotion branches cannot be promoted again.",
     )
@@ -170,7 +180,7 @@ def eligible_source(
 
 
 def artifact_name(repository_id, number, approval_id):
-    return f"promotion-approval-{repository_id}-{number}-{approval_id}"
+    return f"promotion-approval-v2-{repository_id}-{number}-{approval_id}"
 
 
 def same_json(left, right):
@@ -196,11 +206,11 @@ def validate_record(
             "approval",
             "run",
         }
-        | ({"candidate"} if candidate else set()),
+        | ({"candidate"} if candidate else {"base_ref"}),
         "Approval record schema is invalid.",
     )
     require(
-        type(record["schema"]) is int and record["schema"] == (2 if candidate else 1),
+        type(record["schema"]) is int and record["schema"] == 2,
         "Unsupported approval record version.",
     )
     require(
@@ -222,6 +232,11 @@ def validate_record(
     subprocess.run(
         ["git", "check-ref-format", "refs/heads/" + record["head_ref"]], check=True
     )
+    if not candidate:
+        require(isinstance(record["base_ref"], str), "Approved source base is invalid.")
+        subprocess.run(
+            ["git", "check-ref-format", "refs/heads/" + record["base_ref"]], check=True
+        )
     run = record["run"]
     require(
         isinstance(run, dict)
@@ -570,7 +585,13 @@ def planned_candidate_source(repository, repository_id, number, approval, plan):
         "The current approval does not authorize this candidate plan.",
     )
     source = eligible_source(
-        repository, repository_id, number, approval, plan["head_sha"], plan["head_ref"]
+        repository,
+        repository_id,
+        number,
+        approval,
+        plan["head_sha"],
+        plan["head_ref"],
+        plan["source_base"],
     )
     require(
         source["base"]["ref"] == plan["source_base"]
@@ -725,6 +746,7 @@ def main():
     parser.add_argument("--plan")
     parser.add_argument("--candidate-sha")
     parser.add_argument("--head-ref")
+    parser.add_argument("--base-ref")
     parser.add_argument("--approval-id", type=int)
     parser.add_argument("--approval-event", choices=("labeled", "ready_for_review"))
     parser.add_argument("--promoter")
@@ -754,8 +776,9 @@ def main():
         require(
             args.head_sha is not None
             and re.fullmatch(r"[0-9a-f]{40}", args.head_sha)
-            and args.head_ref is not None,
-            "The planned source revision and branch are required.",
+            and args.head_ref is not None
+            and args.base_ref is not None,
+            "The planned source revision and branches are required.",
         )
         require(
             approval["id"] == args.approval_id
@@ -771,6 +794,7 @@ def main():
             approval,
             args.head_sha,
             args.head_ref,
+            args.base_ref,
         )
         print(json.dumps(source, separators=(",", ":")))
         return
@@ -873,12 +897,20 @@ def main():
             approval,
             existing["head_sha"],
             existing["head_ref"],
+            existing["base_ref"],
         )
         print(json.dumps(existing, separators=(",", ":")))
         return
     require(
         args.head_sha is not None and re.fullmatch(r"[0-9a-f]{40}", args.head_sha),
         "An explicitly approved head SHA is required.",
+    )
+    require(
+        isinstance(args.base_ref, str) and args.base_ref,
+        "An explicitly approved source base is required.",
+    )
+    subprocess.run(
+        ["git", "check-ref-format", "refs/heads/" + args.base_ref], check=True
     )
     require(
         args.promotion_label == approval["promotion_label"],
@@ -906,14 +938,20 @@ def main():
         "A newer approval superseded this queued dispatch.",
     )
     source = eligible_source(
-        args.repository, repository_id, args.number, approval, args.head_sha
+        args.repository,
+        repository_id,
+        args.number,
+        approval,
+        args.head_sha,
+        expected_base=args.base_ref,
     )
     record = {
-        "schema": 1,
+        "schema": 2,
         "repository": {"id": repository_id, "full_name": args.repository},
         "number": args.number,
         "head_ref": source["head"]["ref"],
         "head_sha": args.head_sha,
+        "base_ref": args.base_ref,
         "approval": approval,
         "run": {
             "id": run_id,

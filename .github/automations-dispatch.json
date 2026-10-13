@@ -82,7 +82,10 @@
       "on": {
         "pull_request": ["ready_for_review"]
       },
-      "workflow": "promote-pull-request.yml"
+      "workflow": "promote-pull-request.yml",
+      "inputs": {
+        "base_ref": "/pull_request/base/ref"
+      }
     },
     {
       "repository": "uv-dev",
@@ -96,7 +99,8 @@
       "allow_draft": true,
       "workflow": "promote-pull-request.yml",
       "inputs": {
-        "promotion_label": "/label/name"
+        "promotion_label": "/label/name",
+        "base_ref": "/pull_request/base/ref"
       }
     },
     {
@@ -109,7 +113,10 @@
         "/sender/type": "User"
       },
       "allow_draft": true,
-      "workflow": "promote-pull-request.yml"
+      "workflow": "promote-pull-request.yml",
+      "inputs": {
+        "base_ref": "/pull_request/base/ref"
+      }
     },
     {
       "repository": "uv-dev",
@@ -117,7 +124,9 @@
         "pull_request": ["edited"]
       },
       "conditions": {
-        "/changes/base/ref/from": { "exists": true }
+        "/changes/base/ref/from": {
+          "exists": true
+        }
       },
       "allow_draft": true,
       "workflow": "pull-request-conflicts.yml",
