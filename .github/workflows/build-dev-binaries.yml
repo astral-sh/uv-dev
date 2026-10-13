@@ -265,8 +265,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: $/.github/actions/setup-cargo
-
       - name: Setup Dev Drive
         run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
 
@@ -274,6 +272,9 @@ jobs:
       - name: Copy Git Repo to Dev Drive
         run: |
           Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+
+      # Dev Drive setup changes Cargo's location and `PATH`.
+      - uses: $/.github/actions/setup-cargo
 
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}
@@ -310,8 +311,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: $/.github/actions/setup-cargo
-
       - name: Setup Dev Drive
         run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
 
@@ -319,6 +318,9 @@ jobs:
       - name: Copy Git Repo to Dev Drive
         run: |
           Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+
+      # Dev Drive setup changes Cargo's location and `PATH`.
+      - uses: $/.github/actions/setup-cargo
 
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}

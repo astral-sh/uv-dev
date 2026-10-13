@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
 ## Wrapper script for locked Cargo commands and auditable release builds.
 ##
-## Set CARGO_LOCKED=1 to require an up-to-date Cargo.lock.
-## Cargo extensions still need their own --locked flags.
-## Set CARGO_AUDITABLE=0 to disable SBOM embedding outside release builds.
+## Set `CARGO_LOCKED=1` to require an up-to-date `Cargo.lock`.
+## Cargo extensions still need their own `--locked` flags.
+## Set `CARGO_AUDITABLE=0` to disable SBOM embedding outside release builds.
 ## Use `scripts/install-cargo-extensions.sh` to install cargo-auditable.
 ##
 ## Usage:
@@ -13,7 +13,7 @@
 
 set -eu
 
-# Rustup requires +toolchain to precede Cargo's arguments.
+# Rustup requires `+toolchain` to precede Cargo's arguments.
 toolchain=""
 case "${1:-}" in
     +*)
