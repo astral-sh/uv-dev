@@ -1,0 +1,19 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 5605,
+        "title": "Documentation feedback",
+        "url": "https://github.com/astral-sh/uv/issues/5605",
+        "state": "open",
+        "reason": "The September 1, 2026 comment by hendev1 reports the exact same broken URL in docs/concepts/authentication/http.md and identifies the missing .html suffix. This is a specific prior report of the same defect within the open documentation tracker."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using netrc, the exact everything.curl.dev/usingcurl/netrc URL, everything.curl.dev, netrc link, broken/dead documentation links, HTTP authentication, and curl documentation, including the documentation label. Inspected the matching discussion and surrounding comments in astral-sh/uv#5605. Followed closed astral-sh/uv#8482 to merged astral-sh/uv#8511 and inspected its diff; ruled them out as duplicates or prior link fixes because they clarified NETRC and ~/.netrc discovery while retaining the extensionless URL. No matching link-fix pull request was found."
+  },
+  "type": "duplicate",
+  "type_reason": "The broken link is confirmed in docs/concepts/authentication/http.md:22: its destination returns HTTP 404, while the suggested .html URL returns HTTP 200 and serves the .netrc documentation. However, the identical defect was already reported in the still-open astral-sh/uv#5605 before this issue, so duplicate takes precedence over bug. No evidence of a previously fixed link regression was found.",
+  "summary": "astral-sh/uv#5605 already contains an exact report of this broken .netrc link and the missing .html suffix.",
+  "draft_response": "You're right: the documented URL returns 404, and https://everything.curl.dev/usingcurl/netrc.html serves the intended .netrc documentation. This exact broken link was already reported in the September 1 comment on astral-sh/uv#5605. Let's track the correction there; the change needed is to update the URL in docs/concepts/authentication/http.md."
+}
