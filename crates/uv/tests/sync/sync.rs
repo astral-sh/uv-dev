@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
@@ -941,10 +941,16 @@ fn sync_lockfile_requires_revision() -> Result<()> {
     Ok(())
 }
 
-/// Syncing a new project warms its interpreter cache so the next sync does not query Python.
+/// Syncing a new project with a regular executable warms the cache for the next sync.
 #[test]
 fn sync_caches_interpreter() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let python = context
+        .python_versions
+        .first()
+        .context("No Python installation")?
+        .1
+        .simple_canonicalize()?;
     context
         .temp_dir
         .child("pyproject.toml")
@@ -954,18 +960,19 @@ fn sync_caches_interpreter() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
     "#})?;
-    context.sync().assert().success();
+    context
+        .sync()
+        .arg("--python")
+        .arg(&python)
+        .assert()
+        .success();
 
     let site_packages = context.site_packages();
     fs_err::write(
-        site_packages.join("sitecustomize.py"),
-        indoc! {r#"
-            from pathlib import Path
-
-            Path(__file__).with_name("interpreter-started").touch()
-        "#},
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
     )?;
-    let startup_marker = site_packages.join("interpreter-started");
+    let startup_marker = context.venv.child("interpreter-started");
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -973,7 +980,7 @@ fn sync_caches_interpreter() -> Result<()> {
     Resolved 1 package in [TIME]
     Checked in [TIME]
     ");
-    assert!(!startup_marker.exists());
+    startup_marker.assert(predicate::path::missing());
 
     // Bypassing the cache must run Python and trigger the startup probe.
     context
@@ -982,7 +989,7 @@ fn sync_caches_interpreter() -> Result<()> {
         .arg("--no-cache")
         .assert()
         .success();
-    assert!(startup_marker.is_file());
+    startup_marker.assert(predicate::path::is_file());
 
     Ok(())
 }
