@@ -1645,7 +1645,10 @@ fn empty_dir_exists() -> Result<()> {
     "
     );
 
-    context.venv.assert(predicates::path::is_dir());
+    context
+        .venv
+        .child("pyvenv.cfg")
+        .assert(predicates::path::is_file());
 
     Ok(())
 }
