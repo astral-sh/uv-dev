@@ -11126,6 +11126,13 @@ fn sync_invalid_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_virtualenv_bin()
         .with_filtered_python_names();
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let wheel = "ok-1.0.0-py3-none-any.whl";
+    fs_err::copy(
+        context.workspace_root.join("test/links").join(wheel),
+        wheels.child(wheel),
+    )?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -11134,6 +11141,11 @@ fn sync_invalid_environment() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
+        dependencies = ["ok==1.0.0"]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
         "#,
     )?;
 
@@ -11167,10 +11179,13 @@ fn sync_invalid_environment() -> Result<()> {
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    Resolved 1 package in [TIME]
-    Checked in [TIME]
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
     ");
     marker.assert(predicate::path::missing());
+    context.assert_installed("ok", "1.0.0");
 
     let bin = venv_bin_path(&environment);
 
@@ -11186,9 +11201,11 @@ fn sync_invalid_environment() -> Result<()> {
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         Removed virtual environment at: .venv
         Creating virtual environment at: .venv
-        Resolved 1 package in [TIME]
-        Checked in [TIME]
+        Resolved 2 packages in [TIME]
+        Installed 1 package in [TIME]
+         + ok==1.0.0
         ");
+        context.assert_installed("ok", "1.0.0");
     }
 
     // A missing Python executable also causes recreation.
@@ -11199,9 +11216,11 @@ fn sync_invalid_environment() -> Result<()> {
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    Resolved 1 package in [TIME]
-    Checked in [TIME]
+    Resolved 2 packages in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
     ");
+    context.assert_installed("ok", "1.0.0");
 
     // Without `pyvenv.cfg`, an incompatible environment is no longer safe to replace.
     fs_err::remove_dir_all(&environment)?;
