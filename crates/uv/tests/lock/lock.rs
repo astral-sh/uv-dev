@@ -19618,11 +19618,11 @@ fn unconditional_overlapping_marker_disjoint_version_constraints() -> Result<()>
     Ok(())
 }
 
-/// `--check` rejects a missing lockfile before selecting an interpreter.
+/// `--check` rejects a missing lockfile without creating one.
 #[cfg(feature = "test-universal")]
 #[test]
 fn check_no_lock() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
