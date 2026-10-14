@@ -25,18 +25,7 @@ fn sole_project_revision(context: &TestContext) -> Result<PathBuf> {
         .to_path_buf())
 }
 
-/// `cache prune` should remove any stale source distribution revisions.
-#[test]
-fn prune_stale_revision() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_file_counts()
-        .with_filtered_sizes_and_units()
-        // The cache entry does not have a stable key, so we filter it out.
-        .with_filter((
-            r"\[CACHE_DIR\](\\|\/)(.*?)(\\|\/).*",
-            "[CACHE_DIR]/$2/[ENTRY]",
-        ));
-
+fn write_project_fixture(context: &TestContext) -> Result<()> {
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -59,6 +48,22 @@ fn prune_stale_revision() -> Result<()> {
         .child("__init__.py")
         .touch()?;
     context.temp_dir.child("README").touch()?;
+    Ok(())
+}
+
+/// `cache prune` should remove any stale source distribution revisions.
+#[test]
+fn prune_stale_revision() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_file_counts()
+        .with_filtered_sizes_and_units()
+        // The cache entry does not have a stable key, so we filter it out.
+        .with_filter((
+            r"\[CACHE_DIR\](\\|\/)(.*?)(\\|\/).*",
+            "[CACHE_DIR]/$2/[ENTRY]",
+        ));
+
+    write_project_fixture(&context)?;
 
     // Install the same package twice, with `--reinstall`.
     uv_snapshot!(context.filters(), context
@@ -145,28 +150,7 @@ fn prune_stale_revision_content_addressed_cache() -> Result<()> {
             "[CACHE_DIR]/$2/[ENTRY]",
         ));
 
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = []
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-        "#,
-    )?;
-
-    context
-        .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .touch()?;
-    context.temp_dir.child("README").touch()?;
+    write_project_fixture(&context)?;
 
     // Install the same package twice, with `--reinstall`.
     uv_snapshot!(context.filters(), context
