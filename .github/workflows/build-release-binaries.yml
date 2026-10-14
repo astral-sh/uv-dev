@@ -587,7 +587,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: 2_17
           docker-options: -e CARGO -e AWS_LC_SYS_USE_SYSTEM
-          args: --profile minimal-size --locked --out crates/uv-build/dist -m crates/uv-build/Cargo.toml --compatibility pypi
+          args: --profile minimal-size --locked --out crates/uv-build/dist -m crates/uv-build/Cargo.toml --compatibility pypi ${{ matrix.target == 'x86_64-unknown-linux-gnu' && '-Z build-std=std,panic_abort' || '' }}
           before-script-linux: |
             scripts/install-cargo-extensions.sh
 
@@ -596,6 +596,10 @@ jobs:
                 bundled_lld_dir="$(rustc --print sysroot)/lib/rustlib/${{ matrix.target }}/bin/gcc-ld"
                 test -x "${bundled_lld_dir}/ld.lld"
                 export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C link-arg=-B${bundled_lld_dir} -C link-arg=-fuse-ld=lld -C link-arg=-Wl,--icf=all"
+
+                # Compile the standard library with the minimal-size profile.
+                rustup component add rust-src
+                export RUSTC_BOOTSTRAP=1
             fi
         env:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
@@ -605,6 +609,10 @@ jobs:
           pip install ${PACKAGE_NAME}_build --no-index --find-links crates/uv-build/dist --force-reinstall
           ${MODULE_NAME}-build --help
           python -m ${MODULE_NAME}_build --help
+          mkdir -p "${RUNNER_TEMP}/uv-build-smoke"
+          cd test/packages/built-by-uv
+          ${MODULE_NAME}-build build-wheel "${RUNNER_TEMP}/uv-build-smoke"
+          ${MODULE_NAME}-build build-sdist "${RUNNER_TEMP}/uv-build-smoke"
       - name: "Upload wheels uv-build"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
