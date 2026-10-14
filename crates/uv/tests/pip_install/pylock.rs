@@ -1135,30 +1135,14 @@ fn pep_751_rejects_mismatched_wheel_identity() -> Result<()> {
 fn pep_751_mix() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.dev.toml")
-        .assert()
-        .success();
+    let lockfile = indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#};
+    for filename in ["pylock.toml", "pylock.dev.toml"] {
+        context.temp_dir.child(filename).write_str(lockfile)?;
+    }
 
     context.temp_dir.child("requirements.txt").touch()?;
     context.temp_dir.child("constraints.txt").touch()?;
