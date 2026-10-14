@@ -17346,16 +17346,30 @@ async fn sync_deprecated_zstd_wheel() -> Result<()> {
     Ok(())
 }
 
+async fn assert_source_archive_not_requested(server: &MockServer, archive_url: &str) {
+    let archive_url = Url::parse(archive_url).expect("valid source archive URL");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("the package server records requests");
+    let requested_paths = requests
+        .iter()
+        .map(|request| request.url.path())
+        .collect::<Vec<_>>();
+    assert!(
+        !requested_paths.contains(&archive_url.path()),
+        "source archive was requested: {requested_paths:?}"
+    );
+}
+
 /// Sync with an index whose only source distribution has a non-PEP 625-compliant
 /// extension (e.g., `.tar.bz2`). The resolver should reject it as incompatible.
 #[tokio::test]
 async fn sync_non_pep625_sdist() -> Result<()> {
     let context = uv_test::test_context!("3.13");
     let server = PackageServer::new(&"basic-package".parse()?).await;
-    // The unsupported filename must be rejected before the archive is downloaded.
-    server
-        .serve("basic_package-0.1.0.tar.bz2", b"", Some(&"0".repeat(64)))
-        .await;
+    let archive = "basic_package-0.1.0.tar.bz2";
+    server.serve(archive, b"", Some(&"0".repeat(64))).await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! { r#"
@@ -17384,6 +17398,7 @@ async fn sync_non_pep625_sdist() -> Result<()> {
 
     hint: `basic-package` was found on http://[LOCALHOST]/simple, but not at the requested version (basic-package==0.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
     ");
+    assert_source_archive_not_requested(server.mock_server(), &server.file_url(archive)).await;
 
     Ok(())
 }
@@ -17393,12 +17408,6 @@ async fn sync_non_pep625_sdist() -> Result<()> {
 /// without surfacing an incompatibility error.
 #[tokio::test]
 async fn sync_non_pep625_sdist_with_compatible_wheel() -> Result<()> {
-    use serde_json::json;
-    use wiremock::{
-        Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
-    };
-
     let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;
 
@@ -17432,7 +17441,7 @@ async fn sync_non_pep625_sdist_with_compatible_wheel() -> Result<()> {
         "files": [
             {
                 "filename": "basic_package-0.1.0.tar.bz2",
-                "url": sdist_url,
+                "url": &sdist_url,
                 "hashes": {
                     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
                 }
@@ -17482,6 +17491,7 @@ async fn sync_non_pep625_sdist_with_compatible_wheel() -> Result<()> {
     Installed 1 package in [TIME]
      + basic-package==0.1.0
     ");
+    assert_source_archive_not_requested(&server, &sdist_url).await;
 
     Ok(())
 }
