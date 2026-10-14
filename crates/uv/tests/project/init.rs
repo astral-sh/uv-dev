@@ -195,9 +195,9 @@ fn init_application_no_package_main_exists() -> Result<()> {
     Initialized project `foo`
     ");
 
-    child
-        .child("pyproject.toml")
-        .assert(predicate::path::is_file());
+    let pyproject: toml::Value = toml::from_str(&context.read("foo/pyproject.toml"))?;
+    assert_eq!(pyproject["project"]["name"].as_str(), Some("foo"));
+    assert!(pyproject.get("build-system").is_none());
     main_py.assert(original_main);
 
     Ok(())
@@ -2711,10 +2711,8 @@ fn init_invalid_parent_workspace() -> Result<()> {
     Initialized project `foo` at `[TEMP_DIR]/foo`
     ");
 
-    context
-        .temp_dir
-        .child("foo/pyproject.toml")
-        .assert(predicate::path::is_file());
+    let initialized: toml::Value = toml::from_str(&context.read("foo/pyproject.toml"))?;
+    assert_eq!(initialized["project"]["name"].as_str(), Some("foo"));
     pyproject_toml.assert("");
 
     Ok(())
