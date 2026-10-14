@@ -718,7 +718,7 @@ enum Author {
 }
 
 impl Author {
-    fn to_toml_string(&self) -> String {
+    fn to_inline_table(&self) -> InlineTable {
         let mut inline = InlineTable::new();
 
         match self {
@@ -734,7 +734,7 @@ impl Author {
             }
         }
 
-        inline.to_string()
+        inline
     }
 }
 
@@ -760,7 +760,7 @@ fn pyproject_project(
         } else {
             format!("\ndescription = {}", Value::from(description.unwrap_or("Add your description here")))
         },
-        authors = author.map_or_else(String::new, |author| format!("\nauthors = [\n    {}\n]", author.to_toml_string())),
+        authors = author.map_or_else(String::new, |author| format!("\nauthors = [\n    {}\n]", author.to_inline_table())),
         requires_python = requires_python.specifiers(),
     }
 }
