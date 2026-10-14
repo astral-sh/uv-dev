@@ -10,6 +10,8 @@ mod binary_policy;
 #[cfg(feature = "test-python")]
 mod bytecode;
 #[cfg(feature = "test-python")]
+mod cache_keys;
+#[cfg(feature = "test-python")]
 mod cross_device;
 #[cfg(feature = "test-python")]
 mod dependency_metadata;
