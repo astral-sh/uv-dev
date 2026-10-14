@@ -956,20 +956,19 @@ async fn get_or_create_environment(
             ToolRequirement::Python { .. } => {}
             ToolRequirement::Package { requirement, .. } => requirements.push(requirement.clone()),
         }
-        requirements.extend(resolve_names(spec.requirements.clone()).await?);
+        requirements.extend(resolve_names(spec.requirements).await?);
         requirements
     };
 
     // Resolve the constraints.
     let constraints = spec
         .constraints
-        .clone()
         .into_iter()
         .map(|constraint| constraint.requirement)
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    let overrides = resolve_names(spec.overrides.clone()).await?;
+    let overrides = resolve_names(spec.overrides).await?;
 
     // Check if the tool is already installed in a compatible environment.
     if !isolated && !request.is_latest() {
