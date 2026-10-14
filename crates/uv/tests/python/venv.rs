@@ -279,10 +279,11 @@ fn create_venv_313() {
 
 #[test]
 fn create_venv_project_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo");
 
     // `uv venv` ignores `UV_PROJECT_ENVIRONMENT` when it's not a project
-    uv_snapshot!(context.filters(), context.venv().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo"), @"
+    uv_snapshot!(context.filters(), context.venv(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -309,7 +310,7 @@ fn create_venv_project_environment() -> Result<()> {
     )?;
 
     // But, if we're in a project we'll respect it
-    uv_snapshot!(context.filters(), context.venv().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo"), @"
+    uv_snapshot!(context.filters(), context.venv(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -327,7 +328,7 @@ fn create_venv_project_environment() -> Result<()> {
     let child = context.temp_dir.child("child");
     child.create_dir_all()?;
 
-    uv_snapshot!(context.filters(), context.venv().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo").current_dir(child.path()), @"
+    uv_snapshot!(context.filters(), context.venv().current_dir(child.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -355,7 +356,7 @@ fn create_venv_project_environment() -> Result<()> {
         .child("bar")
         .assert(predicates::path::is_dir());
 
-    // Or, of they opt-out with `--no-workspace` or `--no-project`
+    // Or, if project discovery is disabled with `--no-workspace` or `--no-project`.
     uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--no-workspace"), @"
     exit_code: 0 (success)
     ----- stderr -----
