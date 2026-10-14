@@ -98,7 +98,7 @@ impl<'a, Context: BuildContext> ExtrasResolver<'a, Context> {
                     }
                 })
             {
-                archive.metadata.provides_extra.to_vec()
+                archive.metadata.provides_extra.clone()
             } else {
                 // Run the PEP 517 build process to extract metadata from the source distribution.
                 let archive = database
@@ -106,7 +106,7 @@ impl<'a, Context: BuildContext> ExtrasResolver<'a, Context> {
                     .await
                     .map_err(|err| Error::from_dist(dist, err))?;
 
-                let extras = archive.metadata.provides_extra.to_vec();
+                let extras = archive.metadata.provides_extra.clone();
 
                 // Insert the metadata into the index.
                 index
@@ -121,7 +121,7 @@ impl<'a, Context: BuildContext> ExtrasResolver<'a, Context> {
         extras.sort_unstable();
 
         Ok(Requirement {
-            extras: extras.into_boxed_slice(),
+            extras,
             ..requirement
         })
     }
