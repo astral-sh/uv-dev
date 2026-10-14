@@ -382,12 +382,20 @@ mod tests {
         let cache = CredentialsCache::default();
         // Insert with URL with credentials and get with redacted URL.
         let url = DisplaySafeUrl::parse("https://username:password@example.com/foobar").unwrap();
-        cache.insert(&url, credentials.clone());
-        assert_eq!(cache.get_url(&url, &username), Some(credentials.clone()));
+        cache.insert(&url, Arc::clone(&credentials));
+        let redacted = DisplaySafeUrl::parse("https://example.com/foobar").unwrap();
+        assert!(Arc::ptr_eq(
+            &cache.get_url(&redacted, &username).unwrap(),
+            &credentials
+        ));
         // Insert with redacted URL and get with URL with credentials.
+        let redacted = DisplaySafeUrl::parse("https://second-example.com/foobar").unwrap();
+        cache.insert(&redacted, Arc::clone(&credentials));
         let url =
             DisplaySafeUrl::parse("https://username:password@second-example.com/foobar").unwrap();
-        cache.insert(&url, credentials.clone());
-        assert_eq!(cache.get_url(&url, &username), Some(credentials.clone()));
+        assert!(Arc::ptr_eq(
+            &cache.get_url(&url, &username).unwrap(),
+            &credentials
+        ));
     }
 }
