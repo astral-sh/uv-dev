@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::{Context, Result};
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
@@ -12,7 +12,7 @@ use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
 use crate::Credentials;
-use crate::credentials::Token;
+use crate::credentials::Authentication;
 use crate::index::is_path_prefix;
 use crate::realm::{Realm, RealmRef};
 
@@ -22,8 +22,8 @@ static HUGGING_FACE_REALM: LazyLock<Realm> = LazyLock::new(|| {
     Realm::from(&url)
 });
 
-/// The authentication token for the Hugging Face platform, if set.
-static HUGGING_FACE_TOKEN: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
+/// Authentication for the Hugging Face platform, if a token is set.
+static HUGGING_FACE_AUTHENTICATION: LazyLock<Option<Arc<Authentication>>> = LazyLock::new(|| {
     // Extract the Hugging Face token from the environment variable, if it exists.
     let hf_token = std::env::var(EnvVars::HF_TOKEN)
         .ok()
@@ -36,7 +36,9 @@ static HUGGING_FACE_TOKEN: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
     }
 
     debug!("Found Hugging Face token in environment");
-    Some(hf_token)
+    Some(Arc::new(Authentication::from(Credentials::bearer(
+        hf_token,
+    ))))
 });
 
 /// A provider for authentication credentials for the Hugging Face platform.
@@ -44,16 +46,12 @@ static HUGGING_FACE_TOKEN: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
 pub(crate) struct HuggingFaceProvider;
 
 impl HuggingFaceProvider {
-    /// Returns the credentials for the Hugging Face platform, if available.
-    pub(crate) fn credentials_for(url: &Url) -> Option<Credentials> {
-        if RealmRef::from(url) == *HUGGING_FACE_REALM {
-            if let Some(token) = HUGGING_FACE_TOKEN.as_ref() {
-                return Some(Credentials::Bearer {
-                    token: Token::new(token.clone()),
-                });
-            }
+    /// Returns authentication for the Hugging Face platform, if available.
+    pub(crate) fn authentication_for(url: &Url) -> Option<Arc<Authentication>> {
+        if RealmRef::from(url) != *HUGGING_FACE_REALM {
+            return None;
         }
-        None
+        HUGGING_FACE_AUTHENTICATION.as_ref().map(Arc::clone)
     }
 }
 

@@ -641,10 +641,7 @@ impl AuthMiddleware {
         }
 
         // Support for known providers, like Hugging Face and S3.
-        if let Some(credentials) = HuggingFaceProvider::credentials_for(url)
-            .map(Authentication::from)
-            .map(Arc::new)
-        {
+        if let Some(credentials) = HuggingFaceProvider::authentication_for(url) {
             debug!("Found Hugging Face credentials for `{url}`");
             self.cache().fetches.done(key, Some(credentials.clone()));
             return Ok(Some(credentials));
