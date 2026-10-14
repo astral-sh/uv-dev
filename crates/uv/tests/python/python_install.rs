@@ -3954,14 +3954,8 @@ fn python_install_upgrade_version_file() {
 }
 
 #[test]
-fn python_install_armv7() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
-        .with_managed_python_dirs()
-        .with_filtered_python_sources()
-        .with_filtered_python_install_bin()
-        .with_filtered_python_names()
-        .with_filtered_exe_suffix();
+fn python_install_armv7_musl_unavailable() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
 
     // Explicitly request a musl build for armv7l
     uv_snapshot!(context.filters(), context.python_install().arg("cpython-3.12.12-linux-armv7-musl"), @"
@@ -3969,8 +3963,16 @@ fn python_install_armv7() {
     ----- stderr -----
     error: uv does not yet provide musl Python distributions on armv7.
     ");
+}
 
-    // The gnuabi build for armv7l contains duplicate terminfo symlinks.
+/// The GNU ABI archive for armv7l contains duplicate terminfo symlinks.
+#[test]
+fn python_install_armv7_gnueabi() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+
     uv_snapshot!(context.filters(), context
         .python_install()
         .env_remove(EnvVars::UV_LEGACY_TAR_BACKEND)
@@ -3980,10 +3982,16 @@ fn python_install_armv7() {
     Installed Python 3.12.12 in [TIME]
      + cpython-3.12.12-[PLATFORM] (python3.12)
     ");
+}
 
-    context.python_uninstall().arg("--all").assert().success();
+/// The legacy extractor also supports the duplicate terminfo symlinks.
+#[test]
+fn python_install_armv7_gnueabi_legacy_tar() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
 
-    // Exercise the legacy tar backend against the same archive.
     uv_snapshot!(context.filters(), context
         .python_install()
         .env(EnvVars::UV_LEGACY_TAR_BACKEND, "1")
