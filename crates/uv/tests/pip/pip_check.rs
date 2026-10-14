@@ -369,22 +369,20 @@ fn check_multiple_incompatible_packages() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
-fn check_python_version() {
+fn check_python_version() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("urllib3")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + urllib3==2.2.1
-    "
-    );
+    let distribution = ChildPath::new(context.site_packages()).child("urllib3-2.2.1.dist-info");
+    distribution.child("METADATA").write_str(indoc! {"
+        Metadata-Version: 2.1
+        Name: urllib3
+        Version: 2.2.1
+        Requires-Python: >=3.8
+    "})?;
+    distribution.child("WHEEL").write_str(indoc! {"
+        Wheel-Version: 1.0
+        Root-Is-Purelib: true
+        Tag: py3-none-any
+    "})?;
 
     uv_snapshot!(context.filters(), context.pip_check().arg("--python-version").arg("3.7"), @"
     exit_code: 1 (failure)
@@ -394,6 +392,8 @@ fn check_python_version() {
     The package `urllib3` requires Python >=3.8, but `3.12.[X]` is installed
     "
     );
+
+    Ok(())
 }
 
 /// Packages accepted by the resolver must not trigger Python upper-bound diagnostics.
