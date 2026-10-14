@@ -34,18 +34,18 @@ pub fn unzip_and_hash(
 /// This function returns the path to that top-level directory.
 pub fn strip_component(source: impl AsRef<Path>) -> Result<PathBuf, Error> {
     // TODO(konstin): Verify the name of the directory.
-    let top_level = fs_err::read_dir(source.as_ref())
-        .map_err(Error::Io)?
-        .collect::<std::io::Result<Vec<fs_err::DirEntry>>>()
+    let mut top_level = fs_err::read_dir(source.as_ref()).map_err(Error::Io)?;
+    let root = top_level
+        .next()
+        .ok_or(Error::EmptyArchive)?
         .map_err(Error::Io)?;
-    match top_level.as_slice() {
-        [root] => Ok(root.path()),
-        [] => Err(Error::EmptyArchive),
-        _ => Err(Error::NonSingularArchive(
-            top_level
-                .into_iter()
-                .map(|entry| entry.file_name())
-                .collect(),
-        )),
+    let Some(other) = top_level.next().transpose().map_err(Error::Io)? else {
+        return Ok(root.path());
+    };
+
+    let mut names = vec![root.file_name(), other.file_name()];
+    for entry in top_level {
+        names.push(entry.map_err(Error::Io)?.file_name());
     }
+    Err(Error::NonSingularArchive(names))
 }
