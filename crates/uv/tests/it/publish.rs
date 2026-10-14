@@ -2,7 +2,6 @@ use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
 use indoc::indoc;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::env::current_dir;
 use std::path::{Path, PathBuf};
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
@@ -478,7 +477,7 @@ fn dubious_filenames() {
         .unwrap();
 
     uv_snapshot!(context.filters(), context.publish()
-        .current_dir(current_dir().unwrap())
+        .current_dir(context.home_dir.path())
         .arg("-u")
         .arg("dummy")
         .arg("-p")
@@ -702,9 +701,7 @@ fn invalid_index() {
         .write_str(pyproject_toml)
         .unwrap();
 
-    let ok_wheel = current_dir()
-        .unwrap()
-        .join("../../test/links/ok-1.0.0-py3-none-any.whl");
+    let ok_wheel = dummy_wheel();
 
     // No such index
     uv_snapshot!(context.filters(), context.publish()
