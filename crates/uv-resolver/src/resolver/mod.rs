@@ -1517,7 +1517,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     // this fork, allowing environments in neither set to fall on either side.
                     // For example, Darwin == 24 becomes Darwin < 25 when the wheels require
                     // Darwin >= 25. This avoids introducing forks for unrelated wheel tags.
-                    let coverage = dist.implied_markers().and(fork_markers);
+                    let coverage = artifact_markers.and(fork_markers);
                     let split = marker.restrict(marker.or(coverage));
                     let Some((left, right)) = fork_version_by_marker(env, split) else {
                         return Ok(Some(ResolverVersion::Unavailable(
@@ -3573,14 +3573,16 @@ impl ForkedDependencies {
 
                 let mut new = vec![];
                 for fork in std::mem::take(&mut forks) {
-                    let Some((remaining_forker, envs)) = forker.fork(&fork.env) else {
+                    let Some(result) = forker.fork(&fork.env) else {
                         new.push(fork);
                         continue;
                     };
-                    forker = remaining_forker;
+                    forker = result.remaining;
 
-                    for fork_env in envs {
-                        let mut new_fork = fork.clone();
+                    // Process the included environment last, since fork order can affect resolution.
+                    let excluded = result.excluded.map(|env| (fork.clone(), env));
+                    let included = (fork, result.included);
+                    for (mut new_fork, fork_env) in excluded.into_iter().chain([included]) {
                         new_fork.set_env(fork_env);
                         // We only add the dependency to this fork if it
                         // satisfies the fork's markers. Some forks are

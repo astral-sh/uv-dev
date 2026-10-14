@@ -5,7 +5,7 @@ use either::Either;
 
 use uv_distribution_types::{IndexMetadata, Requirement, RequirementScope, RequirementSource};
 use uv_normalize::{GroupName, PackageName};
-use uv_pep440::{Version, VersionSpecifiers};
+use uv_pep440::Version;
 use uv_pypi_types::{ConflictItemRef, Conflicts, VerbatimParsedUrl};
 use uv_resolver_types::PackageNodeKind;
 
@@ -193,27 +193,14 @@ impl PubGrubDependency {
                 version,
                 source,
             } = pubgrub_requirement;
-            match &*package {
-                PubGrubPackageInner::Package { .. } => Self {
-                    package,
-                    version,
-                    parent: if is_normal_parent {
+            let parent = match &*package {
+                PubGrubPackageInner::Package { .. } | PubGrubPackageInner::Marker { .. } => {
+                    if is_normal_parent {
                         parent_name.cloned()
                     } else {
                         None
-                    },
-                    source,
-                },
-                PubGrubPackageInner::Marker { .. } => Self {
-                    package,
-                    version,
-                    parent: if is_normal_parent {
-                        parent_name.cloned()
-                    } else {
-                        None
-                    },
-                    source,
-                },
+                    }
+                }
                 PubGrubPackageInner::Extra { name, .. } => {
                     if group_name.is_none() {
                         debug_assert!(
@@ -221,12 +208,7 @@ impl PubGrubDependency {
                             "extras not flattened for {name}"
                         );
                     }
-                    Self {
-                        package,
-                        version,
-                        parent: None,
-                        source,
-                    }
+                    None
                 }
                 PubGrubPackageInner::Group { name, .. } => {
                     if group_name.is_none() {
@@ -235,18 +217,19 @@ impl PubGrubDependency {
                             "group not flattened for {name}"
                         );
                     }
-                    Self {
-                        package,
-                        version,
-                        parent: None,
-                        source,
-                    }
+                    None
                 }
                 PubGrubPackageInner::Root(_) => unreachable!("Root package in dependencies"),
                 PubGrubPackageInner::Python(_) => {
                     unreachable!("Python package in dependencies")
                 }
                 PubGrubPackageInner::System(_) => unreachable!("System package in dependencies"),
+            };
+            Self {
+                package,
+                version,
+                parent,
+                source,
             }
         }))
     }
@@ -269,33 +252,20 @@ struct PubGrubRequirement {
 }
 
 impl PubGrubRequirement {
-    fn package_for_requirement(requirement: &Requirement, kind: PackageNodeKind) -> PubGrubPackage {
-        PubGrubPackage::from_package(requirement.name.clone(), kind, requirement.marker)
-    }
-
-    /// Convert a [`Requirement`] to a PubGrub-compatible package and range, while returning the URL
-    /// on the [`Requirement`], if any.
+    /// Convert a requirement into its PubGrub package, source constraint, and version range.
     fn from_requirement(requirement: &Requirement, kind: PackageNodeKind) -> Self {
-        if let RequirementSource::Registry { specifier, .. } = &requirement.source {
-            return Self::from_registry_requirement(specifier, kind, requirement);
-        }
-
         Self {
-            package: Self::package_for_requirement(requirement, kind),
-            version: Range::full(),
+            package: PubGrubPackage::from_package(
+                requirement.name.clone(),
+                kind,
+                requirement.marker,
+            ),
             source: DependencySource::from_requirement(requirement),
-        }
-    }
-
-    fn from_registry_requirement(
-        specifier: &VersionSpecifiers,
-        kind: PackageNodeKind,
-        requirement: &Requirement,
-    ) -> Self {
-        Self {
-            package: Self::package_for_requirement(requirement, kind),
-            source: DependencySource::from_requirement(requirement),
-            version: Range::from(specifier.clone()),
+            version: requirement
+                .source
+                .version_specifiers()
+                .cloned()
+                .map_or_else(Range::full, Range::from),
         }
     }
 }

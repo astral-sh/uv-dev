@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use itertools::Itertools;
+use smallvec::SmallVec;
 use tracing::trace;
 
 use uv_distribution_types::{RequiresPython, RequiresPythonRange};
@@ -311,29 +312,23 @@ impl ResolverEnvironment {
                 ref include,
                 ref exclude,
             } => {
-                let mut include: crate::FxHashbrownSet<_> = (**include).clone();
-                let mut exclude: crate::FxHashbrownSet<_> = (**exclude).clone();
+                let mut include = Arc::clone(include);
+                let mut exclude = Arc::clone(exclude);
                 for rule in rules {
-                    match rule {
-                        Ok(item) => {
-                            if exclude.contains(&item) {
-                                return None;
-                            }
-                            include.insert(item);
-                        }
-                        Err(item) => {
-                            if include.contains(&item) {
-                                return None;
-                            }
-                            exclude.insert(item);
-                        }
+                    let (item, selected, conflicting) = match rule {
+                        Ok(item) => (item, &mut include, &exclude),
+                        Err(item) => (item, &mut exclude, &include),
+                    };
+                    if conflicting.contains(&item) {
+                        return None;
                     }
+                    Arc::make_mut(selected).insert(item);
                 }
                 let kind = Kind::Universal {
                     initial_forks: Arc::clone(initial_forks),
                     markers: *markers,
-                    include: Arc::new(include),
-                    exclude: Arc::new(exclude),
+                    include,
+                    exclude,
                 };
                 Some(Self { kind })
             }
@@ -420,20 +415,6 @@ impl ResolverEnvironment {
                 include,
                 exclude,
             } => {
-                let format_conflict_item = |conflict_item: &ConflictItem| {
-                    format!(
-                        "{}{}",
-                        conflict_item.package(),
-                        match conflict_item.kind() {
-                            ConflictKind::Extra(extra) => format!("[{extra}]"),
-                            ConflictKind::Group(group) => {
-                                format!("[group:{group}]")
-                            }
-                            ConflictKind::Project => String::new(),
-                        }
-                    )
-                };
-
                 if markers.is_true() && include.is_empty() && exclude.is_empty() {
                     return None;
                 }
@@ -442,29 +423,23 @@ impl ResolverEnvironment {
                 if !markers.is_true() {
                     descriptors.push(format!("markers: {markers:?}"));
                 }
-                if !include.is_empty() {
-                    descriptors.push(format!(
-                        "included: {}",
-                        // Sort to ensure stable error messages
-                        include
-                            .iter()
-                            .map(format_conflict_item)
-                            .collect::<BTreeSet<_>>()
-                            .into_iter()
-                            .join(", "),
-                    ));
-                }
-                if !exclude.is_empty() {
-                    descriptors.push(format!(
-                        "excluded: {}",
-                        // Sort to ensure stable error messages
-                        exclude
-                            .iter()
-                            .map(format_conflict_item)
-                            .collect::<BTreeSet<_>>()
-                            .into_iter()
-                            .join(", "),
-                    ));
+                for (label, conflicts) in [("included", include), ("excluded", exclude)] {
+                    if conflicts.is_empty() {
+                        continue;
+                    }
+                    // Sort the formatted items to ensure stable error messages.
+                    let items = conflicts
+                        .iter()
+                        .map(|item| {
+                            let package = item.package();
+                            match item.kind() {
+                                ConflictKind::Extra(extra) => format!("{package}[{extra}]"),
+                                ConflictKind::Group(group) => format!("{package}[group:{group}]"),
+                                ConflictKind::Project => package.to_string(),
+                            }
+                        })
+                        .collect::<BTreeSet<_>>();
+                    descriptors.push(format!("{label}: {}", items.into_iter().format(", ")));
                 }
 
                 Some(format!("split ({})", descriptors.join("; ")))
@@ -561,18 +536,20 @@ pub(crate) struct Forker<'d> {
     marker: MarkerTree,
 }
 
-impl Forker<'_> {
+/// The environments produced by splitting on a dependency, together with the remaining forker.
+pub(crate) struct ForkResult<'d> {
+    pub(crate) remaining: Forker<'d>,
+    pub(crate) excluded: Option<ResolverEnvironment>,
+    pub(crate) included: ResolverEnvironment,
+}
+
+impl<'d> Forker<'d> {
     /// Attempt a fork based on the given resolver environment.
     ///
-    /// If a fork is possible, then a new forker and at least one new
-    /// resolver environment is returned. In some cases, it is possible for
-    /// more resolver environments to be returned. (For example, when the
-    /// negation of this forker's markers has overlap with the given resolver
-    /// environment.)
-    pub(crate) fn fork(
-        &self,
-        env: &ResolverEnvironment,
-    ) -> Option<(Self, Vec<ResolverEnvironment>)> {
+    /// A successful split always has an environment that includes the dependency. It may also
+    /// have an environment that excludes the dependency if the negated marker overlaps the
+    /// resolver environment.
+    pub(crate) fn fork(&self, env: &ResolverEnvironment) -> Option<ForkResult<'d>> {
         if !env.included_by_marker(self.marker) {
             return None;
         }
@@ -585,26 +562,22 @@ impl Forker<'_> {
             panic!("resolver must be in universal mode for forking")
         };
 
-        let mut envs = vec![];
-        {
-            let not_marker = self.marker.negate();
-            if !env_marker.is_disjoint(not_marker) {
-                envs.push(env.narrow_environment(not_marker));
-            }
-        }
-        // Note also that we push this one last for historical reasons.
-        // Changing the order of forks can change the output in some
-        // ways. While it's probably fine, we try to avoid changing the
-        // output.
-        envs.push(env.narrow_environment(self.marker));
+        let not_marker = self.marker.negate();
+        let excluded =
+            (!env_marker.is_disjoint(not_marker)).then(|| env.narrow_environment(not_marker));
+        let included = env.narrow_environment(self.marker);
 
         let mut remaining_marker = self.marker;
         remaining_marker = remaining_marker.and(env_marker.negate());
-        let remaining_forker = Forker {
+        let remaining = Forker {
             package: self.package,
             marker: remaining_marker,
         };
-        Some((remaining_forker, envs))
+        Some(ForkResult {
+            remaining,
+            excluded,
+            included,
+        })
     }
 
     /// Returns true if the dependency represented by this forker may be
@@ -615,12 +588,12 @@ impl Forker<'_> {
     }
 }
 
-/// Fork the resolver based on a `Requires-Python` specifier.
+/// Fork the resolver into at most two environments based on a `Requires-Python` specifier.
 pub(crate) fn fork_version_by_python_requirement(
     requires_python: &VersionSpecifiers,
     python_requirement: &PythonRequirement,
     env: &ResolverEnvironment,
-) -> Vec<ResolverEnvironment> {
+) -> SmallVec<[ResolverEnvironment; 2]> {
     let requires_python = RequiresPython::from_specifiers(requires_python.clone());
     let lower = requires_python.range().lower().clone();
 
@@ -637,7 +610,7 @@ pub(crate) fn fork_version_by_python_requirement(
             python_requirement.target(),
             requires_python,
         );
-        return vec![];
+        return SmallVec::new();
     };
 
     let Kind::Universal {
@@ -648,12 +621,11 @@ pub(crate) fn fork_version_by_python_requirement(
         panic!("resolver must be in universal mode for forking")
     };
 
-    let mut envs = vec![];
-    if !env_marker.is_disjoint(lower.to_marker_tree()) {
-        envs.push(env.narrow_environment(lower.to_marker_tree()));
-    }
-    if !env_marker.is_disjoint(upper.to_marker_tree()) {
-        envs.push(env.narrow_environment(upper.to_marker_tree()));
+    let mut envs = SmallVec::new();
+    for marker in [lower.to_marker_tree(), upper.to_marker_tree()] {
+        if !env_marker.is_disjoint(marker) {
+            envs.push(env.narrow_environment(marker));
+        }
     }
     debug_assert!(!envs.is_empty(), "at least one fork should be produced");
     envs
@@ -680,26 +652,24 @@ pub(crate) fn fork_version_by_marker(
     //   `python_version >= '3.10' and sys_platform == 'linux'`
     //   `python_version >= '3.10' and sys_platform != 'linux'`
     //
-    // If the marker is disjoint with the current environment, then we should return an empty list.
-    // If the marker complement is disjoint with the current environment, then we should also return
-    // an empty list.
+    // A split requires both the marker and its complement to overlap the current environment.
     //
     // For example, given `python_version >= '3.10' and sys_platform == 'linux'` and the split marker
-    // `sys_platform == 'win32'`, return an empty list, since the following isn't satisfiable:
+    // `sys_platform == 'win32'`, no split is possible, since the following isn't satisfiable:
     //
     //   python_version >= '3.10' and sys_platform == 'linux' and sys_platform == 'win32'
     if env_marker.is_disjoint(marker) {
         return None;
     }
-    let with_marker = env.narrow_environment(marker);
-
     let complement = marker.negate();
     if env_marker.is_disjoint(complement) {
         return None;
     }
-    let without_marker = env.narrow_environment(complement);
 
-    Some((with_marker, without_marker))
+    Some((
+        env.narrow_environment(marker),
+        env.narrow_environment(complement),
+    ))
 }
 
 #[cfg(test)]

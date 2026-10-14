@@ -1,4 +1,7 @@
+use std::path::Path;
+
 use either::Either;
+use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use same_file::is_same_file;
 use tracing::debug;
@@ -168,12 +171,10 @@ impl Urls {
             recorder.source_policy(name);
         }
         if let Some(member_url) = self.workspace_members.get(name) {
-            let overrides = self.overrides.get(name, env);
-            for requirement_url in overrides
-                .iter()
-                .copied()
-                .chain(url.filter(|_| overrides.is_empty()))
-            {
+            let mut overrides = self.overrides.get(name, env);
+            // An applicable override replaces the requirement URL.
+            let first_url = overrides.next().or(url);
+            for requirement_url in first_url.into_iter().chain(overrides) {
                 if !same_resource(&member_url.parsed_url, &requirement_url.parsed_url, git) {
                     let mut urls = vec![
                         member_url.parsed_url.clone(),
@@ -189,9 +190,7 @@ impl Urls {
             }
             Ok(Either::Left(Either::Right(std::iter::once(member_url))))
         } else if self.overrides.contains_key(name) {
-            Ok(Either::Left(Either::Left(
-                self.overrides.get(name, env).into_iter(),
-            )))
+            Ok(Either::Left(Either::Left(self.overrides.get(name, env))))
         } else if let Some(url) = url {
             let url =
                 self.canonicalize_allowed_url(env, name, git, &url.verbatim, &url.parsed_url)?;
@@ -235,30 +234,30 @@ impl Urls {
             });
         };
 
-        let matching_urls: Vec<_> = expected
+        expected
             .iter()
             .filter(|requirement| same_resource(&requirement.parsed_url, parsed_url, git))
-            .collect();
-
-        let [allowed_url] = matching_urls.as_slice() else {
-            let mut conflicting_urls: Vec<_> = matching_urls
-                .into_iter()
-                .map(|parsed_url| parsed_url.parsed_url.clone())
-                .chain(std::iter::once(parsed_url.clone()))
-                .collect();
-            conflicting_urls.sort();
-            return Err(ResolveError::ConflictingUrls {
-                package_name: package_name.clone(),
-                urls: conflicting_urls,
-                env: env.clone(),
-            });
-        };
-        Ok(*allowed_url)
+            .exactly_one()
+            .map_err(|matching_urls| {
+                let mut conflicting_urls: Vec<_> = matching_urls
+                    .map(|parsed_url| parsed_url.parsed_url.clone())
+                    .chain(std::iter::once(parsed_url.clone()))
+                    .collect();
+                conflicting_urls.sort();
+                ResolveError::ConflictingUrls {
+                    package_name: package_name.clone(),
+                    urls: conflicting_urls,
+                    env: env.clone(),
+                }
+            })
     }
 }
 
 /// Returns `true` if the [`ParsedUrl`] instances point to the same resource.
 fn same_resource(a: &ParsedUrl, b: &ParsedUrl, git: &GitResolver) -> bool {
+    // Equal installation paths identify the same resource even when the file is unavailable.
+    let same_install_path = |a: &Path, b: &Path| a == b || is_same_file(a, b).unwrap_or(false);
+
     match (a, b) {
         (ParsedUrl::Archive(a), ParsedUrl::Archive(b)) => {
             a.subdirectory.as_deref().map(uv_fs::normalize_path)
@@ -275,12 +274,10 @@ fn same_resource(a: &ParsedUrl, b: &ParsedUrl, git: &GitResolver) -> bool {
                 && git.same_ref(&a.url, &b.url)
         }
         (ParsedUrl::Path(a), ParsedUrl::Path(b)) => {
-            a.install_path == b.install_path
-                || is_same_file(&a.install_path, &b.install_path).unwrap_or(false)
+            same_install_path(&a.install_path, &b.install_path)
         }
         (ParsedUrl::Directory(a), ParsedUrl::Directory(b)) => {
-            (a.install_path == b.install_path
-                || is_same_file(&a.install_path, &b.install_path).unwrap_or(false))
+            same_install_path(&a.install_path, &b.install_path)
                 && a.editable.is_none_or(|a| b.editable.is_none_or(|b| a == b))
         }
         _ => false,

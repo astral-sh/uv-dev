@@ -1,19 +1,17 @@
-use rustc_hash::FxHashMap;
-
 use uv_distribution_types::{Requirement, RequirementSource};
 use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::{ConflictItem, ConflictItemRef, ConflictKind};
 
-use crate::ResolverEnvironment;
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
+use crate::{FxHashbrownMap, ResolverEnvironment};
 
 /// A set of package names associated with a given fork.
 pub(crate) type ForkSet = ForkMap<()>;
 
 /// A map from package names to their values for a given fork.
 #[derive(Debug, Clone)]
-pub(crate) struct ForkMap<T>(FxHashMap<PackageName, Vec<Entry<T>>>);
+pub(crate) struct ForkMap<T>(FxHashbrownMap<PackageName, Vec<Entry<T>>>);
 
 /// An entry in a [`ForkMap`].
 #[derive(Debug, Clone)]
@@ -76,7 +74,7 @@ impl ForkScope {
 
 impl<T> Default for ForkMap<T> {
     fn default() -> Self {
-        Self(FxHashMap::default())
+        Self(FxHashbrownMap::default())
     }
 }
 
@@ -84,7 +82,7 @@ impl<T> ForkMap<T> {
     /// Associate a value with the [`Requirement`] in a given fork.
     pub(crate) fn add(&mut self, requirement: &Requirement, value: T) {
         self.0
-            .entry(requirement.name.clone())
+            .entry_ref(&requirement.name)
             .or_default()
             .push(Entry {
                 value,
@@ -95,9 +93,7 @@ impl<T> ForkMap<T> {
     /// Returns `true` if the map contains any values for a package that are compatible with the
     /// given fork.
     pub(crate) fn contains(&self, package_name: &PackageName, env: &ResolverEnvironment) -> bool {
-        self.0
-            .get(package_name)
-            .is_some_and(|values| values.iter().any(|entry| entry.scope.matches(env)))
+        self.get(package_name, env).next().is_some()
     }
 
     /// Returns `true` if the map contains any values for a package.
@@ -105,20 +101,22 @@ impl<T> ForkMap<T> {
         self.0.contains_key(package_name)
     }
 
-    /// Returns a list of values associated with a package that are compatible with the given fork.
+    /// Returns the values associated with a package that are compatible with the given fork.
     ///
     /// Compatibility implies that the markers on the requirement that contained this value
     /// are not disjoint with the given fork. Note that this does not imply that the requirement
     /// diverged in the given fork - values from overlapping forks may be combined.
-    pub(crate) fn get(&self, package_name: &PackageName, env: &ResolverEnvironment) -> Vec<&T> {
-        let Some(values) = self.0.get(package_name) else {
-            return Vec::new();
-        };
-        values
-            .iter()
-            .filter(|entry| entry.scope.matches(env))
+    pub(crate) fn get(
+        &self,
+        package_name: &PackageName,
+        env: &ResolverEnvironment,
+    ) -> impl Iterator<Item = &T> {
+        self.0
+            .get(package_name)
+            .into_iter()
+            .flatten()
+            .filter(move |entry| entry.scope.matches(env))
             .map(|entry| &entry.value)
-            .collect()
     }
 }
 

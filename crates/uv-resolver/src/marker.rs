@@ -14,54 +14,57 @@ pub(crate) fn requires_python(tree: MarkerTree) -> Option<RequiresPythonRange> {
 
     /// Collect the Python version markers from the tree.
     ///
-    /// Specifically, performs a DFS to collect all Python requirements on the path to every
-    /// `MarkerTreeKind::True` node.
-    fn collect_python_markers(tree: MarkerTree, markers: &mut Markers, range: &Ranges<Version>) {
+    /// A true terminal reached without a Python version node accepts every version.
+    fn collect_python_markers(tree: MarkerTree, markers: &mut Markers) {
         match tree.kind() {
             MarkerTreeKind::True => {
-                markers.push(range.clone());
+                markers.push(Ranges::full());
             }
             MarkerTreeKind::False => {}
             MarkerTreeKind::Version(marker) => match marker.key() {
                 CanonicalMarkerValueVersion::PythonFullVersion => {
+                    // In the reduced, ordered decision tree, a non-false child has a true terminal
+                    // and cannot test the same variable again.
                     for (range, tree) in marker.edges() {
-                        collect_python_markers(tree, markers, range);
+                        if !tree.is_false() {
+                            markers.push(range.clone());
+                        }
                     }
                 }
                 CanonicalMarkerValueVersion::ImplementationVersion => {
                     for (_, tree) in marker.edges() {
-                        collect_python_markers(tree, markers, range);
+                        collect_python_markers(tree, markers);
                     }
                 }
             },
             MarkerTreeKind::VersionString(marker) => {
                 for (_, tree) in marker.edges() {
-                    collect_python_markers(tree, markers, range);
+                    collect_python_markers(tree, markers);
                 }
             }
             MarkerTreeKind::String(marker) => {
                 for (_, tree) in marker.children() {
-                    collect_python_markers(tree, markers, range);
+                    collect_python_markers(tree, markers);
                 }
             }
             MarkerTreeKind::In(marker) => {
                 for (_, tree) in marker.children() {
-                    collect_python_markers(tree, markers, range);
+                    collect_python_markers(tree, markers);
                 }
             }
             MarkerTreeKind::Contains(marker) => {
                 for (_, tree) in marker.children() {
-                    collect_python_markers(tree, markers, range);
+                    collect_python_markers(tree, markers);
                 }
             }
             MarkerTreeKind::Extra(marker) => {
                 for (_, tree) in marker.children() {
-                    collect_python_markers(tree, markers, range);
+                    collect_python_markers(tree, markers);
                 }
             }
             MarkerTreeKind::List(marker) => {
                 for (_, tree) in marker.children() {
-                    collect_python_markers(tree, markers, range);
+                    collect_python_markers(tree, markers);
                 }
             }
         }
@@ -72,7 +75,7 @@ pub(crate) fn requires_python(tree: MarkerTree) -> Option<RequiresPythonRange> {
     }
 
     let mut markers = Markers::new();
-    collect_python_markers(tree, &mut markers, &Ranges::full());
+    collect_python_markers(tree, &mut markers);
 
     // If there are no Python version markers, return `None`.
     if markers.iter().all(|range| {
@@ -105,6 +108,21 @@ mod tests {
     use std::ops::Bound;
     use std::str::FromStr;
     use uv_pep440::UpperBound;
+
+    #[test]
+    fn test_requires_python_with_extra_branches() {
+        let tree = MarkerTree::from_str(
+            "python_full_version >= '3.8' and (extra == 'foo' or extra == 'bar')",
+        )
+        .unwrap();
+        assert_eq!(
+            requires_python(tree),
+            Some(RequiresPythonRange::new(
+                LowerBound::new(Bound::Included(Version::new([3, 8]))),
+                UpperBound::default(),
+            ))
+        );
+    }
 
     #[test]
     fn test_requires_python() {

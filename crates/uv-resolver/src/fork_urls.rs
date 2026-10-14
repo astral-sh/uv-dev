@@ -1,16 +1,14 @@
-use std::collections::hash_map::Entry;
-
-use rustc_hash::FxHashMap;
+use hashbrown::hash_map::EntryRef;
 
 use uv_normalize::PackageName;
 use uv_pypi_types::VerbatimParsedUrl;
 
-use crate::ResolveError;
 use crate::resolver::ResolverEnvironment;
+use crate::{FxHashbrownMap, ResolveError};
 
 /// See [`crate::resolver::ForkState`].
 #[derive(Default, Debug, Clone)]
-pub(crate) struct ForkUrls(FxHashMap<PackageName, VerbatimParsedUrl>);
+pub(crate) struct ForkUrls(FxHashbrownMap<PackageName, VerbatimParsedUrl>);
 
 impl ForkUrls {
     /// Get the URL previously used for a package in this fork.
@@ -30,8 +28,8 @@ impl ForkUrls {
         url: &VerbatimParsedUrl,
         env: &ResolverEnvironment,
     ) -> Result<(), ResolveError> {
-        match self.0.entry(package_name.clone()) {
-            Entry::Occupied(previous) => {
+        match self.0.entry_ref(package_name) {
+            EntryRef::Occupied(previous) => {
                 if previous.get() != url {
                     let mut conflicting_url =
                         vec![previous.get().parsed_url.clone(), url.parsed_url.clone()];
@@ -43,7 +41,7 @@ impl ForkUrls {
                     });
                 }
             }
-            Entry::Vacant(vacant) => {
+            EntryRef::Vacant(vacant) => {
                 vacant.insert(url.clone());
             }
         }
