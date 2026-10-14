@@ -28,6 +28,8 @@ mod output_streams;
 mod pip_compile;
 #[cfg(all(feature = "test-python", feature = "test-universal"))]
 mod pylock_paths;
+#[cfg(all(feature = "test-python", feature = "test-python-eol"))]
+mod requires_python;
 #[cfg(feature = "test-python")]
 mod source_url_hashes;
 #[cfg(feature = "test-python")]
