@@ -1,10 +1,12 @@
+use std::borrow::Cow;
 use std::env;
-use std::fmt::{Display, Formatter};
+use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
 use crate::PythonRunnerOutput;
+use itertools::Itertools;
 use owo_colors::OwoColorize;
 use regex::regex;
 use thiserror::Error;
@@ -158,9 +160,9 @@ fn hint_build_dependency(
     package: &str,
 ) -> std::fmt::Result {
     let table_key = if package_name.contains('.') {
-        format!("\"{package_name}\"")
+        Cow::Owned(format!("\"{package_name}\""))
     } else {
-        package_name.to_string()
+        Cow::Borrowed(package_name)
     };
     write!(
         f,
@@ -184,61 +186,38 @@ fn hint_build_dependency(
     )
 }
 
+impl MissingHeaderCause {
+    /// Write the package context for a missing system library.
+    fn fmt_package_context(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if let (Some(name), Some(version)) = (&self.package_name, &self.package_version) {
+            write!(f, " for `{}`", format!("{name}@{version}").cyan())
+        } else if let Some(version_id) = &self.version_id {
+            write!(f, " for `{}`", version_id.cyan())
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl Display for MissingHeaderCause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.missing_library {
             MissingLibrary::Header(header) => {
-                if let (Some(package_name), Some(package_version)) =
-                    (&self.package_name, &self.package_version)
-                {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install a library that provides `{}` for `{}`",
-                        header.cyan(),
-                        format!("{package_name}@{package_version}").cyan(),
-                    )
-                } else if let Some(version_id) = &self.version_id {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install a library that provides `{}` for `{}`",
-                        header.cyan(),
-                        version_id.cyan(),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install a library that provides `{}`",
-                        header.cyan(),
-                    )
-                }
+                write!(
+                    f,
+                    "This error likely indicates that you need to install a library that provides `{}`",
+                    header.cyan(),
+                )?;
+                self.fmt_package_context(f)
             }
             MissingLibrary::Linker(library) => {
-                if let (Some(package_name), Some(package_version)) =
-                    (&self.package_name, &self.package_version)
-                {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install the library that provides a shared library for `{}` for `{}` (e.g., `{}`)",
-                        library.cyan(),
-                        format!("{package_name}@{package_version}").cyan(),
-                        format!("lib{library}-dev").cyan(),
-                    )
-                } else if let Some(version_id) = &self.version_id {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install the library that provides a shared library for `{}` for `{}` (e.g., `{}`)",
-                        library.cyan(),
-                        version_id.cyan(),
-                        format!("lib{library}-dev").cyan(),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install the library that provides a shared library for `{}` (e.g., `{}`)",
-                        library.cyan(),
-                        format!("lib{library}-dev").cyan(),
-                    )
-                }
+                write!(
+                    f,
+                    "This error likely indicates that you need to install the library that provides a shared library for `{}`",
+                    library.cyan(),
+                )?;
+                self.fmt_package_context(f)?;
+                write!(f, " (e.g., `{}`)", format!("lib{library}-dev").cyan())
             }
             MissingLibrary::BuildDependency(package) => {
                 if let (Some(package_name), Some(package_version)) =
@@ -302,19 +281,7 @@ impl Display for BuildBackendError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} ({})", self.message, self.exit_code)?;
 
-        let mut non_empty = false;
-
-        if self.stdout.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stdout]".red(), self.stdout.join("\n"))?;
-            non_empty = true;
-        }
-
-        if self.stderr.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stderr]".red(), self.stderr.join("\n"))?;
-            non_empty = true;
-        }
-
-        if non_empty {
+        if fmt_command_output(f, &self.stdout, &self.stderr)? {
             writeln!(f)?;
         }
 
@@ -335,16 +302,25 @@ impl Display for MissingHeaderError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} ({})", self.message, self.exit_code)?;
 
-        if self.stdout.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stdout]".red(), self.stdout.join("\n"))?;
-        }
-
-        if self.stderr.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stderr]".red(), self.stderr.join("\n"))?;
-        }
-
+        fmt_command_output(f, &self.stdout, &self.stderr)?;
         Ok(())
     }
+}
+
+/// Write non-empty command output streams and return whether any output was written.
+fn fmt_command_output(
+    f: &mut Formatter<'_>,
+    stdout: &[String],
+    stderr: &[String],
+) -> Result<bool, fmt::Error> {
+    let mut non_empty = false;
+    for (label, lines) in [("[stdout]", stdout), ("[stderr]", stderr)] {
+        if lines.iter().any(|line| !line.trim().is_empty()) {
+            write!(f, "\n\n{}\n{}", label.red(), lines.iter().format("\n"))?;
+            non_empty = true;
+        }
+    }
+    Ok(non_empty)
 }
 
 impl Error {
@@ -380,85 +356,59 @@ impl Error {
 
         // In the cases I've seen it was the 5th and 3rd last line (see test case), 10 seems like a reasonable cutoff.
         let missing_library = output.stderr.iter().rev().take(10).find_map(|line| {
+            let line = line.trim();
             if let Some((_, [header])) = missing_header_re_gcc
-                .captures(line.trim())
-                .or(missing_header_re_clang.captures(line.trim()))
-                .or(missing_header_re_msvc.captures(line.trim()))
+                .captures(line)
+                .or_else(|| missing_header_re_clang.captures(line))
+                .or_else(|| missing_header_re_msvc.captures(line))
                 .map(|c| c.extract())
             {
                 Some(MissingLibrary::Header(header.to_string()))
-            } else if let Some((_, [library])) =
-                ld_not_found_re.captures(line.trim()).map(|c| c.extract())
+            } else if let Some((_, [library])) = ld_not_found_re.captures(line).map(|c| c.extract())
             {
                 Some(MissingLibrary::Linker(library.to_string()))
-            } else if wheel_not_found_re.is_match(line.trim()) {
+            } else if wheel_not_found_re.is_match(line) {
                 Some(MissingLibrary::BuildDependency("wheel".to_string()))
-            } else if distutils_not_found_re.is_match(line.trim()) {
+            } else if distutils_not_found_re.is_match(line) {
                 Some(MissingLibrary::DeprecatedModule(
                     "distutils".to_string(),
                     Version::new([3, 12]),
                 ))
-            } else if let Some(caps) = module_not_found.captures(line.trim()) {
-                if let Some(module_match) = caps.get(1) {
-                    let module_name = module_match.as_str();
-                    let package_name = match crate::pipreqs::MODULE_MAPPING.lookup(module_name) {
-                        Some(package) => package.to_string(),
-                        None => module_name.to_string(),
-                    };
-                    Some(MissingLibrary::BuildDependency(package_name))
-                } else {
-                    None
-                }
             } else {
-                None
+                let module = module_not_found.captures(line)?.get(1)?.as_str();
+                let package = crate::pipreqs::MODULE_MAPPING
+                    .lookup(module)
+                    .map_or(module, PackageName::as_str);
+                Some(MissingLibrary::BuildDependency(package.to_owned()))
             }
         });
 
+        let (stdout, stderr) = match level {
+            BuildOutput::Stderr | BuildOutput::Quiet => (Vec::new(), Vec::new()),
+            BuildOutput::Debug => (output.stdout.clone(), output.stderr.clone()),
+        };
+
         if let Some(missing_library) = missing_library {
-            return match level {
-                BuildOutput::Stderr | BuildOutput::Quiet => {
-                    Self::MissingHeader(Box::new(MissingHeaderError {
-                        message,
-                        exit_code: output.status,
-                        stdout: vec![],
-                        stderr: vec![],
-                        cause: MissingHeaderCause {
-                            missing_library,
-                            package_name: name.cloned(),
-                            package_version: version.cloned(),
-                            version_id: version_id.map(ToString::to_string),
-                        },
-                    }))
-                }
-                BuildOutput::Debug => Self::MissingHeader(Box::new(MissingHeaderError {
-                    message,
-                    exit_code: output.status,
-                    stdout: output.stdout.clone(),
-                    stderr: output.stderr.clone(),
-                    cause: MissingHeaderCause {
-                        missing_library,
-                        package_name: name.cloned(),
-                        package_version: version.cloned(),
-                        version_id: version_id.map(ToString::to_string),
-                    },
-                })),
-            };
+            return Self::MissingHeader(Box::new(MissingHeaderError {
+                message,
+                exit_code: output.status,
+                stdout,
+                stderr,
+                cause: MissingHeaderCause {
+                    missing_library,
+                    package_name: name.cloned(),
+                    package_version: version.cloned(),
+                    version_id: version_id.map(ToString::to_string),
+                },
+            }));
         }
 
-        match level {
-            BuildOutput::Stderr | BuildOutput::Quiet => Self::BuildBackend(BuildBackendError {
-                message,
-                exit_code: output.status,
-                stdout: vec![],
-                stderr: vec![],
-            }),
-            BuildOutput::Debug => Self::BuildBackend(BuildBackendError {
-                message,
-                exit_code: output.status,
-                stdout: output.stdout.clone(),
-                stderr: output.stderr.clone(),
-            }),
-        }
+        Self::BuildBackend(BuildBackendError {
+            message,
+            exit_code: output.status,
+            stdout,
+            stderr,
+        })
     }
 }
 
