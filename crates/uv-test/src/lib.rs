@@ -1897,10 +1897,21 @@ impl TestContext {
         .stdout(version);
     }
 
-    /// Assert a package is not installed.
+    /// Assert that a module is unavailable in the environment.
     pub fn assert_not_installed(&self, package: &'static str) {
-        self.assert_command(format!("import {package}").as_str())
-            .failure();
+        self.python_command()
+            .arg("-c")
+            .arg(indoc! {r"
+                import importlib.util
+                import sys
+
+                if importlib.util.find_spec(sys.argv[1]) is not None:
+                    raise SystemExit(f'{sys.argv[1]} is installed')
+            "})
+            .arg(package)
+            .current_dir(&self.temp_dir)
+            .assert()
+            .success();
     }
 
     /// Generate various escaped regex patterns for the given path.
