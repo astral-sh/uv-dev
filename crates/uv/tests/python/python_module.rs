@@ -38,15 +38,16 @@ fn with_user_scheme(context: TestContext) -> anyhow::Result<(TestContext, PathBu
 
 // Keep base-prefix discovery within the test environment instead of picking up a system uv.
 // See #15368.
-const TEST_SCRIPT: &str = "
-import os
-import sys
-import uv
+const TEST_SCRIPT: &str = indoc! {r"
+    import os
+    import sys
+    import uv
 
-sys.base_prefix = os.path.join(sys.prefix, 'missing-base-prefix')
-assert not os.path.exists(sys.base_prefix), sys.base_prefix
-print(uv.find_uv_bin())
-";
+    sys.base_prefix = os.path.join(sys.prefix, 'missing-base-prefix')
+    if os.path.exists(sys.base_prefix):
+        raise RuntimeError(f'base prefix unexpectedly exists: {sys.base_prefix}')
+    print(uv.find_uv_bin())
+"};
 
 /// Copy the current Python sources into a fixture independent of Git's symlink support.
 fn fake_uv(context: &TestContext) -> anyhow::Result<PathBuf> {
