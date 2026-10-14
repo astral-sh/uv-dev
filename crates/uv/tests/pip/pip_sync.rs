@@ -5279,7 +5279,8 @@ fn require_hashes_url_malformed() -> Result<()> {
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
-        .arg("--require-hashes"), @"
+        .arg("--require-hashes")
+        .arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Invalid hash digest length (expected 64 hexadecimal characters, found 3)
