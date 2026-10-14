@@ -429,11 +429,13 @@ impl ConflictMarker {
     ) -> Self {
         let mut marker = Self::TRUE;
         for set in conflicts.iter() {
-            for (first, second) in set.iter().filter(|item| include(item)).tuple_combinations() {
-                let pair = Self::from_conflict_item(first)
-                    .negate()
-                    .or(Self::from_conflict_item(second).negate());
-                marker = marker.and(pair);
+            let mut all_previous_inactive = Self::TRUE;
+            for (previous, current) in set.iter().filter(|item| include(item)).tuple_windows() {
+                all_previous_inactive =
+                    all_previous_inactive.and(Self::from_conflict_item(previous).negate());
+                // The current item can be active only if every earlier item is inactive.
+                marker = marker
+                    .and(all_previous_inactive.or(Self::from_conflict_item(current).negate()));
             }
         }
         marker
