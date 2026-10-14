@@ -871,23 +871,19 @@ fn complex_namespace_packages() -> Result<()> {
             return one() + one()
     "};
 
-    let projects = [
-        ("complex-project", "part_a", init_py_a),
-        ("complex-project", "part_b", init_py_b),
-    ];
-
-    for (project_name, part_name, init_py) in projects {
-        let project = context
-            .temp_dir
-            .child(format!("{project_name}-{part_name}"));
-        let project_name_dist_info = project_name.replace('-', "_");
+    let part_a = context.temp_dir.child("complex-project-part_a");
+    let part_b = context.temp_dir.child("complex-project-part_b");
+    for (project, part_name, init_py) in [
+        (&part_a, "part_a", init_py_a),
+        (&part_b, "part_b", init_py_b),
+    ] {
         let pyproject_toml = formatdoc! {r#"
             [project]
-            name = "{project_name}-{part_name}"
+            name = "complex-project-{part_name}"
             version = "1.0.0"
 
             [tool.uv.build-backend]
-            module-name = "{project_name_dist_info}.{part_name}"
+            module-name = "complex_project.{part_name}"
 
             [build-system]
             requires = ["uv_build>=0.7,<10000"]
@@ -898,19 +894,26 @@ fn complex_namespace_packages() -> Result<()> {
 
         project
             .child("src")
-            .child(project_name_dist_info)
+            .child("complex_project")
             .child(part_name)
             .child("__init__.py")
             .write_str(init_py)?;
-
-        context
-            .build()
-            .arg(project.path())
-            .arg("--out-dir")
-            .arg(dist.path())
-            .assert()
-            .success();
     }
+
+    context
+        .build()
+        .arg(part_a.path())
+        .arg("--out-dir")
+        .arg(dist.path())
+        .assert()
+        .success();
+    context
+        .build()
+        .arg(part_b.path())
+        .arg("--out-dir")
+        .arg(dist.path())
+        .assert()
+        .success();
 
     uv_snapshot!(
         context.filters(),
