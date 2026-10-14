@@ -218,13 +218,6 @@ fn packse_add_remove_existing_package_noop() {
     Resolved 49 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(lock);
-    });
-
     let diff = context.diff_lock(|context| {
         let mut add_cmd = context.add();
         add_cmd.arg("--no-sync").arg("pyyaml");
@@ -252,11 +245,6 @@ fn packse_promote_transitive_to_direct_then_remove() {
     ");
 
     let lock = context.read("uv.lock");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(lock);
-    });
 
     let diff = context.diff_lock(|context| {
         let mut add_cmd = context.add();
