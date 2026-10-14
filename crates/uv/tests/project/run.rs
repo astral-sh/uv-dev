@@ -3462,18 +3462,20 @@ fn run_no_project() -> Result<()> {
         .with_filtered_exe_suffix();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! { r#"
+    let project = |requires_python: &str| {
+        formatdoc! {r#"
         [project]
         name = "foo"
         version = "1.0.0"
-        requires-python = ">=3.8"
+        requires-python = "{requires_python}"
         dependencies = ["anyio"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-        "#
-    })?;
+        "#}
+    };
+    pyproject_toml.write_str(&project(">=3.8"))?;
 
     let src = context.temp_dir.child("src").child("foo");
     src.create_dir_all()?;
@@ -3496,9 +3498,10 @@ fn run_no_project() -> Result<()> {
      + idna==3.6
      + sniffio==1.3.1
     ");
+    let lock = context.read("uv.lock");
+    pyproject_toml.write_str(&project(">=3.100"))?;
 
-    // `run --no-project` should not (but it should still run in the same environment, as it would
-    // if there were no project at all).
+    // Project requirements are ignored, but the existing environment is still discovered.
     uv_snapshot!(context.filters(), context.run().arg("--no-project").arg("python").arg("-c").arg("import sys; print(sys.executable)"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -3512,12 +3515,12 @@ fn run_no_project() -> Result<()> {
     [CACHE_DIR]/builds-v0/[TMP]/[BIN]/[PYTHON]
     ");
 
-    // `run --no-project` should not (but it should still run in the same environment, as it would
-    // if there were no project at all).
-    uv_snapshot!(context.filters(), context.run().arg("--no-project").arg("python").arg("-c").arg("import sys; print(sys.executable)"), @"
+    // The isolated run leaves the discovered environment intact.
+    uv_snapshot!(context.filters(), context.run().arg("--no-project").arg("python").arg("-c").arg("import importlib.metadata; import sys; print(sys.executable); print(importlib.metadata.version('foo'))"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [VENV]/[BIN]/[PYTHON]
+    1.0.0
     ");
 
     // `run --no-project --locked` should warn about `--locked`.
@@ -3529,6 +3532,7 @@ fn run_no_project() -> Result<()> {
     ----- stderr -----
     warning: `--locked` has no effect when used alongside `--no-project`
     ");
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
