@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use astral_mail_headers::Message;
-use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
 use fs_err::{DirEntry, File};
 use itertools::Itertools;
@@ -26,7 +25,7 @@ use uv_shell::escape_posix_for_single_quotes;
 use uv_trampoline_builder::windows_script_launcher;
 use uv_warnings::warn_user_once;
 
-use crate::record::RecordEntry;
+use crate::record::{RecordEntry, encode_sha256};
 use crate::script::{EntryPoints, Script};
 use crate::{Error, Layout};
 
@@ -114,10 +113,7 @@ fn copy_and_hash(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<
         writer.write_all(&buf[..len])?;
         written += len as u64;
     }
-    Ok((
-        written,
-        format!("sha256={}", BASE64URL_NOPAD.encode(&hasher.finalize())),
-    ))
+    Ok((written, encode_sha256(&hasher.finalize())))
 }
 
 /// Format the shebang for a given Python executable.
@@ -863,8 +859,7 @@ fn write_file_recorded(
     let content = content.as_ref();
     uv_fs::write_atomic_sync(site_packages.join(relative_path), content)?;
 
-    let hash = Sha256::digest(content);
-    let encoded_hash = format!("sha256={}", BASE64URL_NOPAD.encode(&hash));
+    let encoded_hash = encode_sha256(&Sha256::digest(content));
     record.push(RecordEntry {
         path: relative_path.portable_display().to_string(),
         hash: Some(encoded_hash),
