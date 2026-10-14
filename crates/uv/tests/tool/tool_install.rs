@@ -1738,14 +1738,15 @@ fn tool_install_already_installed() {
     Installed 2 executables: black, blackd
     ");
 
-    tool_dir.child("black").assert(predicate::path::is_dir());
-    tool_dir
-        .child("black")
-        .child("uv-receipt.toml")
-        .assert(predicate::path::is_file());
-
+    let receipt = tool_dir.child("black/uv-receipt.toml");
+    let original_receipt = context.read(&receipt);
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
     assert_tool_launcher(&executable);
+    let original_launcher = context.read_bytes(&executable);
+    let environment_marker = tool_dir.child("black/retained-marker");
+    environment_marker
+        .write_str("existing environment")
+        .unwrap();
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -1753,7 +1754,7 @@ fn tool_install_already_installed() {
         filters => context.filters(),
     }, {
         // Should run black in the virtual environment
-        assert_snapshot!(context.read(executable), @r#"
+        assert_snapshot!(context.read(&executable), @r#"
         #![TEMP_DIR]/tools/black/bin/python
         # -*- coding: utf-8 -*-
         import sys
@@ -1770,8 +1771,7 @@ fn tool_install_already_installed() {
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        // We should have a tool receipt
-        assert_snapshot!(context.read("tools/black/uv-receipt.toml"), @r#"
+        assert_snapshot!(&original_receipt, @r#"
         [tool]
         requirements = [{ name = "black" }]
         entrypoints = [
@@ -1793,27 +1793,9 @@ fn tool_install_already_installed() {
     `black` is already installed
     ");
 
-    tool_dir.child("black").assert(predicate::path::is_dir());
-    bin_dir
-        .child(format!("black{}", std::env::consts::EXE_SUFFIX))
-        .assert(predicate::path::exists());
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        // We should not have an additional tool receipt
-        assert_snapshot!(context.read("tools/black/uv-receipt.toml"), @r#"
-        [tool]
-        requirements = [{ name = "black" }]
-        entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
-        ]
-
-        [tool.options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-        "#);
-    });
+    assert_eq!(context.read(&receipt), original_receipt);
+    assert_eq!(context.read_bytes(&executable), original_launcher);
+    environment_marker.assert("existing environment");
 
     // Install `black` again with the `--reinstall` flag
     // We should recreate the entire environment and reinstall the entry points
