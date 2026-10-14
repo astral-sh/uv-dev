@@ -92,6 +92,19 @@ fn build_can_leave_output_directory_unignored() -> Result<()> {
 }
 
 #[test]
+fn build_keeps_existing_output_ignore_rules() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = write_noisy_project(&context)?;
+    let dist = project.child("dist");
+    dist.child(".gitignore").write_str("*.whl\n")?;
+
+    uv_snapshot!(context.build().args(["project", "--offline", "--wheel", "--quiet"]), @"exit_code: 0 (success)");
+    dist.child(WHEEL).assert(predicate::path::is_file());
+    dist.child(".gitignore").assert("*.whl\n");
+    Ok(())
+}
+
+#[test]
 fn build_shows_backend_output() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let project = write_noisy_project(&context)?;
