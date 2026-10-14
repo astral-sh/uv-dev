@@ -53,6 +53,7 @@ impl EggInfoFilename {
         let mut parts = stem.split('-');
         let name = parts
             .next()
+            .filter(|name| !name.is_empty())
             .ok_or_else(|| EggInfoFilenameError::MissingPackageName(format!("{stem}.egg-info")))?;
         let name = PackageName::from_str(name)
             .map_err(|e| EggInfoFilenameError::InvalidPackageName(format!("{stem}.egg-info"), e))?;
@@ -82,6 +83,16 @@ impl FromStr for EggInfoFilename {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_package_name() {
+        for filename in [".egg-info", "-1.0.egg-info"] {
+            assert!(matches!(
+                filename.parse::<EggInfoFilename>(),
+                Err(EggInfoFilenameError::MissingPackageName(_))
+            ));
+        }
+    }
 
     #[test]
     fn egg_info_filename() {
