@@ -651,7 +651,8 @@ fn non_project_default_groups_in_lockfile() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
-    assert_snapshot!(context.read("uv.lock"), @r#"
+    let current = context.read("uv.lock");
+    assert_snapshot!(current, @r#"
     version = 1
     revision = 5
     requires-python = ">=3.12"
@@ -675,54 +676,42 @@ fn non_project_default_groups_in_lockfile() -> Result<()> {
     source = { virtual = "member" }
     "#);
 
-    // An older lock without recorded defaults remains usable with its workspace manifest.
-    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
-        version = 1
-        revision = 4
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [manifest]
-        members = ["member"]
-
-        [[package]]
-        name = "member"
-        version = "1.0.0"
-        source = { virtual = "member" }
-    "#})?;
-
-    let legacy = Lock::from_canonical_toml(&context.read("uv.lock"))?;
-    assert_eq!(legacy.workspace_default_groups(), None);
+    // Locks predating recorded defaults are valid when that metadata is absent.
+    let mut legacy = current.parse::<DocumentMut>()?;
+    let current_revision = legacy["revision"].clone();
+    legacy["revision"] = value(4);
+    legacy["manifest"]
+        .as_table_mut()
+        .context("generated lock has no workspace manifest")?
+        .remove("default-groups")
+        .context("generated lock has no root default groups")?;
+    let legacy_contents = legacy.to_string();
+    let lockfile = context.temp_dir.child("uv.lock");
+    lockfile.write_str(&legacy_contents)?;
+    assert_eq!(
+        Lock::from_canonical_toml(&legacy_contents)?.workspace_default_groups(),
+        None
+    );
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
 
-    // Restore the recorded defaults before checking changes to the selection.
-    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
+    assert_eq!(context.read("uv.lock"), legacy_contents);
 
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
+    // The same missing metadata invalidates a lock that supports recorded defaults.
+    legacy["revision"] = current_revision;
+    lockfile.write_str(&legacy.to_string())?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-        [manifest]
-        members = ["member"]
-        default-groups = ["docs", "lint"]
-
-        [manifest.dependency-groups]
-        docs = []
-        lint = []
-
-        [[package]]
-        name = "member"
-        version = "1.0.0"
-        source = { virtual = "member" }
-    "#})?;
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    lockfile.write_str(&current)?;
 
     // An explicit empty default selection is recorded independently of the defined groups.
     pyproject.write_str(indoc! {r#"
