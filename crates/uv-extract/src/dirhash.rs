@@ -307,14 +307,15 @@ impl DirhashTree {
         Self::default()
     }
 
-    fn insertion_entry(
+    /// Find the parent directory and final component of a normalized path.
+    fn parent_and_name<'path>(
         &mut self,
-        normalized_path: &str,
+        normalized_path: &'path str,
         original_path: &str,
         create_dirs: bool,
-    ) -> Result<Entry<'_, String, DirhashEntry>, DirhashError> {
+    ) -> Result<(&mut Self, &'path str), DirhashError> {
         let Some((component, rest)) = normalized_path.split_once('/') else {
-            return Ok(self.children.entry(String::from(normalized_path)));
+            return Ok((self, normalized_path));
         };
 
         // The separate lookup avoids allocating an owned key for an existing directory.
@@ -331,7 +332,7 @@ impl DirhashTree {
         };
         match child {
             Some(DirhashEntry::Directory(child)) => {
-                child.insertion_entry(rest, original_path, create_dirs)
+                child.parent_and_name(rest, original_path, create_dirs)
             }
             Some(DirhashEntry::File(_)) => Err(DirhashError::FileDirectoryConflict {
                 path: PathBuf::from(original_path),
@@ -356,8 +357,8 @@ impl DirhashTree {
     /// efficient to hash it as you write it than to read it back again. See [`blake3_copy`].
     pub fn add_file(&mut self, path: &str, hash: blake3::Hash) -> Result<(), DirhashError> {
         let normalized_path = normalize_dirhash_path(path)?;
-        let entry = self.insertion_entry(&normalized_path, path, true)?;
-        match entry {
+        let (parent, name) = self.parent_and_name(&normalized_path, path, true)?;
+        match parent.children.entry(name.to_owned()) {
             Entry::Vacant(vacant) => {
                 vacant.insert(DirhashEntry::File(hash));
                 Ok(())
@@ -381,20 +382,18 @@ impl DirhashTree {
     /// that already exists.
     pub fn update_file(&mut self, path: &str, hash: blake3::Hash) -> Result<(), DirhashError> {
         let normalized_path = normalize_dirhash_path(path)?;
-        let entry = self.insertion_entry(&normalized_path, path, false)?;
-        match entry {
-            Entry::Vacant(_) => Err(DirhashError::MissingPath {
+        let (parent, name) = self.parent_and_name(&normalized_path, path, false)?;
+        match parent.children.get_mut(name) {
+            None => Err(DirhashError::MissingPath {
                 path: PathBuf::from(path),
             }),
-            Entry::Occupied(mut occupied) => match occupied.get_mut() {
-                DirhashEntry::File(prev_hash) => {
-                    *prev_hash = hash;
-                    Ok(())
-                }
-                DirhashEntry::Directory(_) => Err(DirhashError::FileDirectoryConflict {
-                    path: PathBuf::from(path),
-                }),
-            },
+            Some(DirhashEntry::File(prev_hash)) => {
+                *prev_hash = hash;
+                Ok(())
+            }
+            Some(DirhashEntry::Directory(_)) => Err(DirhashError::FileDirectoryConflict {
+                path: PathBuf::from(path),
+            }),
         }
     }
 
@@ -407,8 +406,8 @@ impl DirhashTree {
     /// This function creates parent directories as needed.
     pub fn add_empty_dir(&mut self, path: &str) -> Result<(), DirhashError> {
         let normalized_path = normalize_dirhash_path(path)?;
-        let entry = self.insertion_entry(&normalized_path, path, true)?;
-        match entry {
+        let (parent, name) = self.parent_and_name(&normalized_path, path, true)?;
+        match parent.children.entry(name.to_owned()) {
             Entry::Vacant(vacant) => {
                 vacant.insert(DirhashEntry::Directory(Self::default()));
                 Ok(())
