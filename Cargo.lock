@@ -6807,6 +6807,7 @@ dependencies = [
  "owo-colors",
  "rustc-hash",
  "serde",
+ "serde_json",
  "toml",
  "uv-cache",
  "uv-cli-error",
