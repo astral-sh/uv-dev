@@ -8,15 +8,15 @@ Classification: duplicate
 
 The reporter wants to export package dependencies for a vulnerability tracker, excluding development dependency groups. They currently use `uv export --no-dev`, observe that other groups are not excluded, and propose `--only-package` or `--no-dependency-groups`, possibly replacing `--no-dev`. The report contains no example, project configuration, uv version, platform, or error output.
 
-Duplicate of astral-sh/uv#12366. astral-sh/uv#10592 and merged astral-sh/uv#10618 establish the existing --no-default-groups solution; astral-sh/uv#16512 and astral-sh/uv#18474 track documentation clarity.
+The triage assessment is duplicate of astral-sh/uv#12366. astral-sh/uv#10592 and merged astral-sh/uv#10618 establish the existing --no-default-groups solution; astral-sh/uv#16512 and astral-sh/uv#18474 track documentation clarity.
 
 The existing command is `uv export --no-default-groups`, without explicit group selections. Add `--no-emit-project` when the output must also omit the project itself. Group-only dependencies are excluded; dependencies required by the project remain included even if also declared in a group.
 
-## Draft response
+## Maintainer disposition
 
-You can use `uv export --no-default-groups` to export your project's dependencies without including dependency groups, provided you don't also select groups with `--group` or `--all-groups`. `--no-dev` is an alias for `--no-group dev`, so it only disables the group named `dev`. Add `--no-emit-project` if your tracker should receive the dependencies without the project itself.
+On 2026-10-14, maintainer charliermarsh stated that astral-sh/uv#22353 was being closed with the guidance to use `uv export --no-default-groups`, while offering to reopen if the request had been misunderstood. This refers to the maintainer's earlier recommendation of that command.
 
-The request for an explicit “only main” selection is already tracked in astral-sh/uv#12366. Please continue the discussion of a dedicated flag there.
+The supplied discussion contains no reporter confirmation that the command meets their needs and no additional configuration or reproduction. The closure comment does not explicitly classify the issue as a duplicate; the duplicate classification above remains the triage assessment.
 
 ## Classification
 
@@ -54,4 +54,4 @@ The documentation chain also includes open astral-sh/uv#20520 and closed, unmerg
 
 ## Maintainer next step
 
-Recommend the existing export flags and centralize discussion of a dedicated package-only selector in astral-sh/uv#12366. The draft is for review only; no GitHub comment or issue update has been made.
+No further implementation or reply is indicated by the current discussion. If the reporter explains why `uv export --no-default-groups` does not meet the request, reassess the scope and the maintainer's offer to reopen. Useful details would include the exact command, relevant project/group configuration, uv version, and expected versus actual export contents. The broader package-only selection discussion remains in astral-sh/uv#12366.
