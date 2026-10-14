@@ -20,6 +20,9 @@ mod build_backend_license;
 mod build_backend_requires;
 
 #[cfg(feature = "test-python")]
+mod build_dependency_check;
+
+#[cfg(feature = "test-python")]
 mod build_fast_path;
 
 mod build_list_validation;
