@@ -561,18 +561,20 @@ pub(crate) struct Forker<'d> {
     marker: MarkerTree,
 }
 
-impl Forker<'_> {
+/// The environments produced by splitting on a dependency, together with the remaining forker.
+pub(crate) struct ForkResult<'d> {
+    pub(crate) remaining: Forker<'d>,
+    pub(crate) excluded: Option<ResolverEnvironment>,
+    pub(crate) included: ResolverEnvironment,
+}
+
+impl<'d> Forker<'d> {
     /// Attempt a fork based on the given resolver environment.
     ///
-    /// If a fork is possible, then a new forker and at least one new
-    /// resolver environment is returned. In some cases, it is possible for
-    /// more resolver environments to be returned. (For example, when the
-    /// negation of this forker's markers has overlap with the given resolver
-    /// environment.)
-    pub(crate) fn fork(
-        &self,
-        env: &ResolverEnvironment,
-    ) -> Option<(Self, Vec<ResolverEnvironment>)> {
+    /// A successful split always has an environment that includes the dependency. It may also
+    /// have an environment that excludes the dependency if the negated marker overlaps the
+    /// resolver environment.
+    pub(crate) fn fork(&self, env: &ResolverEnvironment) -> Option<ForkResult<'d>> {
         if !env.included_by_marker(self.marker) {
             return None;
         }
@@ -585,26 +587,22 @@ impl Forker<'_> {
             panic!("resolver must be in universal mode for forking")
         };
 
-        let mut envs = vec![];
-        {
-            let not_marker = self.marker.negate();
-            if !env_marker.is_disjoint(not_marker) {
-                envs.push(env.narrow_environment(not_marker));
-            }
-        }
-        // Note also that we push this one last for historical reasons.
-        // Changing the order of forks can change the output in some
-        // ways. While it's probably fine, we try to avoid changing the
-        // output.
-        envs.push(env.narrow_environment(self.marker));
+        let not_marker = self.marker.negate();
+        let excluded =
+            (!env_marker.is_disjoint(not_marker)).then(|| env.narrow_environment(not_marker));
+        let included = env.narrow_environment(self.marker);
 
         let mut remaining_marker = self.marker;
         remaining_marker = remaining_marker.and(env_marker.negate());
-        let remaining_forker = Forker {
+        let remaining = Forker {
             package: self.package,
             marker: remaining_marker,
         };
-        Some((remaining_forker, envs))
+        Some(ForkResult {
+            remaining,
+            excluded,
+            included,
+        })
     }
 
     /// Returns true if the dependency represented by this forker may be
