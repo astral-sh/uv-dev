@@ -429,14 +429,11 @@ impl WheelFile {
     /// > {distribution}-{version}.dist-info/WHEEL is metadata about the archive itself in the same
     /// > email message format:
     pub fn parse(wheel_text: &str) -> Result<Self, Error> {
-        // {distribution}-{version}.dist-info/WHEEL is metadata about the archive itself in the same email message format:
-        let data = parse_email_message(wheel_text.as_bytes(), "WHEEL")?;
+        let wheel = Self(parse_email_message(wheel_text.as_bytes(), "WHEEL")?);
 
         // mkl_fft-1.3.6-58-cp310-cp310-manylinux2014_x86_64.whl has multiple Wheel-Version entries, we have to ignore that
         // like pip
-        let wheel_version = data
-            .get("Wheel-Version")
-            .and_then(|wheel_versions| wheel_versions.first());
+        let wheel_version = wheel.first_header_value("Wheel-Version");
         let wheel_version = wheel_version
             .and_then(|wheel_version| wheel_version.split_once('.'))
             .ok_or_else(|| {
@@ -448,7 +445,7 @@ impl WheelFile {
         // and technically we only need to check that the version is not higher
         if wheel_version == ("0", "1") {
             warn!("Ancient wheel version 0.1 (expected is 1.0)");
-            return Ok(Self(data));
+            return Ok(wheel);
         }
         // Check that installer is compatible with Wheel-Version. Warn if minor version is greater, abort if major version is greater.
         // Wheel-Version: 1.0
@@ -464,19 +461,18 @@ impl WheelFile {
                 0, wheel_version.1
             );
         }
-        Ok(Self(data))
+        Ok(wheel)
+    }
+
+    fn first_header_value(&self, header: &str) -> Option<&str> {
+        self.0.get(header)?.first().map(String::as_str)
     }
 
     /// Whether the wheel should be installed into the `purelib` or `platlib` directory.
     pub(crate) fn lib_kind(&self) -> LibKind {
         // Determine whether Root-Is-Purelib == ‘true’.
         // If it is, the wheel is pure, and should be installed into purelib.
-        let root_is_purelib = self
-            .0
-            .get("Root-Is-Purelib")
-            .and_then(|root_is_purelib| root_is_purelib.first())
-            .is_some_and(|root_is_purelib| root_is_purelib == "true");
-        if root_is_purelib {
+        if self.first_header_value("Root-Is-Purelib") == Some("true") {
             LibKind::Pure
         } else {
             LibKind::Plat
