@@ -8,8 +8,8 @@ use uv_configuration::BuildOptions;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
-    BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed, Identifier, Name,
-    RemoteSource, Resolution,
+    BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, DistributionId, Hashed,
+    Identifier, Name, RemoteSource, Resolution,
 };
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
@@ -128,13 +128,16 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             }
         }
 
-        let id = dist.distribution_id();
-        if let Some(result) = in_flight.downloads.register_or_wait(&id).await {
-            let cached = result.map_err(Error::Thread)?;
-            validate_in_flight_wheel(&dist, cached.filename())
-                .map_err(|err| Error::from_dist(dist, err, resolution))?;
-            return Ok(cached);
-        }
+        let download = match DownloadRegistration::register(in_flight, dist.distribution_id()).await
+        {
+            DownloadRegistration::Completed(result) => {
+                let cached = result.map_err(Error::Thread)?;
+                validate_in_flight_wheel(&dist, cached.filename())
+                    .map_err(|err| Error::from_dist(dist, err, resolution))?;
+                return Ok(cached);
+            }
+            DownloadRegistration::Started(download) => download,
+        };
 
         let policy = self.hashes.archive_policy(&dist);
         let result = self
@@ -155,10 +158,51 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             })
             .map_err(|err| Error::from_dist(dist, err, resolution));
 
-        in_flight
-            .downloads
-            .done(id, result.as_ref().cloned().map_err(ToString::to_string));
+        download.complete(result.as_ref().cloned().map_err(ToString::to_string));
         result
+    }
+}
+
+/// Either a completed download or ownership of a newly registered download.
+enum DownloadRegistration<'a> {
+    Completed(Result<CachedDist, String>),
+    Started(PendingDownload<'a>),
+}
+
+impl<'a> DownloadRegistration<'a> {
+    async fn register(in_flight: &'a InFlight, id: DistributionId) -> Self {
+        match in_flight.downloads.register_or_wait(&id).await {
+            Some(result) => Self::Completed(result),
+            None => Self::Started(PendingDownload {
+                in_flight,
+                id: Some(id),
+            }),
+        }
+    }
+}
+
+/// Publish a result for a registered download, including when its owner is cancelled.
+struct PendingDownload<'a> {
+    in_flight: &'a InFlight,
+    id: Option<DistributionId>,
+}
+
+impl PendingDownload<'_> {
+    fn complete(mut self, result: Result<CachedDist, String>) {
+        let id = self.id.take().expect("download has not been completed");
+        self.in_flight.downloads.done(id, result);
+    }
+}
+
+impl Drop for PendingDownload<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            // Waiters require a terminal result; removing a pending registration cannot wake them.
+            self.in_flight.downloads.done(
+                id,
+                Err("Distribution preparation was cancelled".to_string()),
+            );
+        }
     }
 }
 
@@ -300,5 +344,40 @@ impl uv_distribution::Reporter for Facade {
 
     fn on_download_complete(&self, name: &PackageName, index: usize) {
         self.reporter.on_download_complete(name, index);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use uv_distribution_types::DistributionId;
+    use uv_types::InFlight;
+
+    use super::DownloadRegistration;
+
+    #[tokio::test]
+    async fn cancelled_download_wakes_waiters() {
+        let in_flight = InFlight::default();
+        let id = DistributionId::PathBuf("example.whl".into());
+        let DownloadRegistration::Started(download) =
+            DownloadRegistration::register(&in_flight, id.clone()).await
+        else {
+            panic!("expected to register a new download");
+        };
+
+        let (registration, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(biased; DownloadRegistration::register(&in_flight, id), async {
+                drop(download);
+            })
+        })
+        .await
+        .expect("cancelled download left a waiter blocked");
+
+        assert!(matches!(
+            registration,
+            DownloadRegistration::Completed(Err(message))
+                if message == "Distribution preparation was cancelled"
+        ));
     }
 }
