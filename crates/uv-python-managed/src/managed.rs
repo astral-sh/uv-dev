@@ -1,6 +1,6 @@
 use core::fmt;
 use std::borrow::Cow;
-use std::cmp::{Ordering, Reverse};
+use std::cmp::Ordering;
 use std::ffi::OsStr;
 use std::io::{self, Write};
 #[cfg(windows)]
@@ -231,7 +231,7 @@ impl ManagedPythonInstallations {
                     })
                     .ok()
             })
-            .sorted_unstable_by_key(|installation| Reverse(installation.key().clone())))
+            .sorted_unstable_by(|left, right| right.key().cmp(left.key())))
     }
 
     /// Iterate over Python installations that support the current platform.
