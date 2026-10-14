@@ -1633,39 +1633,23 @@ impl DiscoveryPreferences {
     /// Return a string describing the sources that are considered when searching for Python with
     /// the given preferences.
     fn sources(&self, request: &PythonRequest) -> String {
-        let python_sources = self
-            .python_preference
-            .sources()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        match self.environment_preference {
-            EnvironmentPreference::Any => disjunction(
-                &["virtual environments"]
-                    .into_iter()
-                    .chain(python_sources.iter().map(String::as_str))
-                    .collect::<Vec<_>>(),
-            ),
-            EnvironmentPreference::ExplicitSystem => {
-                if request.is_explicit_system() {
-                    disjunction(
-                        &["virtual environments"]
-                            .into_iter()
-                            .chain(python_sources.iter().map(String::as_str))
-                            .collect::<Vec<_>>(),
-                    )
-                } else {
-                    disjunction(&["virtual environments"])
-                }
-            }
-            EnvironmentPreference::OnlySystem => disjunction(
-                &python_sources
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>(),
-            ),
-            EnvironmentPreference::OnlyVirtual => disjunction(&["virtual environments"]),
-        }
+        let (include_virtual, include_system) = match self.environment_preference {
+            EnvironmentPreference::Any => (true, true),
+            EnvironmentPreference::ExplicitSystem => (true, request.is_explicit_system()),
+            EnvironmentPreference::OnlySystem => (false, true),
+            EnvironmentPreference::OnlyVirtual => (true, false),
+        };
+        let virtual_source = include_virtual.then_some(Either::Left("virtual environments"));
+        let system_sources = if include_system {
+            self.python_preference.sources()
+        } else {
+            &[]
+        };
+        disjunction(
+            virtual_source
+                .into_iter()
+                .chain(system_sources.iter().map(Either::Right)),
+        )
     }
 }
 
@@ -1695,19 +1679,20 @@ impl fmt::Display for PythonNotFound {
 }
 
 /// Join a series of items with `or` separators, making use of commas when necessary.
-fn disjunction(items: &[&str]) -> String {
-    match items.len() {
-        0 => String::new(),
-        1 => items[0].to_string(),
-        2 => format!("{} or {}", items[0], items[1]),
-        _ => {
-            let last = items.last().unwrap();
-            format!(
-                "{}, or {}",
-                items.iter().take(items.len() - 1).join(", "),
-                last
-            )
-        }
+fn disjunction<T: fmt::Display>(mut items: impl DoubleEndedIterator<Item = T>) -> String {
+    let Some(first) = items.next() else {
+        return String::new();
+    };
+    let Some(last) = items.next_back() else {
+        return first.to_string();
+    };
+    if let Some(second) = items.next() {
+        format!(
+            "{first}, {}, or {last}",
+            iter::once(second).chain(items).format(", ")
+        )
+    } else {
+        format!("{first} or {last}")
     }
 }
 
