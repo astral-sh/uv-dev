@@ -778,49 +778,12 @@ fn python_list_with_mirrors() -> Result<()> {
         .with_filtered_python_keys()
         .with_collapsed_whitespace()
         .with_filtered_latest_python_versions()
-        // Add filters to normalize file paths in URLs
+        // Normalize platform-specific archive names while preserving the release path and artifact family.
         .with_filter((
-            r"(https://mirror\.example\.com/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
+            r"/[^/\s]+/(cpython|graalpy|xbuildenv)-[^/\s]+\.(?:tar\.[a-z0-9]+|zip)\b",
+            "/[RELEASE]/$1-[ARCHIVE]",
         ))
-        .with_filter((
-            r"(https://python-mirror\.example\.com/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://pypy-mirror\.example\.com/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://graalpy-mirror\.example\.com/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://pyodide-mirror\.example\.com/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://github\.com/astral-sh/python-build-standalone/releases/download/).*"
-                .to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://releases\.astral\.sh/github/python-build-standalone/releases/download/).*"
-                .to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://downloads\.python\.org/pypy/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://github\.com/oracle/graalpython/releases/download/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://github\.com/pyodide/pyodide/releases/download/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ));
+        .with_filter((r"/pypy[^/\s]+\.(?:tar\.[a-z0-9]+|zip)\b", "/pypy[ARCHIVE]"));
 
     // Test with UV_PYTHON_INSTALL_MIRROR environment variable - verify mirror URL is used
     uv_snapshot!(context.filters(), context.python_list()
@@ -830,7 +793,7 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.19-[PLATFORM] https://mirror.example.com/[FILE-PATH]
+    cpython-3.10.19-[PLATFORM] https://mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
     ");
 
     // Test with UV_PYPY_INSTALL_MIRROR environment variable - verify PyPy mirror URL is used
@@ -841,7 +804,7 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pypy-3.10.16-[PLATFORM] https://pypy-mirror.example.com/[FILE-PATH]
+    pypy-3.10.16-[PLATFORM] https://pypy-mirror.example.com/pypy[ARCHIVE]
     ");
 
     // Test with UV_GRAALPY_INSTALL_MIRROR environment variable.
@@ -852,7 +815,7 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[FILE-PATH]
+    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
     ");
 
     // Test with UV_PYODIDE_INSTALL_MIRROR environment variable.
@@ -863,7 +826,7 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[FILE-PATH]
+    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
     // Test with all mirror environment variables set.
@@ -877,9 +840,9 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM] https://python-mirror.example.com/[FILE-PATH]
-    pypy-3.10.16-[PLATFORM] https://pypy-mirror.example.com/[FILE-PATH]
-    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[FILE-PATH]
+    cpython-3.10.[LATEST]-[PLATFORM] https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-[PLATFORM] https://pypy-mirror.example.com/pypy[ARCHIVE]
+    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
     ");
 
     // Pyodide uses its own mirror when the CPython mirror is also set.
@@ -891,7 +854,7 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[FILE-PATH]
+    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
     // Test without mirrors - verify the default Astral mirror URL is used for CPython
@@ -901,9 +864,9 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM] https://releases.astral.sh/github/python-build-standalone/releases/download/[FILE-PATH]
-    pypy-3.10.16-[PLATFORM] https://downloads.python.org/pypy/[FILE-PATH]
-    graalpy-3.10.0-[PLATFORM] https://github.com/oracle/graalpython/releases/download/[FILE-PATH]
+    cpython-3.10.[LATEST]-[PLATFORM] https://releases.astral.sh/github/python-build-standalone/releases/download/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-[PLATFORM] https://downloads.python.org/pypy/pypy[ARCHIVE]
+    graalpy-3.10.0-[PLATFORM] https://github.com/oracle/graalpython/releases/download/[RELEASE]/graalpy-[ARCHIVE]
     ");
 
     // The CPython mirror does not change the default Pyodide URL.
@@ -914,7 +877,7 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://github.com/pyodide/pyodide/releases/download/[FILE-PATH]
+    pyodide-3.13.2-emscripten-wasm32-musl https://github.com/pyodide/pyodide/releases/download/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
     context.temp_dir.child("uv.toml").write_str(indoc! {r#"
@@ -930,9 +893,9 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM] https://python-mirror.example.com/[FILE-PATH]
-    pypy-3.10.16-[PLATFORM] https://pypy-mirror.example.com/[FILE-PATH]
-    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[FILE-PATH]
+    cpython-3.10.[LATEST]-[PLATFORM] https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-[PLATFORM] https://pypy-mirror.example.com/pypy[ARCHIVE]
+    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
     ");
 
     uv_snapshot!(context.filters(), context.python_list()
@@ -941,7 +904,7 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[FILE-PATH]
+    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
     // Each environment variable overrides only its corresponding configured mirror.
@@ -952,9 +915,9 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM] https://python-mirror.example.com/[FILE-PATH]
-    pypy-3.10.16-[PLATFORM] https://mirror.example.com/[FILE-PATH]
-    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[FILE-PATH]
+    cpython-3.10.[LATEST]-[PLATFORM] https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-[PLATFORM] https://mirror.example.com/pypy[ARCHIVE]
+    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
     ");
 
     uv_snapshot!(context.filters(), context.python_list()
@@ -964,7 +927,7 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://mirror.example.com/[FILE-PATH]
+    pyodide-3.13.2-emscripten-wasm32-musl https://mirror.example.com/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
     Ok(())
