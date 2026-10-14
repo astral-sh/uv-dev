@@ -28,10 +28,10 @@ use crate::dirhash::{
     DirhashTree, HashedFile, UnhashedFile, UnzipOutput, blake3_copy_with_buffer,
     directory_tree_from_extracted,
 };
-use crate::{Error, ExtractionDirectories, insecure_no_validate, validate_zip_directory_entry};
-
-/// Default buffer size for streaming archive reads and file copies.
-const DEFAULT_BUF_SIZE: usize = 128 * 1024;
+use crate::{
+    DEFAULT_BUF_SIZE, Error, ExtractionDirectories, copy_zip_entry, insecure_no_validate,
+    validate_zip_directory_entry,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocalHeaderEntry {
@@ -259,23 +259,8 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                                 .map_err(Error::io_or_zip)?;
                         (bytes_read, Some(digest))
                     } else {
-                        let mut bytes_read = 0;
-                        copy_buffer.resize(DEFAULT_BUF_SIZE, 0);
-                        loop {
-                            let read = tokio::io::AsyncReadExt::read(&mut reader, &mut copy_buffer)
-                                .await
-                                .map_err(Error::io_or_zip)?;
-                            if read == 0 {
-                                break;
-                            }
-                            tokio::io::AsyncWriteExt::write_all(&mut writer, &copy_buffer[..read])
-                                .await
-                                .map_err(Error::Io)?;
-                            bytes_read += read as u64;
-                        }
-                        tokio::io::AsyncWriteExt::flush(&mut writer)
-                            .await
-                            .map_err(Error::Io)?;
+                        let bytes_read =
+                            copy_zip_entry(&mut reader, &mut writer, &mut copy_buffer).await?;
                         (bytes_read, None)
                     }
                 }
