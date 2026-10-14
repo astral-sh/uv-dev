@@ -79,14 +79,14 @@ impl Name for ChangedDist {
     }
 }
 
-/// The [`Version`] or [`VerbatimUrl`] for a changed dist.
+/// The version or source URL for a changed distribution.
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-enum ShortSpecifier<'a> {
-    Version(&'a Version),
+enum ChangeSpecifier<'a, V> {
+    Version(V),
     Url(&'a VerbatimUrl),
 }
 
-impl std::fmt::Display for ShortSpecifier<'_> {
+impl<V: std::fmt::Display> std::fmt::Display for ChangeSpecifier<'_, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Version(version) => version.fmt(f),
@@ -95,39 +95,23 @@ impl std::fmt::Display for ShortSpecifier<'_> {
     }
 }
 
-/// The [`InstalledVersion`] or [`VerbatimUrl`] for a changed dist.
-#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-enum LongSpecifier<'a> {
-    InstalledVersion(InstalledVersion<'a>),
-    Url(&'a VerbatimUrl),
-}
-
-impl std::fmt::Display for LongSpecifier<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InstalledVersion(version) => version.fmt(f),
-            Self::Url(url) => write!(f, " @ {url}"),
-        }
-    }
-}
+type ShortSpecifier<'a> = ChangeSpecifier<'a, &'a Version>;
+type LongSpecifier<'a> = ChangeSpecifier<'a, InstalledVersion<'a>>;
 
 impl ChangedDist {
     fn short_specifier(&self) -> ShortSpecifier<'_> {
-        match self {
-            Self::Local(dist) => ShortSpecifier::Version(dist.installed_version().version()),
-            Self::Remote(dist) => match dist.version_or_url() {
-                VersionOrUrlRef::Version(version) => ShortSpecifier::Version(version),
-                VersionOrUrlRef::Url(url) => ShortSpecifier::Url(url),
-            },
+        match self.long_specifier() {
+            LongSpecifier::Version(version) => ShortSpecifier::Version(version.version()),
+            LongSpecifier::Url(url) => ShortSpecifier::Url(url),
         }
     }
 
     fn long_specifier(&self) -> LongSpecifier<'_> {
         match self {
-            Self::Local(dist) => LongSpecifier::InstalledVersion(dist.installed_version()),
+            Self::Local(dist) => LongSpecifier::Version(dist.installed_version()),
             Self::Remote(dist) => match dist.version_or_url() {
                 VersionOrUrlRef::Version(version) => {
-                    LongSpecifier::InstalledVersion(InstalledVersion::Version(version))
+                    LongSpecifier::Version(InstalledVersion::Version(version))
                 }
                 VersionOrUrlRef::Url(url) => LongSpecifier::Url(url),
             },
