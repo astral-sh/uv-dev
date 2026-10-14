@@ -6,7 +6,10 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap;
 
 use uv_normalize::{ExtraName, GroupName, InvalidNameError, PackageName};
-use uv_pep508::{ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree};
+use uv_pep508::{
+    ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree,
+    MarkerValueExtra,
+};
 use uv_pypi_types::{ConflictItem, ConflictKind, Conflicts, Inference};
 
 #[derive(Debug, thiserror::Error)]
@@ -454,31 +457,29 @@ impl ConflictMarker {
     /// Create a conflict marker that is true only when the production
     /// dependencies for the given package are activated.
     fn project(package: &PackageName) -> Self {
-        let operator = uv_pep508::ExtraOperator::Equal;
-        let name = uv_pep508::MarkerValueExtra::Extra(encode_project(package));
-        let expr = uv_pep508::MarkerExpression::Extra { operator, name };
-        let marker = MarkerTree::expression(expr);
-        Self { marker }
+        Self::from_encoded_extra(encode_project(package))
     }
 
     /// Create a conflict marker that is true only when the given extra for the
     /// given package is activated.
     fn extra(package: &PackageName, extra: &ExtraName) -> Self {
-        let operator = uv_pep508::ExtraOperator::Equal;
-        let name = uv_pep508::MarkerValueExtra::Extra(encode_package_extra(package, extra));
-        let expr = uv_pep508::MarkerExpression::Extra { operator, name };
-        let marker = MarkerTree::expression(expr);
-        Self { marker }
+        Self::from_encoded_extra(encode_package_extra(package, extra))
     }
 
     /// Create a conflict marker that is true only when the given group for the
     /// given package is activated.
     fn group(package: &PackageName, group: &GroupName) -> Self {
-        let operator = uv_pep508::ExtraOperator::Equal;
-        let name = uv_pep508::MarkerValueExtra::Extra(encode_package_group(package, group));
-        let expr = uv_pep508::MarkerExpression::Extra { operator, name };
-        let marker = MarkerTree::expression(expr);
-        Self { marker }
+        Self::from_encoded_extra(encode_package_group(package, group))
+    }
+
+    /// Create the activation marker for an encoded conflict item.
+    fn from_encoded_extra(extra: ExtraName) -> Self {
+        Self {
+            marker: MarkerTree::expression(MarkerExpression::Extra {
+                operator: ExtraOperator::Equal,
+                name: MarkerValueExtra::Extra(extra),
+            }),
+        }
     }
 
     /// Returns a new conflict marker that is the negation of this one.
