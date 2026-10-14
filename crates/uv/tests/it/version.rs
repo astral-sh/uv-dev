@@ -1301,25 +1301,64 @@ requires-python = ">=3.12"
 }
 
 #[test]
-fn bump_invalid_components() {
+fn bump_invalid_component_fails() {
     let context = uv_test::test_context_with_versions!(&[]);
 
-    for (argument, error) in [
-        ("foo", "invalid bump component `foo`"),
-        ("stable=1", "`--bump stable` does not accept a value"),
-        ("patch=", "`--bump` values cannot be empty"),
-        ("dev=foo", "invalid numeric value `foo` for `--bump dev`"),
-    ] {
-        context
-            .version()
-            .args(["--bump", argument])
-            .assert()
-            .code(2)
-            .stdout("")
-            .stderr(format!(
-                "error: {error}\n\nUsage: uv version [OPTIONS] [VALUE]\n\nFor more information, try '--help'.\n"
-            ));
-    }
+    let output = uv_snapshot!(context.filters(), context.version().args(["--bump", "foo"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid bump component `foo`
+
+    Usage: uv version [OPTIONS] [VALUE]
+
+    For more information, try '--help'.
+    ");
+    assert!(output.stderr.ends_with(b"\n"));
+}
+
+#[test]
+fn bump_stable_with_value_fails() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.version().args(["--bump", "stable=1"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--bump stable` does not accept a value
+
+    Usage: uv version [OPTIONS] [VALUE]
+
+    For more information, try '--help'.
+    ");
+}
+
+#[test]
+fn bump_empty_value_fails() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.version().args(["--bump", "patch="]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--bump` values cannot be empty
+
+    Usage: uv version [OPTIONS] [VALUE]
+
+    For more information, try '--help'.
+    ");
+}
+
+#[test]
+fn bump_invalid_numeric_value_fails() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.version().args(["--bump", "dev=foo"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid numeric value `foo` for `--bump dev`
+
+    Usage: uv version [OPTIONS] [VALUE]
+
+    For more information, try '--help'.
+    ");
 }
 
 #[test]
