@@ -848,8 +848,11 @@ pub(super) fn finalize_tool_install(
 
         let entrypoints = installed_entrypoints[first_entrypoint..]
             .iter()
-            .dedup_by(|left, right| left.name == right.name);
-        let count = entrypoints.clone().count();
+            .map(|entrypoint| entrypoint.name.as_str())
+            .sorted_unstable()
+            .dedup()
+            .collect::<Vec<_>>();
+        let count = entrypoints.len();
         let s = if count == 1 { "" } else { "s" };
         let from_pkg = if name == package {
             String::new()
@@ -859,9 +862,7 @@ pub(super) fn finalize_tool_install(
         writeln!(
             printer.stderr(),
             "Installed {count} executable{s}{from_pkg}: {}",
-            entrypoints
-                .map(|entrypoint| entrypoint.name.bold())
-                .join(", ")
+            entrypoints.iter().map(|name| name.bold()).join(", ")
         )?;
     }
 
