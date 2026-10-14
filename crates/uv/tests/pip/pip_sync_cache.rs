@@ -34,6 +34,38 @@ async fn artifact_downloads(server: &MockServer, filename: &str) -> usize {
         .count()
 }
 
+async fn serve_index_wheel(server: &MockServer, package: &str, version: &str) -> Result<String> {
+    let (filename, wheel) = generate_wheel(
+        &package.parse()?,
+        &version.parse()?,
+        &[],
+        &Default::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    Mock::given(path(format!("/simple/{package}/")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "max-age=3600")
+                .set_body_raw(
+                    format!(r#"<a href="/{filename}" data-upload-time="2024-01-01T00:00:00Z">{filename}</a>"#),
+                    "text/html",
+                ),
+        )
+        .mount(server)
+        .await;
+    Mock::given(path(format!("/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "max-age=3600")
+                .set_body_bytes(wheel),
+        )
+        .mount(server)
+        .await;
+    Ok(filename)
+}
+
 fn write_tomli_wheel(archive: &Path, payload: &str, mtime: i64) -> Result<()> {
     let (_, wheel) = generate_wheel_with_files(
         &"tomli".parse()?,
@@ -46,6 +78,107 @@ fn write_tomli_wheel(archive: &Path, payload: &str, mtime: i64) -> Result<()> {
     );
     fs_err::write(archive, wheel)?;
     filetime::set_file_mtime(archive, filetime::FileTime::from_unix_time(mtime, 0))?;
+    Ok(())
+}
+
+/// Refresh every package even while its HTTP response is fresh.
+#[tokio::test]
+async fn refresh_all_packages() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let markupsafe = serve_index_wheel(&server, "markupsafe", "2.1.3").await?;
+    let tomli = serve_index_wheel(&server, "tomli", "2.0.1").await?;
+    let index_url = format!("{}/simple/", server.uri());
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
+
+    uv_snapshot!(context.pip_sync().args(["requirements.txt", "--strict", "--index-url"]).arg(&index_url), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + markupsafe==2.1.3
+     + tomli==2.0.1
+    ");
+    context.assert_installed("markupsafe", "2.1.3");
+    context.assert_installed("tomli", "2.0.1");
+    let markupsafe_downloads = artifact_downloads(&server, &markupsafe).await;
+    let tomli_downloads = artifact_downloads(&server, &tomli).await;
+
+    context.reset_venv();
+    uv_snapshot!(context.pip_sync().args(["requirements.txt", "--refresh", "--strict", "--index-url"]).arg(&index_url), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + markupsafe==2.1.3
+     + tomli==2.0.1
+    ");
+    assert!(
+        artifact_downloads(&server, &markupsafe).await > markupsafe_downloads,
+        "refresh must fetch markupsafe again"
+    );
+    assert!(
+        artifact_downloads(&server, &tomli).await > tomli_downloads,
+        "refresh must fetch tomli again"
+    );
+    context.assert_installed("markupsafe", "2.1.3");
+    context.assert_installed("tomli", "2.0.1");
+    Ok(())
+}
+
+/// Refresh only the selected package and reuse the other package's cached wheel.
+#[tokio::test]
+async fn refresh_selected_package() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let markupsafe = serve_index_wheel(&server, "markupsafe", "2.1.3").await?;
+    let tomli = serve_index_wheel(&server, "tomli", "2.0.1").await?;
+    let index_url = format!("{}/simple/", server.uri());
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
+
+    uv_snapshot!(context.pip_sync().args(["requirements.txt", "--strict", "--index-url"]).arg(&index_url), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + markupsafe==2.1.3
+     + tomli==2.0.1
+    ");
+    context.assert_installed("markupsafe", "2.1.3");
+    context.assert_installed("tomli", "2.0.1");
+    let markupsafe_downloads = artifact_downloads(&server, &markupsafe).await;
+    let tomli_downloads = artifact_downloads(&server, &tomli).await;
+
+    context.reset_venv();
+    uv_snapshot!(context.pip_sync().args(["requirements.txt", "--refresh-package", "tomli", "--strict", "--index-url"]).arg(&index_url), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + markupsafe==2.1.3
+     + tomli==2.0.1
+    ");
+    assert!(
+        artifact_downloads(&server, &tomli).await > tomli_downloads,
+        "refresh must fetch the selected tomli wheel again"
+    );
+    assert_eq!(
+        artifact_downloads(&server, &markupsafe).await,
+        markupsafe_downloads,
+        "refresh must reuse the unselected markupsafe wheel"
+    );
+    context.assert_installed("markupsafe", "2.1.3");
+    context.assert_installed("tomli", "2.0.1");
     Ok(())
 }
 
