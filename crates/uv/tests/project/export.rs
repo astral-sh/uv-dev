@@ -1355,7 +1355,7 @@ fn requirements_txt_frozen_workspace_member_group_precedence() -> Result<()> {
 
 #[cfg(feature = "test-universal")]
 #[test]
-fn allrequirements_txt_() -> Result<()> {
+fn requirements_txt_all_workspace_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -1368,7 +1368,7 @@ fn allrequirements_txt_() -> Result<()> {
         dependencies = ["anyio==3.7.0", "child"]
 
         [tool.uv.workspace]
-        members = ["child"]
+        members = ["child", "standalone"]
 
         [tool.uv.sources]
         child = { workspace = true }
@@ -1394,6 +1394,21 @@ fn allrequirements_txt_() -> Result<()> {
         "#,
     )?;
 
+    // This member is not reachable from the root dependency graph.
+    context
+        .temp_dir
+        .child("standalone/pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "standalone"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+        "#})?;
+
     context.lock().assert().success();
 
     uv_snapshot!(context.filters(), context.export().arg("--all-packages"), @r"
@@ -1404,6 +1419,7 @@ fn allrequirements_txt_() -> Result<()> {
     -e .
     -e ./child
         # via project
+    -e ./standalone
     anyio==3.7.0 \
         --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
         --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
@@ -1422,7 +1438,7 @@ fn allrequirements_txt_() -> Result<()> {
         # via anyio
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 7 packages in [TIME]
     ");
 
     Ok(())
