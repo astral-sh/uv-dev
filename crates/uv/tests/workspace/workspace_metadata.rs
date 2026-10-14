@@ -1852,6 +1852,7 @@ dependencies = [
     Ok(())
 }
 
+/// Keep a stale virtual-project distribution distinct from selected owners in the same environment.
 #[test]
 fn workspace_metadata_module_owners_include_stale_virtual_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1859,18 +1860,37 @@ fn workspace_metadata_module_owners_include_stale_virtual_package() -> Result<()
     let stale_owner = context
         .temp_dir
         .child("module_owner_root-0.1.0-py3-none-any.whl");
-    write_wheel(stale_owner.path(), "module-owner-root", &[("stale.py", "")])?;
-
-    context.temp_dir.child("pyproject.toml").write_str(
-        r#"[project]
-name = "module-owner-root"
-version = "0.1.0"
-requires-python = ">=3.12"
-
-[tool.uv]
-package = false
-"#,
+    write_wheel(
+        stale_owner.path(),
+        "module-owner-root",
+        "module_owner_root-0.1.0",
+        &[("stale.py", "")],
     )?;
+    let selected_owner = context
+        .temp_dir
+        .child("selected_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        selected_owner.path(),
+        "selected-owner",
+        "selected_owner-0.1.0",
+        &[("selected.py", "")],
+    )?;
+    let selected_owner_url = Url::from_file_path(selected_owner.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "module-owner-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["selected-owner @ {selected_owner_url}"]
+
+            [tool.uv]
+            package = false
+        "#})?;
 
     context
         .pip_install()
@@ -1880,10 +1900,13 @@ package = false
 
     let assert = context
         .workspace_metadata()
-        .arg("--sync")
+        .args(["--sync", "--offline"])
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    context
+        .assert_command("import stale; import selected")
+        .success();
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(serde_json::json!({
             "modules": metadata["modules"],
@@ -1891,6 +1914,13 @@ package = false
         }), @r#"
         {
           "modules": {
+            "selected": {
+              "owners": [
+                {
+                  "package_id": "selected-owner==0.1.0@path+[TEMP_DIR]/selected_owner-0.1.0-py3-none-any.whl"
+                }
+              ]
+            },
             "stale": {
               "owners": [
                 {
@@ -1901,13 +1931,34 @@ package = false
           },
           "resolution": {
             "module-owner-root==0.1.0@virtual+[TEMP_DIR]/": {
-              "dependencies": [],
+              "dependencies": [
+                {
+                  "id": "selected-owner==0.1.0@path+[TEMP_DIR]/selected_owner-0.1.0-py3-none-any.whl"
+                }
+              ],
               "kind": "package",
               "name": "module-owner-root",
               "source": {
                 "virtual": "[TEMP_DIR]/"
               },
               "version": "0.1.0"
+            },
+            "selected-owner==0.1.0@path+[TEMP_DIR]/selected_owner-0.1.0-py3-none-any.whl": {
+              "dependencies": [],
+              "kind": "package",
+              "name": "selected-owner",
+              "source": {
+                "path": "[TEMP_DIR]/selected_owner-0.1.0-py3-none-any.whl"
+              },
+              "version": "0.1.0",
+              "wheels": [
+                {
+                  "filename": "selected_owner-0.1.0-py3-none-any.whl",
+                  "hashes": {
+                    "sha256": "[SHA256]"
+                  }
+                }
+              ]
             },
             "workspace+[TEMP_DIR]/": {
               "dependencies": [],
