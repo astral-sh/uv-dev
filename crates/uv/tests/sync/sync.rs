@@ -8384,8 +8384,7 @@ fn virtual_dependency_group() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn virtual_no_build_dynamic_cached() -> Result<()> {
+fn virtual_project_with_cached_dynamic_metadata() -> Result<TestContext> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -8407,8 +8406,13 @@ fn virtual_no_build_dynamic_cached() -> Result<()> {
         .child("requirements.txt")
         .write_str("anyio==3.7.0")?;
 
-    // Generate a lockfile.
     context.lock().assert().success();
+    Ok(context)
+}
+
+#[test]
+fn virtual_no_build_dynamic_cached() -> Result<()> {
+    let context = virtual_project_with_cached_dynamic_metadata()?;
 
     // `--no-build` should not raise an error, since we don't build or install the project (given
     // that it's virtual and the metadata is cached).
@@ -8428,29 +8432,7 @@ fn virtual_no_build_dynamic_cached() -> Result<()> {
 
 #[test]
 fn virtual_no_build_dynamic_no_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dynamic = ["dependencies"]
-
-        [tool.setuptools.dynamic]
-        dependencies = {file = ["requirements.txt"]}
-        "#,
-    )?;
-
-    context
-        .temp_dir
-        .child("requirements.txt")
-        .write_str("anyio==3.7.0")?;
-
-    // Generate a lockfile.
-    context.lock().assert().success();
+    let context = virtual_project_with_cached_dynamic_metadata()?;
 
     // Clear the cache.
     fs_err::remove_dir_all(&context.cache_dir)?;
