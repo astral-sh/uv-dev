@@ -9,16 +9,17 @@ use assert_fs::prelude::PathChild;
 use assert_fs::{fixture::FileWriteStr, prelude::PathCreateDir};
 use indoc::indoc;
 
-use uv_platform::{Arch, Os};
 use uv_static::EnvVars;
 
 use uv_test::{uv_snapshot, venv_bin_path};
 
+use super::fixtures::interpreter_platform;
+
 #[test]
 fn python_find_default_arch() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
-    let arch = Arch::from_env().to_string();
-    let os = Os::from_env();
+    let (_, python) = &context.python_versions[0];
+    let (os, arch) = interpreter_platform(&context, python)?;
     context
         .temp_dir
         .child(".python-version")
@@ -31,7 +32,7 @@ fn python_find_default_arch() -> Result<()> {
     error: No interpreter found for any-3.12-any-wasm32-any in [PYTHON SOURCES]
     ");
 
-    uv_snapshot!(context.filters(), context.python_find().env(EnvVars::UV_PYTHON_ARCH, &arch), @"
+    uv_snapshot!(context.filters(), context.python_find().env(EnvVars::UV_PYTHON_ARCH, arch.to_string()), @"
     exit_code: 0 (success)
     ----- stdout -----
     [PYTHON-3.12]
@@ -56,7 +57,6 @@ fn python_find_default_arch() -> Result<()> {
     ----- stdout -----
     [PYTHON-3.12]
     ");
-    let (_, python) = context.python_versions.first().unwrap();
     uv_snapshot!(context.filters(), context.python_find()
         .env(EnvVars::UV_PYTHON_ARCH, "wasm32")
         .arg(python), @"
@@ -135,7 +135,7 @@ fn python_find_warning_chain() -> Result<()> {
 }
 
 #[test]
-fn python_find() {
+fn python_find() -> Result<()> {
     let mut context =
         uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_filtered_python_sources();
 
@@ -202,10 +202,9 @@ fn python_find() {
     [PYTHON-3.12]
     ");
 
-    // Request CPython 3.12 for the current platform
-    let os = Os::from_env();
-    let arch = Arch::from_env();
-
+    // Request CPython 3.12 for the fixture interpreter's platform.
+    let (_, python) = &context.python_versions[1];
+    let (os, arch) = interpreter_platform(&context, python)?;
     uv_snapshot!(context.filters(), context.python_find()
         .arg(format!("cpython-3.12-{os}-{arch}")), @"
     exit_code: 0 (success)
@@ -235,6 +234,7 @@ fn python_find() {
     ----- stdout -----
     [PYTHON-3.11]
     ");
+    Ok(())
 }
 
 #[test]
