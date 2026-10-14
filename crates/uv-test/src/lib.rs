@@ -2388,7 +2388,7 @@ pub fn decode_token(content: &[&str]) -> String {
 /// the permissions are restored even if the test panics.
 #[cfg(unix)]
 pub struct ReadOnlyDirectoryGuard {
-    path: PathBuf,
+    directory: fs_err::File,
     original_mode: u32,
 }
 
@@ -2398,14 +2398,13 @@ impl ReadOnlyDirectoryGuard {
     /// that will restore the original permissions when dropped.
     pub fn new(path: impl Into<PathBuf>) -> std::io::Result<Self> {
         use std::os::unix::fs::PermissionsExt;
-        let path = path.into();
-        let metadata = fs_err::metadata(&path)?;
-        let original_mode = metadata.permissions().mode();
+        let directory = fs_err::File::open(path)?;
+        let original_mode = directory.metadata()?.permissions().mode();
         // Remove write permissions (keep read and execute)
         let readonly_mode = original_mode & !0o222;
-        fs_err::set_permissions(&path, std::fs::Permissions::from_mode(readonly_mode))?;
+        directory.set_permissions(std::fs::Permissions::from_mode(readonly_mode))?;
         Ok(Self {
-            path,
+            directory,
             original_mode,
         })
     }
@@ -2415,10 +2414,46 @@ impl ReadOnlyDirectoryGuard {
 impl Drop for ReadOnlyDirectoryGuard {
     fn drop(&mut self) {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs_err::set_permissions(
-            &self.path,
-            std::fs::Permissions::from_mode(self.original_mode),
+        // The original pathname may now identify a replacement directory.
+        let _ = self
+            .directory
+            .set_permissions(std::fs::Permissions::from_mode(self.original_mode));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod read_only_directory_tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::ReadOnlyDirectoryGuard;
+
+    #[test]
+    fn restores_the_original_directory_after_replacement() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let original = root.path().join("original");
+        let moved = root.path().join("moved");
+        fs_err::create_dir(&original)?;
+        fs_err::set_permissions(&original, std::fs::Permissions::from_mode(0o750))?;
+
+        let guard = ReadOnlyDirectoryGuard::new(&original)?;
+        assert_eq!(
+            fs_err::metadata(&original)?.permissions().mode() & 0o777,
+            0o550
         );
+        fs_err::rename(&original, &moved)?;
+        fs_err::create_dir(&original)?;
+        fs_err::set_permissions(&original, std::fs::Permissions::from_mode(0o700))?;
+        drop(guard);
+
+        assert_eq!(
+            fs_err::metadata(&moved)?.permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(
+            fs_err::metadata(&original)?.permissions().mode() & 0o777,
+            0o700
+        );
+        Ok(())
     }
 }
 
