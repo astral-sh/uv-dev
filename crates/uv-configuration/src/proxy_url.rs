@@ -57,23 +57,13 @@ impl FromStr for ProxyUrl {
     ///
     /// This matches reqwest's and curl's behavior.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        fn try_with_http_scheme(s: &str) -> Result<ProxyUrl, ProxyUrlError> {
-            let with_scheme = format!("http://{s}");
-            let url = Url::parse(&with_scheme)?;
-            ProxyUrl::try_from(url)
+        let parse = |url: &str| Self::try_from(Url::parse(url)?);
+        match parse(s) {
+            Err(ProxyUrlError::InvalidUrl(url::ParseError::RelativeUrlWithoutBase)) => {}
+            Err(ProxyUrlError::InvalidScheme { .. }) if lacks_scheme(s) => {}
+            result => return result,
         }
-
-        match Url::parse(s) {
-            Ok(url) => match Self::try_from(url) {
-                Ok(proxy) => Ok(proxy),
-                Err(ProxyUrlError::InvalidScheme { .. }) if lacks_scheme(s) => {
-                    try_with_http_scheme(s)
-                }
-                Err(e) => Err(e),
-            },
-            Err(url::ParseError::RelativeUrlWithoutBase) => try_with_http_scheme(s),
-            Err(err) => Err(ProxyUrlError::InvalidUrl(err)),
-        }
+        parse(&format!("http://{s}"))
     }
 }
 
