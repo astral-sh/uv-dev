@@ -130,15 +130,23 @@ fn lock_without_package_metadata(lock: &str) -> Result<toml_edit::DocumentMut> {
         anyhow::bail!("lockfile did not contain a package array");
     };
     for package in packages.iter_mut() {
-        let extras = package
+        let extras = match package
             .get("metadata")
             .and_then(|metadata| metadata.get("provides-extras"))
-            .and_then(toml_edit::Item::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(toml_edit::Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
+        {
+            Some(extras) => extras
+                .as_array()
+                .ok_or_else(|| anyhow!("package provided extras were not an array"))?
+                .iter()
+                .map(|extra| {
+                    extra
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                        .ok_or_else(|| anyhow!("package provided extra was not a string: {extra}"))
+                })
+                .collect::<Result<Vec<_>>>()?,
+            None => Vec::new(),
+        };
         if !extras.is_empty() {
             let optional_dependencies = package
                 .entry("optional-dependencies")
