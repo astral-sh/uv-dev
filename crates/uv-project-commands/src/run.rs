@@ -205,7 +205,7 @@ pub async fn run(
         }
 
         // If a lockfile already exists, lock the script.
-        if let Some(target) = script
+        if let Some(target @ LockTarget::Script(script_file)) = script
             .as_script()
             .map(LockTarget::from)
             .filter(|target| target.lock_path().is_file())
@@ -279,7 +279,7 @@ pub async fn run(
 
             // Sync the environment.
             let target = InstallTarget::Script {
-                script: script.as_script().unwrap(),
+                script: script_file,
                 lock: &lock,
             };
 
@@ -568,68 +568,40 @@ pub async fn run(
             )
             .await
             {
-                Ok(project) => {
-                    if no_project {
-                        debug!("Ignoring discovered project due to `--no-project`");
-                        None
-                    } else {
-                        Some(project)
-                    }
+                Ok(_) if no_project => {
+                    debug!("Ignoring discovered project due to `--no-project`");
+                    None
                 }
-                Err(err) => {
+                Ok(project) => Some(project),
+                Err(err)
                     if matches!(
                         err.as_ref(),
                         WorkspaceErrorKind::MissingPyprojectToml
                             | WorkspaceErrorKind::NonWorkspace(_)
-                    ) {
-                        if no_project {
-                            warn!("`--no-project` was provided, but no project was found");
-                        }
-                        None
-                    } else {
-                        // If the user runs with `--no-project`, ignore the error.
-                        if no_project {
-                            warn!("Ignoring project discovery error due to `--no-project`: {err}");
-                            None
-                        } else {
-                            return Err(err.into());
-                        }
+                    ) =>
+                {
+                    if no_project {
+                        warn!("`--no-project` was provided, but no project was found");
                     }
+                    None
                 }
+                Err(err) if no_project => {
+                    warn!("Ignoring project discovery error due to `--no-project`: {err}");
+                    None
+                }
+                Err(err) => return Err(err.into()),
             }
         };
 
-        if no_project {
-            // If the user ran with `--no-project` and provided a project-only setting, warn.
-            for flag in extras.history().as_flags_pretty() {
-                warn_user!("`{flag}` has no effect when used alongside `--no-project`");
-            }
-            for flag in groups.history().as_flags_pretty() {
-                warn_user!("`{flag}` has no effect when used alongside `--no-project`");
-            }
-            if let LockCheck::Enabled(lock_check) = lock_check {
-                warn_user!("`{lock_check}` has no effect when used alongside `--no-project`");
-            }
-            if frozen.is_some() {
-                warn_user!("`--frozen` has no effect when used alongside `--no-project`");
-            }
-            if no_sync {
-                warn_user!("`--no-sync` has no effect when used alongside `--no-project`");
-            }
-        } else if project.is_none() {
-            // If we can't find a project and the user provided a project-only setting, warn.
-            for flag in extras.history().as_flags_pretty() {
-                warn_user!("`{flag}` has no effect when used outside of a project");
-            }
-            for flag in groups.history().as_flags_pretty() {
-                warn_user!("`{flag}` has no effect when used outside of a project");
-            }
-            if let LockCheck::Enabled(lock_check) = lock_check {
-                warn_user!("`{lock_check}` has no effect when used outside of a project",);
-            }
-            if no_sync {
-                warn_user!("`--no-sync` has no effect when used outside of a project");
-            }
+        if no_project || project.is_none() {
+            crate::warnings::warn_ignored_project_settings(
+                no_project,
+                &extras,
+                &groups,
+                lock_check,
+                frozen.filter(|_| no_project),
+                no_sync,
+            );
         }
 
         if let Some(project) = project {
@@ -798,7 +770,7 @@ pub async fn run(
                 target.validate_extras(&extras)?;
                 target.validate_groups(&groups)?;
 
-                match sync_from_lock(
+                sync_from_lock(
                     target,
                     &venv,
                     &extras,
@@ -825,10 +797,7 @@ pub async fn run(
                     MalwareCheckContext::from(&malware_settings),
                 )
                 .await
-                {
-                    Ok(_) => {}
-                    Err(err) => return Err(UvError::from(err).into()),
-                }
+                .map_err(UvError::from)?;
 
                 base_lock = Some((
                     result.into_lock(),
@@ -1053,9 +1022,12 @@ pub async fn run(
                     .chain(base_site_packages)
                     .dedup()
                     .inspect(|path| debug!("Adding `{}` to site packages", path.display()))
-                    .map(|path| format!("site.addsitedir({})", path.escape_for_python()))
-                    .collect::<Vec<_>>()
-                    .join("; ")
+                    .format_with("; ", |path, write| {
+                        write(&format_args!(
+                            "site.addsitedir({})",
+                            path.escape_for_python()
+                        ))
+                    })
             );
 
             set_overlay(ephemeral_env, &overlay_content)?;
@@ -1410,7 +1382,7 @@ pub enum RunCommand {
     PythonGuiScript(PathBuf, Vec<OsString>),
     /// Execute a Python package containing a `__main__.py` file.
     /// If an entrypoint with the target name is installed in the environment, it is preferred.
-    PythonPackage(OsString, PathBuf, Vec<OsString>),
+    PythonPackage(PathBuf, Vec<OsString>),
     /// Execute a Python [zipapp](https://docs.python.org/3/library/zipapp.html).
     PythonZipapp(PathBuf, Vec<OsString>),
     /// Execute a `python` script provided via `stdin`.
@@ -1449,10 +1421,9 @@ impl PendingRemoteRunCommand {
         self,
         client_builder: &BaseClientBuilder<'_>,
     ) -> anyhow::Result<(DisplaySafeUrl, tempfile::NamedTempFile, Vec<OsString>)> {
-        let url = self.url.clone();
         let downloaded_script =
             ParsedRunCommand::download_remote_script(&self.url, client_builder).await?;
-        Ok((url, downloaded_script, self.args))
+        Ok((self.url, downloaded_script, self.args))
     }
 }
 
@@ -1483,12 +1454,8 @@ impl ParsedRunCommand {
 
                 let (url, downloaded_script, args) =
                     remote_command.download(&client_builder).await?;
-                let script = match Pep723Metadata::read(&downloaded_script).await {
-                    Ok(Some(metadata)) => Some(Pep723Item::Remote(metadata, url)),
-                    Ok(None) => None,
-                    Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => None,
-                    Err(err) => return Err(err.into()),
-                };
+                let script = ignore_missing_script(Pep723Metadata::read(&downloaded_script).await)?
+                    .map(|metadata| Pep723Item::Remote(metadata, url));
 
                 Ok((script, RunCommand::PythonRemote(downloaded_script, args)))
             }
@@ -1497,14 +1464,16 @@ impl ParsedRunCommand {
 
     /// Determine the [`ParsedRunCommand`] for a given set of arguments.
     pub fn from_args(
-        command: &[OsString],
+        command: Vec<OsString>,
         module: bool,
         script: bool,
         gui_script: bool,
     ) -> anyhow::Result<Self> {
-        let Some((target, args)) = command.split_first() else {
+        let mut command = command.into_iter();
+        let Some(target) = command.next() else {
             return Ok(Self::Ready(RunCommand::Empty));
         };
+        let args = command.collect();
 
         if target.eq_ignore_ascii_case("-") {
             let mut buf = Vec::with_capacity(1024);
@@ -1513,13 +1482,13 @@ impl ParsedRunCommand {
             return if module {
                 Err(anyhow!("Cannot run a Python module from stdin"))
             } else if gui_script {
-                Ok(Self::Ready(RunCommand::PythonGuiStdin(buf, args.to_vec())))
+                Ok(Self::Ready(RunCommand::PythonGuiStdin(buf, args)))
             } else {
-                Ok(Self::Ready(RunCommand::PythonStdin(buf, args.to_vec())))
+                Ok(Self::Ready(RunCommand::PythonStdin(buf, args)))
             };
         }
 
-        let target_path = PathBuf::from(target);
+        let target_path = Path::new(&target);
 
         // Determine whether the user provided a remote script.
         if target_path.starts_with("http://") || target_path.starts_with("https://") {
@@ -1529,70 +1498,48 @@ impl ParsedRunCommand {
             // be invalid anyway, and thus couldn't refer to a local file.
             if !cfg!(unix) || matches!(target_path.try_exists(), Ok(false)) {
                 let url = DisplaySafeUrl::parse(&target.to_string_lossy())?;
-                return Ok(Self::PendingRemote(PendingRemoteRunCommand {
-                    url,
-                    args: args.to_vec(),
-                }));
+                return Ok(Self::PendingRemote(PendingRemoteRunCommand { url, args }));
             }
         }
 
         if module {
-            return Ok(Self::Ready(RunCommand::PythonModule(
-                target.clone(),
-                args.to_vec(),
-            )));
+            return Ok(Self::Ready(RunCommand::PythonModule(target, args)));
         } else if gui_script {
             return Ok(Self::Ready(RunCommand::PythonGuiScript(
-                target.clone().into(),
-                args.to_vec(),
+                target.into(),
+                args,
             )));
         } else if script {
-            return Ok(Self::Ready(RunCommand::PythonScript(
-                target.clone().into(),
-                args.to_vec(),
-            )));
+            return Ok(Self::Ready(RunCommand::PythonScript(target.into(), args)));
+        } else if target.eq_ignore_ascii_case("python") {
+            return Ok(Self::Ready(RunCommand::Python(args)));
         }
 
         let metadata = target_path.metadata();
         let is_file = metadata.as_ref().is_ok_and(std::fs::Metadata::is_file);
         let is_dir = metadata.as_ref().is_ok_and(std::fs::Metadata::is_dir);
 
-        if target.eq_ignore_ascii_case("python") {
-            Ok(Self::Ready(RunCommand::Python(args.to_vec())))
-        } else if target_path
+        if target_path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("py") || ext.eq_ignore_ascii_case("pyc"))
             && is_file
         {
-            Ok(Self::Ready(RunCommand::PythonScript(
-                target_path,
-                args.to_vec(),
-            )))
+            Ok(Self::Ready(RunCommand::PythonScript(target.into(), args)))
         } else if target_path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("pyw"))
             && is_file
         {
             Ok(Self::Ready(RunCommand::PythonGuiScript(
-                target_path,
-                args.to_vec(),
+                target.into(),
+                args,
             )))
         } else if is_dir && target_path.join("__main__.py").is_file() {
-            Ok(Self::Ready(RunCommand::PythonPackage(
-                target.clone(),
-                target_path,
-                args.to_vec(),
-            )))
-        } else if is_file && is_python_zipapp(&target_path) {
-            Ok(Self::Ready(RunCommand::PythonZipapp(
-                target_path,
-                args.to_vec(),
-            )))
+            Ok(Self::Ready(RunCommand::PythonPackage(target.into(), args)))
+        } else if is_file && is_python_zipapp(target_path) {
+            Ok(Self::Ready(RunCommand::PythonZipapp(target.into(), args)))
         } else {
-            Ok(Self::Ready(RunCommand::External(
-                target.clone(),
-                args.iter().map(std::clone::Clone::clone).collect(),
-            )))
+            Ok(Self::Ready(RunCommand::External(target, args)))
         }
     }
 
@@ -1644,20 +1591,23 @@ impl ParsedRunCommand {
     }
 }
 
+/// Treat a missing script as having no inline metadata.
+fn ignore_missing_script<T>(
+    result: Result<Option<T>, Pep723Error>,
+) -> Result<Option<T>, Pep723Error> {
+    match result {
+        Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        result => result,
+    }
+}
+
 impl RunCommand {
     /// Read any inline PEP 723 metadata associated with this command target.
     async fn read_pep723_item(&self) -> Result<Option<Pep723Item>, Pep723Error> {
         match self {
-            Self::PythonScript(script, _) | Self::PythonGuiScript(script, _) => {
-                match Pep723Script::read(script).await {
-                    Ok(Some(script)) => Ok(Some(Pep723Item::Script(script))),
-                    Ok(None) => Ok(None),
-                    Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-                        Ok(None)
-                    }
-                    Err(err) => Err(err),
-                }
-            }
+            Self::PythonScript(script, _) | Self::PythonGuiScript(script, _) => Ok(
+                ignore_missing_script(Pep723Script::read(script).await)?.map(Pep723Item::Script),
+            ),
             Self::PythonStdin(contents, _) | Self::PythonGuiStdin(contents, _) => {
                 Pep723Metadata::parse(contents).map(|metadata| metadata.map(Pep723Item::Stdin))
             }
@@ -1710,8 +1660,8 @@ impl RunCommand {
                 process.args(args);
                 process
             }
-            Self::PythonPackage(target, path, args) => {
-                let name = PathBuf::from(target).with_extension(std::env::consts::EXE_EXTENSION);
+            Self::PythonPackage(target, args) => {
+                let name = target.with_extension(std::env::consts::EXE_EXTENSION);
                 let entrypoint = interpreter.scripts().join(name);
 
                 // If the target is an installed, executable script — prefer that
@@ -1722,7 +1672,7 @@ impl RunCommand {
                 // Otherwise, invoke `python <module>`
                 } else {
                     let mut process = Command::new(interpreter.sys_executable());
-                    process.arg(path);
+                    process.arg(target);
                     process.args(args);
                     process
                 }
@@ -1747,57 +1697,17 @@ impl RunCommand {
                 process
             }
             Self::PythonGuiScript(target, args) => {
-                let python_executable = interpreter.sys_executable();
-
-                // Use `pythonw.exe` if it exists, otherwise fall back to `python.exe`.
-                // See `install-wheel-rs::get_script_executable`.gd
-                let pythonw_executable = python_executable
-                    .file_name()
-                    .map(|name| {
-                        let new_name = name.to_string_lossy().replace("python", "pythonw");
-                        python_executable.with_file_name(new_name)
-                    })
-                    .filter(|path| path.is_file())
-                    .unwrap_or_else(|| python_executable.to_path_buf());
-
-                let mut process = Command::new(&pythonw_executable);
+                let mut process = Self::python_gui_command(interpreter);
                 process.arg(target);
                 process.args(args);
                 process
             }
-            Self::PythonStdin(script, args) => {
-                let mut process = Command::new(interpreter.sys_executable());
-                process.arg("-c");
-
-                cfg_select! {
-                    unix => {
-                        process.arg(OsStr::from_bytes(script));
-                    },
-                    _ => {
-                        let script =
-                            String::from_utf8(script.clone()).expect("script is valid UTF-8");
-                        process.arg(script);
-                    },
-                }
-                process.args(args);
-
-                process
-            }
-            Self::PythonGuiStdin(script, args) => {
-                let python_executable = interpreter.sys_executable();
-
-                // Use `pythonw.exe` if it exists, otherwise fall back to `python.exe`.
-                // See `install-wheel-rs::get_script_executable`.gd
-                let pythonw_executable = python_executable
-                    .file_name()
-                    .map(|name| {
-                        let new_name = name.to_string_lossy().replace("python", "pythonw");
-                        python_executable.with_file_name(new_name)
-                    })
-                    .filter(|path| path.is_file())
-                    .unwrap_or_else(|| python_executable.to_path_buf());
-
-                let mut process = Command::new(&pythonw_executable);
+            Self::PythonStdin(script, args) | Self::PythonGuiStdin(script, args) => {
+                let mut process = if matches!(self, Self::PythonGuiStdin(..)) {
+                    Self::python_gui_command(interpreter)
+                } else {
+                    Command::new(interpreter.sys_executable())
+                };
                 process.arg("-c");
 
                 cfg_select! {
@@ -1827,13 +1737,26 @@ impl RunCommand {
         }
     }
 
+    /// Use `pythonw` if it exists, otherwise fall back to the interpreter's executable.
+    fn python_gui_command(interpreter: &Interpreter) -> Command {
+        let python_executable = interpreter.sys_executable();
+        let pythonw_executable = python_executable
+            .file_name()
+            .map(|name| {
+                let new_name = name.to_string_lossy().replace("python", "pythonw");
+                python_executable.with_file_name(new_name)
+            })
+            .filter(|path| path.is_file());
+        Command::new(pythonw_executable.as_deref().unwrap_or(python_executable))
+    }
+
     /// Return the directory containing the script, if any.
     fn script_dir(&self) -> Option<&Path> {
         let parent = match self {
             Self::PythonScript(target, _)
             | Self::PythonGuiScript(target, _)
-            | Self::PythonZipapp(target, _) => target.parent(),
-            Self::PythonPackage(_, path, _) => path.parent(),
+            | Self::PythonZipapp(target, _)
+            | Self::PythonPackage(target, _) => target.parent(),
             Self::Python(_)
             | Self::PythonModule(..)
             | Self::PythonStdin(..)
@@ -1849,63 +1772,39 @@ impl RunCommand {
 
 impl std::fmt::Display for RunCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+        let args = match self {
             Self::Python(args) => {
                 write!(f, "python")?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                args
             }
-            Self::PythonPackage(target, _path, args) => {
+            Self::PythonPackage(target, args) => {
                 write!(f, "{}", target.to_string_lossy())?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                args
             }
             Self::PythonScript(target, args) | Self::PythonZipapp(target, args) => {
                 write!(f, "python {}", target.display())?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                args
             }
             Self::PythonModule(module, args) => {
-                write!(f, "python -m")?;
-                write!(f, " {}", module.to_string_lossy())?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                write!(f, "python -m {}", module.to_string_lossy())?;
+                args
             }
             Self::PythonGuiScript(target, args) => {
                 write!(f, "pythonw {}", target.display())?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                args
             }
-            Self::PythonStdin(..) | Self::PythonRemote(..) => {
-                write!(f, "python -c")?;
-                Ok(())
-            }
-            Self::PythonGuiStdin(..) => {
-                write!(f, "pythonw -c")?;
-                Ok(())
-            }
+            Self::PythonStdin(..) | Self::PythonRemote(..) => return f.write_str("python -c"),
+            Self::PythonGuiStdin(..) => return f.write_str("pythonw -c"),
             Self::External(executable, args) => {
                 write!(f, "{}", executable.to_string_lossy())?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                args
             }
-            Self::Empty => {
-                write!(f, "python")?;
-                Ok(())
-            }
+            Self::Empty => return f.write_str("python"),
+        };
+        for arg in args {
+            write!(f, " {}", arg.to_string_lossy())?;
         }
+        Ok(())
     }
 }
 
@@ -1966,29 +1865,29 @@ async fn resolve_gist_url(
 
 /// Returns `true` if the target is a ZIP archive containing a `__main__.py` file.
 fn is_python_zipapp(target: &Path) -> bool {
-    if let Ok(file) = fs_err::File::open(target) {
-        let reader = std::io::BufReader::new(file);
-        return futures::executor::block_on(async {
-            let archive = async_zip::base::read::seek::ZipFileReader::new(
-                futures::io::AllowStdIo::new(reader),
-            )
-            .await
-            .ok()?;
-            archive
-                .file()
-                .entries()
-                .iter()
-                .find(|entry| {
-                    entry
-                        .filename()
-                        .as_str()
-                        .is_ok_and(|name| name == "__main__.py")
-                })
-                .map(|entry| entry.dir().is_ok_and(|is_dir| !is_dir))
-        })
-        .unwrap_or(false);
-    }
-    false
+    let Ok(file) = fs_err::File::open(target) else {
+        return false;
+    };
+    let reader = std::io::BufReader::new(file);
+    futures::executor::block_on(async {
+        let Ok(archive) =
+            async_zip::base::read::seek::ZipFileReader::new(futures::io::AllowStdIo::new(reader))
+                .await
+        else {
+            return false;
+        };
+        archive
+            .file()
+            .entries()
+            .iter()
+            .find(|entry| {
+                entry
+                    .filename()
+                    .as_str()
+                    .is_ok_and(|name| name == "__main__.py")
+            })
+            .is_some_and(|entry| entry.dir().is_ok_and(|is_dir| !is_dir))
+    })
 }
 
 /// Read and parse recursion depth from the environment.

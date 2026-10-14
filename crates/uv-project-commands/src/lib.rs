@@ -22,6 +22,7 @@ mod toolchain;
 pub mod tree;
 pub mod upgrade;
 pub mod version;
+mod warnings;
 
 mod reporters;
 
