@@ -149,25 +149,20 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         }
     }
 
-    #[allow(refining_impl_trait)]
-    fn roots(&self) -> Box<dyn Iterator<Item = &PackageName> + '_> {
+    fn roots(&self) -> impl Iterator<Item = &PackageName> {
         let lock = self.lock();
-        match self.package_selection() {
-            Some(PackageSelection::Projects(names)) => Box::new(names.iter()),
-            Some(PackageSelection::NonProjectWorkspace) => Box::new(lock.members().iter()),
-            Some(PackageSelection::Workspace) => {
-                // Identify the workspace members.
-                //
-                // The members are encoded directly in the lockfile, unless the workspace contains a
-                // single member at the root, in which case, we identify it by its source.
-                if lock.members().is_empty() {
-                    Box::new(lock.root().into_iter().map(Package::name))
-                } else {
-                    Box::new(lock.members().iter())
-                }
+        let names = match self.package_selection() {
+            Some(PackageSelection::Projects(names)) => names,
+            // A single-member workspace omits the member list from the lockfile.
+            Some(PackageSelection::Workspace) if lock.members().is_empty() => lock
+                .root()
+                .map_or(&[][..], |root| std::slice::from_ref(root.name())),
+            Some(PackageSelection::Workspace | PackageSelection::NonProjectWorkspace) => {
+                return Either::Right(lock.members().iter());
             }
-            None => Box::new(std::iter::empty()),
-        }
+            None => &[],
+        };
+        Either::Left(names.iter())
     }
 
     fn group_root(&self, groups: &DependencyGroupsWithDefaults) -> Option<&PackageName> {
