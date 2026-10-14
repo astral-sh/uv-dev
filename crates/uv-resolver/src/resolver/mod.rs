@@ -1517,7 +1517,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     // this fork, allowing environments in neither set to fall on either side.
                     // For example, Darwin == 24 becomes Darwin < 25 when the wheels require
                     // Darwin >= 25. This avoids introducing forks for unrelated wheel tags.
-                    let coverage = dist.implied_markers().and(fork_markers);
+                    let coverage = artifact_markers.and(fork_markers);
                     let split = marker.restrict(marker.or(coverage));
                     let Some((left, right)) = fork_version_by_marker(env, split) else {
                         return Ok(Some(ResolverVersion::Unavailable(

@@ -651,26 +651,24 @@ pub(crate) fn fork_version_by_marker(
     //   `python_version >= '3.10' and sys_platform == 'linux'`
     //   `python_version >= '3.10' and sys_platform != 'linux'`
     //
-    // If the marker is disjoint with the current environment, then we should return an empty list.
-    // If the marker complement is disjoint with the current environment, then we should also return
-    // an empty list.
+    // A split requires both the marker and its complement to overlap the current environment.
     //
     // For example, given `python_version >= '3.10' and sys_platform == 'linux'` and the split marker
-    // `sys_platform == 'win32'`, return an empty list, since the following isn't satisfiable:
+    // `sys_platform == 'win32'`, no split is possible, since the following isn't satisfiable:
     //
     //   python_version >= '3.10' and sys_platform == 'linux' and sys_platform == 'win32'
     if env_marker.is_disjoint(marker) {
         return None;
     }
-    let with_marker = env.narrow_environment(marker);
-
     let complement = marker.negate();
     if env_marker.is_disjoint(complement) {
         return None;
     }
-    let without_marker = env.narrow_environment(complement);
 
-    Some((with_marker, without_marker))
+    Some((
+        env.narrow_environment(marker),
+        env.narrow_environment(complement),
+    ))
 }
 
 #[cfg(test)]
