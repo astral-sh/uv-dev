@@ -15,15 +15,7 @@ use crate::universal_marker::UniversalMarker;
 /// Collect all nodes without incoming edges, including the virtual root and virtual dev
 /// dependency packages, since the graph's edges don't cover dev dependencies.
 fn root_nodes<Node, Edge>(graph: &Graph<Node, Edge>) -> Vec<NodeIndex> {
-    graph
-        .node_indices()
-        .filter(|node_index| {
-            graph
-                .edges_directed(*node_index, Direction::Incoming)
-                .next()
-                .is_none()
-        })
-        .collect()
+    graph.externals(Direction::Incoming).collect()
 }
 
 /// Determine the markers under which a package is reachable in the dependency tree.
