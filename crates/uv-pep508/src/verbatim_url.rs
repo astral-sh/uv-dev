@@ -44,7 +44,7 @@ impl Debug for VerbatimUrl {
                 |_| Cow::Borrowed(given),
                 |url| {
                     let redacted = url.to_string();
-                    if redacted == url.displayable_with_credentials().to_string() {
+                    if redacted == url.as_str() {
                         Cow::Borrowed(given)
                     } else {
                         Cow::Owned(redacted)
@@ -96,12 +96,7 @@ impl VerbatimUrl {
         let given = given.as_ref();
         let url = DisplaySafeUrl::parse(given)?;
 
-        Ok(Self {
-            url,
-            given: None,
-            expanded: false,
-            force_relative: false,
-        })
+        Ok(Self::from_url(url))
     }
 
     /// Convert a [`VerbatimUrl`] from a path or a URL.
@@ -113,36 +108,17 @@ impl VerbatimUrl {
         input: &str,
         root_dir: Option<&Path>,
     ) -> Result<Self, VerbatimUrlError> {
-        let url = match split_scheme(input) {
-            Some((scheme, ..)) => {
-                match Scheme::parse(scheme) {
-                    Some(_) => {
-                        // Ex) `https://pypi.org/simple`
-                        Self::parse_url(input)?
-                    }
-                    None => {
-                        // Ex) `C:\Users\user\index`
-                        if let Some(root_dir) = root_dir {
-                            Self::from_path_with_fragment(input, Some(root_dir))?
-                        } else {
-                            let absolute_path = std::path::absolute(input).map_err(|err| {
-                                VerbatimUrlError::Absolute(input.to_string(), err)
-                            })?;
-                            Self::from_path_with_fragment(absolute_path, None)?
-                        }
-                    }
-                }
-            }
-            None => {
-                // Ex) `/Users/user/index`
-                if let Some(root_dir) = root_dir {
-                    Self::from_path_with_fragment(input, Some(root_dir))?
-                } else {
-                    let absolute_path = std::path::absolute(input)
-                        .map_err(|err| VerbatimUrlError::Absolute(input.to_string(), err))?;
-                    Self::from_path_with_fragment(absolute_path, None)?
-                }
-            }
+        // A Windows drive letter looks like a scheme, so only recognized schemes identify URLs.
+        let url = if let Some((scheme, _)) = split_scheme(input)
+            && Scheme::parse(scheme).is_some()
+        {
+            Self::parse_url(input)?
+        } else if let Some(root_dir) = root_dir {
+            Self::from_path_with_fragment(input, Some(root_dir))?
+        } else {
+            let absolute_path = std::path::absolute(input)
+                .map_err(|err| VerbatimUrlError::Absolute(input.to_string(), err))?;
+            Self::from_path_with_fragment(absolute_path, None)?
         };
         Ok(url.with_given(input))
     }
@@ -170,12 +146,7 @@ impl VerbatimUrl {
         let url = DisplaySafeUrl::from_file_path(&path)
             .map_err(|()| VerbatimUrlError::UrlConversion(path))?;
 
-        Ok(Self {
-            url,
-            given: None,
-            expanded: false,
-            force_relative: false,
-        })
+        Ok(Self::from_url(url))
     }
 
     /// Parse a URL from an absolute or relative path, including a URL fragment.
@@ -212,12 +183,7 @@ impl VerbatimUrl {
         let url = DisplaySafeUrl::from_file_path(&path)
             .unwrap_or_else(|()| panic!("path is absolute: {}", path.display()));
 
-        Ok(Self {
-            url,
-            given: None,
-            expanded: false,
-            force_relative: false,
-        })
+        Ok(Self::from_url(url))
     }
 
     /// Parse a URL from a normalized path.
@@ -237,12 +203,7 @@ impl VerbatimUrl {
         let url = DisplaySafeUrl::from_file_path(path)
             .unwrap_or_else(|()| panic!("path is absolute: {}", path.display()));
 
-        Ok(Self {
-            url,
-            given: None,
-            expanded: false,
-            force_relative: false,
-        })
+        Ok(Self::from_url(url))
     }
 
     /// Set a fragment that was provided as part of a URL.

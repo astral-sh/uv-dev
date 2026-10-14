@@ -6,13 +6,13 @@ use std::str::FromStr;
 use uv_fs::normalize_url_path;
 use uv_normalize::ExtraName;
 
-use crate::marker::parse;
 use crate::verbatim_url::strip_host;
 use crate::verbatim_url::were_vars_expanded;
 use crate::{
     Cursor, MarkerEnvironment, MarkerTree, Pep508Error, Pep508ErrorSource, Pep508Url, Reporter,
     RequirementOrigin, Scheme, TracingReporter, VerbatimUrl, VerbatimUrlError, expand_env_vars,
-    parse_extras_cursor, split_extras, split_scheme,
+    fmt_extras, parse_extras_cursor, parse_requirement_suffix, scan_url, split_extras,
+    split_scheme,
 };
 
 /// An extension over [`Pep508Url`] that also supports parsing unnamed requirements, namely paths.
@@ -128,17 +128,7 @@ impl<Url: UnnamedRequirementUrl> UnnamedRequirement<Url> {
 impl<Url: UnnamedRequirementUrl> Display for UnnamedRequirement<Url> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.url)?;
-        if !self.extras.is_empty() {
-            write!(
-                f,
-                "[{}]",
-                self.extras
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )?;
-        }
+        fmt_extras(&self.extras, f)?;
         if let Some(marker) = self.marker.contents() {
             write!(f, " ; {marker}")?;
         }
@@ -168,40 +158,12 @@ fn parse_unnamed_requirement<Url: UnnamedRequirementUrl>(
     // Parse the URL itself, along with any extras.
     let (url, extras) = parse_unnamed_url::<Url>(cursor, working_dir)?;
 
-    // wsp*
-    cursor.eat_whitespace();
-    // quoted_marker?
-    let marker = if cursor.peek_char() == Some(';') {
-        // Skip past the semicolon
-        cursor.next();
-        parse::parse_markers_cursor(cursor, reporter)?
-    } else {
-        None
-    };
-    // wsp*
-    cursor.eat_whitespace();
-    if let Some((pos, char)) = cursor.next() {
-        let message = if char == '#' {
-            format!(
-                r"Expected end of input or `;`, found `{char}`; comments must be preceded by a leading space"
-            )
-        } else if marker.is_none() {
-            format!(r"Expected end of input or `;`, found `{char}`")
-        } else {
-            format!(r"Expected end of input, found `{char}`")
-        };
-        return Err(Pep508Error {
-            message: Pep508ErrorSource::String(message),
-            start: pos,
-            len: char.len_utf8(),
-            input: cursor.to_string(),
-        });
-    }
+    let marker = parse_requirement_suffix(cursor, reporter, None)?;
 
     Ok(UnnamedRequirement {
         url,
         extras: extras.into_boxed_slice(),
-        marker: marker.unwrap_or_default(),
+        marker,
         origin: None,
     })
 }
@@ -216,7 +178,7 @@ fn parse_unnamed_requirement<Url: UnnamedRequirementUrl>(
 /// - `https://download.pytorch.org/whl/torch_stable.html`
 fn preprocess_unnamed_url<Url: UnnamedRequirementUrl>(
     url: &str,
-    #[cfg_attr(not(feature = "non-pep508-extensions"), allow(unused))] working_dir: Option<&Path>,
+    working_dir: Option<&Path>,
     cursor: &Cursor,
     start: usize,
     len: usize,
@@ -226,130 +188,46 @@ fn preprocess_unnamed_url<Url: UnnamedRequirementUrl>(
     // of the URL itself would be ambiguous, since it would consist of the environment variable,
     // which would expand to _more_ than the URL.
     let (url, extras) = if let Some((url, extras)) = split_extras(url) {
-        (url, Some(extras))
-    } else {
-        (url, None)
-    };
-
-    // Parse the extras, if provided.
-    let extras = if let Some(extras) = extras {
-        parse_extras_cursor(&mut Cursor::new(extras)).map_err(|err| Pep508Error {
+        let extras = parse_extras_cursor(&mut Cursor::new(extras)).map_err(|err| Pep508Error {
             message: err.message,
             start: start + url.len() + err.start,
             len: err.len,
             input: cursor.to_string(),
-        })?
+        })?;
+        (url, extras)
     } else {
-        vec![]
+        (url, Vec::new())
     };
 
     // Expand environment variables in the URL.
     let expanded = expand_env_vars(url);
     let vars_expanded = were_vars_expanded(url, expanded.as_ref());
 
-    if let Some((scheme, path)) = split_scheme(&expanded) {
-        match Scheme::parse(scheme) {
-            // Ex) `file:///home/ferris/project/scripts/...`, `file://localhost/home/ferris/project/scripts/...`, or `file:../ferris/`
-            Some(Scheme::File) => {
-                // Strip the leading slashes, along with the `localhost` host, if present.
-                let path = strip_host(path);
-
-                // Transform, e.g., `/C:/Users/ferris/wheel-0.42.0.tar.gz` to `C:\Users\ferris\wheel-0.42.0.tar.gz`.
-                let path = normalize_url_path(path);
-
-                #[cfg(feature = "non-pep508-extensions")]
-                if let Some(working_dir) = working_dir {
-                    let url = Url::parse_path(path.as_ref(), working_dir)
-                        .map_err(|err| Pep508Error {
-                            message: Pep508ErrorSource::UrlError(Box::new(err)),
-                            start,
-                            len,
-                            input: cursor.to_string(),
-                        })?
-                        .with_given(url)
-                        .with_expanded(vars_expanded);
-                    return Ok((url, extras));
-                }
-
-                let url = Url::parse_absolute_path(path.as_ref())
-                    .map_err(|err| Pep508Error {
-                        message: Pep508ErrorSource::UrlError(Box::new(err)),
-                        start,
-                        len,
-                        input: cursor.to_string(),
-                    })?
-                    .with_given(url)
-                    .with_expanded(vars_expanded);
-                Ok((url, extras))
-            }
-            // Ex) `https://download.pytorch.org/whl/torch_stable.html`
-            Some(_) => {
-                // Ex) `https://download.pytorch.org/whl/torch_stable.html`
-                let url = Url::parse_unnamed_url(expanded.as_ref())
-                    .map_err(|err| Pep508Error {
-                        message: Pep508ErrorSource::UrlError(Box::new(err)),
-                        start,
-                        len,
-                        input: cursor.to_string(),
-                    })?
-                    .with_given(url)
-                    .with_expanded(vars_expanded);
-                Ok((url, extras))
-            }
-
-            // Ex) `C:\Users\ferris\wheel-0.42.0.tar.gz`
-            _ => {
-                if let Some(working_dir) = working_dir {
-                    let url = Url::parse_path(expanded.as_ref(), working_dir)
-                        .map_err(|err| Pep508Error {
-                            message: Pep508ErrorSource::UrlError(Box::new(err)),
-                            start,
-                            len,
-                            input: cursor.to_string(),
-                        })?
-                        .with_given(url)
-                        .with_expanded(vars_expanded);
-                    return Ok((url, extras));
-                }
-
-                let url = Url::parse_absolute_path(expanded.as_ref())
-                    .map_err(|err| Pep508Error {
-                        message: Pep508ErrorSource::UrlError(Box::new(err)),
-                        start,
-                        len,
-                        input: cursor.to_string(),
-                    })?
-                    .with_given(url)
-                    .with_expanded(vars_expanded);
-                Ok((url, extras))
-            }
+    let parse_path = |path: &str| match working_dir {
+        Some(working_dir) => Url::parse_path(path, working_dir),
+        None => Url::parse_absolute_path(path),
+    };
+    let url = match split_scheme(&expanded)
+        .and_then(|(scheme, path)| Scheme::parse(scheme).map(|scheme| (scheme, path)))
+    {
+        Some((Scheme::File, path)) => {
+            // Strip leading slashes and the localhost host, then normalize Windows drive letters.
+            let path = normalize_url_path(strip_host(path));
+            parse_path(path.as_ref())
         }
-    } else {
-        // Ex) `../editable/`
-        if let Some(working_dir) = working_dir {
-            let url = Url::parse_path(expanded.as_ref(), working_dir)
-                .map_err(|err| Pep508Error {
-                    message: Pep508ErrorSource::UrlError(Box::new(err)),
-                    start,
-                    len,
-                    input: cursor.to_string(),
-                })?
-                .with_given(url)
-                .with_expanded(vars_expanded);
-            return Ok((url, extras));
-        }
-
-        let url = Url::parse_absolute_path(expanded.as_ref())
-            .map_err(|err| Pep508Error {
-                message: Pep508ErrorSource::UrlError(Box::new(err)),
-                start,
-                len,
-                input: cursor.to_string(),
-            })?
-            .with_given(url)
-            .with_expanded(vars_expanded);
-        Ok((url, extras))
+        Some(_) => Url::parse_unnamed_url(expanded.as_ref()),
+        // An unrecognized scheme may be a Windows drive letter.
+        None => parse_path(expanded.as_ref()),
     }
+    .map_err(|err| Pep508Error {
+        message: Pep508ErrorSource::UrlError(Box::new(err)),
+        start,
+        len,
+        input: cursor.to_string(),
+    })?
+    .with_given(url)
+    .with_expanded(vars_expanded);
+    Ok((url, extras))
 }
 
 /// Like [`crate::parse_url`], but allows for extras to be present at the end of the URL, to comply
@@ -373,62 +251,15 @@ fn parse_unnamed_url<Url: UnnamedRequirementUrl>(
     cursor: &mut Cursor,
     working_dir: Option<&Path>,
 ) -> Result<(Url, Vec<ExtraName>), Pep508Error<Url>> {
-    // wsp*
-    cursor.eat_whitespace();
-
-    // <URI_reference>
-    let (start, len) = {
-        let start = cursor.pos();
-        let mut len = 0;
-        let mut depth = 0u32;
-        while let Some((_, c)) = cursor.next() {
-            // If we see a line break, we're done.
-            if matches!(c, '\r' | '\n') {
-                break;
-            }
-
-            // Track the depth of brackets.
-            if c == '[' {
-                depth = depth.saturating_add(1);
-            } else if c == ']' {
-                depth = depth.saturating_sub(1);
-            }
-
-            // If we see top-level whitespace, check if it's followed by a semicolon or hash. If so,
-            // end the URL at the last non-whitespace character.
-            if depth == 0 && c.is_whitespace() {
-                let mut cursor = cursor.clone();
-                cursor.eat_whitespace();
-                if matches!(cursor.peek_char(), None | Some(';' | '#')) {
-                    break;
-                }
-            }
-
-            len += c.len_utf8();
-
-            // If we see a top-level semicolon or hash followed by whitespace, we're done.
-            if depth == 0 && cursor.peek_char().is_some_and(|c| matches!(c, ';' | '#')) {
-                let mut cursor = cursor.clone();
-                cursor.next();
-                if cursor.peek_char().is_some_and(char::is_whitespace) {
-                    break;
-                }
-            }
+    let mut depth = 0u32;
+    let (start, len) = scan_url::<Url>(cursor, |c| {
+        // Track the depth of brackets, to avoid interpreting delimiters inside extras.
+        if c == '[' {
+            depth = depth.saturating_add(1);
+        } else if c == ']' {
+            depth = depth.saturating_sub(1);
         }
-        (start, len)
-    };
-
-    let url = cursor.slice(start, len);
-    if url.is_empty() {
-        return Err(Pep508Error {
-            message: Pep508ErrorSource::String("Expected URL".to_string()),
-            start,
-            len,
-            input: cursor.to_string(),
-        });
-    }
-
-    let url = preprocess_unnamed_url(url, working_dir, cursor, start, len)?;
-
-    Ok(url)
+        depth == 0
+    })?;
+    preprocess_unnamed_url(cursor.slice(start, len), working_dir, cursor, start, len)
 }

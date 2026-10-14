@@ -58,17 +58,30 @@ mod origin;
 mod unnamed;
 mod verbatim_url;
 
-/// Error with a span attached. Not that those aren't `String` but `Vec<char>` indices.
+/// A parse error with a byte-indexed span.
 #[derive(Debug)]
 pub struct Pep508Error<T: Pep508Url = VerbatimUrl> {
     /// Either we have an error string from our parser or an upstream error from `url`
     pub message: Pep508ErrorSource<T>,
-    /// Span start index
+    /// Byte offset of the error span.
     pub start: usize,
-    /// Span length
+    /// Length of the error span in bytes.
     pub len: usize,
     /// The input string so we can print it underlined
     pub input: String,
+}
+
+impl<T: Pep508Url> Pep508Error<T> {
+    fn unnamed_requirement(cursor: &Cursor, start: usize, example: &str) -> Self {
+        Self {
+            message: Pep508ErrorSource::UnsupportedRequirement(format!(
+                "URL requirement must be preceded by a package name. Add the name of the package before the URL (e.g., `package_name @ {example}`)."
+            )),
+            start,
+            len: cursor.pos() - start,
+            input: cursor.to_string(),
+        }
+    }
 }
 
 /// Either we have an error string from our parser or an upstream error from `url`
@@ -92,11 +105,12 @@ impl<T: Pep508Url> Display for Pep508Error<T> {
             return Display::fmt(&self.message, f);
         }
 
-        // We can use char indices here since it's a Vec<char>
-        let start_offset = self.input[..self.start]
-            .chars()
-            .filter_map(unicode_width::UnicodeWidthChar::width)
-            .sum::<usize>();
+        let display_width = |text: &str| {
+            text.chars()
+                .filter_map(unicode_width::UnicodeWidthChar::width)
+                .sum::<usize>()
+        };
+        let start_offset = display_width(&self.input[..self.start]);
         let underline_len = if self.start == self.input.len() {
             // We also allow 0 here for convenience
             assert!(
@@ -106,10 +120,7 @@ impl<T: Pep508Url> Display for Pep508Error<T> {
             );
             1
         } else {
-            self.input[self.start..self.start + self.len]
-                .chars()
-                .filter_map(unicode_width::UnicodeWidthChar::width)
-                .sum::<usize>()
+            display_width(&self.input[self.start..self.start + self.len])
         };
         write!(
             f,
@@ -172,9 +183,7 @@ fn fmt_requirement<T: Pep508Url + Display>(
     display_credentials: bool,
 ) -> std::fmt::Result {
     write!(f, "{}", requirement.name)?;
-    if !requirement.extras.is_empty() {
-        write!(f, "[{}]", requirement.extras.iter().format(","))?;
-    }
+    fmt_extras(&requirement.extras, f)?;
     if let Some(version_or_url) = &requirement.version_or_url {
         match version_or_url {
             VersionOrUrl::VersionSpecifier(version_specifier) => {
@@ -196,30 +205,46 @@ fn fmt_requirement<T: Pep508Url + Display>(
     Ok(())
 }
 
+fn fmt_extras(extras: &[ExtraName], f: &mut Formatter<'_>) -> std::fmt::Result {
+    if extras.is_empty() {
+        Ok(())
+    } else {
+        write!(f, "[{}]", extras.iter().format(","))
+    }
+}
+
+/// A Serde visitor that parses a string without allocating a temporary copy.
+struct ParseVisitor<F> {
+    expected: &'static str,
+    parse: F,
+}
+
+impl<T, E, F> de::Visitor<'_> for ParseVisitor<F>
+where
+    F: FnOnce(&str) -> Result<T, E>,
+    E: Display,
+{
+    type Value = T;
+
+    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.expected)
+    }
+
+    fn visit_str<D: de::Error>(self, value: &str) -> Result<Self::Value, D> {
+        (self.parse)(value).map_err(D::custom)
+    }
+}
+
 /// <https://github.com/serde-rs/serde/issues/908#issuecomment-298027413>
 impl<'de, T: Pep508Url> Deserialize<'de> for Requirement<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct RequirementVisitor<T>(std::marker::PhantomData<T>);
-
-        impl<T: Pep508Url> serde::de::Visitor<'_> for RequirementVisitor<T> {
-            type Value = Requirement<T>;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a string containing a PEP 508 requirement")
-            }
-
-            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                FromStr::from_str(v).map_err(de::Error::custom)
-            }
-        }
-
-        deserializer.deserialize_str(RequirementVisitor(std::marker::PhantomData))
+        deserializer.deserialize_str(ParseVisitor {
+            expected: "a string containing a PEP 508 requirement",
+            parse: Self::from_str,
+        })
     }
 }
 
@@ -452,26 +477,17 @@ fn parse_name<T: Pep508Url>(cursor: &mut Cursor) -> Result<PackageName, Pep508Er
 
     if let Some((index, char)) = cursor.next() {
         if !matches!(char, 'A'..='Z' | 'a'..='z' | '0'..='9') {
-            // Check if the user added a filesystem path without a package name. pip supports this
-            // in `requirements.txt`, but it doesn't adhere to the PEP 508 grammar.
-            let mut clone = cursor.clone().at(start);
-            return if looks_like_unnamed_requirement(&mut clone) {
-                Err(Pep508Error {
-                    message: Pep508ErrorSource::UnsupportedRequirement("URL requirement must be preceded by a package name. Add the name of the package before the URL (e.g., `package_name @ /path/to/file`).".to_string()),
-                    start,
-                    len: clone.pos() - start,
-                    input: clone.to_string(),
-                })
-            } else {
-                Err(Pep508Error {
-                    message: Pep508ErrorSource::String(format!(
-                        "Expected package name starting with an alphanumeric character, found `{char}`"
-                    )),
-                    start: index,
-                    len: char.len_utf8(),
-                    input: cursor.to_string(),
-                })
-            };
+            if let Some(err) = unnamed_requirement_error(cursor, start, "/path/to/file") {
+                return Err(err);
+            }
+            return Err(Pep508Error {
+                message: Pep508ErrorSource::String(format!(
+                    "Expected package name starting with an alphanumeric character, found `{char}`"
+                )),
+                start: index,
+                len: char.len_utf8(),
+                input: cursor.to_string(),
+            });
         }
     } else {
         return Err(Pep508Error {
@@ -500,12 +516,16 @@ fn parse_name<T: Pep508Url>(cursor: &mut Cursor) -> Result<PackageName, Pep508Er
     Ok(PackageName::from_str(cursor.slice(start, len)).unwrap())
 }
 
-/// Parse a potential URL from the [`Cursor`], advancing the [`Cursor`] to the end of the URL.
-///
-/// Returns `true` if the URL appears to be a viable unnamed requirement, and `false` otherwise.
-fn looks_like_unnamed_requirement(cursor: &mut Cursor) -> bool {
+/// Diagnose a URL or path without a package name, which requirements files permit but PEP 508 does
+/// not. The diagnostic spans the potential URL without advancing the parser.
+fn unnamed_requirement_error<T: Pep508Url>(
+    cursor: &Cursor,
+    start: usize,
+    example: &str,
+) -> Option<Pep508Error<T>> {
+    let mut cursor = cursor.clone().at(start);
     // Read the entire path.
-    let (start, len) = cursor.take_while(|char| !char.is_whitespace());
+    let (_, len) = cursor.take_while(|char| !char.is_whitespace());
     let url = cursor.slice(start, len);
 
     // Expand any environment variables in the path.
@@ -516,34 +536,13 @@ fn looks_like_unnamed_requirement(cursor: &mut Cursor) -> bool {
         .map(|(url, _)| url)
         .unwrap_or(&expanded);
 
-    // Analyze the path.
-    let mut chars = url.chars();
-
-    let Some(first_char) = chars.next() else {
-        return false;
-    };
-
-    // Ex) `/bin/ls`
-    if first_char == '\\' || first_char == '/' || first_char == '.' {
-        return true;
-    }
-
-    // Ex) `https://` or `C:`
-    if split_scheme(url).is_some() {
-        return true;
-    }
-
-    // Ex) `foo/bar`
-    if url.contains('/') || url.contains('\\') {
-        return true;
-    }
-
-    // Ex) `foo.tar.gz`
-    if looks_like_archive(url) {
-        return true;
-    }
-
-    false
+    let first_char = url.chars().next()?;
+    (matches!(first_char, '\\' | '/' | '.')
+        || split_scheme(url).is_some()
+        || url.contains('/')
+        || url.contains('\\')
+        || looks_like_archive(url))
+    .then(|| Pep508Error::unnamed_requirement(&cursor, start, example))
 }
 
 /// Returns `true` if a file looks like an archive.
@@ -581,7 +580,6 @@ fn parse_extras_cursor<T: Pep508Url>(
     cursor.eat_whitespace();
 
     let mut extras = Vec::new();
-    let mut is_first_iteration = true;
 
     loop {
         // End of the extras section. (Empty extras are allowed.)
@@ -591,7 +589,7 @@ fn parse_extras_cursor<T: Pep508Url>(
         }
 
         // Comma separator
-        match (cursor.peek(), is_first_iteration) {
+        match (cursor.peek(), extras.is_empty()) {
             // For the first iteration, we don't expect a comma.
             (Some((pos, ',')), true) => {
                 return Err(Pep508Error {
@@ -622,23 +620,11 @@ fn parse_extras_cursor<T: Pep508Url>(
 
         // wsp* before the identifier
         cursor.eat_whitespace();
-        let mut buffer = String::new();
-        let early_eof_error = Pep508Error {
-            message: Pep508ErrorSource::String(
-                "Missing closing bracket (expected ']', found end of dependency specification)"
-                    .to_string(),
-            ),
-            start: bracket_pos,
-            len: 1,
-            input: cursor.to_string(),
-        };
 
         // First char of the identifier.
-        match cursor.next() {
+        let start = match cursor.next() {
             // letterOrDigit
-            Some((_, alphanumeric @ ('a'..='z' | 'A'..='Z' | '0'..='9'))) => {
-                buffer.push(alphanumeric);
-            }
+            Some((start, 'a'..='z' | 'A'..='Z' | '0'..='9')) => start,
             Some((pos, other)) => {
                 return Err(Pep508Error {
                     message: Pep508ErrorSource::String(format!(
@@ -649,15 +635,25 @@ fn parse_extras_cursor<T: Pep508Url>(
                     input: cursor.to_string(),
                 });
             }
-            None => return Err(early_eof_error),
-        }
+            None => {
+                return Err(Pep508Error {
+                    message: Pep508ErrorSource::String(
+                        "Missing closing bracket (expected ']', found end of dependency specification)"
+                            .to_string(),
+                    ),
+                    start: bracket_pos,
+                    len: 1,
+                    input: cursor.to_string(),
+                });
+            }
+        };
         // Parse from the second char of the identifier
         // We handle the illegal character case below
         // identifier_end = letterOrDigit | (('-' | '_' | '.' )* letterOrDigit)
         // identifier_end*
-        let (start, len) = cursor
+        cursor
             .take_while(|char| matches!(char, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.'));
-        buffer.push_str(cursor.slice(start, len));
+        let len = cursor.pos() - start;
         match cursor.peek() {
             Some((pos, char)) if char != ',' && char != ']' && !char.is_whitespace() => {
                 return Err(Pep508Error {
@@ -671,7 +667,7 @@ fn parse_extras_cursor<T: Pep508Url>(
             }
             _ => {}
         }
-        if let Some(last @ ('-' | '_' | '.')) = buffer.chars().last() {
+        if let Some(last @ ('-' | '_' | '.')) = cursor.slice(start, len).chars().last() {
             return Err(Pep508Error {
                 message: Pep508ErrorSource::String(format!(
                     "Extra name must end with an alphanumeric character, not `{last}`"
@@ -686,10 +682,9 @@ fn parse_extras_cursor<T: Pep508Url>(
 
         // Add the parsed extra
         extras.push(
-            ExtraName::from_str(&buffer)
+            ExtraName::from_str(cursor.slice(start, len))
                 .expect("`ExtraName` validation should match PEP 508 parsing"),
         );
-        is_first_iteration = false;
     }
 
     Ok(extras)
@@ -716,44 +711,57 @@ fn parse_url<T: Pep508Url>(
     cursor: &mut Cursor,
     working_dir: Option<&Path>,
 ) -> Result<T, Pep508Error<T>> {
+    let (start, len) = scan_url::<T>(cursor, |_| true)?;
+    T::parse_url(cursor.slice(start, len), working_dir).map_err(|err| Pep508Error {
+        message: Pep508ErrorSource::UrlError(Box::new(err)),
+        start,
+        len,
+        input: cursor.to_string(),
+    })
+}
+
+/// Scan the nonempty URL span, recognizing delimiters only at the top level.
+fn scan_url<T: Pep508Url>(
+    cursor: &mut Cursor,
+    mut at_top_level: impl FnMut(char) -> bool,
+) -> Result<(usize, usize), Pep508Error<T>> {
+    const DELIMITERS: [char; 2] = [';', '#'];
+
     // wsp*
     cursor.eat_whitespace();
     // <URI_reference>
-    let (start, len) = {
-        let start = cursor.pos();
-        let mut len = 0;
-        while let Some((_, c)) = cursor.next() {
-            // If we see a line break, we're done.
-            if matches!(c, '\r' | '\n') {
+    let start = cursor.pos();
+    let mut len = 0;
+    while let Some((_, c)) = cursor.next() {
+        // If we see a line break, we're done.
+        if matches!(c, '\r' | '\n') {
+            break;
+        }
+
+        let top_level = at_top_level(c);
+        // If we see top-level whitespace, check if it's followed by a semicolon or hash. If so,
+        // end the URL at the last non-whitespace character.
+        if top_level && c.is_whitespace() {
+            let remaining = cursor.remaining().trim_start();
+            if remaining.is_empty() || remaining.starts_with(DELIMITERS) {
                 break;
             }
-
-            // If we see top-level whitespace, check if it's followed by a semicolon or hash. If so,
-            // end the URL at the last non-whitespace character.
-            if c.is_whitespace() {
-                let mut cursor = cursor.clone();
-                cursor.eat_whitespace();
-                if matches!(cursor.peek_char(), None | Some(';' | '#')) {
-                    break;
-                }
-            }
-
-            len += c.len_utf8();
-
-            // If we see a top-level semicolon or hash followed by whitespace, we're done.
-            if cursor.peek_char().is_some_and(|c| matches!(c, ';' | '#')) {
-                let mut cursor = cursor.clone();
-                cursor.next();
-                if cursor.peek_char().is_some_and(char::is_whitespace) {
-                    break;
-                }
-            }
         }
-        (start, len)
-    };
 
-    let url = cursor.slice(start, len);
-    if url.is_empty() {
+        len += c.len_utf8();
+
+        // If we see a top-level semicolon or hash followed by whitespace, we're done.
+        if top_level
+            && cursor
+                .remaining()
+                .strip_prefix(DELIMITERS)
+                .is_some_and(|remaining| remaining.starts_with(char::is_whitespace))
+        {
+            break;
+        }
+    }
+
+    if len == 0 {
         return Err(Pep508Error {
             message: Pep508ErrorSource::String("Expected URL".to_string()),
             start,
@@ -762,14 +770,7 @@ fn parse_url<T: Pep508Url>(
         });
     }
 
-    let url = T::parse_url(url, working_dir).map_err(|err| Pep508Error {
-        message: Pep508ErrorSource::UrlError(Box::new(err)),
-        start,
-        len,
-        input: cursor.to_string(),
-    })?;
-
-    Ok(url)
+    Ok((start, len))
 }
 
 /// Identify the extras in a relative URL (e.g., `../editable[dev]`).
@@ -796,12 +797,11 @@ pub(crate) fn split_extras(given: &str) -> Option<(&str, &str)> {
 
 /// PEP 440 wrapper
 fn parse_specifier<T: Pep508Url>(
-    cursor: &mut Cursor,
-    buffer: &str,
+    cursor: &Cursor,
     start: usize,
     end: usize,
 ) -> Result<VersionSpecifier, Pep508Error<T>> {
-    VersionSpecifier::from_str(buffer).map_err(|err| Pep508Error {
+    VersionSpecifier::from_str(cursor.slice(start, end - start)).map_err(|err| Pep508Error {
         message: Pep508ErrorSource::String(err.to_string()),
         start,
         len: end - start,
@@ -809,92 +809,90 @@ fn parse_specifier<T: Pep508Url>(
     })
 }
 
-/// Such as `>=1.19,<2.0`, either delimited by the end of the specifier or a `;` for the marker part
+/// Parse a version specifier, optionally enclosed in parentheses.
 ///
 /// ```text
-/// version_one (wsp* ',' version_one)* (wsp* ',')?
+/// versionspec = ('(' version_many ')') | version_many
+/// version_many = version_one (wsp* ',' version_one)* (wsp* ',')?
 /// ```
 fn parse_version_specifier<T: Pep508Url>(
     cursor: &mut Cursor,
-) -> Result<Option<VersionOrUrl<T>>, Pep508Error<T>> {
-    let mut start = cursor.pos();
-    let mut specifiers = Vec::new();
-    let mut buffer = String::new();
-    let requirement_kind = loop {
-        match cursor.peek() {
-            Some((end, ',')) => {
-                let specifier = parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                buffer.clear();
-                cursor.next();
-                start = end + 1;
-            }
-            Some((_, ';')) | None => {
-                if buffer.trim().is_empty() && !specifiers.is_empty() {
-                    break Some(VersionOrUrl::VersionSpecifier(
-                        specifiers.into_iter().collect(),
-                    ));
-                }
-                let end = cursor.pos();
-                let specifier = parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                break Some(VersionOrUrl::VersionSpecifier(
-                    specifiers.into_iter().collect(),
-                ));
-            }
-            Some((_, char)) => {
-                buffer.push(char);
-                cursor.next();
-            }
-        }
+) -> Result<VersionOrUrl<T>, Pep508Error<T>> {
+    let opening_parenthesis = cursor.eat_char('(');
+    let terminator = if opening_parenthesis.is_some() {
+        // Makes for a slightly better error underline.
+        cursor.eat_whitespace();
+        ')'
+    } else {
+        ';'
     };
-    Ok(requirement_kind)
+
+    let mut specifiers = Vec::new();
+    let (start, end) = loop {
+        let (start, len) = cursor.take_while(|c| c != ',' && c != terminator);
+        let end = start + len;
+        if cursor.eat_char(',').is_none() {
+            break (start, end);
+        }
+        specifiers.push(parse_specifier(cursor, start, end)?);
+    };
+
+    if let Some(start) = opening_parenthesis
+        && cursor.eat_char(')').is_none()
+    {
+        return Err(Pep508Error {
+            message: Pep508ErrorSource::String(
+                "Missing closing parenthesis (expected ')', found end of dependency specification)"
+                    .to_string(),
+            ),
+            start,
+            len: 1,
+            input: cursor.to_string(),
+        });
+    }
+
+    // Allow one trailing comma after a nonempty list.
+    if specifiers.is_empty() || !cursor.slice(start, end - start).trim().is_empty() {
+        specifiers.push(parse_specifier(cursor, start, end)?);
+    }
+    Ok(VersionOrUrl::VersionSpecifier(
+        specifiers.into_iter().collect(),
+    ))
 }
 
-/// Such as `(>=1.19,<2.0)`
-///
-/// ```text
-/// '(' version_one (wsp* ',' version_one)* (wsp* ',')? ')'
-/// ```
-fn parse_version_specifier_parentheses<T: Pep508Url>(
+/// Parse an optional marker and ensure the remainder is empty or starts with a permitted comment.
+fn parse_requirement_suffix<T: Pep508Url>(
     cursor: &mut Cursor,
-) -> Result<Option<VersionOrUrl<T>>, Pep508Error<T>> {
-    let brace_pos = cursor.pos();
-    cursor.next();
-    // Makes for slightly better error underline
+    reporter: &mut impl Reporter,
+    comment_delimiter: Option<char>,
+) -> Result<MarkerTree, Pep508Error<T>> {
     cursor.eat_whitespace();
-    let mut start = cursor.pos();
-    let mut specifiers = Vec::new();
-    let mut buffer = String::new();
-    let requirement_kind = loop {
-        match cursor.next() {
-            Some((end, ',')) => {
-                let specifier =
-                    parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                buffer.clear();
-                start = end + 1;
-            }
-            Some((end, ')')) => {
-                if buffer.trim().is_empty() && !specifiers.is_empty() {
-                    break Some(VersionOrUrl::VersionSpecifier(
-                        specifiers.into_iter().collect(),
-                    ));
-                }
-                let specifier = parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                break Some(VersionOrUrl::VersionSpecifier(specifiers.into_iter().collect()));
-            }
-            Some((_, char)) => buffer.push(char),
-            None => return Err(Pep508Error {
-                message: Pep508ErrorSource::String("Missing closing parenthesis (expected ')', found end of dependency specification)".to_string()),
-                start: brace_pos,
-                len: 1,
-                input: cursor.to_string(),
-            }),
-        }
+    let marker = if cursor.eat_char(';').is_some() {
+        marker::parse::parse_markers_cursor(cursor, reporter)?
+    } else {
+        None
     };
-    Ok(requirement_kind)
+    cursor.eat_whitespace();
+
+    if let Some((pos, char)) = cursor.next().filter(|(_, c)| comment_delimiter != Some(*c)) {
+        let message = if char == '#' {
+            format!(
+                r"Expected end of input or `;`, found `{char}`; comments must be preceded by a leading space"
+            )
+        } else if marker.is_none() {
+            format!(r"Expected end of input or `;`, found `{char}`")
+        } else {
+            format!(r"Expected end of input, found `{char}`")
+        };
+        return Err(Pep508Error {
+            message: Pep508ErrorSource::String(message),
+            start: pos,
+            len: char.len_utf8(),
+            input: cursor.to_string(),
+        });
+    }
+
+    Ok(marker.unwrap_or_default())
 }
 
 /// Parse a PEP 508-compliant [dependency specifier](https://packaging.python.org/en/latest/specifications/dependency-specifiers).
@@ -938,33 +936,21 @@ fn parse_pep508_requirement<T: Pep508Url>(
             Some(VersionOrUrl::Url(parse_url(cursor, working_dir)?))
         }
         // name_req
-        Some('(') => parse_version_specifier_parentheses(cursor)?,
-        // name_req
-        Some('<' | '=' | '>' | '~' | '!') => parse_version_specifier(cursor)?,
+        Some('(' | '<' | '=' | '>' | '~' | '!') => Some(parse_version_specifier(cursor)?),
         // No requirements / any version
         Some(';') | None => None,
         Some(other) => {
-            // Rewind to the start of the version specifier, to see if the user added a URL without
-            // a package name. pip supports this in `requirements.txt`, but it doesn't adhere to
-            // the PEP 508 grammar.
-            let mut clone = cursor.clone().at(start);
-            return if looks_like_unnamed_requirement(&mut clone) {
-                Err(Pep508Error {
-                    message: Pep508ErrorSource::UnsupportedRequirement("URL requirement must be preceded by a package name. Add the name of the package before the URL (e.g., `package_name @ https://...`).".to_string()),
-                    start,
-                    len: clone.pos() - start,
-                    input: clone.to_string(),
-                })
-            } else {
-                Err(Pep508Error {
-                    message: Pep508ErrorSource::String(format!(
-                        "Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `{other}`"
-                    )),
-                    start: cursor.pos(),
-                    len: other.len_utf8(),
-                    input: cursor.to_string(),
-                })
-            };
+            if let Some(err) = unnamed_requirement_error(cursor, start, "https://...") {
+                return Err(err);
+            }
+            return Err(Pep508Error {
+                message: Pep508ErrorSource::String(format!(
+                    "Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `{other}`"
+                )),
+                start: cursor.pos(),
+                len: other.len_utf8(),
+                input: cursor.to_string(),
+            });
         }
     };
 
@@ -976,52 +962,21 @@ fn parse_pep508_requirement<T: Pep508Url>(
     if requirement_kind.is_none() {
         if looks_like_archive(cursor.slice(name_start, name_end - name_start)) {
             let clone = cursor.clone().at(start);
-            return Err(Pep508Error {
-                message: Pep508ErrorSource::UnsupportedRequirement("URL requirement must be preceded by a package name. Add the name of the package before the URL (e.g., `package_name @ https://...`).".to_string()),
+            return Err(Pep508Error::unnamed_requirement(
+                &clone,
                 start,
-                len: clone.pos() - start,
-                input: clone.to_string(),
-            });
+                "https://...",
+            ));
         }
     }
 
-    // wsp*
-    cursor.eat_whitespace();
-    // quoted_marker?
-    let marker = if cursor.peek_char() == Some(';') {
-        // Skip past the semicolon
-        cursor.next();
-        marker::parse::parse_markers_cursor(cursor, reporter)?
-    } else {
-        None
-    };
-
-    // wsp*
-    cursor.eat_whitespace();
-
-    if let Some((pos, char)) = cursor.next().filter(|(_, c)| *c != '#') {
-        let message = if char == '#' {
-            format!(
-                r"Expected end of input or `;`, found `{char}`; comments must be preceded by a leading space"
-            )
-        } else if marker.is_none() {
-            format!(r"Expected end of input or `;`, found `{char}`")
-        } else {
-            format!(r"Expected end of input, found `{char}`")
-        };
-        return Err(Pep508Error {
-            message: Pep508ErrorSource::String(message),
-            start: pos,
-            len: char.len_utf8(),
-            input: cursor.to_string(),
-        });
-    }
+    let marker = parse_requirement_suffix(cursor, reporter, Some('#'))?;
 
     Ok(Requirement {
         name,
         extras: extras.into_boxed_slice(),
         version_or_url: requirement_kind,
-        marker: marker.unwrap_or_default(),
+        marker,
         origin: None,
     })
 }

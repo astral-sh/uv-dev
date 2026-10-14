@@ -8,7 +8,6 @@ use crate::{Pep508Error, Pep508ErrorSource, Pep508Url};
 pub(crate) struct Cursor<'a> {
     input: &'a str,
     chars: Chars<'a>,
-    pos: usize,
 }
 
 impl<'a> Cursor<'a> {
@@ -17,7 +16,6 @@ impl<'a> Cursor<'a> {
         Self {
             input,
             chars: input.chars(),
-            pos: 0,
         }
     }
 
@@ -26,13 +24,17 @@ impl<'a> Cursor<'a> {
         Self {
             input: self.input,
             chars: self.input[pos..].chars(),
-            pos,
         }
     }
 
     /// Returns the current byte position of the cursor.
     pub(crate) fn pos(&self) -> usize {
-        self.pos
+        self.input.len() - self.remaining().len()
+    }
+
+    /// Returns the unconsumed input.
+    pub(crate) fn remaining(&self) -> &'a str {
+        self.chars.as_str()
     }
 
     /// Returns a slice over the input string.
@@ -42,7 +44,7 @@ impl<'a> Cursor<'a> {
 
     /// Peeks the next character and position from the input stream without consuming it.
     pub(crate) fn peek(&self) -> Option<(usize, char)> {
-        self.chars.clone().next().map(|char| (self.pos, char))
+        self.peek_char().map(|char| (self.pos(), char))
     }
 
     /// Peeks the next character from the input stream without consuming it.
@@ -52,58 +54,52 @@ impl<'a> Cursor<'a> {
 
     /// Eats the next character from the input stream if it matches the given token.
     pub(crate) fn eat_char(&mut self, token: char) -> Option<usize> {
-        let (start_pos, peek_char) = self.peek()?;
-        if peek_char == token {
-            self.next();
-            Some(start_pos)
-        } else {
-            None
-        }
+        let remaining = self.remaining().strip_prefix(token)?;
+        let start = self.pos();
+        self.advance_to(remaining);
+        Some(start)
     }
 
     /// Consumes whitespace from the cursor.
     pub(crate) fn eat_whitespace(&mut self) {
-        while let Some(char) = self.peek_char() {
-            if char.is_whitespace() {
-                self.next();
-            } else {
-                return;
-            }
-        }
+        self.take_while(char::is_whitespace);
     }
 
     /// Returns the next character and position from the input stream and consumes it.
     pub(crate) fn next(&mut self) -> Option<(usize, char)> {
-        let pos = self.pos;
+        let pos = self.pos();
         let char = self.chars.next()?;
-        self.pos += char.len_utf8();
         Some((pos, char))
     }
 
-    /// Peeks over the cursor as long as the condition is met, without consuming it.
-    pub(crate) fn peek_while(&mut self, condition: impl Fn(char) -> bool) -> (usize, usize) {
-        let peeker = self.chars.clone();
-        let start = self.pos();
-        let len = peeker
-            .take_while(|c| condition(*c))
-            .map(char::len_utf8)
-            .sum();
-        (start, len)
+    /// Consume a keyword followed by a delimiter or the end of input.
+    pub(crate) fn eat_keyword(
+        &mut self,
+        keyword: &str,
+        is_delimiter: impl FnOnce(char) -> bool,
+    ) -> bool {
+        let Some(remaining) = self.remaining().strip_prefix(keyword) else {
+            return false;
+        };
+        if remaining.chars().next().is_some_and(|c| !is_delimiter(c)) {
+            return false;
+        }
+
+        self.advance_to(remaining);
+        true
     }
 
-    /// Consumes characters from the cursor as long as the condition is met.
+    /// Consumes characters from the cursor as long as the condition is met, returning the start
+    /// position and length in bytes.
     pub(crate) fn take_while(&mut self, condition: impl Fn(char) -> bool) -> (usize, usize) {
         let start = self.pos();
-        let mut len = 0;
-        while let Some(char) = self.peek_char() {
-            if !condition(char) {
-                break;
-            }
+        self.advance_to(self.remaining().trim_start_matches(condition));
+        (start, self.pos() - start)
+    }
 
-            self.next();
-            len += char.len_utf8();
-        }
-        (start, len)
+    /// Advance to a suffix of the current unconsumed input.
+    fn advance_to(&mut self, remaining: &'a str) {
+        self.chars = remaining.chars();
     }
 
     /// Consumes characters from the cursor, raising an error if it doesn't match the given token.

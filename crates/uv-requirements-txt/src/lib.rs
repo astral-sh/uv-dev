@@ -43,6 +43,7 @@ use std::str::FromStr;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 use unscanny::{Pattern, Scanner};
+#[cfg(feature = "http")]
 use url::Url;
 
 #[cfg(feature = "http")]
@@ -269,49 +270,46 @@ impl RequirementsTxt {
                         file: Box::new(requirements_txt.clone()),
                         error: RequirementsTxtParserError::Io(err),
                     })?,
+                #[cfg(feature = "http")]
                 RequirementsInput::Remote(url) => {
-                    #[cfg(not(feature = "http"))]
-                    {
+                    // Avoid constructing a client if network is disabled already.
+                    if client_builder.is_offline() {
                         return Err(RequirementsTxtFileError {
                             file: Box::new(requirements_txt.clone()),
                             error: RequirementsTxtParserError::Io(io::Error::new(
                                 io::ErrorKind::InvalidInput,
-                                "Remote file not supported without `http` feature",
+                                format!(
+                                    "Network connectivity is disabled, but a remote requirements file was requested: {url}"
+                                ),
                             )),
                         });
                     }
-
-                    #[cfg(feature = "http")]
-                    {
-                        // Avoid constructing a client if network is disabled already.
-                        if client_builder.is_offline() {
-                            return Err(RequirementsTxtFileError {
+                    let client =
+                        client_builder
+                            .build()
+                            .map_err(|err| RequirementsTxtFileError {
                                 file: Box::new(requirements_txt.clone()),
-                                error: RequirementsTxtParserError::Io(io::Error::new(
-                                    io::ErrorKind::InvalidInput,
-                                    format!(
-                                        "Network connectivity is disabled, but a remote requirements file was requested: {url}"
-                                    ),
-                                )),
-                            });
+                                error: RequirementsTxtParserError::ClientBuild(
+                                    url.clone(),
+                                    Box::new(err),
+                                ),
+                            })?;
+                    read_url_to_string(url, client).await.map_err(|err| {
+                        RequirementsTxtFileError {
+                            file: Box::new(requirements_txt.clone()),
+                            error: err,
                         }
-                        let client =
-                            client_builder
-                                .build()
-                                .map_err(|err| RequirementsTxtFileError {
-                                    file: Box::new(requirements_txt.clone()),
-                                    error: RequirementsTxtParserError::ClientBuild(
-                                        url.clone(),
-                                        Box::new(err),
-                                    ),
-                                })?;
-                        read_url_to_string(url, client).await.map_err(|err| {
-                            RequirementsTxtFileError {
-                                file: Box::new(requirements_txt.clone()),
-                                error: err,
-                            }
-                        })?
-                    }
+                    })?
+                }
+                #[cfg(not(feature = "http"))]
+                RequirementsInput::Remote(_) => {
+                    return Err(RequirementsTxtFileError {
+                        file: Box::new(requirements_txt.clone()),
+                        error: RequirementsTxtParserError::Io(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "Remote file not supported without `http` feature",
+                        )),
+                    });
                 }
             };
             cache.insert(requirements_txt.clone(), content.clone());
@@ -2908,24 +2906,62 @@ mod test {
         Ok(())
     }
 
-    #[test_case("--no-indexx"; "no index")]
-    #[test_case("--prefoo"; "pre")]
-    #[test_case("--trusted-hostile"; "trusted host")]
     #[tokio::test]
-    async fn malformed_option(content: &str) -> Result<()> {
+    async fn malformed_option_no_index() -> Result<()> {
         let temp_dir = assert_fs::TempDir::new()?;
         let requirements_txt = temp_dir.child("requirements.txt");
-        requirements_txt.write_str(content)?;
+        requirements_txt.write_str("--no-indexx")?;
 
         let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
             .await
             .unwrap_err();
         let errors = anyhow::Error::new(error).chain().join("\n");
 
-        let requirement_txt = regex::escape(&requirements_txt.path().user_display().to_string());
-        let filters = vec![(requirement_txt.as_str(), "<REQUIREMENTS_TXT>")];
+        let requirements_txt = regex::escape(&requirements_txt.path().user_display().to_string());
         insta::with_settings!({
-            filters => filters
+            filters => vec![(requirements_txt.as_str(), "<REQUIREMENTS_TXT>")]
+        }, {
+            insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1");
+        });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn malformed_option_pre() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+        requirements_txt.write_str("--prefoo")?;
+
+        let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
+            .await
+            .unwrap_err();
+        let errors = anyhow::Error::new(error).chain().join("\n");
+
+        let requirements_txt = regex::escape(&requirements_txt.path().user_display().to_string());
+        insta::with_settings!({
+            filters => vec![(requirements_txt.as_str(), "<REQUIREMENTS_TXT>")]
+        }, {
+            insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1");
+        });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn malformed_option_trusted_host() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+        requirements_txt.write_str("--trusted-hostile")?;
+
+        let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
+            .await
+            .unwrap_err();
+        let errors = anyhow::Error::new(error).chain().join("\n");
+
+        let requirements_txt = regex::escape(&requirements_txt.path().user_display().to_string());
+        insta::with_settings!({
+            filters => vec![(requirements_txt.as_str(), "<REQUIREMENTS_TXT>")]
         }, {
             insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1");
         });
