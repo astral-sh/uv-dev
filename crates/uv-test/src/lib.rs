@@ -1927,6 +1927,8 @@ impl TestContext {
 
         // Include a non-canonicalized version
         patterns.push(Self::path_pattern(path));
+        // An already canonical path has the same spelling in both forms.
+        patterns.dedup();
 
         patterns
     }
@@ -2409,6 +2411,20 @@ mod python_discovery_tests {
         let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
 
         assert_path_missing(context.temp_dir.join("cache"));
+    }
+}
+
+#[cfg(test)]
+mod path_pattern_tests {
+    use super::TestContext;
+
+    #[test]
+    fn canonical_path_has_one_pattern() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let canonical = directory.path().canonicalize()?;
+
+        assert_eq!(TestContext::path_patterns(canonical).len(), 1);
+        Ok(())
     }
 }
 
