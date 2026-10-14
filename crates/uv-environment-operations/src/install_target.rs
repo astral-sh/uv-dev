@@ -618,11 +618,12 @@ impl<'lock> InstallTarget<'lock> {
         self.lock().build_constraints(self.install_path())
     }
 
-    /// Validate the extras requested by the [`ExtrasSpecification`].
+    /// Validate the explicitly requested extras against the installation target.
     pub fn validate_extras(self, extras: &ExtrasSpecification) -> Result<(), EnvironmentError> {
-        if extras.is_empty() {
+        let mut requested_extras = extras.explicit_names().peekable();
+        let Some(first_extra) = requested_extras.peek().copied() else {
             return Ok(());
-        }
+        };
         match self {
             Self::Project { lock, .. }
             | Self::Projects { lock, .. }
@@ -630,11 +631,6 @@ impl<'lock> InstallTarget<'lock> {
             | Self::NonProjectWorkspace { lock, .. }
             | Self::Lockfile { lock, .. } => {
                 if !lock.supports_provides_extra() {
-                    return Ok(());
-                }
-
-                let mut requested_extras = extras.explicit_names().peekable();
-                if requested_extras.peek().is_none() {
                     return Ok(());
                 }
 
@@ -667,13 +663,7 @@ impl<'lock> InstallTarget<'lock> {
                 }
             }
             Self::Script { .. } => {
-                // We shouldn't get here if the list is empty so we can assume it isn't
-                let extra = extras
-                    .explicit_names()
-                    .next()
-                    .expect("non-empty extras")
-                    .clone();
-                return Err(EnvironmentError::MissingExtraScript(extra));
+                return Err(EnvironmentError::MissingExtraScript(first_extra.clone()));
             }
         }
 
