@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
-use serde::{Deserialize, Deserializer};
+use serde::de::{MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, de};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, Bound};
 use std::ffi::OsStr;
@@ -962,7 +962,7 @@ struct Project {
     dynamic: Option<Vec<String>>,
 }
 
-/// The string and table forms used by README and license metadata.
+/// The value forms used by project metadata fields.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum StringOrTable {
@@ -977,6 +977,15 @@ enum StringOrTable {
 enum StringOrIgnored {
     String(String),
     Ignored(de::IgnoredAny),
+}
+
+impl StringOrIgnored {
+    fn into_string<E: de::Error>(self, expected: &str) -> Result<String, E> {
+        match self {
+            Self::String(value) => Ok(value),
+            Self::Ignored(_) => Err(de::Error::custom(expected)),
+        }
+    }
 }
 
 /// The optional `project.readme` key in a pyproject.toml as specified in
@@ -1015,13 +1024,7 @@ impl<'de> Deserialize<'de> for Readme {
             };
             let charset = fields
                 .remove("charset")
-                .map(|value| {
-                    if let StringOrIgnored::String(charset) = value {
-                        Ok(charset)
-                    } else {
-                        Err(de::Error::custom(EXPECTED))
-                    }
-                })
+                .map(|value| value.into_string(EXPECTED))
                 .transpose()?;
             if let Some(StringOrIgnored::String(file)) = fields.remove("file") {
                 return Ok(Self::File {
@@ -1147,50 +1150,140 @@ impl<'de> Deserialize<'de> for Contact {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            #[serde(default, deserialize_with = "deserialize_string")]
-            name: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_string")]
-            email: Option<String>,
-        }
+        const EXPECTED: &str = "a table with 'name' and/or 'email' keys";
 
-        fn deserialize_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            String::deserialize(deserializer).map(Some)
+        enum ContactValue {
+            Contact(Contact),
+            Invalid,
         }
 
         struct ContactVisitor;
 
         impl<'de> Visitor<'de> for ContactVisitor {
-            type Value = Contact;
+            type Value = ContactValue;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 formatter.write_str("a table with 'name' and/or 'email' keys")
             }
 
-            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
             where
                 A: MapAccess<'de>,
             {
-                let Fields { name, email } = Fields::deserialize(MapAccessDeserializer::new(map))?;
-                match (name, email) {
-                    (Some(name), Some(email)) => Ok(Contact::NameEmail { name, email }),
-                    (Some(name), None) => Ok(Contact::Name { name }),
-                    (None, Some(email)) => Ok(Contact::Email { email }),
-                    (None, None) => Err(serde::de::Error::custom(
-                        "a table with 'name' and/or 'email' keys",
-                    )),
+                let mut name = None;
+                let mut email = None;
+                let mut invalid = false;
+                while let Some(field) = map.next_key::<String>()? {
+                    let value = map.next_value::<StringOrIgnored>()?;
+                    match field.as_str() {
+                        "name" if name.is_none() => match value {
+                            StringOrIgnored::String(value) => name = Some(value),
+                            StringOrIgnored::Ignored(_) => invalid = true,
+                        },
+                        "email" if email.is_none() => match value {
+                            StringOrIgnored::String(value) => email = Some(value),
+                            StringOrIgnored::Ignored(_) => invalid = true,
+                        },
+                        "name" | "email" => invalid = true,
+                        _ => invalid = true,
+                    }
                 }
+                if invalid {
+                    return Ok(ContactValue::Invalid);
+                }
+                match (name, email) {
+                    (Some(name), Some(email)) => {
+                        Ok(ContactValue::Contact(Contact::NameEmail { name, email }))
+                    }
+                    (Some(name), None) => Ok(ContactValue::Contact(Contact::Name { name })),
+                    (None, Some(email)) => Ok(ContactValue::Contact(Contact::Email { email })),
+                    (None, None) => Ok(ContactValue::Invalid),
+                }
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                while sequence.next_element::<de::IgnoredAny>()?.is_some() {}
+                Ok(ContactValue::Invalid)
+            }
+
+            fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(ContactValue::Invalid)
+            }
+
+            fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(ContactValue::Invalid)
+            }
+
+            fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(ContactValue::Invalid)
+            }
+
+            fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(ContactValue::Invalid)
+            }
+
+            fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(ContactValue::Invalid)
+            }
+
+            fn visit_string<E>(self, _value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(ContactValue::Invalid)
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(ContactValue::Invalid)
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(ContactValue::Invalid)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                deserializer.deserialize_any(self)
+            }
+
+            fn visit_newtype_struct<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                deserializer.deserialize_any(self)
             }
         }
 
-        deserializer
-            .deserialize_map(ContactVisitor)
-            .map_err(|_| serde::de::Error::custom("a table with 'name' and/or 'email' keys"))
+        match deserializer.deserialize_any(ContactVisitor)? {
+            ContactValue::Contact(contact) => Ok(contact),
+            ContactValue::Invalid => Err(de::Error::custom(EXPECTED)),
+        }
     }
 }
 
@@ -1572,6 +1665,21 @@ mod tests {
         [bar_group]
         foo-bar = foo:bar
         ");
+    }
+
+    #[test]
+    fn contact_out_of_range_integer() {
+        let contents = extend_project(indoc! {r#"
+            authors = [{ name = 18446744073709551616 }]
+        "#});
+        let error = toml::from_str::<PyProjectToml>(&contents).unwrap_err();
+        assert_snapshot!(format_err(error), @r#"
+        TOML parse error at line 4, column 21
+          |
+        4 | authors = [{ name = 18446744073709551616 }]
+          |                     ^^^^^^^^^^^^^^^^^^^^
+        invalid type: integer `18446744073709551616` as i128, expected any value
+        "#);
     }
 
     #[test]
