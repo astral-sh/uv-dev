@@ -1807,7 +1807,11 @@ impl TestContext {
             );
         }
 
-        let mut command = Command::new(&interpreter);
+        self.python_command_at(&interpreter)
+    }
+
+    fn python_command_at(&self, interpreter: &Path) -> Command {
+        let mut command = Command::new(interpreter);
         command
             // Our tests change files in <1s, so we must disable CPython bytecode caching or we'll get stale files
             // https://github.com/python/cpython/issues/75953
@@ -1817,6 +1821,13 @@ impl TestContext {
 
         self.add_shared_env(&mut command, false);
 
+        command
+    }
+
+    /// Probe the fixture environment without a base-interpreter fallback or local-source imports.
+    fn isolated_venv_python_command(&self) -> Command {
+        let mut command = self.python_command_at(&self.interpreter());
+        command.arg("-I");
         command
     }
 
@@ -1889,18 +1900,21 @@ impl TestContext {
             .assert()
     }
 
-    /// Assert a package is installed with the given version.
+    /// Assert a module is installed in the fixture virtual environment with the given version.
     pub fn assert_installed(&self, package: &'static str, version: &'static str) {
-        self.assert_command(
-            format!("import {package} as package; print(package.__version__, end='')").as_str(),
-        )
-        .success()
-        .stdout(version);
+        self.isolated_venv_python_command()
+            .arg("-c")
+            .arg(format!(
+                "import {package} as package; print(package.__version__, end='')"
+            ))
+            .assert()
+            .success()
+            .stdout(version);
     }
 
-    /// Assert that a module is unavailable in the environment.
+    /// Assert that a module is unavailable in the fixture virtual environment.
     pub fn assert_not_installed(&self, package: &'static str) {
-        self.python_command()
+        self.isolated_venv_python_command()
             .arg("-c")
             .arg(indoc! {r"
                 import importlib.util
@@ -1910,7 +1924,6 @@ impl TestContext {
                     raise SystemExit(f'{sys.argv[1]} is installed')
             "})
             .arg(package)
-            .current_dir(&self.temp_dir)
             .assert()
             .success();
     }
