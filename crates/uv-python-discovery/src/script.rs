@@ -151,7 +151,12 @@ impl ScriptInterpreter {
                 .into_path_buf()
         };
 
-        // If `--active` is set, prefer the active virtual environment.
+        let prefer_active = match active {
+            ActiveEnvironment::Prefer => true,
+            ActiveEnvironment::Warn => false,
+            ActiveEnvironment::Ignore => return cache_env,
+        };
+
         if let Some(from_virtual_env) = virtualenv_from_env() {
             let from_virtual_env = if from_virtual_env.is_absolute() {
                 from_virtual_env
@@ -159,31 +164,24 @@ impl ScriptInterpreter {
                 CWD.join(from_virtual_env)
             };
             if !uv_fs::is_same_file_allow_missing(&from_virtual_env, &cache_env).unwrap_or(false) {
-                match active {
-                    ActiveEnvironment::Prefer => {
-                        debug!(
-                            "Using active virtual environment `{}` instead of script environment `{}`",
-                            from_virtual_env.user_display(),
-                            cache_env.user_display()
-                        );
-                        return from_virtual_env;
-                    }
-                    ActiveEnvironment::Ignore => {}
-                    ActiveEnvironment::Warn => {
-                        warn_user_once!(
-                            "`VIRTUAL_ENV={}` does not match the script environment path `{}` and will be ignored; use `--active` to target the active environment instead",
-                            from_virtual_env.user_display(),
-                            cache_env.user_display()
-                        );
-                    }
+                if prefer_active {
+                    debug!(
+                        "Using active virtual environment `{}` instead of script environment `{}`",
+                        from_virtual_env.user_display(),
+                        cache_env.user_display()
+                    );
+                    return from_virtual_env;
                 }
-            }
-        } else {
-            if active == ActiveEnvironment::Prefer {
-                debug!(
-                    "Use of the active virtual environment was requested, but `VIRTUAL_ENV` is not set"
+                warn_user_once!(
+                    "`VIRTUAL_ENV={}` does not match the script environment path `{}` and will be ignored; use `--active` to target the active environment instead",
+                    from_virtual_env.user_display(),
+                    cache_env.user_display()
                 );
             }
+        } else if prefer_active {
+            debug!(
+                "Use of the active virtual environment was requested, but `VIRTUAL_ENV` is not set"
+            );
         }
 
         // Otherwise, use the cache root.
