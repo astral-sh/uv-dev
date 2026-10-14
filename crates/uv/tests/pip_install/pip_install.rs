@@ -2937,47 +2937,31 @@ fn install_no_index_version() {
     context.assert_command("import flask").failure();
 }
 
-/// Install a package via --extra-index-url.
-///
-/// This is a regression test where previously uv would consult test.pypi.org
-/// first, and if the package was found there, uv would not look at any other
-/// indexes. We fixed this by flipping the priority order of indexes so that
-/// test.pypi.org becomes the fallback (in this example) and the extra indexes
-/// (regular PyPI) are checked first.
-///
-/// (Neither approach matches `pip`'s behavior, which considers versions of
-/// each package from all indexes. uv stops at the first index it finds a
-/// package in.)
-///
-/// Ref: <https://github.com/astral-sh/uv/issues/1600>
+/// The extra index takes priority when the default index has only an incompatible version.
+/// See <https://github.com/astral-sh/uv/issues/1600>.
 #[test]
 fn install_extra_index_url_has_priority() {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-09T00:00:00Z");
+    let context = uv_test::test_context!("3.12");
+    let default_index =
+        PackseServer::new("does_not_exist/requires-exact-version-does-not-exist.toml");
+    let extra_index = PackseServer::new("simple/single-package.toml");
 
     uv_snapshot!(context.pip_install()
         .arg("--index-url")
-        .arg("https://test.pypi.org/simple")
+        .arg(default_index.index_url())
         .arg("--extra-index-url")
-        .arg("https://pypi.org/simple")
-        // This tests what we want because BOTH of the following
-        // are true: `black` is on pypi.org and test.pypi.org, AND
-        // `black==24.2.0` is on pypi.org and NOT test.pypi.org. So
-        // this would previously check for `black` on test.pypi.org,
-        // find it, but then not find a compatible version. After
-        // the fix, uv will check pypi.org first since it is given
-        // priority via --extra-index-url.
-        .arg("black==24.2.0")
-        .arg("--no-deps"), @"
+        .arg(extra_index.index_url())
+        .arg("a==2.0.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + black==24.2.0
+     + a==2.0.0
     "
     );
 
-    context.assert_command("import flask").failure();
+    context.assert_installed("a", "2.0.0");
 }
 
 /// Ensure that the index is fetched only once when duplicate indices are specified
