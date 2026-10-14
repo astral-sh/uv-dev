@@ -33,6 +33,17 @@ impl VendorArtifact {
     pub(crate) fn is_loaded(&self) -> bool {
         self.bytes.get().is_some()
     }
+
+    /// Construct a private artifact for testing lazy server indexing.
+    #[cfg(test)]
+    pub(crate) const fn test_fixture() -> Self {
+        Self {
+            filename: "fixture-1.0.0-py3-none-any.whl",
+            url: "unused",
+            sha256: "unused",
+            bytes: OnceLock::new(),
+        }
+    }
 }
 
 static VENDOR_ARTIFACTS: [VendorArtifact; 17] = [
