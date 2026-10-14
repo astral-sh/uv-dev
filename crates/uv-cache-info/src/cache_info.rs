@@ -186,18 +186,14 @@ impl CacheInfo {
                         }
                     }
                 }
-                CacheKey::Git {
-                    git: GitPattern::Bool(true),
-                } => match Commit::from_repository(directory) {
-                    Ok(commit_info) => commit = Some(commit_info),
-                    Err(err) => {
-                        debug!("Failed to read the current commit: {err}");
-                    }
-                },
-                CacheKey::Git {
-                    git: GitPattern::Set(set),
-                } => {
-                    if set.commit.unwrap_or(false) {
+                CacheKey::Git { git } => {
+                    let (include_commit, include_tags) = match git {
+                        GitPattern::Bool(commit) => (commit, false),
+                        GitPattern::Set(GitSet { commit, tags }) => {
+                            (commit.unwrap_or(false), tags.unwrap_or(false))
+                        }
+                    };
+                    if include_commit {
                         match Commit::from_repository(directory) {
                             Ok(commit_info) => commit = Some(commit_info),
                             Err(err) => {
@@ -205,7 +201,7 @@ impl CacheInfo {
                             }
                         }
                     }
-                    if set.tags.unwrap_or(false) {
+                    if include_tags {
                         match Tags::from_repository(directory) {
                             Ok(tags_info) => tags = Some(tags_info),
                             Err(err) => {
@@ -214,9 +210,6 @@ impl CacheInfo {
                         }
                     }
                 }
-                CacheKey::Git {
-                    git: GitPattern::Bool(false),
-                } => {}
                 CacheKey::Environment { env: var } => {
                     let value = std::env::var(&var).ok();
                     env.insert(var, value);
