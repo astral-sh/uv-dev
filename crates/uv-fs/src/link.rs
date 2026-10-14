@@ -653,44 +653,31 @@ where
         return Ok(state);
     }
 
-    match state.attempt {
-        LinkAttempt::Initial => {
-            if let Err(err) = try_hardlink_file(path, target) {
-                if err.kind() == io::ErrorKind::AlreadyExists
-                    && options.on_existing_directory == OnExistingDirectory::Merge
-                {
-                    atomic_hardlink_overwrite(path, target, state)
-                } else {
-                    debug!(
-                        "Failed to hard link `{}` to `{}`: {}; falling back to copy",
-                        path.display(),
-                        target.display(),
-                        err
-                    );
-                    warn_user_once!(
-                        "Failed to hardlink files; falling back to full copy. This may lead to degraded performance.\n         \
-                        If the cache and target directories are on different filesystems, hardlinking may not be supported.\n         \
-                        If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning."
-                    );
-                    link_file(path, target, state.next_mode(), options)
-                }
-            } else {
-                Ok(state.mode_working())
-            }
+    match try_hardlink_file(path, target) {
+        Ok(()) => Ok(state.mode_working()),
+        Err(err)
+            if err.kind() == io::ErrorKind::AlreadyExists
+                && options.on_existing_directory == OnExistingDirectory::Merge =>
+        {
+            atomic_hardlink_overwrite(path, target, state)
         }
-        LinkAttempt::Subsequent => {
-            if let Err(err) = try_hardlink_file(path, target) {
-                if err.kind() == io::ErrorKind::AlreadyExists
-                    && options.on_existing_directory == OnExistingDirectory::Merge
-                {
-                    atomic_hardlink_overwrite(path, target, state)
-                } else {
-                    Err(LinkError::Io(err))
-                }
-            } else {
-                Ok(state)
+        Err(err) => match state.attempt {
+            LinkAttempt::Initial => {
+                debug!(
+                    "Failed to hard link `{}` to `{}`: {}; falling back to copy",
+                    path.display(),
+                    target.display(),
+                    err
+                );
+                warn_user_once!(
+                    "Failed to hardlink files; falling back to full copy. This may lead to degraded performance.\n         \
+                    If the cache and target directories are on different filesystems, hardlinking may not be supported.\n         \
+                    If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning."
+                );
+                link_file(path, target, state.next_mode(), options)
             }
-        }
+            LinkAttempt::Subsequent => Err(LinkError::Io(err)),
+        },
     }
 }
 
@@ -712,48 +699,35 @@ where
         return Ok(state);
     }
 
-    match state.attempt {
-        LinkAttempt::Initial => {
-            if let Err(err) = create_symlink(path, target) {
-                if err.kind() == io::ErrorKind::AlreadyExists
-                    && options.on_existing_directory == OnExistingDirectory::Merge
-                {
-                    atomic_symlink_overwrite(path, target, state)
-                } else {
-                    debug!(
-                        "Failed to symlink `{}` to `{}`: {}; falling back to copy",
-                        path.display(),
-                        target.display(),
-                        err
-                    );
-                    warn_user_once!(
-                        "Failed to symlink files; falling back to full copy. This may lead to degraded performance.\n         \
-                        If the cache and target directories are on different filesystems, symlinking may not be supported.\n         \
-                        If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning."
-                    );
-                    link_file(path, target, state.next_mode(), options)
-                }
-            } else {
-                Ok(state.mode_working())
-            }
+    match create_symlink(path, target) {
+        Ok(()) => Ok(state.mode_working()),
+        Err(err)
+            if err.kind() == io::ErrorKind::AlreadyExists
+                && options.on_existing_directory == OnExistingDirectory::Merge =>
+        {
+            atomic_symlink_overwrite(path, target, state)
         }
-        LinkAttempt::Subsequent => {
-            if let Err(err) = create_symlink(path, target) {
-                if err.kind() == io::ErrorKind::AlreadyExists
-                    && options.on_existing_directory == OnExistingDirectory::Merge
-                {
-                    atomic_symlink_overwrite(path, target, state)
-                } else {
-                    Err(LinkError::Symlink {
-                        from: path.to_path_buf(),
-                        to: target.to_path_buf(),
-                        err,
-                    })
-                }
-            } else {
-                Ok(state)
+        Err(err) => match state.attempt {
+            LinkAttempt::Initial => {
+                debug!(
+                    "Failed to symlink `{}` to `{}`: {}; falling back to copy",
+                    path.display(),
+                    target.display(),
+                    err
+                );
+                warn_user_once!(
+                    "Failed to symlink files; falling back to full copy. This may lead to degraded performance.\n         \
+                    If the cache and target directories are on different filesystems, symlinking may not be supported.\n         \
+                    If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning."
+                );
+                link_file(path, target, state.next_mode(), options)
             }
-        }
+            LinkAttempt::Subsequent => Err(LinkError::Symlink {
+                from: path.to_path_buf(),
+                to: target.to_path_buf(),
+                err,
+            }),
+        },
     }
 }
 
