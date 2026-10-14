@@ -30,6 +30,7 @@ struct BytecodeWorkers {
     handles: Vec<WorkerHandle>,
     _script_directory: TempDir,
     sender: Sender<PathBuf>,
+    source_files: usize,
 }
 
 /// A ready Python bytecode compiler and its communication streams.
@@ -153,31 +154,45 @@ fn spawn_workers(
         handles: worker_handles,
         _script_directory: script_directory,
         sender,
+        source_files: 0,
     })
 }
 
-/// Wait for all workers to exit, prioritizing worker failures over producer failures.
-async fn wait_for_workers(
-    workers: BytecodeWorkers,
-    producer_result: Result<(), CompileError>,
-) -> Result<(), CompileError> {
-    let BytecodeWorkers {
-        handles,
-        _script_directory,
-        sender,
-    } = workers;
-    // Closing the channel lets workers exit after consuming the remaining queued files.
-    drop(sender);
-    for result in futures::future::join_all(handles).await {
-        match result {
-            // A worker thread panicked or exited without reporting its result.
-            Err(_) | Ok(Err(_)) => return Err(CompileError::Join),
-            Ok(Ok(Err(compile_error))) => return Err(compile_error),
-            Ok(Ok(Ok(()))) => {}
-        }
+impl BytecodeWorkers {
+    /// Submit a source file to a worker.
+    async fn submit(&mut self, file: PathBuf) -> Result<(), CompileError> {
+        self.sender
+            .send(file)
+            .await
+            .map_err(CompileError::WorkerDisappeared)?;
+        self.source_files += 1;
+        Ok(())
     }
 
-    producer_result
+    /// Wait for all workers to exit, prioritizing worker failures over producer failures.
+    async fn finish(
+        self,
+        producer_result: Result<(), CompileError>,
+    ) -> Result<usize, CompileError> {
+        let Self {
+            handles,
+            _script_directory,
+            sender,
+            source_files,
+        } = self;
+        // Closing the channel lets workers exit after consuming the remaining queued files.
+        drop(sender);
+        for result in futures::future::join_all(handles).await {
+            match result {
+                // A worker thread panicked or exited without reporting its result.
+                Err(_) | Ok(Err(_)) => return Err(CompileError::Join),
+                Ok(Ok(Err(compile_error))) => return Err(compile_error),
+                Ok(Ok(Ok(()))) => {}
+            }
+        }
+
+        producer_result.map(|()| source_files)
+    }
 }
 
 /// Bytecode compile all file in `dir` using a pool of Python interpreters running a Python script
@@ -203,10 +218,9 @@ pub async fn compile_tree(
         "compileall doesn't work with relative paths: `{}`",
         dir.display()
     );
-    let workers = spawn_workers(dir, python_executable, cache, concurrency.installs)?;
+    let mut workers = spawn_workers(dir, python_executable, cache, concurrency.installs)?;
 
     // Start the producer, sending all `.py` files to workers.
-    let mut source_files = 0;
     let mut producer_result = Ok(());
     let walker = WalkDir::new(dir)
         .into_iter()
@@ -228,21 +242,18 @@ pub async fn compile_tree(
         };
         // https://github.com/pypa/pip/blob/3820b0e52c7fed2b2c43ba731b718f316e6816d1/src/pip/_internal/operations/install/wheel.py#L593-L604
         if entry.file_type().is_file() && entry.path().extension().is_some_and(|ext| ext == "py") {
-            source_files += 1;
-            if let Err(err) = workers.sender.send(entry.into_path()).await {
+            if let Err(err) = workers.submit(entry.into_path()).await {
                 // The workers exited.
                 // If e.g. something with the Python interpreter is wrong, the workers have exited
                 // with an error. We try to report this informative error and only if that fails,
                 // report the send error.
-                producer_result = Err(CompileError::WorkerDisappeared(err));
+                producer_result = Err(err);
                 break;
             }
         }
     }
 
-    wait_for_workers(workers, producer_result).await?;
-
-    Ok(source_files)
+    workers.finish(producer_result).await
 }
 
 /// Bytecode compile the given Python source files using a pool of Python interpreters.
@@ -265,10 +276,9 @@ pub async fn compile_files(
         return Ok(0);
     }
 
-    let workers = spawn_workers(cache, python_executable, cache, initial_files.len())?;
+    let mut workers = spawn_workers(cache, python_executable, cache, initial_files.len())?;
 
     let mut producer_result = Ok(());
-    let mut source_files = 0;
     for file in initial_files.into_iter().map(Ok).chain(files) {
         let file = match file {
             Ok(file) => file,
@@ -282,15 +292,12 @@ pub async fn compile_files(
             "compileall doesn't work with relative paths: `{}`",
             file.display()
         );
-        source_files += 1;
-        if let Err(err) = workers.sender.send(file).await {
-            producer_result = Err(CompileError::WorkerDisappeared(err));
+        if let Err(err) = workers.submit(file).await {
+            producer_result = Err(err);
             break;
         }
     }
-    wait_for_workers(workers, producer_result).await?;
-
-    Ok(source_files)
+    workers.finish(producer_result).await
 }
 
 async fn worker(
