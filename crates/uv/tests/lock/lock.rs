@@ -1,4 +1,3 @@
-#[cfg(feature = "test-universal")]
 use std::path::Path;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use std::process::Command;
@@ -38,6 +37,21 @@ use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 #[cfg(feature = "test-universal")]
 use uv_test::{capture_uv_snapshot, diff_uv_snapshot, download_to_disk, venv_bin_path};
 use uv_test::{diff_snapshot, uv_snapshot};
+
+const TQDM_WHEEL: &str = "tqdm-1000.0.0-py3-none-any.whl";
+
+fn copy_flat_index_fixture(
+    context: &uv_test::TestContext,
+    index: &Path,
+    filename: &str,
+) -> Result<()> {
+    fs_err::create_dir_all(index)?;
+    fs_err::copy(
+        context.workspace_root.join("test/links").join(filename),
+        index.join(filename),
+    )?;
+    Ok(())
+}
 
 #[cfg(feature = "test-universal")]
 fn assert_cache_missing_files(cache: &Path, filenames: &[&str]) -> Result<()> {
@@ -12041,22 +12055,8 @@ fn lock_constraint_dependency_absolute_path() -> Result<()> {
 fn lock_index_absolute_path_from_config() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Create a local flat index with a wheel.
     let index_dir = context.temp_dir.child("local_index");
-    fs_err::create_dir_all(&index_dir)?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-1000"))
-        {
-            let dest = index_dir.join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &index_dir, TQDM_WHEEL)?;
 
     // Create a project directory.
     let project = context.temp_dir.child("project");
@@ -16983,24 +16983,7 @@ fn lock_warn_missing_transitive_lower_bounds() -> Result<()> {
 fn lock_find_links_local_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &context.temp_dir.join("links"), TQDM_WHEEL)?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17089,24 +17072,7 @@ fn lock_find_links_local_wheel() -> Result<()> {
 fn lock_find_links_ignore_explicit_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &context.temp_dir.join("links"), TQDM_WHEEL)?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17205,13 +17171,7 @@ fn lock_find_links_ignore_explicit_index() -> Result<()> {
 fn lock_find_links_relative_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
-    let links = workspace.child("links");
-    links.create_dir_all()?;
-    let wheel = "tqdm-1000.0.0-py3-none-any.whl";
-    fs_err::copy(
-        context.workspace_root.join("test/links").join(wheel),
-        links.join(wheel),
-    )?;
+    copy_flat_index_fixture(&context, &workspace.child("links"), TQDM_WHEEL)?;
 
     workspace.child("pyproject.toml").write_str(
         r#"
@@ -17242,7 +17202,7 @@ fn lock_find_links_relative_url() -> Result<()> {
     let package = locked_package(&context.read("workspace/uv.lock"), "tqdm")?;
     assert_eq!(package["version"].as_str(), Some("1000.0.0"));
     assert_eq!(package["source"]["registry"].as_str(), Some("links"));
-    assert_eq!(package["wheels"][0]["path"].as_str(), Some(wheel));
+    assert_eq!(package["wheels"][0]["path"].as_str(), Some(TQDM_WHEEL));
 
     uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"]).current_dir(&workspace), @"
     exit_code: 0 (success)
@@ -17260,24 +17220,11 @@ fn lock_find_links_relative_url() -> Result<()> {
 fn lock_find_links_local_sdist() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(
+        &context,
+        &context.temp_dir.join("links"),
+        "tqdm-999.0.0.tar.gz",
+    )?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17534,24 +17481,7 @@ fn lock_find_links_http_sdist() -> Result<()> {
 fn lock_find_links_explicit_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &context.temp_dir.join("links"), TQDM_WHEEL)?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17635,24 +17565,7 @@ fn lock_find_links_explicit_index() -> Result<()> {
 fn lock_find_links_higher_priority_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &context.temp_dir.join("links"), TQDM_WHEEL)?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17724,24 +17637,7 @@ fn lock_find_links_higher_priority_index() -> Result<()> {
 fn lock_find_links_lower_priority_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &context.temp_dir.join("links"), TQDM_WHEEL)?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -44633,22 +44529,12 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
 fn lock_supported_environment_abi3_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Create a local flat index with the abi3 test wheel.
     let index_dir = context.temp_dir.child("local_index");
-    fs_err::create_dir_all(&index_dir)?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("abi3_package"))
-        {
-            let dest = index_dir.join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(
+        &context,
+        &index_dir,
+        "abi3_package-1.0.0-cp37-abi3-manylinux_2_17_x86_64.whl",
+    )?;
 
     let project = context.temp_dir.child("project");
     fs_err::create_dir_all(&project)?;
