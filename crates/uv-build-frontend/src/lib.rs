@@ -1115,19 +1115,20 @@ impl PythonRunner {
         environment_variables: &FxHashMap<OsString, OsString>,
         modified_path: &OsString,
     ) -> Result<PythonRunnerOutput, Error> {
-        /// Read lines from a reader and store them in a buffer.
+        /// Read and capture lines from a process stream.
         async fn read_from(
-            mut reader: tokio::io::Split<tokio::io::BufReader<impl tokio::io::AsyncRead + Unpin>>,
+            reader: impl tokio::io::AsyncRead + Unpin,
             mut printer: Printer,
-            buffer: &mut Vec<String>,
-        ) -> io::Result<()> {
+        ) -> io::Result<Vec<String>> {
+            let mut reader = tokio::io::BufReader::new(reader).split(b'\n');
+            let mut buffer = Vec::with_capacity(1024);
             while let Some(line_buf) = reader.next_segment().await? {
                 let line_buf = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
                 let line = String::from_utf8_lossy(line_buf).into();
                 let _ = write!(printer, "{line}");
                 buffer.push(line);
             }
-            Ok(())
+            Ok(buffer)
         }
 
         let _permit = self.concurrent_build_slots.acquire().await.unwrap();
@@ -1164,28 +1165,24 @@ impl PythonRunner {
             .spawn()
             .map_err(command_failed)?;
 
-        // Create buffers to capture `stdout` and `stderr`.
-        let mut stdout_buf = Vec::with_capacity(1024);
-        let mut stderr_buf = Vec::with_capacity(1024);
-
-        // Create separate readers for `stdout` and `stderr`.
-        let stdout_reader = tokio::io::BufReader::new(child.stdout.take().unwrap()).split(b'\n');
-        let stderr_reader = tokio::io::BufReader::new(child.stderr.take().unwrap()).split(b'\n');
+        let stdout_reader = child.stdout.take().unwrap();
+        let stderr_reader = child.stderr.take().unwrap();
 
         // Asynchronously read from the in-memory pipes.
         let printer = Printer::from(self.level);
-        let (stdout_result, stderr_result) = tokio::join!(
-            read_from(stdout_reader, printer, &mut stdout_buf),
-            read_from(stderr_reader, printer, &mut stderr_buf),
+        let (stdout, stderr) = tokio::join!(
+            read_from(stdout_reader, printer),
+            read_from(stderr_reader, printer),
         );
-        stdout_result.and(stderr_result).map_err(command_failed)?;
+        let stdout = stdout.map_err(command_failed)?;
+        let stderr = stderr.map_err(command_failed)?;
 
         // Wait for the child process to finish.
         let status = child.wait().await.map_err(command_failed)?;
 
         Ok(PythonRunnerOutput {
-            stdout: stdout_buf,
-            stderr: stderr_buf,
+            stdout,
+            stderr,
             status,
         })
     }
