@@ -4925,23 +4925,27 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
 )]
 fn offline_env_false_overrides_config() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let baseline = capture_uv_snapshot!(
-        context.filters(),
-        add_shared_args(context.version()).arg("--show-settings")
+    let mut command = add_shared_args(context.version());
+    command
+        .arg("--show-settings")
+        .env_remove(EnvVars::UV_OFFLINE);
+    let baseline = capture_uv_snapshot!(context.filters(), &mut command);
+    assert!(
+        baseline.starts_with("exit_code: 0 (success)\n"),
+        "{baseline}"
     );
+    assert!(baseline.contains("connectivity: Online,"), "{baseline}");
 
     let config = context.temp_dir.child("uv.toml");
     config.write_str("offline = true\n")?;
+    command
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("connectivity: Offline,"));
 
     assert_eq!(
         baseline,
-        capture_uv_snapshot!(
-            context.filters(),
-            add_shared_args(context.version())
-                .arg("--show-settings")
-                .env(EnvVars::UV_OFFLINE, "0")
-        )
+        capture_uv_snapshot!(context.filters(), command.env(EnvVars::UV_OFFLINE, "0"))
     );
 
     Ok(())
