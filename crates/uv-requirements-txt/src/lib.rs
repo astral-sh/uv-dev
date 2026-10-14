@@ -2906,27 +2906,65 @@ mod test {
         Ok(())
     }
 
-    #[test_case("--no-indexx"; "no index")]
-    #[test_case("--prefoo"; "pre")]
-    #[test_case("--trusted-hostile"; "trusted host")]
     #[tokio::test]
-    async fn malformed_option(content: &str) -> Result<()> {
+    async fn malformed_option_no_index() -> Result<()> {
         let temp_dir = assert_fs::TempDir::new()?;
         let requirements_txt = temp_dir.child("requirements.txt");
-        requirements_txt.write_str(content)?;
+        requirements_txt.write_str("--no-indexx")?;
 
         let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
             .await
             .unwrap_err();
         let errors = anyhow::Error::new(error).chain().join("\n");
 
-        assert_eq!(
-            errors,
-            format!(
-                "Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: {}:1:1",
-                requirements_txt.path().user_display()
-            )
-        );
+        let requirements_txt = regex::escape(&requirements_txt.path().user_display().to_string());
+        insta::with_settings!({
+            filters => vec![(requirements_txt.as_str(), "<REQUIREMENTS_TXT>")]
+        }, {
+            insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1");
+        });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn malformed_option_pre() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+        requirements_txt.write_str("--prefoo")?;
+
+        let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
+            .await
+            .unwrap_err();
+        let errors = anyhow::Error::new(error).chain().join("\n");
+
+        let requirements_txt = regex::escape(&requirements_txt.path().user_display().to_string());
+        insta::with_settings!({
+            filters => vec![(requirements_txt.as_str(), "<REQUIREMENTS_TXT>")]
+        }, {
+            insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1");
+        });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn malformed_option_trusted_host() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+        requirements_txt.write_str("--trusted-hostile")?;
+
+        let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
+            .await
+            .unwrap_err();
+        let errors = anyhow::Error::new(error).chain().join("\n");
+
+        let requirements_txt = regex::escape(&requirements_txt.path().user_display().to_string());
+        insta::with_settings!({
+            filters => vec![(requirements_txt.as_str(), "<REQUIREMENTS_TXT>")]
+        }, {
+            insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1");
+        });
 
         Ok(())
     }
