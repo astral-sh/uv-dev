@@ -1305,9 +1305,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 // If the version is incompatible because no distributions are compatible, exit early.
                 return Ok(Some(ResolverVersion::Unavailable(
                     candidate.version().clone(),
-                    // TODO(charlie): We can avoid this clone; the candidate is dropped here and
-                    // owns the incompatibility.
-                    UnavailableVersion::IncompatibleDist(incompatibility.clone()),
+                    UnavailableVersion::IncompatibleDist((*incompatibility).into()),
                 )));
             }
         };
