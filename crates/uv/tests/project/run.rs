@@ -6634,8 +6634,8 @@ fn isolate_child_environment() -> Result<()> {
     ModuleNotFoundError: No module named 'iniconfig'
     "#);
 
-    // Ensure that the isolated environment can't access `iniconfig` (from the parent package).
-    uv_snapshot!(context.filters(), context.run().arg("--package").arg("child").arg("--isolated").arg("--with").arg("typing-extensions").arg("python").arg("-c").arg("import iniconfig"), @r#"
+    // The overlay remains importable without exposing the parent's dependencies.
+    uv_snapshot!(context.filters(), context.run().arg("--package").arg("child").arg("--isolated").arg("--with").arg("typing-extensions").arg("python").arg("-c").arg("import typing_extensions\nimport iniconfig"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -6645,9 +6645,17 @@ fn isolate_child_environment() -> Result<()> {
     Installed 1 package in [TIME]
      + typing-extensions==4.10.0
     Traceback (most recent call last):
-      File "<string>", line 1, in <module>
+      File "<string>", line 2, in <module>
     ModuleNotFoundError: No module named 'iniconfig'
     "#);
+
+    // The isolated runs must leave the parent's environment usable.
+    context.venv.assert(predicate::path::is_dir());
+    context
+        .python_command()
+        .args(["-I", "-c", "import iniconfig"])
+        .assert()
+        .success();
 
     Ok(())
 }
