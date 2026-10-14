@@ -484,6 +484,14 @@ enum FileCutoffCheck {
     Materializable,
 }
 
+/// Whether a file is included by upload-time cutoffs.
+#[derive(Clone, Copy)]
+enum FileCutoffStatus {
+    Included,
+    /// The file is excluded, with its upload time if available.
+    Excluded(Option<i64>),
+}
+
 impl VersionMapLazy {
     /// Returns the registry-provided metadata for the given version, if it exists.
     fn get_metadata(&self, version: &Version) -> Option<ResolutionMetadata> {
@@ -581,7 +589,7 @@ impl VersionMapLazy {
             for (filename, file) in files.all(&self.package_name) {
                 // Support resolving as if it were an earlier timestamp, at least as long files have
                 // upload time information.
-                let (excluded, upload_time) = if let Some(included_version_cutoff) =
+                let cutoff_status = if let Some(included_version_cutoff) =
                     &self.included_version_cutoff
                 {
                     match file.upload_time_utc_ms.as_ref() {
@@ -592,16 +600,16 @@ impl VersionMapLazy {
                                 "Excluding `{}` (uploaded {upload_time}) due to exclude-newer ({included_version_cutoff})",
                                 file.filename
                             );
-                            (true, Some(upload_time))
+                            FileCutoffStatus::Excluded(Some(upload_time))
                         }
                         None => {
                             warn_user_once!(
                                 "`{}` is missing an upload date, but user provided: {included_version_cutoff}",
                                 file.filename,
                             );
-                            (true, None)
+                            FileCutoffStatus::Excluded(None)
                         }
-                        _ => (false, None),
+                        _ => FileCutoffStatus::Included,
                     }
                 } else if let Some(available_version_cutoff) = &self.available_version_cutoff {
                     match file.upload_time_utc_ms.as_ref() {
@@ -612,12 +620,12 @@ impl VersionMapLazy {
                                 "Excluding `{}` (uploaded {upload_time}) due to available version cutoff ({available_version_cutoff})",
                                 file.filename
                             );
-                            (true, Some(upload_time))
+                            FileCutoffStatus::Excluded(Some(upload_time))
                         }
-                        _ => (false, None),
+                        _ => FileCutoffStatus::Included,
                     }
                 } else {
-                    (false, None)
+                    FileCutoffStatus::Included
                 };
 
                 // Prioritize amongst all available files.
@@ -629,8 +637,7 @@ impl VersionMapLazy {
                             &filename,
                             hashes.as_slice(),
                             yanked,
-                            excluded,
-                            upload_time,
+                            cutoff_status,
                         );
                         let dist = RegistryBuiltWheel {
                             filename,
@@ -650,8 +657,7 @@ impl VersionMapLazy {
                             &filename,
                             hashes.as_slice(),
                             yanked,
-                            excluded,
-                            upload_time,
+                            cutoff_status,
                         );
                         let dist = RegistrySourceDist {
                             name: filename.name,
@@ -680,11 +686,10 @@ impl VersionMapLazy {
         filename: &SourceDistFilename,
         hashes: &[HashDigest],
         yanked: Option<&Yanked>,
-        excluded: bool,
-        upload_time: Option<i64>,
+        cutoff_status: FileCutoffStatus,
     ) -> SourceDistCompatibility {
         // Check if after upload time cutoff
-        if excluded {
+        if let FileCutoffStatus::Excluded(upload_time) = cutoff_status {
             return SourceDistCompatibility::Incompatible(IncompatibleSource::ExcludeNewer(
                 upload_time,
             ));
@@ -719,11 +724,10 @@ impl VersionMapLazy {
         filename: &WheelFilename,
         hashes: &[HashDigest],
         yanked: Option<&Yanked>,
-        excluded: bool,
-        upload_time: Option<i64>,
+        cutoff_status: FileCutoffStatus,
     ) -> WheelCompatibility {
         // Check if after upload time cutoff
-        if excluded {
+        if let FileCutoffStatus::Excluded(upload_time) = cutoff_status {
             return WheelCompatibility::Incompatible(IncompatibleWheel::ExcludeNewer(upload_time));
         }
 
