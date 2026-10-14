@@ -341,7 +341,7 @@ fn python_list_venv() {
     ");
 
     // An active virtual environment is omitted from the listing.
-    uv_snapshot!(context.filters(), context.python_list().env(EnvVars::VIRTUAL_ENV, &context.venv), @"
+    uv_snapshot!(context.filters(), context.python_list().env(EnvVars::VIRTUAL_ENV, context.venv.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
