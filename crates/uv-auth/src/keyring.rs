@@ -195,16 +195,7 @@ impl KeyringProvider {
         // Check the full URL first
         // <https://github.com/pypa/pip/blob/ae5fff36b0aad6e5e0037884927eaa29163c0611/src/pip/_internal/network/auth.py#L376C1-L379C14>
         trace!("Checking keyring for URL `{url}`");
-        let mut credentials = match self.backend {
-            KeyringProviderBackend::Native => self.fetch_native(url.as_str(), username).await,
-            KeyringProviderBackend::Subprocess => {
-                self.fetch_subprocess(url.as_str(), username).await
-            }
-            #[cfg(test)]
-            KeyringProviderBackend::Dummy(ref store) => {
-                Self::fetch_dummy(store, url.as_str(), username)
-            }
-        };
+        let mut credentials = self.fetch_service(url.as_str(), username).await;
         // And fallback to a check for the host
         if credentials.is_none() {
             let host = if let Some(port) = url.port() {
@@ -213,14 +204,7 @@ impl KeyringProvider {
                 url.host_str()?.to_string()
             };
             trace!("Checking keyring for host {host}");
-            credentials = match self.backend {
-                KeyringProviderBackend::Native => self.fetch_native(&host, username).await,
-                KeyringProviderBackend::Subprocess => self.fetch_subprocess(&host, username).await,
-                #[cfg(test)]
-                KeyringProviderBackend::Dummy(ref store) => {
-                    Self::fetch_dummy(store, &host, username)
-                }
-            };
+            credentials = self.fetch_service(&host, username).await;
 
             // For non-HTTPS URLs, `store` includes the scheme in the service name
             // (e.g., `http://host:port`) to avoid leaking credentials across schemes.
@@ -228,22 +212,24 @@ impl KeyringProvider {
             if credentials.is_none() && url.scheme() != "https" {
                 let scheme_host = format!("{}://{host}", url.scheme());
                 trace!("Checking keyring for scheme+host {scheme_host}");
-                credentials = match self.backend {
-                    KeyringProviderBackend::Native => {
-                        self.fetch_native(&scheme_host, username).await
-                    }
-                    KeyringProviderBackend::Subprocess => {
-                        self.fetch_subprocess(&scheme_host, username).await
-                    }
-                    #[cfg(test)]
-                    KeyringProviderBackend::Dummy(ref store) => {
-                        Self::fetch_dummy(store, &scheme_host, username)
-                    }
-                };
+                credentials = self.fetch_service(&scheme_host, username).await;
             }
         }
 
         credentials.map(|(username, password)| Credentials::basic(Some(username), Some(password)))
+    }
+
+    async fn fetch_service(
+        &self,
+        service: &str,
+        username: Option<&str>,
+    ) -> Option<(String, String)> {
+        match &self.backend {
+            KeyringProviderBackend::Native => self.fetch_native(service, username).await,
+            KeyringProviderBackend::Subprocess => self.fetch_subprocess(service, username).await,
+            #[cfg(test)]
+            KeyringProviderBackend::Dummy(store) => Self::fetch_dummy(store, service, username),
+        }
     }
 
     #[instrument(skip(self))]
