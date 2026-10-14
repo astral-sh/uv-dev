@@ -5,6 +5,7 @@ use uv_test::pypi_proxy;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod audit;
+mod audit_configuration;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod build;
