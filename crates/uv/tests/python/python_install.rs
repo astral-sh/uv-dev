@@ -3677,29 +3677,10 @@ fn python_install_armv7_gnueabi_legacy_tar() {
     ");
 }
 
-#[test]
-fn python_install_compile_bytecode() -> anyhow::Result<()> {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_filtered_compiled_file_count()
-        .with_managed_python_dirs()
-        .with_empty_python_install_mirror()
-        .with_filtered_latest_python_versions();
-
-    // Install 3.14 and compile its bytecode
-    uv_snapshot!(context.filters(), context.python_install().arg("--compile-bytecode").arg("3.14"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Installed Python 3.14.[LATEST] in [TIME]
-     + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
-    Bytecode compiled [COUNT] files in [TIME]
-    ");
-
-    // Find the stdlib path for cpython 3.14
+fn assert_cpython_bytecode_compiled(context: &TestContext, version: &str) -> anyhow::Result<()> {
     let bin_path = context
         .bin_dir
-        .child(format!("python3.14{}", std::env::consts::EXE_SUFFIX));
+        .child(format!("python{version}{}", std::env::consts::EXE_SUFFIX));
 
     #[cfg(unix)]
     let stdlib = fs_err::read_link(bin_path)?
@@ -3708,7 +3689,7 @@ fn python_install_compile_bytecode() -> anyhow::Result<()> {
         .parent()
         .context("`bin` directory should be a child of the installation path")?
         .join("lib")
-        .join("python3.14");
+        .join(format!("python{version}"));
     #[cfg(windows)]
     let stdlib = launcher_path(&bin_path)
         .parent()
@@ -3737,7 +3718,31 @@ fn python_install_compile_bytecode() -> anyhow::Result<()> {
         "expected Python sources in {}",
         stdlib.display()
     );
-    assert_eq!(pyc_count, py_count);
+    assert_eq!(pyc_count, py_count, "{}", stdlib.display());
+
+    Ok(())
+}
+
+#[test]
+fn python_install_compile_bytecode() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_filtered_compiled_file_count()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror()
+        .with_filtered_latest_python_versions();
+
+    // Install 3.14 and compile its bytecode
+    uv_snapshot!(context.filters(), context.python_install().arg("--compile-bytecode").arg("3.14"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.[LATEST] in [TIME]
+     + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
+    Bytecode compiled [COUNT] files in [TIME]
+    ");
+
+    assert_cpython_bytecode_compiled(&context, "3.14")?;
 
     // Attempting to install with --compile-bytecode should (currently)
     // unconditionally re-run the bytecode compiler
@@ -3884,7 +3889,7 @@ fn python_install_upgrade_build_version() {
 }
 
 #[test]
-fn python_install_compile_bytecode_multiple() {
+fn python_install_compile_bytecode_multiple() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3902,6 +3907,12 @@ fn python_install_compile_bytecode_multiple() {
      + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
     Bytecode compiled [COUNT] files in [TIME]
     ");
+
+    for version in ["3.12", "3.14"] {
+        assert_cpython_bytecode_compiled(&context, version)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(unix)] // Pyodide cannot be used on Windows
