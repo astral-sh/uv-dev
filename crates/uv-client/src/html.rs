@@ -200,15 +200,13 @@ impl SimpleDetailHTML {
             (href, Hashes::default())
         };
 
-        // Extract the filename from the body text, which MUST match that of
-        // the final path component of the URL.
-        let filename = path
-            .split('/')
-            .next_back()
-            .ok_or_else(|| Error::MissingFilename(href.to_string()))?;
+        // Extract the filename from the final path component of the URL.
+        let filename = path.rsplit_once('/').map_or(path, |(_, filename)| filename);
 
         // Strip any query string from the filename.
-        let filename = filename.split('?').next().unwrap_or(filename);
+        let filename = filename
+            .split_once('?')
+            .map_or(filename, |(filename, _)| filename);
 
         // Unquote the filename.
         let filename = percent_encoding::percent_decode_str(filename)
@@ -335,23 +333,11 @@ pub enum Error {
     #[error(transparent)]
     HtmlParse(#[from] astral_html::Error),
 
-    #[error("Missing href attribute on anchor link: `{0}`")]
-    MissingHref(String),
-
-    #[error("Expected distribution filename as last path component of URL: {0}")]
-    MissingFilename(String),
-
     #[error("Expected distribution filename to be UTF-8: {0}")]
     UnsupportedFilename(String),
 
-    #[error("Missing hash attribute on URL: {0}")]
-    MissingHash(String),
-
     #[error(transparent)]
     FragmentParse(#[from] HashError),
-
-    #[error("Invalid `requires-python` specifier: {0}")]
-    Pep440(#[source] uv_pep440::VersionSpecifiersParseError),
 }
 
 #[cfg(test)]
