@@ -182,30 +182,22 @@ impl UniversalMarker {
 
     /// If all inference sets reduce to the same marker, simplify the marker using that knowledge.
     pub(crate) fn unify_inference_sets(&mut self, conflict_sets: &[BTreeSet<Inference>]) {
-        let mut previous_marker = None;
+        let initial_marker = self.marker;
+        let mut branch_markers = conflict_sets.iter().map(|conflict_set| {
+            conflict_set
+                .iter()
+                .fold(initial_marker, |marker, inference| {
+                    let extra = encode_conflict_item(&inference.item);
+                    if inference.included {
+                        marker.simplify_extras_with(|candidate| *candidate == extra)
+                    } else {
+                        marker.simplify_not_extras_with(|candidate| *candidate == extra)
+                    }
+                })
+        });
 
-        for conflict_set in conflict_sets {
-            let mut marker = self.marker;
-            for inference in conflict_set {
-                let extra = encode_conflict_item(&inference.item);
-
-                marker = if inference.included {
-                    marker.simplify_extras_with(|candidate| *candidate == extra)
-                } else {
-                    marker.simplify_not_extras_with(|candidate| *candidate == extra)
-                };
-            }
-            if let Some(previous_marker) = &previous_marker {
-                if previous_marker != &marker {
-                    return;
-                }
-            } else {
-                previous_marker = Some(marker);
-            }
-        }
-
-        if let Some(all_branches_marker) = previous_marker {
-            *self = Self::from_combined(all_branches_marker);
+        if let Ok(marker) = branch_markers.all_equal_value() {
+            *self = Self::from_combined(marker);
         }
     }
 
