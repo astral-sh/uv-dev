@@ -101,17 +101,15 @@ pub fn uninstall_wheel(
                 Err(err) => return Err(err.into()),
             }
 
-            // Try to read from the directory. If it doesn't exist, assume we deleted it in a
-            // previous iteration.
-            let mut read_dir = match fs_err::read_dir(path) {
-                Ok(read_dir) => read_dir,
+            // Close the directory handle before removing an empty directory.
+            match fs_err::read_dir(path) {
+                Ok(mut entries) => {
+                    if entries.next().is_some() {
+                        break;
+                    }
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
                 Err(err) => return Err(err.into()),
-            };
-
-            // If the directory is not empty, we're done.
-            if read_dir.next().is_some() {
-                break;
             }
 
             fs_err::remove_dir(path)?;
