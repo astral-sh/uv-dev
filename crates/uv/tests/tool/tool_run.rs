@@ -379,21 +379,30 @@ fn tool_run_warn_executable_from_multiple_dependencies() -> Result<()> {
         sdist = false
     "#})?;
     let index = PackseServer::from_scenario(&scenario);
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filter((r"(?m)^Hello from provider-[ab]!$", "Hello from [PROVIDER]!"));
 
-    context
-        .tool_run()
+    uv_snapshot!(context.filters(), context.tool_run()
         .arg("--index-url")
         .arg(index.index_url())
-        .args(["--from", "root-tool", "shared-tool"])
-        .assert()
-        .success()
-        .stderr(predicates::str::contains(indoc! {"
-            warning: An executable named `shared-tool` is not provided by package `root-tool` but is available via the following dependencies:
-            - provider-a
-            - provider-b
-            Consider using `uv tool run --from PKG shared-tool` instead.
-        "}));
+        .args(["--from", "root-tool", "shared-tool"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from [PROVIDER]!
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + provider-a==1.0.0
+     + provider-b==1.0.0
+     + root-tool==1.0.0
+    warning: An executable named `shared-tool` is not provided by package `root-tool` but is available via the following dependencies:
+    - provider-a
+    - provider-b
+    Consider using `uv tool run --from PKG shared-tool` instead.
+    ");
 
     Ok(())
 }
