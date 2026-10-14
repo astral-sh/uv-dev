@@ -42,4 +42,7 @@ mod pip_sync_target;
 
 mod pip_tree;
 
+#[cfg(feature = "test-python")]
 mod pip_uninstall;
+
+mod pip_uninstall_input;
