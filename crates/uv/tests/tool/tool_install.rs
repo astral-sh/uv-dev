@@ -4886,7 +4886,11 @@ fn tool_install_mismatched_name() {
     ");
 }
 
-/// When installing from an authenticated index, the credentials should be omitted from the receipt.
+/// Credentials supplied in an index URL are omitted from the receipt, but the receipt retains
+/// the authentication policy so an upgrade without credentials fails instead of reporting that
+/// there is nothing to upgrade.
+///
+/// See: <https://github.com/astral-sh/uv/issues/18120>
 #[tokio::test]
 async fn tool_install_credentials() {
     let proxy = crate::pypi_proxy::start().await;
@@ -4895,13 +4899,11 @@ async fn tool_install_credentials() {
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `executable-application`
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("executable-application")
-         .arg("--index")
+        .arg("--index")
         .arg(proxy.authenticated_url("public", "heron", "/basic-auth/simple"))
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
@@ -4913,42 +4915,9 @@ async fn tool_install_credentials() {
     Installed 1 executable: app
     ");
 
-    tool_dir
-        .child("executable-application")
-        .assert(predicate::path::is_dir());
-    tool_dir
-        .child("executable-application")
-        .child("uv-receipt.toml")
-        .assert(predicate::path::is_file());
-
-    let executable = bin_dir.child(format!("app{}", std::env::consts::EXE_SUFFIX));
-    assert_tool_launcher(&executable);
-
-    // On Windows, we can't snapshot an executable file.
-    #[cfg(not(windows))]
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        // Should run black in the virtual environment
-        assert_snapshot!(context.read(executable), @r#"
-        #![TEMP_DIR]/tools/executable-application/bin/python
-        # -*- coding: utf-8 -*-
-        import sys
-        from executable_application import main
-        if __name__ == "__main__":
-            if sys.argv[0].endswith("-script.pyw"):
-                sys.argv[0] = sys.argv[0][:-11]
-            elif sys.argv[0].endswith(".exe"):
-                sys.argv[0] = sys.argv[0][:-4]
-            sys.exit(main())
-        "#);
-
-    });
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        // We should have a tool receipt
         assert_snapshot!(context.read("tools/executable-application/uv-receipt.toml"), @r#"
         [tool]
         requirements = [{ name = "executable-application" }]
@@ -4961,6 +4930,16 @@ async fn tool_install_credentials() {
         exclude-newer = "2025-01-18T00:00:00Z"
         "#);
     });
+
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("executable-application")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade executable-application
+      cause: Failed to fetch: http://[LOCALHOST]/basic-auth/simple/executable-application/
+      cause: Missing credentials for: http://[LOCALHOST]/basic-auth/simple/executable-application/
+    ");
 }
 
 /// When installing from an authenticated index, the credentials should be omitted from the receipt.
