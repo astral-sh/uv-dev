@@ -534,23 +534,17 @@ fn freeze_multiple_paths() -> Result<()> {
     Ok(())
 }
 
-// We follow pip in just ignoring nonexistent paths
+/// Match pip by ignoring nonexistent paths without creating them.
 #[test]
 fn freeze_nonexistent_path() {
     let context = uv_test::test_context!("3.12");
-
-    let nonexistent_dir = {
-        let dir = context.temp_dir.child("blahblah");
-        assert!(!dir.exists());
-        dir
-    };
-
-    // Run `pip freeze`.
+    let nonexistent_dir = context.temp_dir.child("nonexistent");
     uv_snapshot!(context.filters(), context.pip_freeze()
         .arg("--path")
         .arg(nonexistent_dir.path()), @"
     exit_code: 0 (success)
     ");
+    nonexistent_dir.assert(predicates::path::missing());
 }
 
 #[test]
