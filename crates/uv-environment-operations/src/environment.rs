@@ -31,6 +31,12 @@ use uv_workspace::WorkspaceCache;
 #[derive(Debug)]
 pub struct CachedEnvironment(PythonEnvironment);
 
+impl AsRef<PythonEnvironment> for CachedEnvironment {
+    fn as_ref(&self) -> &PythonEnvironment {
+        &self.0
+    }
+}
+
 impl From<CachedEnvironment> for PythonEnvironment {
     fn from(environment: CachedEnvironment) -> Self {
         environment.0

@@ -17,15 +17,21 @@ use uv_install_wheel::format_shebang;
 use uv_installer::SitePackages;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 
+use crate::environment::CachedEnvironment;
+
 /// Attach shared dependencies to a writable overlay.
+///
+/// The parent must be a [`CachedEnvironment`]: synchronization relies on its archive path
+/// identifying immutable contents.
 ///
 /// Configure imports before synchronizing managed commands and data. Record the parent only
 /// after synchronization succeeds. An error can leave imports updated; ownership journals allow
 /// a later call to recover interrupted file synchronization.
 pub fn attach_shared_environment(
     environment: &PythonEnvironment,
-    shared: &PythonEnvironment,
+    shared: &CachedEnvironment,
 ) -> anyhow::Result<()> {
+    let shared = shared.as_ref();
     let parent_site_packages = shared
         .site_packages()
         .next()
