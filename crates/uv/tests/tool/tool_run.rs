@@ -3021,6 +3021,7 @@ fn tool_run_verbose_hint_install_failure() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python-eol")]
 fn tool_run_with_compatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9")
         .with_exclude_newer("2024-05-04T00:00:00Z")
