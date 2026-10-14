@@ -106,21 +106,7 @@ fn all_files_except_record_use_archive_file_store_local_serial() -> Result<()> {
     files-v0/bf/bf13d7b1c373edcb8588b94aae048664a6684f665fa4a7e8cd814360e537a049
     files-v0/fa/fad1ac6fba02614a6ee120fbb397cd676f48c101afee95ab29d146c76df03596
     ");
-    let paths = context.cache_files(CacheBucket::Archive)?;
-    let shared_paths = paths
-        .iter()
-        .filter(|path| {
-            objects
-                .iter()
-                .any(|object| uv_fs::is_same_file_allow_missing(path, object) == Some(true))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let paths = paths
-        .into_iter()
-        .filter(|path| !path.ends_with("RECORD"))
-        .collect::<Vec<_>>();
-    assert_eq!(shared_paths, paths);
+    assert_archive_files_share_objects_except_record(&context, &objects)?;
     Ok(())
 }
 
@@ -156,21 +142,7 @@ fn all_files_except_record_use_archive_file_store_local_concurrent() -> Result<(
     files-v0/bf/bf13d7b1c373edcb8588b94aae048664a6684f665fa4a7e8cd814360e537a049
     files-v0/fa/fad1ac6fba02614a6ee120fbb397cd676f48c101afee95ab29d146c76df03596
     ");
-    let paths = context.cache_files(CacheBucket::Archive)?;
-    let shared_paths = paths
-        .iter()
-        .filter(|path| {
-            objects
-                .iter()
-                .any(|object| uv_fs::is_same_file_allow_missing(path, object) == Some(true))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let paths = paths
-        .into_iter()
-        .filter(|path| !path.ends_with("RECORD"))
-        .collect::<Vec<_>>();
-    assert_eq!(shared_paths, paths);
+    assert_archive_files_share_objects_except_record(&context, &objects)?;
     Ok(())
 }
 
@@ -211,21 +183,7 @@ async fn all_files_except_record_use_archive_file_store_streaming_serial() -> Re
     files-v0/bf/bf13d7b1c373edcb8588b94aae048664a6684f665fa4a7e8cd814360e537a049
     files-v0/fa/fad1ac6fba02614a6ee120fbb397cd676f48c101afee95ab29d146c76df03596
     ");
-    let paths = context.cache_files(CacheBucket::Archive)?;
-    let shared_paths = paths
-        .iter()
-        .filter(|path| {
-            objects
-                .iter()
-                .any(|object| uv_fs::is_same_file_allow_missing(path, object) == Some(true))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let paths = paths
-        .into_iter()
-        .filter(|path| !path.ends_with("RECORD"))
-        .collect::<Vec<_>>();
-    assert_eq!(shared_paths, paths);
+    assert_archive_files_share_objects_except_record(&context, &objects)?;
     Ok(())
 }
 
@@ -266,21 +224,7 @@ async fn all_files_except_record_use_archive_file_store_streaming_concurrent() -
     files-v0/bf/bf13d7b1c373edcb8588b94aae048664a6684f665fa4a7e8cd814360e537a049
     files-v0/fa/fad1ac6fba02614a6ee120fbb397cd676f48c101afee95ab29d146c76df03596
     ");
-    let paths = context.cache_files(CacheBucket::Archive)?;
-    let shared_paths = paths
-        .iter()
-        .filter(|path| {
-            objects
-                .iter()
-                .any(|object| uv_fs::is_same_file_allow_missing(path, object) == Some(true))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let paths = paths
-        .into_iter()
-        .filter(|path| !path.ends_with("RECORD"))
-        .collect::<Vec<_>>();
-    assert_eq!(shared_paths, paths);
+    assert_archive_files_share_objects_except_record(&context, &objects)?;
     Ok(())
 }
 
@@ -432,6 +376,28 @@ fn binary_payload_copy_fallback_uses_archive_file_store() -> Result<()> {
         BINARY_PAYLOAD_CONTENTS,
     );
 
+    Ok(())
+}
+
+fn assert_archive_files_share_objects_except_record(
+    context: &TestContext,
+    objects: &[PathBuf],
+) -> Result<()> {
+    let mut record_count = 0;
+    for path in context.cache_files(CacheBucket::Archive)? {
+        let is_record = path.ends_with("RECORD");
+        record_count += usize::from(is_record);
+        let shares_object = objects
+            .iter()
+            .any(|object| uv_fs::is_same_file_allow_missing(&path, object) == Some(true));
+        assert_eq!(
+            shares_object,
+            !is_record,
+            "unexpected file-store sharing for {}",
+            path.display()
+        );
+    }
+    assert_eq!(record_count, 1, "expected one RECORD in the cached archive");
     Ok(())
 }
 
