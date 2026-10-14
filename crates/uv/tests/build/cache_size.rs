@@ -1,3 +1,4 @@
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteBin, PathChild};
 
 use uv_test::uv_snapshot;
@@ -14,21 +15,32 @@ fn cache_size_missing_raw() {
     ");
 }
 
-/// A populated cache reports a positive raw byte count.
+/// Files added to the cache contribute to its reported disk usage.
 #[test]
 fn cache_size_populated_raw() -> anyhow::Result<()> {
-    let context =
-        uv_test::test_context_with_versions!(&[]).with_filter((r"(?m)^[1-9]\d*\r?\n", "[SIZE]\n"));
+    let context = uv_test::test_context_with_versions!(&[]);
+    let read_cache_size = || -> anyhow::Result<u64> {
+        let output = context
+            .cache_size()
+            .arg("--preview")
+            .assert()
+            .success()
+            .stderr("");
+        Ok(std::str::from_utf8(&output.get_output().stdout)?
+            .trim()
+            .parse()?)
+    };
+
+    let empty_size = read_cache_size()?;
     context
         .cache_dir
         .child("payload.bin")
         .write_binary(&[42; 8192])?;
-
-    uv_snapshot!(context.filters(), context.cache_size().arg("--preview"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [SIZE]
-    ");
+    let populated_size = read_cache_size()?;
+    assert!(
+        populated_size > empty_size,
+        "adding a file should increase cache usage (empty: {empty_size}, populated: {populated_size})"
+    );
     Ok(())
 }
 
