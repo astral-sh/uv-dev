@@ -319,75 +319,33 @@ impl<'a> RequirementExpander<'a> {
             .into_iter()
             .flatten()
             .filter_map(move |constraint| {
-                // If the requirement would not be selected with any Python version
-                // supported by the root, skip it.
-                let constraint = if constraint.marker.is_true() {
-                    // Additionally, if the requirement is `requests ; sys_platform == 'darwin'`
-                    // and the constraint is `requests ; python_version == '3.6'`, the
-                    // constraint should only apply when _both_ markers are true.
-                    if requirement.marker.is_true() {
-                        Cow::Borrowed(constraint)
-                    } else {
-                        let mut marker = constraint.marker;
-                        marker = marker.and(requirement.marker);
+                // A constraint only applies when both its marker and the requirement marker are true.
+                let marker = constraint.marker.and(requirement.marker);
+                if marker.is_false() {
+                    trace!(
+                        "Skipping {constraint} because of disjoint markers: `{:?}` vs. `{:?}`",
+                        constraint.marker,
+                        requirement.marker,
+                    );
+                    return None;
+                }
 
-                        if marker.is_false() {
-                            trace!(
-                                "Skipping {constraint} because of disjoint markers: `{:?}` vs. `{:?}`",
-                                constraint.marker,
-                                requirement.marker,
-                            );
-                            return None;
-                        }
-
-                        Cow::Owned(Requirement {
-                            name: constraint.name.clone(),
-                            extras: constraint.extras.clone(),
-                            groups: constraint.groups.clone(),
-                            source: constraint.source.clone(),
-                            scope: constraint.scope.clone(),
-                            origin: constraint.origin.clone(),
-                            marker,
-                        })
-                    }
-                } else {
+                // An unmarked constraint inherits the requirement's already-filtered Python range.
+                if !constraint.marker.is_true() && python_marker.is_disjoint(marker) {
                     let requires_python = python_requirement.target();
+                    trace!(
+                        "Skipping constraint {requirement} because of Requires-Python: {requires_python}"
+                    );
+                    return None;
+                }
 
-                    let mut marker = constraint.marker;
-                    marker = marker.and(requirement.marker);
-
-                    if marker.is_false() {
-                        trace!(
-                            "Skipping {constraint} because of disjoint markers: `{:?}` vs. `{:?}`",
-                            constraint.marker,
-                            requirement.marker,
-                        );
-                        return None;
-                    }
-
-                    // Additionally, if the requirement is `requests ; sys_platform == 'darwin'`
-                    // and the constraint is `requests ; python_version == '3.6'`, the
-                    // constraint should only apply when _both_ markers are true.
-                    if python_marker.is_disjoint(marker) {
-                        trace!(
-                            "Skipping constraint {requirement} because of Requires-Python: {requires_python}"
-                        );
-                        return None;
-                    }
-
-                    if marker == constraint.marker {
-                        Cow::Borrowed(constraint)
-                    } else {
-                        Cow::Owned(Requirement {
-                            name: constraint.name.clone(),
-                            extras: constraint.extras.clone(),
-                            groups: constraint.groups.clone(),
-                            source: constraint.source.clone(),
-                            scope: constraint.scope.clone(),
-                            origin: constraint.origin.clone(),
-                            marker,
-                        })
-                    }
+                let constraint = if marker == constraint.marker {
+                    Cow::Borrowed(constraint)
+                } else {
+                    Cow::Owned(Requirement {
+                        marker,
+                        ..constraint.clone()
+                    })
                 };
 
                 // If we're in a fork in universal mode, ignore any dependency that isn't part of
