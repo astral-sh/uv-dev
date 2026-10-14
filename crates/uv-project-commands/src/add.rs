@@ -887,53 +887,46 @@ fn edits(
         merged_extras.dedup();
         requirement.extras = merged_extras.into_boxed_slice();
 
-        let (requirement, mut source) = match target {
-            EditTarget::Script(_) | EditTarget::Project(_) if raw => {
-                (uv_pep508::Requirement::from(requirement), None)
-            }
-            EditTarget::Script(script) => {
-                let script_path = std::path::absolute(&script.path)?;
-                let script_dir = script_path.parent().expect("script path has no parent");
-
-                let existing_sources = Some(script.sources());
-                resolve_requirement(
-                    requirement,
-                    false,
-                    editable,
-                    index.cloned(),
-                    rev.map(ToString::to_string),
-                    tag.map(ToString::to_string),
-                    branch.map(ToString::to_string),
-                    lfs,
-                    script_dir,
-                    existing_sources,
-                )?
-            }
-            EditTarget::Project(project) => {
-                let existing_sources = project
-                    .pyproject_toml()
-                    .tool
-                    .as_ref()
-                    .and_then(|tool| tool.uv.as_ref())
-                    .and_then(|uv| uv.sources.as_ref())
-                    .map(ToolUvSources::inner);
-                let is_workspace_member = project
-                    .workspace()
-                    .packages()
-                    .contains_key(&requirement.name);
-                resolve_requirement(
-                    requirement,
-                    is_workspace_member,
-                    editable,
-                    index.cloned(),
-                    rev.map(ToString::to_string),
-                    tag.map(ToString::to_string),
-                    branch.map(ToString::to_string),
-                    lfs,
+        let (requirement, mut source) = if raw {
+            (uv_pep508::Requirement::from(requirement), None)
+        } else {
+            let script_path;
+            let (root, existing_sources, is_workspace_member) = match target {
+                EditTarget::Script(script) => {
+                    script_path = std::path::absolute(&script.path)?;
+                    (
+                        script_path.parent().expect("script path has no parent"),
+                        Some(script.sources()),
+                        false,
+                    )
+                }
+                EditTarget::Project(project) => (
                     project.root(),
-                    existing_sources,
-                )?
-            }
+                    project
+                        .pyproject_toml()
+                        .tool
+                        .as_ref()
+                        .and_then(|tool| tool.uv.as_ref())
+                        .and_then(|uv| uv.sources.as_ref())
+                        .map(ToolUvSources::inner),
+                    project
+                        .workspace()
+                        .packages()
+                        .contains_key(&requirement.name),
+                ),
+            };
+            resolve_requirement(
+                requirement,
+                is_workspace_member,
+                editable,
+                index.cloned(),
+                rev.map(ToString::to_string),
+                tag.map(ToString::to_string),
+                branch.map(ToString::to_string),
+                lfs,
+                root,
+                existing_sources,
+            )?
         };
 
         // Remove any credentials. By default, we avoid writing sensitive credentials to files that
