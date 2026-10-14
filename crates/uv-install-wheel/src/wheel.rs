@@ -858,8 +858,7 @@ pub(crate) fn install_data(
 
 /// Write the content to a file and add the hash to the RECORD list
 ///
-/// We still the path in the absolute path to the site packages and the relative path in the
-/// site packages because we must only record the relative path in RECORD
+/// The filesystem path is resolved from site-packages, but RECORD contains the relative path.
 fn write_file_recorded(
     site_packages: &Path,
     relative_path: &Path,
@@ -884,6 +883,17 @@ fn write_file_recorded(
     Ok(())
 }
 
+/// Serialize the content as JSON, write it to a file, and add it to RECORD.
+fn write_json_recorded(
+    site_packages: &Path,
+    relative_path: &Path,
+    content: &impl serde::Serialize,
+    record: &mut Vec<RecordEntry>,
+) -> Result<(), Error> {
+    let content = serde_json::to_vec(content)?;
+    write_file_recorded(site_packages, relative_path, content, record)
+}
+
 /// Adds `INSTALLER`, `REQUESTED` and `direct_url.json` to the .dist-info dir
 pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Serialize>(
     site_packages: &Path,
@@ -900,26 +910,26 @@ pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Se
         write_file_recorded(site_packages, &dist_info_dir.join("REQUESTED"), "", record)?;
     }
     if let Some(direct_url) = direct_url {
-        write_file_recorded(
+        write_json_recorded(
             site_packages,
             &dist_info_dir.join("direct_url.json"),
-            serde_json::to_string(direct_url)?.as_bytes(),
+            direct_url,
             record,
         )?;
     }
     if let Some(cache_info) = cache_info {
-        write_file_recorded(
+        write_json_recorded(
             site_packages,
             &dist_info_dir.join("uv_cache.json"),
-            serde_json::to_string(cache_info)?.as_bytes(),
+            cache_info,
             record,
         )?;
     }
     if let Some(build_info) = build_info {
-        write_file_recorded(
+        write_json_recorded(
             site_packages,
             &dist_info_dir.join("uv_build.json"),
-            serde_json::to_string(build_info)?.as_bytes(),
+            build_info,
             record,
         )?;
     }
