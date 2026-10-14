@@ -113,10 +113,9 @@ impl LockedFileMode {
     #[cfg(not(target_os = "android"))]
     fn try_lock(self, file: &fs_err::File) -> Result<(), std::fs::TryLockError> {
         match self {
-            Self::Exclusive => file.try_lock()?,
-            Self::Shared => file.try_lock_shared()?,
+            Self::Exclusive => file.try_lock(),
+            Self::Shared => file.try_lock_shared(),
         }
-        Ok(())
     }
 
     /// Try to lock the file and return an error if the lock is already acquired by another process
@@ -153,10 +152,9 @@ impl LockedFileMode {
     #[cfg(not(target_os = "android"))]
     fn lock(self, file: &fs_err::File) -> Result<(), io::Error> {
         match self {
-            Self::Exclusive => file.lock()?,
-            Self::Shared => file.lock_shared()?,
+            Self::Exclusive => file.lock(),
+            Self::Shared => file.lock_shared(),
         }
-        Ok(())
     }
 
     /// Lock the file, blocking until the lock becomes available if necessary.
@@ -207,8 +205,8 @@ impl LockedFile {
             file.path().user_display()
         );
         // If there's no contention, return directly.
-        let try_lock_exclusive = tokio::task::spawn_blocking(move || (mode.try_lock(&file), file));
-        let file = match try_lock_exclusive.await? {
+        let try_lock = tokio::task::spawn_blocking(move || (mode.try_lock(&file), file));
+        let file = match try_lock.await? {
             (Ok(()), file) => {
                 trace!("Acquired {mode} lock for `{resource}`");
                 return Ok(Self(file));
@@ -228,8 +226,8 @@ impl LockedFile {
             file.path().user_display(),
         );
         let path = file.path().to_path_buf();
-        let lock_exclusive = tokio::task::spawn_blocking(move || (mode.lock(&file), file));
-        let (result, file) = tokio::time::timeout(*LOCK_TIMEOUT, lock_exclusive)
+        let lock = tokio::task::spawn_blocking(move || (mode.lock(&file), file));
+        let (result, file) = tokio::time::timeout(*LOCK_TIMEOUT, lock)
             .await
             .map_err(|_| LockedFileError::Timeout {
                 timeout: *LOCK_TIMEOUT,
