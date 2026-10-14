@@ -254,13 +254,9 @@ impl<T: ?Sized + CacheKey> CacheKey for &mut T {
     }
 }
 
-impl<T> CacheKey for Vec<T>
-where
-    T: CacheKey,
-{
+impl<T: CacheKey> CacheKey for Vec<T> {
     fn cache_key(&self, state: &mut CacheKeyHasher) {
-        state.write_usize(self.len());
-        CacheKey::cache_key_slice(self, state);
+        self.as_slice().cache_key(state);
     }
 }
 
