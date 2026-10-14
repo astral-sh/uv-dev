@@ -822,47 +822,30 @@ impl Cache {
         let mut references = FxHashMap::<PathBuf, Vec<PathBuf>>::default();
         for bucket in [CacheBucket::SourceDistributions, CacheBucket::Wheels] {
             let bucket_path = self.bucket(bucket);
-            if bucket_path.is_dir() {
-                let walker = walkdir::WalkDir::new(&bucket_path).into_iter();
-                for entry in walker.filter_entry(|entry| {
-                    !(
-                        // As an optimization, ignore any `.lock`, `.whl`, `.msgpack`, `.rev`, or
-                        // `.http` files, along with the `src` directory, which represents the
-                        // unpacked source distribution.
-                        entry.file_name() == "src"
-                            || entry.file_name() == ".lock"
-                            || entry.file_name() == ".gitignore"
-                            || entry.path().extension().is_some_and(|ext| {
-                                ext.eq_ignore_ascii_case("lock")
-                                    || ext.eq_ignore_ascii_case("whl")
-                                    || ext.eq_ignore_ascii_case("http")
-                                    || ext.eq_ignore_ascii_case("rev")
-                                    || ext.eq_ignore_ascii_case("msgpack")
-                            })
-                    )
-                }) {
-                    let entry = entry?;
+            if !bucket_path.is_dir() {
+                continue;
+            }
+            let walker = walkdir::WalkDir::new(&bucket_path).into_iter();
+            for entry in walker.filter_entry(should_search_for_archive_references) {
+                let entry = entry?;
 
-                    // On Unix, archive references use symlinks.
-                    if cfg!(unix) {
-                        if !entry.file_type().is_symlink() {
-                            continue;
-                        }
-                    }
+                // On Unix, archive references use symlinks.
+                #[cfg(unix)]
+                if !entry.file_type().is_symlink() {
+                    continue;
+                }
 
-                    // On Windows, archive references are files containing structured data.
-                    if cfg!(windows) {
-                        if !entry.file_type().is_file() {
-                            continue;
-                        }
-                    }
+                // On Windows, archive references are files containing structured data.
+                #[cfg(windows)]
+                if !entry.file_type().is_file() {
+                    continue;
+                }
 
-                    if let Ok(target) = self.resolve_link(entry.path()) {
-                        references
-                            .entry(target)
-                            .or_default()
-                            .push(entry.path().to_path_buf());
-                    }
+                if let Ok(target) = self.resolve_link(entry.path()) {
+                    references
+                        .entry(target)
+                        .or_default()
+                        .push(entry.path().to_path_buf());
                 }
             }
         }
@@ -941,6 +924,18 @@ impl Cache {
     pub fn resolve_link(&self, path: impl AsRef<Path>) -> io::Result<PathBuf> {
         path.as_ref().canonicalize()
     }
+}
+
+/// Skip unpacked sources and cache metadata when searching for archive references.
+fn should_search_for_archive_references(entry: &walkdir::DirEntry) -> bool {
+    !matches!(
+        entry.file_name().to_str(),
+        Some("src" | ".lock" | ".gitignore")
+    ) && !entry.path().extension().is_some_and(|extension| {
+        ["lock", "whl", "http", "rev", "msgpack"]
+            .into_iter()
+            .any(|ignored| extension.eq_ignore_ascii_case(ignored))
+    })
 }
 
 /// An archive (unzipped wheel) that exists in the local cache.
