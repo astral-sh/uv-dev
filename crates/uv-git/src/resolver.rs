@@ -269,30 +269,24 @@ impl GitResolver {
         url.with_precise(precise).ok()
     }
 
-    /// Returns `true` if the two Git URLs refer to the same precise commit.
+    /// Return whether the URLs identify the same repository and share a reference or resolved commit.
     pub fn same_ref(&self, a: &GitUrl, b: &GitUrl) -> bool {
-        // Convert `a` to a repository URL.
-        let a_ref = RepositoryReference::from(a);
-
-        // Convert `b` to a repository URL.
-        let b_ref = RepositoryReference::from(b);
-
         // The URLs must refer to the same repository.
-        if a_ref.url != b_ref.url {
+        if a.repository() != b.repository() {
             return false;
         }
 
-        // If the URLs have the same tag, they refer to the same commit.
-        if a_ref.reference == b_ref.reference {
+        // A matching reference identifies the same source.
+        if a.reference() == b.reference() {
             return true;
         }
 
         // Otherwise, the URLs must resolve to the same precise commit.
-        let Some(a_precise) = a.precise().or_else(|| self.get(&a_ref)) else {
+        let Some(a_precise) = self.get_precise(a) else {
             return false;
         };
 
-        let Some(b_precise) = b.precise().or_else(|| self.get(&b_ref)) else {
+        let Some(b_precise) = self.get_precise(b) else {
             return false;
         };
 
