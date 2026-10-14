@@ -18880,8 +18880,20 @@ fn project_build_hashes_lock_and_sync() -> Result<()> {
         "#);
     });
 
-    // `--frozen` uses the build dependency hashes recorded in the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-editable"), @"
+    // Make the manifest hash stale so it differs from the trusted hash in the lockfile.
+    pyproject.write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(&hash, &"0".repeat(64)),
+    )?;
+
+    // `--frozen` requires the build dependency hash recorded in the lockfile.
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen",
+        "--no-editable",
+        "--require-build-hashes",
+        "--preview-features=build-dependency-hashes",
+    ]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
@@ -18890,11 +18902,6 @@ fn project_build_hashes_lock_and_sync() -> Result<()> {
     ");
 
     // Changing only a hash makes `--locked` reject the existing lockfile.
-    pyproject.write_str(
-        &context
-            .read("pyproject.toml")
-            .replace(&hash, &"0".repeat(64)),
-    )?;
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
     exit_code: 1 (failure)
     ----- stderr -----
