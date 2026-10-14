@@ -133,6 +133,8 @@ fn missing_record() -> Result<()> {
     "
     );
 
+    context.assert_command("import markupsafe").success();
+
     Ok(())
 }
 
