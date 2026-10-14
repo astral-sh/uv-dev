@@ -358,7 +358,7 @@ impl Credentials {
             }
             Self::Bearer { token } => [b"Bearer ", token.as_slice()].concat(),
         };
-        let mut header = HeaderValue::from_bytes(&header_bytes)?;
+        let mut header = HeaderValue::try_from(header_bytes)?;
         header.set_sensitive(true);
         Ok(header)
     }
