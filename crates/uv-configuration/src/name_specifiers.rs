@@ -44,18 +44,7 @@ impl<'de> serde::Deserialize<'de> for PackageNameSpecifier {
             where
                 E: serde::de::Error,
             {
-                // Accept the special values `:all:` and `:none:`.
-                match value {
-                    ":all:" => Ok(PackageNameSpecifier::All),
-                    ":none:" => Ok(PackageNameSpecifier::None),
-                    _ => {
-                        // Otherwise, parse the value as a package name.
-                        match PackageName::from_str(value) {
-                            Ok(name) => Ok(PackageNameSpecifier::Package(name)),
-                            Err(err) => Err(E::custom(err)),
-                        }
-                    }
-                }
+                PackageNameSpecifier::from_str(value).map_err(E::custom)
             }
         }
 
