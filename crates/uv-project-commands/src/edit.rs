@@ -9,6 +9,7 @@ use tracing::{debug, warn};
 
 use uv_fs::Simplified;
 use uv_lock_operations::LockTarget;
+use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_scripts::{Pep723Metadata, Pep723Script};
 use uv_workspace::pyproject::PyProjectToml;
@@ -36,6 +37,18 @@ impl<'lock> From<&'lock EditTarget> for LockTarget<'lock> {
 }
 
 impl EditTarget {
+    /// Parse the target's metadata for dependency editing.
+    pub(super) fn editable_toml(&self) -> Result<PyProjectTomlMut, uv_project_edit::Error> {
+        let (raw, target) = match self {
+            Self::Script(script) => (script.metadata.raw.as_str(), DependencyTarget::Script),
+            Self::Project(project) => (
+                project.pyproject_toml().raw.as_str(),
+                DependencyTarget::PyProjectToml,
+            ),
+        };
+        PyProjectTomlMut::from_toml(raw, target)
+    }
+
     /// Write the updated metadata if its content changed.
     pub(super) fn write(&self, content: &str) -> Result<(), io::Error> {
         let original = match self {
