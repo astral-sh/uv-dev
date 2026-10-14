@@ -5361,8 +5361,8 @@ fn target_built_distribution() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
-    // Ensure that the package is present in the target directory.
-    assert!(context.temp_dir.child("target").child("iniconfig").is_dir());
+    let target = context.temp_dir.child("target");
+    target.child("iniconfig").assert(predicates::path::is_dir());
 
     // Ensure that we can't import the package.
     context.assert_command("import iniconfig").failure();
@@ -5372,12 +5372,11 @@ fn target_built_distribution() -> Result<()> {
         .python_command()
         .arg("-c")
         .arg("import iniconfig")
-        .env(EnvVars::PYTHONPATH, context.temp_dir.child("target").path())
+        .env(EnvVars::PYTHONPATH, target.path())
         .assert()
         .success();
 
-    // Upgrade it.
-    let requirements_in = context.temp_dir.child("requirements.in");
+    // Replace it with an older version.
     requirements_in.write_str("iniconfig==1.1.1")?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
@@ -5394,9 +5393,14 @@ fn target_built_distribution() -> Result<()> {
      - iniconfig==2.0.0
      + iniconfig==1.1.1
     ");
+    target
+        .child("iniconfig-2.0.0.dist-info")
+        .assert(predicates::path::missing());
+    target
+        .child("iniconfig-1.1.1.dist-info")
+        .assert(predicates::path::is_dir());
 
     // Remove it, and replace with `flask`, which includes a binary.
-    let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("flask")?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
@@ -5413,15 +5417,16 @@ fn target_built_distribution() -> Result<()> {
      + flask==3.0.2
      - iniconfig==1.1.1
     ");
-    // Ensure that the binary is present in the target directory.
-    assert!(
-        context
-            .temp_dir
-            .child("target")
-            .child("bin")
-            .child(format!("flask{EXE_SUFFIX}"))
-            .is_file()
-    );
+    target
+        .child("iniconfig")
+        .assert(predicates::path::missing());
+    target
+        .child("iniconfig-1.1.1.dist-info")
+        .assert(predicates::path::missing());
+    target
+        .child("bin")
+        .child(format!("flask{EXE_SUFFIX}"))
+        .assert(predicates::path::is_file());
 
     Ok(())
 }
