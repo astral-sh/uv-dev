@@ -7134,14 +7134,22 @@ fn read_metadata_statically_over_the_cache() -> Result<()> {
         .touch()?;
 
     context.sync().assert().success();
-    let lock1 = context.read("uv.lock");
-    // Assert we're reading static metadata.
-    assert!(lock1.contains(">=4,<5"));
-    assert!(!lock1.contains("<5,>=4"));
+    let lock = context.read("uv.lock");
+    let document: toml::Value = toml::from_str(&lock)?;
+    let project = document["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("project"))
+        })
+        .ok_or_else(|| anyhow!("project package missing from lockfile"))?;
+    let requirement = &project["metadata"]["requires-dist"][0];
+    assert_eq!(requirement["name"].as_str(), Some("anyio"));
+    assert_eq!(requirement["specifier"].as_str(), Some(">=4,<5"));
+
     context.sync().assert().success();
-    let lock2 = context.read("uv.lock");
-    // Assert stability.
-    assert_eq!(lock1, lock2);
+    assert_eq!(lock, context.read("uv.lock"));
 
     Ok(())
 }
