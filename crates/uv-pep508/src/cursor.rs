@@ -8,7 +8,6 @@ use crate::{Pep508Error, Pep508ErrorSource, Pep508Url};
 pub(crate) struct Cursor<'a> {
     input: &'a str,
     chars: Chars<'a>,
-    pos: usize,
 }
 
 impl<'a> Cursor<'a> {
@@ -17,7 +16,6 @@ impl<'a> Cursor<'a> {
         Self {
             input,
             chars: input.chars(),
-            pos: 0,
         }
     }
 
@@ -26,13 +24,12 @@ impl<'a> Cursor<'a> {
         Self {
             input: self.input,
             chars: self.input[pos..].chars(),
-            pos,
         }
     }
 
     /// Returns the current byte position of the cursor.
     pub(crate) fn pos(&self) -> usize {
-        self.pos
+        self.input.len() - self.remaining().len()
     }
 
     /// Returns the unconsumed input.
@@ -47,7 +44,7 @@ impl<'a> Cursor<'a> {
 
     /// Peeks the next character and position from the input stream without consuming it.
     pub(crate) fn peek(&self) -> Option<(usize, char)> {
-        self.chars.clone().next().map(|char| (self.pos, char))
+        self.peek_char().map(|char| (self.pos(), char))
     }
 
     /// Peeks the next character from the input stream without consuming it.
@@ -73,9 +70,8 @@ impl<'a> Cursor<'a> {
 
     /// Returns the next character and position from the input stream and consumes it.
     pub(crate) fn next(&mut self) -> Option<(usize, char)> {
-        let pos = self.pos;
+        let pos = self.pos();
         let char = self.chars.next()?;
-        self.pos += char.len_utf8();
         Some((pos, char))
     }
 
@@ -106,11 +102,7 @@ impl<'a> Cursor<'a> {
 
     /// Advance to a suffix of the current unconsumed input.
     fn advance_to(&mut self, remaining: &'a str) {
-        let consumed = self.remaining().len() - remaining.len();
-        if consumed > 0 {
-            self.pos += consumed;
-            self.chars = remaining.chars();
-        }
+        self.chars = remaining.chars();
     }
 
     /// Consumes characters from the cursor, raising an error if it doesn't match the given token.
