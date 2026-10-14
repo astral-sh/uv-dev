@@ -5,7 +5,7 @@ use std::fmt::Write;
 use std::io;
 use std::io::Read;
 #[cfg(unix)]
-use std::os::unix::ffi::OsStringExt;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
@@ -1760,7 +1760,7 @@ impl RunCommand {
 
                 cfg_select! {
                     unix => {
-                        process.arg(OsString::from_vec(script.clone()));
+                        process.arg(std::ffi::OsStr::from_bytes(script));
                     },
                     _ => {
                         let script =
