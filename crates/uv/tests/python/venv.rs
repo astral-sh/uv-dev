@@ -854,12 +854,15 @@ fn create_venv_defaults_to_cwd() {
 }
 
 #[test]
-fn create_venv_ignores_virtual_env_variable() {
+fn create_venv_ignores_virtual_env_variable() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    // We shouldn't care if `VIRTUAL_ENV` is set to an non-existent directory
-    // because we ignore virtual environment interpreter sources (we require a system interpreter)
+    // A recognized environment without an interpreter would fail discovery if inspected.
+    let active_venv = context.temp_dir.child("active");
+    active_venv.create_dir_all()?;
+    active_venv.child("pyvenv.cfg").touch()?;
+
     uv_snapshot!(context.filters(), context.venv()
-        .env(EnvVars::VIRTUAL_ENV, context.temp_dir.child("does-not-exist").as_os_str()), @"
+        .env(EnvVars::VIRTUAL_ENV, &active_venv), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -867,6 +870,8 @@ fn create_venv_ignores_virtual_env_variable() {
     Activate with: source .venv/[BIN]/activate
     "
     );
+
+    Ok(())
 }
 
 #[test]
