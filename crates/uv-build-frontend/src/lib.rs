@@ -1123,22 +1123,20 @@ impl PythonRunner {
             mut printer: Printer,
             buffer: &mut Vec<String>,
         ) -> io::Result<()> {
-            loop {
-                match reader.next_segment().await? {
-                    Some(line_buf) => {
-                        let line_buf = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
-                        let line = String::from_utf8_lossy(line_buf).into();
-                        let _ = write!(printer, "{line}");
-                        buffer.push(line);
-                    }
-                    None => return Ok(()),
-                }
+            while let Some(line_buf) = reader.next_segment().await? {
+                let line_buf = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
+                let line = String::from_utf8_lossy(line_buf).into();
+                let _ = write!(printer, "{line}");
+                buffer.push(line);
             }
+            Ok(())
         }
 
         let _permit = self.concurrent_build_slots.acquire().await.unwrap();
 
-        let mut command = Command::new(venv.python_executable());
+        let executable = venv.python_executable();
+        let command_failed = |err| Error::CommandFailed(executable.to_path_buf(), err);
+        let mut command = Command::new(executable);
         if uv_preview::is_enabled(PreviewFeature::BuildLazyImports)
             && venv.interpreter().implementation_name() == "cpython"
             && venv.interpreter().python_tuple() >= (3, 15)
@@ -1166,7 +1164,7 @@ impl PythonRunner {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|err| Error::CommandFailed(venv.python_executable().to_path_buf(), err))?;
+            .map_err(command_failed)?;
 
         // Create buffers to capture `stdout` and `stderr`.
         let mut stdout_buf = Vec::with_capacity(1024);
@@ -1178,25 +1176,14 @@ impl PythonRunner {
 
         // Asynchronously read from the in-memory pipes.
         let printer = Printer::from(self.level);
-        let result = tokio::join!(
+        let (stdout_result, stderr_result) = tokio::join!(
             read_from(stdout_reader, printer, &mut stdout_buf),
             read_from(stderr_reader, printer, &mut stderr_buf),
         );
-        match result {
-            (Ok(()), Ok(())) => {}
-            (Err(err), _) | (_, Err(err)) => {
-                return Err(Error::CommandFailed(
-                    venv.python_executable().to_path_buf(),
-                    err,
-                ));
-            }
-        }
+        stdout_result.and(stderr_result).map_err(command_failed)?;
 
         // Wait for the child process to finish.
-        let status = child
-            .wait()
-            .await
-            .map_err(|err| Error::CommandFailed(venv.python_executable().to_path_buf(), err))?;
+        let status = child.wait().await.map_err(command_failed)?;
 
         Ok(PythonRunnerOutput {
             stdout: stdout_buf,
