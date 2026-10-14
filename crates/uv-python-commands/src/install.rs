@@ -1180,8 +1180,7 @@ fn create_bin_links(
                     executables
                         .iter()
                         .filter_map(|path| path.file_name())
-                        .map(|name| format!("`{}`", name.to_string_lossy()))
-                        .collect(),
+                        .map(|name| format!("`{}`", name.to_string_lossy())),
                 ),
                 bin.simplified_display()
             ),
