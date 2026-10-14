@@ -1,4 +1,4 @@
-use assert_cmd::assert::OutputAssertExt;
+use assert_fs::fixture::{FileWriteBin, PathChild};
 
 use uv_test::uv_snapshot;
 
@@ -14,36 +14,39 @@ fn cache_size_missing_raw() {
     ");
 }
 
-/// Test that `cache size` returns raw bytes after installing packages.
+/// A populated cache reports a positive raw byte count.
 #[test]
-fn cache_size_with_packages_raw() {
-    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
+fn cache_size_populated_raw() -> anyhow::Result<()> {
+    let context =
+        uv_test::test_context_with_versions!(&[]).with_filter((r"(?m)^[1-9]\d*\r?\n", "[SIZE]\n"));
+    context
+        .cache_dir
+        .child("payload.bin")
+        .write_binary(&[42; 8192])?;
 
-    // Install a requirement to populate the cache.
-    context.pip_install().arg("iniconfig").assert().success();
-
-    // Check cache size is now positive (raw bytes).
     uv_snapshot!(context.filters(), context.cache_size().arg("--preview"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [SIZE]
     ");
+    Ok(())
 }
 
-/// Test that `cache size --human` returns human-readable format after installing packages.
+/// A populated cache reports human-readable units.
 #[test]
-fn cache_size_with_packages_human() {
-    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
+fn cache_size_populated_human() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_cache_size();
+    context
+        .cache_dir
+        .child("payload.bin")
+        .write_binary(&[42; 8192])?;
 
-    // Install a requirement to populate the cache.
-    context.pip_install().arg("iniconfig").assert().success();
-
-    // Check cache size with --human flag
     uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("--human"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [SIZE]KiB
     ");
+    Ok(())
 }
 
 /// Explicit output formats override terminal detection.
