@@ -857,20 +857,19 @@ impl PubGrubReportFormatter<'_> {
                             // Check if there are no included versions in the requested
                             // range, but there are still available versions in that range
                             // (i.e., they were filtered out by `exclude-newer`).
-                            let no_included_in_set = self
-                                .included_versions
-                                .get(name)
-                                .is_none_or(|versions| !versions.iter().any(|v| set.contains(v)));
-                            let available_has_versions_in_set = self
-                                .available_versions
-                                .get(name)
-                                .is_some_and(|versions| versions.iter().any(|v| set.contains(v)));
-                            if no_included_in_set && available_has_versions_in_set {
-                                let version_hint_set =
-                                    inherited_exclude_newer_ranges.get(name).map_or_else(
-                                        || set.clone(),
-                                        |exclude_newer_range| set.union(exclude_newer_range),
-                                    );
+                            let has_matching_version = |versions: Option<&BTreeSet<Version>>| {
+                                versions.is_some_and(|versions| {
+                                    versions.iter().any(|version| set.contains(version))
+                                })
+                            };
+                            if !has_matching_version(self.included_versions.get(name))
+                                && has_matching_version(self.available_versions.get(name))
+                            {
+                                let version_hint_set = inherited_exclude_newer_ranges
+                                    .get(name)
+                                    .map_or(Cow::Borrowed(set), |range| {
+                                        Cow::Owned(set.union(range))
+                                    });
                                 let matching_version = self.exclude_newer_version_hint(
                                     name,
                                     &version_hint_set,
