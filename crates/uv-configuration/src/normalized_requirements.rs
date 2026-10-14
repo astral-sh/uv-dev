@@ -411,16 +411,25 @@ fn coalesce(mut requirements: Vec<Requirement>) -> Vec<Requirement> {
         return requirements;
     }
 
-    let mut combined = IndexMap::<RequirementsKey, Requirement>::new();
-    for requirement in requirements {
-        let mut key = requirement.clone();
-        key.marker = MarkerTree::TRUE;
+    // Store the original marker and source separately because the semantic key discards registry
+    // specifiers and excludes the marker when coalescing.
+    let mut combined = IndexMap::<RequirementsKey, (MarkerTree, RequirementSource)>::new();
+    for mut requirement in requirements {
+        let marker = mem::replace(&mut requirement.marker, MarkerTree::TRUE);
+        let source = requirement.source.clone();
         combined
-            .entry(RequirementsKey::new(key))
-            .and_modify(|existing| existing.marker = existing.marker.or(requirement.marker))
-            .or_insert(requirement);
+            .entry(RequirementsKey::new(requirement))
+            .and_modify(|(existing, _)| *existing = existing.or(marker))
+            .or_insert((marker, source));
     }
-    combined.into_values().collect()
+    combined
+        .into_iter()
+        .map(|(key, (marker, source))| Requirement {
+            marker,
+            source,
+            ..key.requirement
+        })
+        .collect()
 }
 
 /// Remove implied clauses without changing prerelease opt-in or yanked-version eligibility.
