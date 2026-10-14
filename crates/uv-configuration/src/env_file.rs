@@ -11,29 +11,26 @@ impl EnvFile {
             return Self::default();
         }
 
-        if env_file.is_empty() {
-            return Self::default();
-        }
-
         let mut paths = Vec::new();
 
         // Split on spaces, but respect backslashes.
         for env_file in env_file {
             let mut current = String::new();
-            let mut escape = false;
-            for c in env_file.chars() {
-                if escape {
-                    current.push(c);
-                    escape = false;
-                } else if c == '\\' {
-                    escape = true;
-                } else if c.is_whitespace() {
-                    if !current.is_empty() {
-                        paths.push(PathBuf::from(current));
-                        current = String::new();
+            let mut chars = env_file.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => {
+                        let Some(escaped) = chars.next() else {
+                            break;
+                        };
+                        current.push(escaped);
                     }
-                } else {
-                    current.push(c);
+                    c if c.is_whitespace() => {
+                        if !current.is_empty() {
+                            paths.push(PathBuf::from(std::mem::take(&mut current)));
+                        }
+                    }
+                    c => current.push(c),
                 }
             }
             if !current.is_empty() {
