@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 use tracing::trace;
 
@@ -28,70 +28,51 @@ pub fn uninstall_wheel(
     // Read the RECORD file.
     let record = {
         let record_path = dist_info.join("RECORD");
-        let mut record_file = match fs_err::File::open(&record_path) {
+        let record_file = match fs_err::File::open(&record_path) {
             Ok(record_file) => record_file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 return Err(Error::MissingRecord(record_path));
             }
             Err(err) => return Err(err.into()),
         };
-        read_record(&mut record_file)?
+        read_record(record_file)?
     };
 
-    let mut file_count = 0usize;
-    let mut dir_count = 0usize;
+    let mut uninstall = Uninstall::default();
 
     #[cfg(windows)]
     let itself = std::env::current_exe().ok();
 
     // Uninstall the files, keeping track of any directories that are left empty.
     let mut visited = BTreeSet::new();
-    for entry in &record {
-        let path = site_packages.join(&entry.path);
-
-        if !is_path_in_scheme(&entry.path, site_packages, &distribution, layout) {
+    for entry in record {
+        let Some(path) = record_path_in_scheme(&entry.path, site_packages, &distribution, layout)
+        else {
             continue;
-        }
+        };
 
         // On Windows, deleting the current executable is a special case.
         #[cfg(windows)]
-        if let Some(itself) = itself.as_ref() {
-            if itself
+        if let Some(itself) = itself.as_ref()
+            && itself
                 .file_name()
-                .is_some_and(|itself| path.file_name().is_some_and(|path| itself == path))
-            {
-                if same_file::is_same_file(itself, &path).unwrap_or(false) {
-                    tracing::debug!("Detected self-delete of executable: {}", path.display());
-                    match self_replace::self_delete_outside_path(site_packages) {
-                        Ok(()) => {
-                            trace!("Removed file: {}", path.display());
-                            file_count += 1;
-                            if let Some(parent) = path.parent() {
-                                visited.insert(normalize_path(parent));
-                            }
-                        }
-                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(err) => return Err(err.into()),
-                    }
-                    continue;
-                }
+                .is_some_and(|name| path.file_name() == Some(name))
+            && same_file::is_same_file(itself, &path).unwrap_or(false)
+        {
+            tracing::debug!("Detected self-delete of executable: {}", path.display());
+            match self_replace::self_delete_outside_path(site_packages) {
+                Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
             }
+            continue;
         }
 
         match fs_err::remove_file(&path) {
-            Ok(()) => {
-                trace!("Removed file: {}", path.display());
-                file_count += 1;
-                if let Some(parent) = path.parent() {
-                    visited.insert(normalize_path(parent));
-                }
-            }
+            Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => match fs_err::remove_dir_all(&path) {
-                Ok(()) => {
-                    trace!("Removed directory: {}", path.display());
-                    dir_count += 1;
-                }
+                Ok(()) => uninstall.record_removed_directory(&path),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(_) => return Err(err.into()),
             },
@@ -100,7 +81,7 @@ pub fn uninstall_wheel(
 
     // If any directories were left empty, remove them. Iterate in reverse order such that we visit
     // the deepest directories first.
-    for path in visited.iter().rev() {
+    for path in visited.into_iter().rev() {
         // No need to look at directories outside of `site-packages` (like `bin`).
         if !path.starts_with(site_packages) {
             continue;
@@ -109,74 +90,64 @@ pub fn uninstall_wheel(
         // Iterate up the directory tree, removing any empty directories. It's insufficient to
         // rely on `visited` alone here, because we may end up removing a directory whose parent
         // directory doesn't contain any files, leaving the _parent_ directory empty.
-        let mut path = path.as_path();
-        loop {
-            // If we reach the site-packages directory, we're done.
-            if path == site_packages {
-                break;
-            }
-
+        for path in path.ancestors().take_while(|&path| path != site_packages) {
             // If the directory contains a `__pycache__` directory, always remove it. `__pycache__`
             // may or may not be listed in the RECORD, but installers are expected to be smart
             // enough to remove it either way.
             let pycache = path.join("__pycache__");
             match fs_err::remove_dir_all(&pycache) {
-                Ok(()) => {
-                    trace!("Removed directory: {}", pycache.display());
-                    dir_count += 1;
-                }
+                Ok(()) => uninstall.record_removed_directory(&pycache),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err.into()),
             }
 
-            // Try to read from the directory. If it doesn't exist, assume we deleted it in a
-            // previous iteration.
-            let mut read_dir = match fs_err::read_dir(path) {
-                Ok(read_dir) => read_dir,
+            // Close the directory handle before removing an empty directory.
+            match fs_err::read_dir(path) {
+                Ok(mut entries) => {
+                    if entries.next().is_some() {
+                        break;
+                    }
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
                 Err(err) => return Err(err.into()),
-            };
-
-            // If the directory is not empty, we're done.
-            if read_dir.next().is_some() {
-                break;
             }
 
             fs_err::remove_dir(path)?;
 
-            trace!("Removed directory: {}", path.display());
-            dir_count += 1;
-
-            if let Some(parent) = path.parent() {
-                path = parent;
-            } else {
-                break;
-            }
+            uninstall.record_removed_directory(path);
         }
     }
 
-    Ok(Uninstall {
-        file_count,
-        dir_count,
-    })
+    Ok(uninstall)
 }
 
 static WARNED_FOR_RECORD_ENTRY_PACKAGE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static WARNED_FOR_EGG_TOP_LEVEL_PACKAGE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
-/// Check if the path is inside the venv or a system interpreter path, and warn if it isn't.
+fn should_warn_for_distribution(
+    warned: &OnceLock<Mutex<HashSet<String>>>,
+    distribution: &impl Display,
+) -> bool {
+    warned
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .expect("The mutex is broken, did some other thread panic?")
+        .insert(distribution.to_string())
+}
+
+/// Resolve a `RECORD` entry to a path inside the installation scheme, warning otherwise.
 ///
-/// Returns `false` is a path is outside the paths that files from a wheel can be installed into,
-/// so that the caller can reject RECORD entries that escape site-packages via path traversal (e.g.,
-/// `../../../etc/passwd`). A malicious wheel could otherwise include such entries to cause deletion
-/// of arbitrary files on uninstall.
-fn is_path_in_scheme(
+/// Reject entries that escape site-packages via path traversal (e.g., `../../../etc/passwd`). A
+/// malicious wheel could otherwise include such entries to cause deletion of arbitrary files on
+/// uninstall.
+fn record_path_in_scheme(
     path: &str,
     site_packages: &Path,
     distribution: impl Display,
     layout: &Layout,
-) -> bool {
-    let normalized = normalize_path(&site_packages.join(path));
+) -> Option<PathBuf> {
+    let target = site_packages.join(path);
+    let normalized = normalize_path(&target);
 
     // `purelib` or `platlib` are site-packages (depending on `Root-Is-Purelib`). As
     // `.data/*` goes into the directories of `scheme`, `.dist-info` goes into site-packages
@@ -193,24 +164,27 @@ fn is_path_in_scheme(
         || normalized.starts_with(&layout.scheme.scripts)
         || normalized.starts_with(&layout.scheme.include)
     {
-        true
+        Some(target)
     } else {
         // A package that does this is malformed to the point of being a risk to the user, be
         // annoying about it, but only once per package.
-        if WARNED_FOR_RECORD_ENTRY_PACKAGE
-            .get_or_init(|| Mutex::new(HashSet::new()))
-            .lock()
-            .expect("The mutex is broken, did some other thread panic?")
-            .insert(distribution.to_string())
-        {
+        if should_warn_for_distribution(&WARNED_FOR_RECORD_ENTRY_PACKAGE, &distribution) {
             warn_user!(
                 "Invalid `RECORD` entry in `{}` that escapes the Python environment, skipping: {}",
                 distribution,
                 path
             );
         }
-        false
+        None
     }
+}
+
+/// Iterate over trimmed, nonempty lines in legacy installation metadata.
+fn trimmed_nonempty_lines(contents: &str) -> impl Iterator<Item = &str> {
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
 }
 
 /// Check that a `top_level.txt` entry names a single top-level module or package.
@@ -222,12 +196,7 @@ fn is_valid_top_level_entry(entry: &str, distribution: impl Display) -> bool {
     if entry.parse::<Identifier>().is_ok() {
         true
     } else {
-        if WARNED_FOR_EGG_TOP_LEVEL_PACKAGE
-            .get_or_init(|| Mutex::new(HashSet::new()))
-            .lock()
-            .expect("The mutex is broken, did some other thread panic?")
-            .insert(distribution.to_string())
-        {
+        if should_warn_for_distribution(&WARNED_FOR_EGG_TOP_LEVEL_PACKAGE, &distribution) {
             warn_user!(
                 "Invalid `top_level.txt` entry in {} that is not a top-level module or package, skipping: {}",
                 distribution,
@@ -242,67 +211,46 @@ fn is_valid_top_level_entry(entry: &str, distribution: impl Display) -> bool {
 ///
 /// See: <https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L483>
 pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Uninstall, Error> {
-    let mut file_count = 0usize;
-    let mut dir_count = 0usize;
+    let mut uninstall = Uninstall::default();
 
     let dist_location = egg_info
         .parent()
         .expect("egg-info directory is not in a site-packages directory");
 
     // Read the `namespace_packages.txt` file, skipping empty or whitespace-only entries.
-    let namespace_packages = {
-        let namespace_packages_path = egg_info.join("namespace_packages.txt");
-        match fs_err::read_to_string(namespace_packages_path) {
-            Ok(namespace_packages) => namespace_packages
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                vec![]
-            }
-            Err(err) => return Err(err.into()),
+    let namespace_packages = match fs_err::read_to_string(egg_info.join("namespace_packages.txt")) {
+        Ok(namespace_packages) => namespace_packages,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+    let namespace_packages = trimmed_nonempty_lines(&namespace_packages).collect::<HashSet<_>>();
+
+    // Read the `top_level.txt` file.
+    let top_level_path = egg_info.join("top_level.txt");
+    let top_level = match fs_err::read_to_string(&top_level_path) {
+        Ok(top_level) => top_level,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Error::MissingTopLevel(top_level_path));
         }
+        Err(err) => return Err(err.into()),
     };
 
-    // Read the `top_level.txt` file, ignoring anything in `namespace_packages.txt`.
-    //
-    // Empty or whitespace-only entries are skipped: legacy setuptools writes `top_level.txt`
-    // with a trailing newline even when the package has no top-level modules, which
-    // `str::lines` yields as an empty string. Joining that onto `dist_location` would
-    // resolve back to `dist_location` itself (site-packages), and a subsequent
-    // `remove_dir_all` would wipe out every installed package.
-    let top_level = {
-        let top_level_path = egg_info.join("top_level.txt");
-        match fs_err::read_to_string(&top_level_path) {
-            Ok(top_level) => top_level
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .filter(|line| !namespace_packages.iter().any(|ns| ns.as_str() == *line))
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Err(Error::MissingTopLevel(top_level_path));
-            }
-            Err(err) => return Err(err.into()),
+    // Remove everything in `top_level.txt` except namespace packages. Legacy setuptools can write
+    // a blank file; joining an empty entry to `dist_location` would target site-packages itself.
+    for entry in trimmed_nonempty_lines(&top_level) {
+        if namespace_packages.contains(entry) {
+            continue;
         }
-    };
-
-    // Remove everything in `top_level.txt`.
-    for entry in top_level {
-        if !is_valid_top_level_entry(&entry, &distribution) {
+        if !is_valid_top_level_entry(entry, &distribution) {
             continue;
         }
 
-        let path = dist_location.join(&entry);
+        let path = dist_location.join(entry);
 
         // Remove as a directory.
         match fs_err::remove_dir_all(&path) {
             Ok(()) => {
-                trace!("Removed directory: {}", path.display());
-                dir_count += 1;
+                uninstall.record_removed_directory(&path);
                 continue;
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -314,8 +262,7 @@ pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Unin
             let path = path.with_extension(extension);
             match fs_err::remove_file(&path) {
                 Ok(()) => {
-                    trace!("Removed file: {}", path.display());
-                    file_count += 1;
+                    uninstall.record_removed_file(&path);
                     break;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -326,20 +273,14 @@ pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Unin
 
     // Remove the `.egg-info` directory.
     match fs_err::remove_dir_all(egg_info) {
-        Ok(()) => {
-            trace!("Removed directory: {}", egg_info.display());
-            dir_count += 1;
-        }
+        Ok(()) => uninstall.record_removed_directory(egg_info),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => {
             return Err(err.into());
         }
     }
 
-    Ok(Uninstall {
-        file_count,
-        dir_count,
-    })
+    Ok(uninstall)
 }
 
 fn normcase(s: &str) -> Cow<'_, str> {
@@ -350,39 +291,32 @@ fn normcase(s: &str) -> Cow<'_, str> {
     }
 }
 
-static EASY_INSTALL_PTH: LazyLock<Mutex<i32>> = LazyLock::new(Mutex::default);
+static EASY_INSTALL_PTH: Mutex<()> = Mutex::new(());
 
 /// Uninstall the legacy editable represented by the `.egg-link` file.
 ///
 /// See: <https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L534-L552>
 pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
-    let mut file_count = 0usize;
+    let mut uninstall = Uninstall::default();
 
     // Find the target line in the `.egg-link` file.
     let contents = fs_err::read_to_string(egg_link)?;
-    let target_line = contents
-        .lines()
-        .find_map(|line| {
-            let line = line.trim();
-            if line.is_empty() { None } else { Some(line) }
-        })
+    let target_line = trimmed_nonempty_lines(&contents)
+        .next()
         .ok_or_else(|| Error::InvalidEggLink(egg_link.to_path_buf()))?;
 
     // This comes from `pkg_resources.normalize_path`
     let target_line = normcase(target_line);
 
     match fs_err::remove_file(egg_link) {
-        Ok(()) => {
-            trace!("Removed file: {}", egg_link.display());
-            file_count += 1;
-        }
+        Ok(()) => uninstall.record_removed_file(egg_link),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(err.into()),
     }
 
-    let site_package = egg_link.parent().ok_or(Error::BrokenVenv(
-        "`.egg-link` file is not in a directory".to_string(),
-    ))?;
+    let site_package = egg_link
+        .parent()
+        .ok_or_else(|| Error::BrokenVenv("`.egg-link` file is not in a directory".to_string()))?;
     let easy_install = site_package.join("easy-install.pth");
 
     // Since uv has an environment lock, it's enough to add a mutex here to ensure we never
@@ -391,27 +325,22 @@ pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
     let _guard = EASY_INSTALL_PTH.lock().unwrap();
 
     let content = fs_err::read_to_string(&easy_install)?;
-    let mut new_content = String::with_capacity(content.len());
-    let mut removed = false;
-
     // https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L634
-    for line in content.lines() {
-        if !removed && line.trim() == target_line {
-            removed = true;
-        } else {
-            new_content.push_str(line);
-            new_content.push('\n');
-        }
-    }
-    if removed {
-        write_atomic_sync(&easy_install, new_content)?;
-        trace!("Removed line from `easy-install.pth`: {target_line}");
-    }
+    let mut lines = content.lines();
+    let Some(target_index) = lines.position(|line| normcase(line.trim()) == target_line) else {
+        return Ok(uninstall);
+    };
 
-    Ok(Uninstall {
-        file_count,
-        dir_count: 0usize,
-    })
+    // Retain all lines before and after the first match.
+    let mut new_content = String::with_capacity(content.len());
+    for line in content.lines().take(target_index).chain(lines) {
+        new_content.push_str(line);
+        new_content.push('\n');
+    }
+    write_atomic_sync(&easy_install, new_content)?;
+    trace!("Removed line from `easy-install.pth`: {target_line}");
+
+    Ok(uninstall)
 }
 
 #[derive(Debug, Default)]
@@ -422,34 +351,43 @@ pub struct Uninstall {
     pub dir_count: usize,
 }
 
+impl Uninstall {
+    /// Record a removed wheel file and its parent for empty-directory cleanup.
+    fn record_removed_wheel_file(&mut self, path: &Path, visited: &mut BTreeSet<PathBuf>) {
+        self.record_removed_file(path);
+        if let Some(parent) = path.parent() {
+            visited.insert(normalize_path(parent));
+        }
+    }
+
+    fn record_removed_file(&mut self, path: &Path) {
+        trace!("Removed file: {}", path.display());
+        self.file_count += 1;
+    }
+
+    fn record_removed_directory(&mut self, path: &Path) {
+        trace!("Removed directory: {}", path.display());
+        self.dir_count += 1;
+    }
+}
+
 /// Normalize a path, removing things like `.` and `..`.
 ///
 /// Source: <https://github.com/rust-lang/cargo/blob/b48c41aedbd69ee3990d62a0e2006edbb506a480/crates/cargo-util/src/paths.rs#L76C1-L109C2>
 fn normalize_path(path: &Path) -> PathBuf {
-    let mut components = path.components().peekable();
-    let mut ret = components
-        .next_if_map_mut(|component| match component {
-            Component::Prefix(..) => Some(PathBuf::from(component.as_os_str())),
-            _ => None,
-        })
-        .unwrap_or_default();
-
-    for component in components {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
         match component {
-            Component::Prefix(..) => unreachable!(),
-            Component::RootDir => {
-                ret.push(component.as_os_str());
-            }
             Component::CurDir => {}
             Component::ParentDir => {
-                ret.pop();
+                normalized.pop();
             }
-            Component::Normal(c) => {
-                ret.push(c);
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
             }
         }
     }
-    ret
+    normalized
 }
 
 #[cfg(test)]
@@ -460,6 +398,29 @@ mod tests {
 
     use crate::Layout;
     use crate::uninstall::{is_valid_top_level_entry, uninstall_egg, uninstall_wheel};
+
+    #[cfg(windows)]
+    #[test]
+    fn test_uninstall_legacy_editable_with_mixed_case_path() -> anyhow::Result<()> {
+        let temp = assert_fs::TempDir::new()?;
+        let site_packages = temp.child("site-packages");
+        let project = temp.child("MixedCaseProject");
+        project.create_dir_all()?;
+        let target = project.path().to_str().expect("valid temporary path");
+        let egg_link = site_packages.child("example.egg-link");
+        egg_link.write_str(target)?;
+        let easy_install = site_packages.child("easy-install.pth");
+        easy_install.write_str(&format!("other\n{target}\nretained\n"))?;
+
+        super::uninstall_legacy_editable(egg_link.path())?;
+
+        assert_eq!(
+            fs_err::read_to_string(easy_install.path())?,
+            "other\nretained\n"
+        );
+        assert!(!egg_link.exists());
+        Ok(())
+    }
 
     #[test]
     fn test_top_level_entry_safe_name() {

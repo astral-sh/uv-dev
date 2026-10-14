@@ -1014,8 +1014,7 @@ pub fn validate_and_heal_record<'a>(
     let relative_record_path =
         PathBuf::from(format!("{dist_info_prefix}.dist-info")).join("RECORD");
     let record_path = wheel_dir.join(&relative_record_path);
-    let mut record_file = File::open(&record_path)?;
-    let mut record = read_record(&mut record_file)?;
+    let mut record = read_record(File::open(&record_path)?)?;
 
     // Match recorded files against the archive and extract stale entries.
     let extra_record_entries = record
