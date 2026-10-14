@@ -12,7 +12,7 @@ use crate::verbatim_url::were_vars_expanded;
 use crate::{
     Cursor, MarkerEnvironment, MarkerTree, Pep508Error, Pep508ErrorSource, Pep508Url, Reporter,
     RequirementOrigin, Scheme, TracingReporter, VerbatimUrl, VerbatimUrlError, expand_env_vars,
-    parse_extras_cursor, scan_url, split_extras, split_scheme,
+    fmt_extras, parse_extras_cursor, scan_url, split_extras, split_scheme,
 };
 
 /// An extension over [`Pep508Url`] that also supports parsing unnamed requirements, namely paths.
@@ -128,17 +128,7 @@ impl<Url: UnnamedRequirementUrl> UnnamedRequirement<Url> {
 impl<Url: UnnamedRequirementUrl> Display for UnnamedRequirement<Url> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.url)?;
-        if !self.extras.is_empty() {
-            write!(
-                f,
-                "[{}]",
-                self.extras
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )?;
-        }
+        fmt_extras(&self.extras, f)?;
         if let Some(marker) = self.marker.contents() {
             write!(f, " ; {marker}")?;
         }
