@@ -21,6 +21,9 @@ mod tool_fixture;
 mod tool_install;
 
 #[cfg(feature = "test-python")]
+mod tool_install_directories;
+
+#[cfg(feature = "test-python")]
 mod tool_install_platform;
 
 #[cfg(feature = "test-python")]
