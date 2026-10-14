@@ -13927,7 +13927,7 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
         .assert()
         .success();
 
-    let context = uv_test::test_context!("3.12").with_filter((r"127\.0\.0\.1:\d*", "[LOCALHOST]"));
+    let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -13951,27 +13951,42 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
             let redirect_url = redirect_url_to_base(req, &proxy_base);
             ResponseTemplate::new(302).insert_header("Location", &redirect_url)
         })
+        .expect(1..)
         .mount(&redirect_server)
         .await;
 
     let mut redirect_url = SafeUrl::parse(&redirect_server.uri())?;
-    let _ = redirect_url.set_username("public");
+    redirect_url
+        .set_username("public")
+        .expect("HTTP URL supports a username");
 
-    uv_snapshot!(context.filters(), context.add().arg("--default-index")
+    // Preserve the origin of each keyring request before normalizing local server addresses.
+    let origin = regex::escape(&redirect_server.address().to_string());
+    let destination = regex::escape(&proxy.host_port());
+    let mut filters = context.filters();
+    filters.splice(
+        0..0,
+        [
+            (origin.as_str(), "[ORIGIN]"),
+            (destination.as_str(), "[DESTINATION]"),
+        ],
+    );
+
+    uv_snapshot!(filters, context.add().arg("--default-index")
         .arg(redirect_url.as_str())
         .arg("anyio")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "heron"}}}}"#, host = proxy.host_port()))
         .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Keyring request for public@http://[LOCALHOST]/
-    Keyring request for public@[LOCALHOST]
-    Keyring request for public@http://[LOCALHOST]
+    Keyring request for public@http://[ORIGIN]/
+    Keyring request for public@[ORIGIN]
+    Keyring request for public@http://[ORIGIN]
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
 
-    hint: An index URL (http://[LOCALHOST]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+    hint: An index URL (http://[ORIGIN]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
