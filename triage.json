@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 5640,
+        "title": "fix(venv): make relocatable activation scripts support ksh",
+        "url": "https://github.com/astral-sh/uv/pull/5640",
+        "state": "merged",
+        "reason": "Introduced Shell::Ksh detection and added it to the Bash/Zsh branch that prints source. The July 2024 diff directly explains the current hint. Its fix concerned script-path discovery for relocatable environments, not OpenBSD ksh's missing source command; it is historical context, not a duplicate or a prior fix for this defect."
+      },
+      {
+        "kind": "issue",
+        "number": 18773,
+        "title": "`uv venv` recommends use of `source` in incompatible shells",
+        "url": "https://github.com/astral-sh/uv/issues/18773",
+        "state": "closed",
+        "reason": "Reports the same unusable source recommendation in dash/ash. Maintainer discussion and reporter confirmation identified SHELL pointing to a different login shell; correcting SHELL removed the suggestion. Here, even correctly detected Shell::Ksh explicitly produces source, so the underlying defect differs."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered ksh, OpenBSD activation, KSH_VERSION, Shell::Ksh, and source: not found; conceptual searches covered Korn, POSIX, dot, activation commands, shell detection, and environment hints without platform/version constraints. PR searches covered ksh, activation, activate, venv source, POSIX, and shell detection; keyword searches returned no PR matches, so issue timelines and source-file commit history were also inspected. Read candidate comments and the diffs of astral-sh/uv#5640 and astral-sh/uv#2221. Ruled out astral-sh/uv#18773 as a duplicate because its confirmed mechanism was shell misidentification. Also ruled out astral-sh/uv#7480 and astral-sh/uv#10498, which fail inside activation scripts, and the fish-specific historical fix tracked by astral-sh/uv#2174 and astral-sh/uv#2221. No prior fix or existing tracker for the specific ksh command-rendering defect was found."
+  },
+  "type": "bug",
+  "type_reason": "The source explicitly prints source for Shell::Ksh, although OpenBSD ksh requires the dot command. This is incorrect user-facing guidance for an already recognized shell. The closest issue concerns a different shell-detection mechanism, and the historical ksh PR introduced this branch rather than fixing it; the evidence does not establish a recurrence of a previously fixed bug.",
+  "summary": "astral-sh/uv#5640 introduced the incorrect ksh activation-hint branch. astral-sh/uv#18773 has a similar symptom but a different confirmed cause. No matching duplicate or prior fix was found.",
+  "draft_response": "You're right: uv already recognizes ksh, but the activation hint groups it with Bash and Zsh and prints `source`. Use `. .venv/bin/activate` in place of that command on OpenBSD ksh. The fix should give `Shell::Ksh` a separate `.` branch while retaining path quoting, with a regression test for the printed hint. This differs from astral-sh/uv#18773, which involved detecting the wrong shell."
+}
