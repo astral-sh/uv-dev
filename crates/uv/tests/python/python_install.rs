@@ -3254,8 +3254,6 @@ fn install_transparent_patch_upgrade_venv_module() {
         .with_managed_python_dirs()
         .with_filtered_python_install_bin();
 
-    let bin_dir = context.temp_dir.child("bin");
-
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("3.12.9"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -3264,20 +3262,15 @@ fn install_transparent_patch_upgrade_venv_module() {
     "
     );
 
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.12.9
-    "
-    );
-
-    // Create a virtual environment using venv module.
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("-m").arg("venv").arg(context.venv.as_os_str()).arg("--without-pip")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    let managed_python = context
+        .bin_dir
+        .join(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), context.external_command(managed_python)
+        .arg("-m").arg("venv").arg(context.venv.as_os_str()).arg("--without-pip"), @"
     exit_code: 0 (success)
     ");
 
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.9
@@ -3294,7 +3287,7 @@ fn install_transparent_patch_upgrade_venv_module() {
     );
 
     // Virtual environment should reflect highest patch version.
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.11
