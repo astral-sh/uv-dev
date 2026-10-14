@@ -16,14 +16,15 @@ use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 #[cfg(unix)]
 use indoc::indoc;
 use insta::assert_snapshot;
-#[cfg(feature = "test-python")]
-use uv_platform::{Arch, Os};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_test::{assert_path_missing, uv_snapshot};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
+
+#[cfg(feature = "test-python")]
+use super::fixtures::interpreter_platform;
 
 /// Pinning through a symlink must not replace a special file at its target.
 #[cfg(all(unix, feature = "test-python"))]
@@ -615,7 +616,7 @@ fn python_pin_resolve_no_python() {
 
 #[test]
 #[cfg(feature = "test-python")]
-fn python_pin_resolve() {
+fn python_pin_resolve() -> Result<()> {
     let context =
         uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_filtered_python_sources();
 
@@ -703,10 +704,9 @@ fn python_pin_resolve() {
         assert_snapshot!(python_version, @"[PYTHON-3.13]");
     });
 
-    // Request CPython 3.13 for the current platform
-    let os = Os::from_env();
-    let arch = Arch::from_env();
-
+    // Request CPython 3.13 for the fixture interpreter's platform.
+    let (_, python) = &context.python_versions[1];
+    let (os, arch) = interpreter_platform(&context, python)?;
     uv_snapshot!(context.filters(), context.python_pin().arg("--resolved")
     .arg(format!("cpython-3.13-{os}-{arch}"))
     , @"
@@ -754,6 +754,7 @@ fn python_pin_resolve() {
     }, {
         assert_snapshot!(python_version, @"[PYTHON-3.13]");
     });
+    Ok(())
 }
 
 #[test]
