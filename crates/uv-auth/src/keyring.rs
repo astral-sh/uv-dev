@@ -112,8 +112,7 @@ impl KeyringProvider {
         username: &str,
         password: &str,
     ) -> Result<(), Error> {
-        let prefixed_service = format!("{UV_SERVICE_PREFIX}{service}");
-        let entry = uv_keyring::Entry::new(&prefixed_service, username)?;
+        let entry = Self::native_entry(service, username)?;
         entry.set_password(password).await?;
         Ok(())
     }
@@ -146,8 +145,7 @@ impl KeyringProvider {
         service_name: &str,
         username: &str,
     ) -> Result<(), uv_keyring::Error> {
-        let prefixed_service = format!("{UV_SERVICE_PREFIX}{service_name}");
-        let entry = uv_keyring::Entry::new(&prefixed_service, username)?;
+        let entry = Self::native_entry(service_name, username)?;
         entry.delete_credential().await?;
         trace!("Removed credentials for {username}@{service_name} from system keyring");
         Ok(())
@@ -164,6 +162,11 @@ impl KeyringProvider {
         } else {
             url.without_credentials().to_string()
         }
+    }
+
+    /// Construct an entry in uv's native keyring namespace.
+    fn native_entry(service: &str, username: &str) -> Result<uv_keyring::Entry, uv_keyring::Error> {
+        uv_keyring::Entry::new(&format!("{UV_SERVICE_PREFIX}{service}"), username)
     }
 
     /// Return the serialized host and optional port without any user information.
@@ -329,11 +332,8 @@ impl KeyringProvider {
         service: &str,
         username: Option<&str>,
     ) -> Option<(String, String)> {
-        let prefixed_service = format!("{UV_SERVICE_PREFIX}{service}");
         let username = username?;
-        let Ok(entry) = uv_keyring::Entry::new(&prefixed_service, username) else {
-            return None;
-        };
+        let entry = Self::native_entry(service, username).ok()?;
         match entry.get_password().await {
             Ok(password) => return Some((username.to_string(), password)),
             Err(uv_keyring::Error::NoEntry) => {
