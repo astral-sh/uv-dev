@@ -125,6 +125,61 @@ enum MissingLibrary {
     DeprecatedModule(String, Version),
 }
 
+impl MissingLibrary {
+    /// Identify a missing library from the build backend's stderr.
+    fn from_stderr(stderr: &[String]) -> Option<Self> {
+        // e.g. `pygraphviz/graphviz_wrap.c:3020:10: fatal error: graphviz/cgraph.h: No such file or directory`
+        let missing_header_re_gcc = regex!(
+            r".*\.(?:c|c..|h|h..):\d+:\d+: fatal error: (.*\.(?:h|h..)): No such file or directory"
+        );
+        // e.g. `pygraphviz/graphviz_wrap.c:3023:10: fatal error: 'graphviz/cgraph.h' file not found`
+        let missing_header_re_clang =
+            regex!(r".*\.(?:c|c..|h|h..):\d+:\d+: fatal error: '(.*\.(?:h|h..))' file not found");
+        // e.g. `pygraphviz/graphviz_wrap.c(3023): fatal error C1083: Cannot open include file: 'graphviz/cgraph.h': No such file or directory`
+        let missing_header_re_msvc = regex!(
+            r".*\.(?:c|c..|h|h..)\(\d+\): fatal error C1083: Cannot open include file: '(.*\.(?:h|h..))': No such file or directory"
+        );
+        // e.g. `/usr/bin/ld: cannot find -lncurses: No such file or directory`
+        let ld_not_found_re =
+            regex!(r"/usr/bin/ld: cannot find -l([a-zA-Z10-9]+): No such file or directory");
+        // e.g. `error: invalid command 'bdist_wheel'`
+        let wheel_not_found_re = regex!(r"error: invalid command 'bdist_wheel'");
+        // e.g. `ModuleNotFoundError: No module named 'distutils'`
+        let distutils_not_found_re = regex!(r"ModuleNotFoundError: No module named 'distutils'");
+        // e.g. `ModuleNotFoundError`
+        let module_not_found = regex!(r#"ModuleNotFoundError: No module named ['"]([^'"]+)['"]"#);
+
+        // Build tools can append summary lines after a diagnostic, so inspect the last ten lines.
+        stderr.iter().rev().take(10).find_map(|line| {
+            let line = line.trim();
+            if let Some((_, [header])) = missing_header_re_gcc
+                .captures(line)
+                .or_else(|| missing_header_re_clang.captures(line))
+                .or_else(|| missing_header_re_msvc.captures(line))
+                .map(|c| c.extract())
+            {
+                Some(Self::Header(header.to_string()))
+            } else if let Some((_, [library])) = ld_not_found_re.captures(line).map(|c| c.extract())
+            {
+                Some(Self::Linker(library.to_string()))
+            } else if wheel_not_found_re.is_match(line) {
+                Some(Self::BuildDependency("wheel".to_string()))
+            } else if distutils_not_found_re.is_match(line) {
+                Some(Self::DeprecatedModule(
+                    "distutils".to_string(),
+                    Version::new([3, 12]),
+                ))
+            } else {
+                let module = module_not_found.captures(line)?.get(1)?.as_str();
+                let package = crate::pipreqs::MODULE_MAPPING
+                    .lookup(module)
+                    .map_or(module, PackageName::as_str);
+                Some(Self::BuildDependency(package.to_owned()))
+            }
+        })
+    }
+}
+
 #[derive(Debug, Error)]
 pub struct MissingHeaderCause {
     missing_library: MissingLibrary,
@@ -333,56 +388,7 @@ impl Error {
         version: Option<&Version>,
         version_id: Option<&str>,
     ) -> Self {
-        // e.g. `pygraphviz/graphviz_wrap.c:3020:10: fatal error: graphviz/cgraph.h: No such file or directory`
-        let missing_header_re_gcc = regex!(
-            r".*\.(?:c|c..|h|h..):\d+:\d+: fatal error: (.*\.(?:h|h..)): No such file or directory"
-        );
-        // e.g. `pygraphviz/graphviz_wrap.c:3023:10: fatal error: 'graphviz/cgraph.h' file not found`
-        let missing_header_re_clang =
-            regex!(r".*\.(?:c|c..|h|h..):\d+:\d+: fatal error: '(.*\.(?:h|h..))' file not found");
-        // e.g. `pygraphviz/graphviz_wrap.c(3023): fatal error C1083: Cannot open include file: 'graphviz/cgraph.h': No such file or directory`
-        let missing_header_re_msvc = regex!(
-            r".*\.(?:c|c..|h|h..)\(\d+\): fatal error C1083: Cannot open include file: '(.*\.(?:h|h..))': No such file or directory"
-        );
-        // e.g. `/usr/bin/ld: cannot find -lncurses: No such file or directory`
-        let ld_not_found_re =
-            regex!(r"/usr/bin/ld: cannot find -l([a-zA-Z10-9]+): No such file or directory");
-        // e.g. `error: invalid command 'bdist_wheel'`
-        let wheel_not_found_re = regex!(r"error: invalid command 'bdist_wheel'");
-        // e.g. `ModuleNotFoundError: No module named 'distutils'`
-        let distutils_not_found_re = regex!(r"ModuleNotFoundError: No module named 'distutils'");
-        // e.g. `ModuleNotFoundError`
-        let module_not_found = regex!(r#"ModuleNotFoundError: No module named ['"]([^'"]+)['"]"#);
-
-        // In the cases I've seen it was the 5th and 3rd last line (see test case), 10 seems like a reasonable cutoff.
-        let missing_library = output.stderr.iter().rev().take(10).find_map(|line| {
-            let line = line.trim();
-            if let Some((_, [header])) = missing_header_re_gcc
-                .captures(line)
-                .or_else(|| missing_header_re_clang.captures(line))
-                .or_else(|| missing_header_re_msvc.captures(line))
-                .map(|c| c.extract())
-            {
-                Some(MissingLibrary::Header(header.to_string()))
-            } else if let Some((_, [library])) = ld_not_found_re.captures(line).map(|c| c.extract())
-            {
-                Some(MissingLibrary::Linker(library.to_string()))
-            } else if wheel_not_found_re.is_match(line) {
-                Some(MissingLibrary::BuildDependency("wheel".to_string()))
-            } else if distutils_not_found_re.is_match(line) {
-                Some(MissingLibrary::DeprecatedModule(
-                    "distutils".to_string(),
-                    Version::new([3, 12]),
-                ))
-            } else {
-                let module = module_not_found.captures(line)?.get(1)?.as_str();
-                let package = crate::pipreqs::MODULE_MAPPING
-                    .lookup(module)
-                    .map_or(module, PackageName::as_str);
-                Some(MissingLibrary::BuildDependency(package.to_owned()))
-            }
-        });
-
+        let missing_library = MissingLibrary::from_stderr(&output.stderr);
         let (stdout, stderr) = match level {
             BuildOutput::Stderr | BuildOutput::Quiet => (Vec::new(), Vec::new()),
             BuildOutput::Debug => (output.stdout.clone(), output.stderr.clone()),
