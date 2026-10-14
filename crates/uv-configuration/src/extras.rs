@@ -31,45 +31,13 @@ impl ExtrasSpecification {
     /// This is the "real" constructor, it's basically taking raw CLI flags but in
     /// a way that's a bit nicer for other constructors to use.
     fn from_history(history: ExtrasSpecificationHistory) -> Self {
-        let ExtrasSpecificationHistory {
-            mut extra,
-            mut only_extra,
-            no_extra,
-            all_extras,
-            no_default_extras,
-            mut defaults,
-        } = history.clone();
-
         // `extra` and `only_extra` actually have the same meanings: packages to include.
         // But if `only_extra` is non-empty then *other* packages should be excluded.
-        // So we just record whether it was and then treat the two lists as equivalent.
-        let only_extras = !only_extra.is_empty();
-        // --only flags imply --no-default-extras
-        let default_extras = !no_default_extras && !only_extras;
-
-        let include = if all_extras {
-            // If this is set we can ignore extra/only_extra/defaults as irrelevant.
-            IncludeExtras::All
-        } else {
-            // Merge all these lists, they're equivalent now
-            extra.append(&mut only_extra);
-            // Resolve default extras potentially also setting All
-            if default_extras {
-                match &mut defaults {
-                    DefaultExtras::All => IncludeExtras::All,
-                    DefaultExtras::List(defaults) => {
-                        extra.append(defaults);
-                        IncludeExtras::Some(extra)
-                    }
-                }
-            } else {
-                IncludeExtras::Some(extra)
-            }
-        };
+        let only_extras = !history.only_extra.is_empty();
 
         Self(Arc::new(ExtrasSpecificationInner {
-            include,
-            exclude: no_extra,
+            include: IncludeExtras::from_history(&history, only_extras),
+            exclude: history.no_extra.clone(),
             only_extras,
             history,
         }))
@@ -264,6 +232,39 @@ pub enum IncludeExtras {
 }
 
 impl IncludeExtras {
+    /// Resolve the included extras from the raw flags and defaults.
+    fn from_history(history: &ExtrasSpecificationHistory, only_extras: bool) -> Self {
+        let ExtrasSpecificationHistory {
+            extra,
+            only_extra,
+            no_extra: _,
+            all_extras,
+            no_default_extras,
+            defaults,
+        } = history;
+        if *all_extras {
+            return Self::All;
+        }
+
+        let defaults: &[ExtraName] = if *no_default_extras || only_extras {
+            &[]
+        } else {
+            match defaults {
+                DefaultExtras::All => return Self::All,
+                DefaultExtras::List(defaults) => defaults,
+            }
+        };
+
+        Self::Some(
+            extra
+                .iter()
+                .chain(only_extra)
+                .chain(defaults)
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Returns `true` if the specification includes the given extra.
     fn contains(&self, extra: &ExtraName) -> bool {
         match self {
