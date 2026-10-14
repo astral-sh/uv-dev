@@ -15,6 +15,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_fs::Simplified;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+use uv_test::archive::generate_source_archive;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, WheelBuilder};
 use uv_test::subdirectory_archive::SubdirectoryArchive;
@@ -13497,13 +13498,16 @@ fn url_hash_mismatch() -> Result<()> {
 #[test]
 fn path_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    // Download the source.
+    let marker = context.temp_dir.child("backend-executed");
+    let bytes = generate_source_archive(
+        &"iniconfig".parse()?,
+        &"2.0.0".parse()?,
+        "",
+        Some(marker.path()),
+    )?;
+    let context = context.with_filter((hex::encode(Sha256::digest(&bytes)), "[COMPUTED_HASH]"));
     let archive = context.temp_dir.child("iniconfig-2.0.0.tar.gz");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
-        &archive,
-    );
+    archive.write_binary(&bytes)?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13531,7 +13535,7 @@ fn path_hash_mismatch() -> Result<()> {
         name = "iniconfig"
         version = "2.0.0"
         source = { path = "iniconfig-2.0.0.tar.gz" }
-        sdist = { hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b4" }
+        sdist = { hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
 
         [[package]]
         name = "project"
@@ -13546,18 +13550,19 @@ fn path_hash_mismatch() -> Result<()> {
     "#})?;
 
     // Reject the archive while validating lockfile metadata, before it can be built.
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to generate package metadata for `iniconfig==2.0.0 @ path+iniconfig-2.0.0.tar.gz`
       cause: Hash mismatch for `iniconfig @ file://[TEMP_DIR]/iniconfig-2.0.0.tar.gz`
 
              Expected:
-               sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b4
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
 
              Computed:
-               sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3
+               sha256:[COMPUTED_HASH]
     ");
+    marker.assert(predicate::path::missing());
 
     Ok(())
 }
