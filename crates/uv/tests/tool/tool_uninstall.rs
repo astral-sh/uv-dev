@@ -13,6 +13,8 @@ fn tool_uninstall() -> Result<()> {
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
+    let launchers = ["formatter", "formatterd"]
+        .map(|name| bin_dir.child(format!("{name}{}", std::env::consts::EXE_SUFFIX)));
 
     let wheel = local_tool_wheel(&context, "formatter", &["formatter", "formatterd"])?;
     context
@@ -29,8 +31,9 @@ fn tool_uninstall() -> Result<()> {
     ");
 
     assert_path_missing(context.temp_dir.child("tools/formatter"));
-    assert_path_missing(bin_dir.child(format!("formatter{}", std::env::consts::EXE_SUFFIX)));
-    assert_path_missing(bin_dir.child(format!("formatterd{}", std::env::consts::EXE_SUFFIX)));
+    for launcher in &launchers {
+        assert_path_missing(launcher);
+    }
     assert!(context.temp_dir.child("tools/.lock").is_file());
 
     // After uninstalling the tool, it shouldn't be listed.
@@ -52,6 +55,13 @@ fn tool_uninstall() -> Result<()> {
      + formatter==1.0.0 (from file://[TEMP_DIR]/formatter-1.0.0-py3-none-any.whl)
     Installed 2 executables: formatter, formatterd
     ");
+    for launcher in launchers {
+        context
+            .external_command(launcher)
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("Hello from formatter!"));
+    }
     Ok(())
 }
 
