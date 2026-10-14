@@ -122,6 +122,8 @@ fn tool_uninstall_multiple_names() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
 
     let formatter = local_tool_wheel(&context, "formatter", &["formatter", "formatterd"])?;
     context
@@ -143,8 +145,12 @@ fn tool_uninstall_multiple_names() -> Result<()> {
     ----- stderr -----
     Uninstalled 3 executables: formatter, formatterd, linter
     ");
+    assert_path_missing(tool_dir.child("formatter"));
+    assert_path_missing(tool_dir.child("linter"));
+    assert_path_missing(bin_dir.child(format!("formatter{}", std::env::consts::EXE_SUFFIX)));
+    assert_path_missing(bin_dir.child(format!("formatterd{}", std::env::consts::EXE_SUFFIX)));
+    assert_path_missing(bin_dir.child(format!("linter{}", std::env::consts::EXE_SUFFIX)));
 
-    // After uninstalling the tool, it shouldn't be listed.
     uv_snapshot!(context.filters(), context.tool_list(), @"
     exit_code: 0 (success)
     ----- stderr -----
