@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::{FileWriteStr, PathChild};
@@ -375,32 +375,32 @@ fn find_uv_bin_error_message() -> anyhow::Result<()> {
 
 /// Exercise venv-installed binary discovery with the requested Python version.
 fn find_uv_bin_in_venv(python_version: &str) -> anyhow::Result<()> {
-    let context = uv_test::test_context!(python_version)
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = uv_test::test_context!(python_version);
+    context
+        .pip_install()
+        .arg(fake_uv(&context)?)
+        .assert()
+        .success();
 
-    let package = fake_uv(&context)?;
-    // Each Python version asserts the same output at these shared snapshot locations.
-    insta::allow_duplicates! {
-        uv_snapshot!(context.filters(), context.pip_install().arg(package), @"
-        exit_code: 0 (success)
-        ----- stderr -----
-        Resolved 1 package in [TIME]
-        Prepared 1 package in [TIME]
-        Installed 1 package in [TIME]
-         + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
-        ");
-
-        uv_snapshot!(context.filters(), context.python_command().arg("-c").arg(TEST_SCRIPT), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        [VENV]/[BIN]/uv
-        ");
-    }
+    let output = context
+        .python_command()
+        .args(["-c", TEST_SCRIPT])
+        .assert()
+        .success()
+        .stderr("");
+    let stdout = std::str::from_utf8(&output.get_output().stdout)?;
+    let actual = Path::new(
+        stdout
+            .strip_suffix("\r\n")
+            .or_else(|| stdout.strip_suffix('\n'))
+            .expect("the discovered executable path should end with a newline"),
+    );
+    assert!(
+        actual.is_absolute(),
+        "expected an absolute path: {actual:?}"
+    );
+    let expected = venv_bin_path(&context.venv).join(format!("uv{}", std::env::consts::EXE_SUFFIX));
+    assert_eq!(fs::canonicalize(actual)?, fs::canonicalize(expected)?);
 
     Ok(())
 }
