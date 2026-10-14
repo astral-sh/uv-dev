@@ -3,6 +3,8 @@ use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
+use assert_fs::assert::PathAssert;
+use assert_fs::fixture::ChildPath;
 use uv_test::packse::PackseServer;
 use uv_test::packse::scenario::{Package, PackageMetadata, Scenario};
 use uv_test::{TestContext, uv_snapshot};
@@ -80,5 +82,50 @@ fn selected_package() -> Result<()> {
     ");
     context.assert_installed("markupsafe", "locally-modified");
     context.assert_installed("tomli", "2.0.1");
+    Ok(())
+}
+
+/// Changing a registry requirement to a direct URL must reinstall even at the same version.
+#[test]
+fn install_version_then_install_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let mut scenario = Scenario::empty();
+    scenario.packages.insert(
+        "werkzeug".parse()?,
+        Package {
+            versions: [("2.0.0".parse()?, PackageMetadata::wheel_only())].into(),
+        },
+    );
+    let index = PackseServer::from_scenario(&scenario);
+    let requirements = context.temp_dir.join("requirements.txt");
+    fs_err::write(&requirements, "werkzeug==2.0.0")?;
+    sync(&context, &index).assert().success();
+
+    let provenance = ChildPath::new(
+        context
+            .site_packages()
+            .join("werkzeug-2.0.0.dist-info/direct_url.json"),
+    );
+    provenance.assert(predicates::path::missing());
+    let wheel_url = index.file_url("werkzeug-2.0.0-py3-none-any.whl");
+    fs_err::write(&requirements, format!("werkzeug @ {wheel_url}"))?;
+
+    uv_snapshot!(context.filters(), sync(&context, &index), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - werkzeug==2.0.0
+     + werkzeug==2.0.0 (from http://[LOCALHOST]/files/werkzeug-2.0.0-py3-none-any.whl)
+    ");
+    let direct_url: serde_json::Value =
+        serde_json::from_reader(fs_err::File::open(provenance.path())?)?;
+    assert_eq!(
+        direct_url,
+        serde_json::json!({"url": wheel_url, "archive_info": {}})
+    );
+    context.assert_installed("werkzeug", "2.0.0");
     Ok(())
 }

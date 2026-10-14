@@ -851,44 +851,6 @@ fn install_url_then_install_version() -> Result<()> {
     Ok(())
 }
 
-/// Install a package via a registry version, then via a direct URL version. The second install
-/// should remove the registry-based version.
-#[test]
-fn install_version_then_install_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("werkzeug==2.0.0")?;
-
-    context
-        .pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        .assert()
-        .success();
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("werkzeug @ https://files.pythonhosted.org/packages/ff/1d/960bb4017c68674a1cb099534840f18d3def3ce44aed12b5ed8b78e0153e/Werkzeug-2.0.0-py3-none-any.whl")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - werkzeug==2.0.0
-     + werkzeug==2.0.0 (from https://files.pythonhosted.org/packages/ff/1d/960bb4017c68674a1cb099534840f18d3def3ce44aed12b5ed8b78e0153e/Werkzeug-2.0.0-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import werkzeug").success();
-
-    Ok(())
-}
-
 /// Test that we select the last 3.8 compatible numpy version instead of trying to compile an
 /// incompatible sdist <https://github.com/astral-sh/uv/issues/388>
 #[cfg(feature = "test-python-eol")]
