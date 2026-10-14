@@ -45,12 +45,7 @@ impl FromStr for Link {
         })?;
 
         // Parse the ID from `archive-v{version}/{id}`.
-        let id = ArchiveId::from_str(id).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("failed to parse ID: {err}"),
-            )
-        })?;
+        let Ok(id) = ArchiveId::from_str(id);
 
         Ok(Self { id, version })
     }
