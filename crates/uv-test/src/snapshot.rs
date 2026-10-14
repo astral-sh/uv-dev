@@ -142,10 +142,13 @@ pub fn run_and_format_silent<T: AsRef<str>>(
             // block waiting for the other.
             let writer = scope.spawn(move || stdin.write_all(input.as_bytes()));
             let output = child.wait_with_output();
-            writer
-                .join()
-                .expect("Stdin writer panicked")
-                .unwrap_or_else(|err| panic!("Failed to write to {program} stdin: {err}"));
+            // A command can exit without consuming all its input. Its status and output still
+            // explain the result, so do not replace them with a broken-pipe error from the writer.
+            if let Err(err) = writer.join().expect("Stdin writer panicked")
+                && err.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                panic!("Failed to write to {program} stdin: {err}");
+            }
             output.unwrap_or_else(|err| panic!("Failed to read output from {program}: {err}"))
         })
     } else {
@@ -433,6 +436,28 @@ mod process_status_tests {
         assert!(output.status.success());
         assert_eq!(output.stdout.len(), input.len() + b"done".len());
         assert!(output.stdout.ends_with(b"done"));
+    }
+
+    #[test]
+    fn captures_output_when_command_closes_stdin_early() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec 0<&-; printf 'input rejected' >&2; exit 2"]);
+        let input = "x".repeat(2 * 1024 * 1024);
+        let filters: &[(&str, &str)] = &[];
+
+        let (snapshot, _) = run_and_format_silent(
+            command,
+            filters,
+            "captures_output_when_command_closes_stdin_early",
+            None,
+            Some(&input),
+        );
+
+        insta::assert_snapshot!(snapshot, @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        input rejected
+        ");
     }
 }
 
