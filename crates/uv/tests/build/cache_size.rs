@@ -89,30 +89,6 @@ fn cache_size_output_formats() {
     ");
 }
 
-/// Existing human-readable flags remain equivalent to `--output-format human`.
-#[test]
-fn cache_size_human_aliases() {
-    let context = uv_test::test_context_with_versions!(&[]).with_cache_dir("missing-cache");
-
-    uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("--human"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0B
-    ");
-
-    uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("-H"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0B
-    ");
-
-    uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("--human-readable"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0B
-    ");
-}
-
 /// Legacy human-readable flags cannot be combined with an explicit output format.
 #[test]
 fn cache_size_output_format_conflicts_with_human() {

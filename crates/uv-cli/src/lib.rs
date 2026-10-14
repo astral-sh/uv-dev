@@ -7720,7 +7720,25 @@ pub enum BuildBackendCommand {
 mod tests {
     use clap::{CommandFactory, Parser};
 
-    use super::{AuthCommand, Cli, Commands};
+    use super::{AuthCommand, Cli, Commands, SizeArgs};
+
+    #[test]
+    fn cache_size_human_readable_flags() {
+        #[derive(Parser)]
+        struct CacheSizeParser {
+            #[command(flatten)]
+            size: SizeArgs,
+        }
+
+        for flag in ["--human", "-H", "--human-readable"] {
+            let parsed = CacheSizeParser::try_parse_from(["size", flag])
+                .expect("human-readable cache size flag should parse");
+            assert!(
+                parsed.size.human,
+                "{flag} should select human-readable output"
+            );
+        }
+    }
 
     #[test]
     fn auth_keyring_provider_hidden_from_help() {
