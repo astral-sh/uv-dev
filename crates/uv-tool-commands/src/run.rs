@@ -896,9 +896,9 @@ async fn get_or_create_environment(
                     // 2. The verbatim executable provided by the user as a named requirement (as in: `uvx change_wheel_version`).
                     // 3. The resolved package name (as in: `uvx git+https://github.com/pallets/flask`).
                     let executable = request_executable
-                        .map(ToString::to_string)
-                        .or_else(|| name.map(ToString::to_string))
-                        .unwrap_or_else(|| requirement.name.to_string());
+                        .or(name)
+                        .unwrap_or(requirement.name.as_str())
+                        .to_owned();
 
                     (executable, requirement)
                 }
