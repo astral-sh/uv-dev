@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19023,
+        "title": ".local/bin/env created by installer may conflict with /usr/bin/env",
+        "url": "https://github.com/astral-sh/uv/issues/19023",
+        "state": "open",
+        "reason": "Tracks the same installer-generated env helper shadowing /usr/bin/env. The original SLURM report encountered permission denied, but later comments describe executable helpers silently ignoring commands and returning 0, including fasd on macOS and environment-isolation commands under MSYS. Maintainers discuss relocating the helper and confirm it is normally created without executable permissions."
+      },
+      {
+        "kind": "pull_request",
+        "number": 2423,
+        "title": "Install env scripts in receipts dir instead of bin dir",
+        "url": "https://github.com/axodotdev/cargo-dist/pull/2423",
+        "state": "merged",
+        "reason": "Upstream fix merged September 11, 2026: flat installations place env.sh and env.fish in the receipt directory, migrate shell references, and remove matching legacy helpers from the binary directory. Both uv 0.13.0 and this checkout pin cargo-dist 0.32.0, released May 22, whose template still uses the old layout; the upstream merge does not establish a shipped uv fix."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered env shadowing, coreutils, silent execution, exit 0, srun, write_env_script_sh, add_install_dir_to_path, and modify_path. Conceptual and fix searches covered non-executable helpers, chmod, renaming, sourcing, libexec, shell installers, cargo-dist, and version-specific terms. Inspected candidate comments and followed astral-sh/uv#19023 through atuinsh/atuin#2873 to axodotdev/cargo-dist#2423. Ruled out astral-sh/uv#21837 and axodotdev/cargo-dist#2513, which concern false shadowing warnings from path normalization, and astral-sh/uv#14674, which concerns intentional PATH precedence. Some broad API searches hit rate limits; subsequent targeted CLI searches completed. No matching uv PR was found."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#19023 already tracks the same helper-name collision, including the exact silent-success failure and relocation proposals. The additional Ubuntu/uv 0.13.0 reproduction belongs there. The upstream fix is absent from the pinned cargo-dist 0.32.0 template, so there is no evidence of a previously shipped uv fix regressing. The claim that the installer itself sets executable permissions remains unconfirmed.",
+  "summary": "Duplicate of astral-sh/uv#19023. Upstream fix axodotdev/cargo-dist#2423 is merged, but uv 0.13.0 still pins the older cargo-dist 0.32.0.",
+  "draft_response": "This is tracked in astral-sh/uv#19023, including reports of env calls silently doing nothing and returning 0. Please add your reproduction and the helper's file permissions there so we can keep the discussion together.\n\nThe cargo-dist 0.32.0 template creates this helper without setting executable permissions, so how it became executable on your Ubuntu system still needs checking. axodotdev/cargo-dist#2423 merged a fix that moves the helpers outside the binary directory and migrates shell references, but uv 0.13.0 still pins the older generator. Using /usr/bin/env explicitly bypasses the collision in the meantime."
+}
