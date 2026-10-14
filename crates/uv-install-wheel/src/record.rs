@@ -19,5 +19,5 @@ pub struct RecordEntry {
 
 /// Encode a SHA-256 digest for the hash column of a wheel's RECORD file.
 pub(crate) fn encode_sha256(digest: &Output<Sha256>) -> String {
-    format!("sha256={}", BASE64URL_NOPAD.encode(digest))
+    format!("sha256={}", BASE64URL_NOPAD.encode_display(digest))
 }
