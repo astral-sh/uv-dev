@@ -1,7 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -578,23 +578,25 @@ fn assert_virtual_project_discovery(pyproject: &str) -> Result<()> {
     Ok(())
 }
 
-/// Assert that discovery returned the Python executable inside the expected environment.
-fn assert_venv_python(command: &mut Command, environment: &Path) -> Result<()> {
-    let output = command.assert().success().stderr("");
-    let stdout = std::str::from_utf8(&output.get_output().stdout)?;
-    let actual = Path::new(
+/// Read the single absolute interpreter path printed by `uv python find`.
+fn interpreter_path_from_output(output: &Output) -> Result<&Path> {
+    let stdout = std::str::from_utf8(&output.stdout)?;
+    let path = Path::new(
         stdout
             .strip_suffix("\r\n")
             .or_else(|| stdout.strip_suffix('\n'))
             .expect("the interpreter path should end with a newline"),
     );
+    assert!(path.is_absolute(), "expected an absolute path: {path:?}");
+    Ok(path)
+}
+
+/// Assert that discovery returned the Python executable inside the expected environment.
+fn assert_venv_python(command: &mut Command, environment: &Path) -> Result<()> {
+    let output = command.assert().success().stderr("");
+    let actual = interpreter_path_from_output(output.get_output())?;
     let expected =
         venv_bin_path(environment).join(format!("python{}", std::env::consts::EXE_SUFFIX));
-
-    assert!(
-        actual.is_absolute(),
-        "expected an absolute path: {actual:?}"
-    );
     assert!(actual.is_file(), "interpreter does not exist: {actual:?}");
     assert_eq!(actual.file_name(), expected.file_name());
     // Resolve directory aliases without following the Python executable, which may point to a
@@ -938,9 +940,8 @@ fn python_required_python_major_minor() -> Result<()> {
     let context = context_with_only_versioned_python("3.11")?;
     let path = &context.python_versions[0].1;
 
-    for request in [">=3.11.4, <3.12", ">3.11.4, <3.12"] {
-        assert_discovered_interpreter(context.python_find().arg(request), path)?.stderr("");
-    }
+    assert_discovered_interpreter(context.python_find().arg(">=3.11.4, <3.12"), path)?.stderr("");
+    assert_discovered_interpreter(context.python_find().arg(">3.11.4, <3.12"), path)?.stderr("");
 
     // Fail to find any matching Python interpreter.
     uv_snapshot!(context.filters(), context.python_find().arg(">3.11.255, <3.12"), @"
@@ -953,7 +954,7 @@ fn python_required_python_major_minor() -> Result<()> {
 }
 
 #[test]
-fn python_find_script() {
+fn python_find_script() -> Result<()> {
     let context = uv_test::test_context!("3.13")
         .with_filtered_virtualenv_bin()
         .with_filtered_python_names()
@@ -973,11 +974,23 @@ fn python_find_script() {
     Checked in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py"), @"
+    let output = uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [CACHE_DIR]/environments-v2/foo-[HASH]/[BIN]/[PYTHON]
     ");
+
+    context
+        .external_command(interpreter_path_from_output(&output)?)
+        .args([
+            "-I",
+            "-c",
+            "import sys; assert sys.prefix != sys.base_prefix; print(f'{sys.version_info.major}.{sys.version_info.minor}', end='')",
+        ])
+        .assert()
+        .success()
+        .stdout("3.13");
+    Ok(())
 }
 
 #[test]
@@ -1612,12 +1625,7 @@ fn assert_discovered_interpreter(
     expected: &Path,
 ) -> Result<assert_cmd::assert::Assert> {
     let output = command.assert().success();
-    let found = Path::new(
-        std::str::from_utf8(&output.get_output().stdout)?
-            .strip_suffix('\n')
-            .expect("interpreter path should end with a newline"),
-    );
-    assert!(found.is_absolute(), "expected an absolute path: {found:?}");
+    let found = interpreter_path_from_output(output.get_output())?;
     assert_eq!(
         fs_err::canonicalize(found)?,
         fs_err::canonicalize(expected)?
