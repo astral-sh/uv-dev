@@ -1,21 +1,15 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteBin, FileWriteStr, PathChild, PathCreateDir};
-use flate2::bufread::GzDecoder;
 use fs_err::File;
-use futures::io::AllowStdIo;
 use indoc::{formatdoc, indoc};
-use insta::{assert_json_snapshot, assert_snapshot};
-use std::io::BufReader;
+#[cfg(feature = "test-pypi")]
 use std::path::Path;
-use std::process::Command;
-use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
 use tempfile::TempDir;
-use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
 #[cfg(feature = "test-pypi")]
 use uv_test::copy_dir_ignore;
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::uv_snapshot;
 
 #[test]
 fn get_requires_for_build_sdist_returns_error() {
@@ -47,6 +41,7 @@ fn get_requires_for_build_editable_returns_error() {
     ");
 }
 
+#[cfg(feature = "test-pypi")]
 const BUILT_BY_UV_TEST_SCRIPT: &str = indoc! {r#"
     from built_by_uv import greet
     from built_by_uv.arithmetic.circle import area
@@ -55,7 +50,15 @@ const BUILT_BY_UV_TEST_SCRIPT: &str = indoc! {r#"
     print(f"Area of a circle with r=2: {area(2)}")
 "#};
 
+#[cfg(feature = "test-pypi")]
 fn unpack_tar_gz(source_dist_path: &Path, target: &Path) -> Result<()> {
+    use std::io::BufReader;
+
+    use flate2::bufread::GzDecoder;
+    use futures::io::AllowStdIo;
+    use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
+    use tokio_util::compat::FuturesAsyncReadCompatExt;
+
     let sdist_reader = BufReader::new(File::open(source_dist_path)?);
     let source_dist = TarArchive::new(AllowStdIo::new(GzDecoder::new(sdist_reader)).compat());
     tokio::runtime::Builder::new_current_thread()
@@ -71,6 +74,10 @@ fn unpack_tar_gz(source_dist_path: &Path, target: &Path) -> Result<()> {
 #[test]
 #[cfg(feature = "test-pypi")]
 fn built_by_uv_direct_wheel() -> Result<()> {
+    use std::process::Command;
+
+    use uv_test::venv_bin_path;
+
     let context = uv_test::test_context!("3.12");
     let built_by_uv = context.temp_dir.child("built-by-uv");
     copy_dir_ignore(
@@ -250,6 +257,9 @@ fn built_by_uv_editable() -> Result<()> {
 fn preserve_executable_bit() -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    use uv_test::venv_bin_path;
 
     let context = uv_test::test_context!("3.12");
 
@@ -1709,6 +1719,8 @@ fn invalid_pyproject_toml() -> Result<()> {
 #[cfg(feature = "test-pypi")]
 #[test]
 fn build_with_all_metadata() -> Result<()> {
+    use insta::{assert_json_snapshot, assert_snapshot};
+
     let context = uv_test::test_context!("3.12");
     let temp_dir = TempDir::new()?;
 
