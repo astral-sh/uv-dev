@@ -1,9 +1,27 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use wiremock::matchers::any;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+use crate::vendor::VendorArtifact;
+
+/// Distribution bytes served by a test index.
+pub(crate) enum FileData {
+    Bytes(Arc<[u8]>),
+    Vendor(&'static VendorArtifact),
+}
+
+impl FileData {
+    pub(crate) fn bytes(&self) -> anyhow::Result<Arc<[u8]>> {
+        match self {
+            Self::Bytes(bytes) => Ok(Arc::clone(bytes)),
+            Self::Vendor(artifact) => artifact.bytes(),
+        }
+    }
+}
 
 /// Background wiremock server shared by the local test indexes in this crate.
 pub(crate) struct HttpServer {

@@ -9,22 +9,8 @@ use std::sync::Arc;
 use indoc::formatdoc;
 use wiremock::{Request, ResponseTemplate};
 
-use crate::http_server::{HttpServer, content_type_for_filename};
-use crate::vendor::{VendorArtifact, vendor_artifacts};
-
-enum FileData {
-    Bytes(Arc<[u8]>),
-    Vendor(&'static VendorArtifact),
-}
-
-impl FileData {
-    fn bytes(&self) -> anyhow::Result<Arc<[u8]>> {
-        match self {
-            Self::Bytes(bytes) => Ok(Arc::clone(bytes)),
-            Self::Vendor(artifact) => artifact.bytes(),
-        }
-    }
-}
+use crate::http_server::{FileData, HttpServer, content_type_for_filename};
+use crate::vendor::vendor_artifacts;
 
 /// A running HTTP server that serves files from a directory as a flat links page.
 pub struct FindLinksServer {
