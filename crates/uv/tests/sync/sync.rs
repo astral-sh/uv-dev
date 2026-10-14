@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
-use insta::{allow_duplicates, assert_snapshot};
+use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -19049,103 +19049,163 @@ fn project_build_hashes_unpinned() -> Result<()> {
 }
 
 #[test]
-fn project_build_hashes_pip() -> Result<()> {
-    // `pip install` and `pip sync` construct separate build hash strategies.
-    for command_name in ["install", "sync"] {
-        let (context, hash) = build_hash_project()?;
-        context
-            .temp_dir
-            .child("requirements.txt")
-            .write_str("project @ ./\n")?;
-        let constraints = context.temp_dir.child("build-constraints.txt");
-        constraints.write_str(&format!(
-            "build-dependency==1.0.0 --hash=sha256:{}\n",
-            "0".repeat(64)
-        ))?;
-        let command = || {
-            let mut command = if command_name == "install" {
-                let mut command = context.pip_install();
-                command.arg("--requirement");
-                command
-            } else {
-                context.pip_sync()
-            };
-            command.arg("requirements.txt").args([
-                "--no-index",
-                "--find-links",
-                "wheels",
-                "--no-cache",
-            ]);
-            command
-        };
+fn project_build_hashes_pip_install() -> Result<()> {
+    let (context, hash) = build_hash_project()?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("project @ ./\n")?;
+    let constraints = context.temp_dir.child("build-constraints.txt");
+    constraints.write_str(&format!(
+        "build-dependency==1.0.0 --hash=sha256:{}\n",
+        "0".repeat(64)
+    ))?;
+    let mut pip_install = context.pip_install();
+    pip_install
+        .args([
+            "--requirement",
+            "requirements.txt",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "--no-cache",
+        ])
+        .arg("--build-constraint")
+        .arg(constraints.path());
 
-        // Provided build hashes are checked independently of runtime hash checking.
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), command()
-                .arg("--build-constraint")
-                .arg(constraints.path()), @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            error: Failed to build `project @ file://[TEMP_DIR]/`
-              cause: Failed to install requirements from `build-system.requires`
-              cause: Failed to download `build-dependency==1.0.0`
-              cause: Hash mismatch for `build-dependency==1.0.0`
+    // Provided build hashes are checked independently of runtime hash checking.
+    uv_snapshot!(context.filters(), &mut pip_install, @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to download `build-dependency==1.0.0`
+      cause: Hash mismatch for `build-dependency==1.0.0`
 
-                     Expected:
-                       sha256:0000000000000000000000000000000000000000000000000000000000000000
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
 
-                     Computed:
-                       sha256:[BUILD_HASH]
-            ");
-        }
-        context
-            .temp_dir
-            .child("backend-executed")
-            .assert(predicate::path::missing());
+             Computed:
+               sha256:[BUILD_HASH]
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::missing());
 
-        constraints.write_str(&format!("build-dependency==1.0.0 --hash=sha256:{hash}\n"))?;
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), command()
-                .arg("--build-constraint")
-                .arg(constraints.path()), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Installed 1 package in [TIME]
-             + project==0.1.0 (from file://[TEMP_DIR]/)
-            ");
-        }
-        context
-            .temp_dir
-            .child("backend-executed")
-            .assert(predicate::path::exists());
-        fs_err::remove_file(context.temp_dir.child("backend-executed"))?;
-        constraints.write_str(&format!(
-            "build-dependency==1.0.0 --hash=sha256:{}\n",
-            "0".repeat(64)
-        ))?;
-        // The explicit opt-out permits the mismatched hash while still building the package.
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), command()
-                .arg("--build-constraint")
-                .arg(constraints.path())
-                .args(["--no-verify-hashes", "--reinstall"]), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Uninstalled 1 package in [TIME]
-            Installed 1 package in [TIME]
-             ~ project==0.1.0 (from file://[TEMP_DIR]/)
-            ");
-        }
-        context
-            .temp_dir
-            .child("backend-executed")
-            .assert(predicate::path::exists());
-    }
+    constraints.write_str(&format!("build-dependency==1.0.0 --hash=sha256:{hash}\n"))?;
+    uv_snapshot!(context.filters(), &mut pip_install, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::exists());
+    fs_err::remove_file(context.temp_dir.child("backend-executed"))?;
+    constraints.write_str(&format!(
+        "build-dependency==1.0.0 --hash=sha256:{}\n",
+        "0".repeat(64)
+    ))?;
+    // The explicit opt-out permits the mismatched hash while still building the package.
+    uv_snapshot!(context.filters(), pip_install.args(["--no-verify-hashes", "--reinstall"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::exists());
+    Ok(())
+}
+
+#[test]
+fn project_build_hashes_pip_sync() -> Result<()> {
+    let (context, hash) = build_hash_project()?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("project @ ./\n")?;
+    let constraints = context.temp_dir.child("build-constraints.txt");
+    constraints.write_str(&format!(
+        "build-dependency==1.0.0 --hash=sha256:{}\n",
+        "0".repeat(64)
+    ))?;
+    let mut pip_sync = context.pip_sync();
+    pip_sync
+        .args([
+            "requirements.txt",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "--no-cache",
+        ])
+        .arg("--build-constraint")
+        .arg(constraints.path());
+
+    // Provided build hashes are checked independently of runtime hash checking.
+    uv_snapshot!(context.filters(), &mut pip_sync, @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to download `build-dependency==1.0.0`
+      cause: Hash mismatch for `build-dependency==1.0.0`
+
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+               sha256:[BUILD_HASH]
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::missing());
+
+    constraints.write_str(&format!("build-dependency==1.0.0 --hash=sha256:{hash}\n"))?;
+    uv_snapshot!(context.filters(), &mut pip_sync, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::exists());
+    fs_err::remove_file(context.temp_dir.child("backend-executed"))?;
+    constraints.write_str(&format!(
+        "build-dependency==1.0.0 --hash=sha256:{}\n",
+        "0".repeat(64)
+    ))?;
+    // The explicit opt-out permits the mismatched hash while still building the package.
+    uv_snapshot!(context.filters(), pip_sync.args(["--no-verify-hashes", "--reinstall"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::exists());
     Ok(())
 }
 
@@ -19469,41 +19529,66 @@ fn project_build_hashes_lock_dynamic_metadata() -> Result<()> {
 }
 
 #[test]
-fn project_build_hashes_isolation() -> Result<()> {
-    for isolation in [
-        vec!["--no-build-isolation"],
-        vec!["--no-build-isolation-package", "project"],
-    ] {
-        let (context, _) = build_hash_project()?;
-        // Without isolation, preinstalled build dependencies do not need hashes.
-        context
-            .pip_install()
-            .arg("--no-index")
-            .arg("--find-links")
-            .arg("wheels")
-            .arg("build-dependency")
-            .assert()
-            .success();
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), context.sync().arg("--no-editable").args(&isolation).arg("--no-cache").arg("--require-build-hashes"), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Uninstalled 1 package in [TIME]
-            Installed 1 package in [TIME]
-             - build-dependency==1.0.0
-             + project==0.1.0 (from file://[TEMP_DIR]/)
-            ");
-            uv_snapshot!(context.filters(), context.sync().arg("--no-editable").args(&isolation).arg("--frozen").arg("--require-build-hashes"), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
-            Checked 1 package in [TIME]
-            ");
-        }
-    }
+fn project_build_hashes_without_isolation() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    // Without isolation, preinstalled build dependencies do not need hashes.
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg("wheels")
+        .arg("build-dependency")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().arg("--no-editable").arg("--no-build-isolation").arg("--no-cache").arg("--require-build-hashes"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - build-dependency==1.0.0
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--no-editable").arg("--no-build-isolation").arg("--frozen").arg("--require-build-hashes"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
+    Checked 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn project_build_hashes_without_isolation_for_project() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    // Without isolation, preinstalled build dependencies do not need hashes.
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg("wheels")
+        .arg("build-dependency")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().arg("--no-editable").args(["--no-build-isolation-package", "project"]).arg("--no-cache").arg("--require-build-hashes"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - build-dependency==1.0.0
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--no-editable").args(["--no-build-isolation-package", "project"]).arg("--frozen").arg("--require-build-hashes"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
+    Checked 1 package in [TIME]
+    ");
     Ok(())
 }
 
