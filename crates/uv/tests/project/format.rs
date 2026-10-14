@@ -261,16 +261,26 @@ fn format_from_project_root() -> Result<()> {
     Ok(())
 }
 
+/// `--no-project` runs from the current directory instead of the discovered project root.
 #[test]
 fn format_no_project() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
 
-    let main_py = context.temp_dir.child("main.py");
-    main_py.write_str(indoc! {r"
-        x    = 1
-    "})?;
+    let unformatted = "x    = 1\n";
+    context.temp_dir.child("main.py").write_str(unformatted)?;
+    let nested = context.temp_dir.child("nested");
+    nested.child("main.py").write_str(unformatted)?;
 
-    uv_snapshot!(context.filters(), context.format().arg("--no-project"), @"
+    uv_snapshot!(context.filters(), context.format().current_dir(&nested).arg("--no-project"), @"
     exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
@@ -279,9 +289,8 @@ fn format_no_project() -> Result<()> {
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
     ");
 
-    // Check that the file was formatted
-    let formatted_content = context.read("main.py");
-    assert_snapshot!(formatted_content, @"x = 1");
+    assert_snapshot!(context.read("nested/main.py"), @"x = 1");
+    assert_eq!(context.read("main.py"), unformatted);
 
     Ok(())
 }
