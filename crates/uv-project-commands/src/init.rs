@@ -190,9 +190,7 @@ pub async fn init(
                     writeln!(printer.stderr(), "Initialized project `{}`", name.cyan())?;
                 }
                 // Initialized a project in the given directory.
-                Some(path) => {
-                    let path = std::path::absolute(&path)
-                        .unwrap_or_else(|_| path.simplified().to_path_buf());
+                Some(_) => {
                     writeln!(
                         printer.stderr(),
                         "Initialized project `{}` at `{}`",
