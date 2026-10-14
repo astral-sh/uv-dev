@@ -15,7 +15,7 @@ use uv_static::EnvVars;
 
 use crate::credentials::{Password, Token, Username};
 use crate::index::is_path_prefix;
-use crate::realm::Realm;
+use crate::realm::RealmRef;
 use crate::service::Service;
 use crate::{Credentials, KeyringProvider};
 
@@ -339,14 +339,12 @@ impl TextCredentialStore {
 
     /// Get credentials for a given URL and username.
     ///
-    /// The most specific URL prefix match in the same [`Realm`] is returned, if any.
+    /// The most specific URL prefix match in the same [`crate::Realm`] is returned, if any.
     pub fn get_credentials(
         &self,
         url: &DisplaySafeUrl,
         username: Option<&str>,
     ) -> Result<Option<&Credentials>, LookupError> {
-        let request_realm = Realm::from(url);
-
         // Perform an exact lookup first
         // TODO(zanieb): Consider adding `DisplaySafeUrlRef` so we can avoid this clone
         // TODO(zanieb): We could also return early here if we can't normalize to a `Service`
@@ -359,10 +357,11 @@ impl TextCredentialStore {
         }
 
         // If that fails, iterate through to find a prefix match
+        let request_realm = RealmRef::from(url.deref());
         let mut best: Option<(usize, &Credentials)> = None;
 
         for ((service, stored_username), credential) in &self.credentials {
-            let service_realm = Realm::from(service.url().deref());
+            let service_realm = RealmRef::from(service.url().deref());
 
             // Only consider services in the same realm
             if service_realm != request_realm {
