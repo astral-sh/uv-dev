@@ -33,6 +33,8 @@ mod pylock;
 mod record;
 #[cfg(feature = "test-python")]
 mod remote_requirements;
+#[cfg(feature = "test-python")]
+mod target;
 
 #[cfg(feature = "test-python")]
 mod wheel_cache;
