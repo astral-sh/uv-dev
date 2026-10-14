@@ -1,6 +1,7 @@
 pub use crate::github::GitHubRepository;
 pub use crate::oid::{GitOid, OidParseError};
 pub use crate::reference::GitReference;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::sync::LazyLock;
 
@@ -17,14 +18,10 @@ mod reference;
 /// Initialize [`GitLfs`] mode from `UV_GIT_LFS` environment.
 static UV_GIT_LFS: LazyLock<GitLfs> = LazyLock::new(|| {
     // TODO(konsti): Parse this in `EnvironmentOptions`.
-    if std::env::var_os(EnvVars::UV_GIT_LFS)
-        .and_then(|v| v.to_str().map(str::to_lowercase))
-        .is_some_and(|v| matches!(v.as_str(), "y" | "yes" | "t" | "true" | "on" | "1"))
-    {
-        GitLfs::Enabled
-    } else {
-        GitLfs::Disabled
-    }
+    GitLfs::from(matches!(
+        uv_static::parse_boolish_environment_variable(EnvVars::UV_GIT_LFS),
+        Ok(Some(true))
+    ))
 });
 
 /// Configuration for Git LFS (Large File Storage) support.
@@ -163,20 +160,25 @@ impl GitUrl {
 
     /// Set the precise [`GitOid`] to use for this Git URL.
     pub fn with_precise(mut self, precise: GitOid) -> Result<Self, GitUrlParseError> {
-        match self.reference.as_commit() {
-            Some(commit) => {
-                if commit != precise {
-                    return Err(GitUrlParseError::MismatchedRevision {
-                        revision: commit.to_string(),
-                        precise,
-                        url: Box::new(self.url.clone()),
-                    });
-                }
-            }
-            None => self.resolved = Some(precise),
+        self.validate_precise(precise)?;
+        if self.reference.as_commit().is_none() {
+            self.resolved = Some(precise);
         }
-
         Ok(self)
+    }
+
+    /// Check that a resolved commit agrees with an exact revision in the URL.
+    pub fn validate_precise(&self, precise: GitOid) -> Result<(), GitUrlParseError> {
+        if let Some(commit) = self.reference.as_commit()
+            && commit != precise
+        {
+            return Err(GitUrlParseError::MismatchedRevision {
+                revision: commit.to_string(),
+                precise,
+                url: Box::new(self.url.clone()),
+            });
+        }
+        Ok(())
     }
 
     /// Set the [`GitReference`] to use for this Git URL, clearing any resolved commit if it changes.
@@ -274,22 +276,20 @@ impl TryFrom<DisplaySafeUrl> for GitUrl {
         url.set_fragment(None);
         url.set_query(None);
 
-        if url.path().matches('@').nth(1).is_some() {
-            return Err(GitUrlParseError::AmbiguousRevision(url));
-        }
-
         // If the URL ends with a reference, like `https://git.example.com/MyProject.git@v1.0`,
         // extract it.
-        let mut reference = GitReference::DefaultBranch;
-        if let Some((prefix, suffix)) = url
-            .path()
-            .rsplit_once('@')
-            .map(|(prefix, suffix)| (prefix.to_string(), suffix.to_string()))
-        {
-            let suffix = percent_decode_str(&suffix).decode_utf8_lossy().into_owned();
-            reference = GitReference::from_rev(suffix);
+        let reference = if let Some((prefix, suffix)) = url.path().rsplit_once('@') {
+            if prefix.contains('@') {
+                return Err(GitUrlParseError::AmbiguousRevision(url));
+            }
+            let reference =
+                GitReference::from_rev(percent_decode_str(suffix).decode_utf8_lossy().into_owned());
+            let prefix = prefix.to_owned();
             url.set_path(&prefix);
-        }
+            reference
+        } else {
+            GitReference::DefaultBranch
+        };
 
         // TODO(samypr100): GitLfs::from_env() for now unless we want to support parsing lfs=true
         Self::from_reference(url, reference, GitLfs::from_env())
@@ -300,16 +300,14 @@ impl From<GitUrl> for DisplaySafeUrl {
     fn from(git: GitUrl) -> Self {
         let precise = git.precise();
         let mut url = git.url;
-
-        // If we have a precise commit, add `@` and the commit hash to the URL.
-        if let Some(precise) = precise {
-            let path = format!("{}@{}", url.path(), precise);
-            url.set_path(&path);
-        } else if let Some(rev) = git.reference.as_url_rev() {
-            let path = format!("{}@{}", url.path(), rev);
+        let revision = precise
+            .as_ref()
+            .map(|precise| Cow::Borrowed(precise.as_str()))
+            .or_else(|| git.reference.as_url_rev());
+        if let Some(revision) = revision {
+            let path = format!("{}@{revision}", url.path());
             url.set_path(&path);
         }
-
         url
     }
 }

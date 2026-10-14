@@ -66,20 +66,13 @@ impl GitReference {
 
     /// Converts the [`GitReference`] to a `str` that can be used as a revision.
     pub fn as_rev(&self) -> &str {
-        match self {
-            Self::Commit(commit) => commit.as_str(),
-            Self::Tag(rev) => rev,
-            Self::Branch(rev) => rev,
-            Self::BranchOrTag(rev) => rev,
-            Self::BranchOrTagOrCommit(rev) => rev,
-            Self::NamedRef(rev) => rev,
-            Self::DefaultBranch => "HEAD",
-        }
+        self.as_str().unwrap_or("HEAD")
     }
 
     /// Converts the [`GitReference`] to a percent-encoded revision string for use in a URL.
     pub fn as_url_rev(&self) -> Option<Cow<'_, str>> {
-        self.as_str().map(Self::encode_rev)
+        self.as_str()
+            .map(|revision| utf8_percent_encode(revision, GIT_REFERENCE_ENCODE_SET).into())
     }
 
     /// Return the commit identified directly by this reference, without resolving named references.
@@ -93,11 +86,6 @@ impl GitReference {
             | Self::NamedRef(_)
             | Self::DefaultBranch => None,
         }
-    }
-
-    /// Percent-encode a revision string for use in a URL.
-    fn encode_rev(rev: &str) -> Cow<'_, str> {
-        utf8_percent_encode(rev, GIT_REFERENCE_ENCODE_SET).into()
     }
 
     /// Returns the kind of this reference.
@@ -116,7 +104,7 @@ impl GitReference {
 
 impl Display for GitReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str().unwrap_or("HEAD"))
+        f.write_str(self.as_rev())
     }
 }
 

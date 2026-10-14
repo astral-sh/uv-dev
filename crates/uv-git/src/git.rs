@@ -165,17 +165,22 @@ impl GitRepository {
 
     /// Parses the object ID of the given `refname`.
     fn rev_parse(&self, refname: &str) -> Result<GitOid> {
-        let result = GIT
+        Ok(self.rev_parse_output(&[refname])?.parse()?)
+    }
+
+    /// Run `git rev-parse` and return its trimmed output.
+    fn rev_parse_output(&self, args: &[&str]) -> Result<String> {
+        let output = GIT
             .as_ref()
             .cloned()?
             .arg("rev-parse")
-            .arg(refname)
+            .args(args)
             .cwd(&self.path)
             .exec_with_output()?;
 
-        let mut result = String::from_utf8(result.stdout)?;
+        let mut result = String::from_utf8(output.stdout)?;
         result.truncate(result.trim_end().len());
-        Ok(result.parse()?)
+        Ok(result)
     }
 
     /// Verifies LFS artifacts have been initialized for a given `refname`.
@@ -308,6 +313,11 @@ impl GitRemote {
 }
 
 impl GitDatabase {
+    /// The remote URL used to populate this database.
+    pub(crate) fn remote_url(&self) -> &DisplaySafeUrl {
+        self.remote.url()
+    }
+
     /// Checkouts to a revision at `destination` from this database.
     pub(crate) fn copy_to(&self, rev: GitOid, destination: &Path) -> Result<GitCheckout> {
         // If the existing checkout exists, and it is fresh, use it.
@@ -327,18 +337,7 @@ impl GitDatabase {
 
     /// Get a short OID for a `revision`, usually 7 chars or more if ambiguous.
     pub(crate) fn to_short_id(&self, revision: GitOid) -> Result<String> {
-        let output = GIT
-            .as_ref()
-            .cloned()?
-            .arg("rev-parse")
-            .arg("--short")
-            .arg(revision.as_str())
-            .cwd(&self.repo.path)
-            .exec_with_output()?;
-
-        let mut result = String::from_utf8(output.stdout)?;
-        result.truncate(result.trim_end().len());
-        Ok(result)
+        self.repo.rev_parse_output(&["--short", revision.as_str()])
     }
 
     /// Checks if `oid` identifies a commit object in this database.
@@ -400,28 +399,20 @@ impl GitCheckout {
         // Perform a local clone of the repository, which will attempt to use
         // hardlinks to set up the repository. This should speed up the clone operation
         // quite a bit if it works.
-        let res = GIT
-            .as_ref()
-            .cloned()?
-            .arg("clone")
-            .arg("--local")
-            // Make sure to pass the local file path and not a file://... url. If given a url,
-            // Git treats the repository as a remote origin and gets confused because we don't
-            // have a HEAD checked out.
-            .arg(database.repo.path.simplified_display().to_string())
-            .arg(into.simplified_display().to_string())
-            .exec_with_output();
-
-        if let Err(e) = res {
-            debug!("Cloning git repo with --local failed, retrying without hardlinks: {e}");
-
-            GIT.as_ref()
-                .cloned()?
+        let git = GIT.as_ref()?;
+        let clone = |strategy: &str| {
+            git.clone()
                 .arg("clone")
-                .arg("--no-hardlinks")
-                .arg(database.repo.path.simplified_display().to_string())
-                .arg(into.simplified_display().to_string())
-                .exec_with_output()?;
+                .arg(strategy)
+                // A file URL would make Git treat the database as a remote origin, which has no
+                // checked-out HEAD. Pass the native path so non-UTF-8 components remain intact.
+                .arg(database.repo.path.simplified())
+                .arg(into.simplified())
+                .exec_with_output()
+        };
+        if let Err(e) = clone("--local") {
+            debug!("Cloning git repo with --local failed, retrying without hardlinks: {e}");
+            clone("--no-hardlinks")?;
         }
 
         let repo = GitRepository::open(into)?;
@@ -521,7 +512,7 @@ impl GitCheckout {
         // nested relative URL resolves against its immediate parent submodule. The transient
         // credential rewrite is still safe to inherit because it only affects transport.
         let mut submodule_update = GIT.as_ref().cloned()?;
-        for config in submodule_auth_config(original_remote_url) {
+        if let Some(config) = submodule_auth_config(original_remote_url) {
             submodule_update.arg("-c").arg(config);
         }
 
@@ -562,12 +553,10 @@ impl GitCheckout {
 /// remotes. Instead, callers pass these values via `git -c`, using a credential-stripped origin URL
 /// for resolution and a transient `url.*.insteadOf` rewrite when credentials are needed for
 /// transport.
-fn submodule_update_config(original_remote_url: &DisplaySafeUrl) -> Vec<String> {
+fn submodule_update_config(original_remote_url: &DisplaySafeUrl) -> impl Iterator<Item = String> {
     let remote_url = original_remote_url.without_credentials();
-    let mut config = vec![format!("remote.origin.url={}", remote_url.as_str())];
-
-    config.extend(submodule_auth_config(original_remote_url));
-    config
+    std::iter::once(format!("remote.origin.url={}", remote_url.as_str()))
+        .chain(submodule_auth_config(original_remote_url))
 }
 
 /// Return command-local Git authentication configuration for updating submodules.
@@ -575,24 +564,21 @@ fn submodule_update_config(original_remote_url: &DisplaySafeUrl) -> Vec<String> 
 /// Unlike `remote.origin.url`, these rewrites are safe to inherit during recursive submodule
 /// updates: they rewrite transport URLs for authentication, but do not change the base URL that Git
 /// uses to resolve nested relative submodule URLs.
-fn submodule_auth_config(original_remote_url: &DisplaySafeUrl) -> Vec<String> {
+fn submodule_auth_config(original_remote_url: &DisplaySafeUrl) -> Option<String> {
     let remote_url = original_remote_url.without_credentials();
-    let mut config = Vec::new();
-
-    if remote_url.as_str() != original_remote_url.as_str() {
-        let safe_root = remote_url_root(remote_url.into_owned());
-        let credentialed_root = remote_url_root((**original_remote_url).clone());
-
-        if safe_root.as_str() != credentialed_root.as_str() {
-            config.push(format!(
-                "url.{}.insteadOf={}",
-                credentialed_root.as_str(),
-                safe_root.as_str()
-            ));
-        }
+    if remote_url.as_str() == original_remote_url.as_str() {
+        return None;
     }
 
-    config
+    let safe_root = remote_url_root(remote_url.into_owned());
+    let credentialed_root = remote_url_root((**original_remote_url).clone());
+    (safe_root.as_str() != credentialed_root.as_str()).then(|| {
+        format!(
+            "url.{}.insteadOf={}",
+            credentialed_root.as_str(),
+            safe_root.as_str()
+        )
+    })
 }
 
 /// Return the scheme, authority, and root path of a remote URL.
@@ -691,41 +677,23 @@ fn fetch(
             offline,
         ),
         RefspecStrategy::First => {
-            // Try each refspec
-            let mut errors = refspecs
-                .iter()
-                .map_while(|refspec| {
-                    let fetch_result = fetch_with_cli(
-                        repo,
-                        remote_url,
-                        std::slice::from_ref(refspec),
-                        tags,
-                        disable_ssl,
-                        offline,
-                    );
-
-                    // Stop after the first success and log failures
-                    match fetch_result {
-                        Err(ref err) => {
-                            debug!("Failed to fetch refspec `{refspec}`: {err}");
-                            Some(fetch_result)
-                        }
-                        Ok(()) => None,
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            if errors.len() == refspecs.len() {
-                if let Some(result) = errors.pop() {
-                    // Use the last error for the message
-                    result
+            let mut result = Ok(());
+            for refspec in &refspecs {
+                result = fetch_with_cli(
+                    repo,
+                    remote_url,
+                    std::slice::from_ref(refspec),
+                    tags,
+                    disable_ssl,
+                    offline,
+                );
+                if let Err(err) = &result {
+                    debug!("Failed to fetch refspec `{refspec}`: {err}");
                 } else {
-                    // Can only occur if there were no refspecs to fetch
-                    Ok(())
+                    break;
                 }
-            } else {
-                Ok(())
             }
+            result
         }
     };
     match reference {
@@ -882,7 +850,7 @@ mod tests {
         let url = DisplaySafeUrl::parse("https://user:password@example.com/org/repo.git").unwrap();
 
         assert_eq!(
-            submodule_update_config(&url),
+            submodule_update_config(&url).collect::<Vec<_>>(),
             vec![
                 "remote.origin.url=https://example.com/org/repo.git".to_string(),
                 "url.https://user:password@example.com/.insteadOf=https://example.com/".to_string(),
@@ -895,7 +863,7 @@ mod tests {
         let url = DisplaySafeUrl::parse("ssh://git@example.com/org/repo.git").unwrap();
 
         assert_eq!(
-            submodule_update_config(&url),
+            submodule_update_config(&url).collect::<Vec<_>>(),
             vec!["remote.origin.url=ssh://git@example.com/org/repo.git".to_string()]
         );
     }

@@ -2,7 +2,6 @@
 //! Cargo is dual-licensed under either Apache 2.0 or MIT, at the user's choice.
 //! Source: <https://github.com/rust-lang/cargo/blob/23eb492cf920ce051abfc56bbaf838514dc8365c/src/cargo/sources/git/source.rs>
 
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -60,6 +59,55 @@ impl GitSource {
         }
     }
 
+    /// Find a cached locked revision or exact commit reference, including any requested LFS objects.
+    fn cached_revision(&self, db: &GitDatabase, lfs_requested: bool) -> Option<GitOid> {
+        let is_cached = |revision: &GitOid| {
+            db.contains(*revision) && (!lfs_requested || db.contains_lfs_artifacts(*revision))
+        };
+        self.git.precise().filter(is_cached)
+    }
+
+    /// Open or update the Git database and resolve the requested revision.
+    fn fetch_database(
+        &self,
+        remote: GitRemote,
+        db_path: &Path,
+        lfs_requested: bool,
+    ) -> Result<(GitDatabase, GitOid, Option<usize>)> {
+        let maybe_db = match remote.db_at(db_path) {
+            Ok(db) => {
+                if let Some(revision) = self.cached_revision(&db, lfs_requested) {
+                    debug!("Using existing Git source `{}`", self.git.url());
+                    return Ok((
+                        db.with_lfs_ready(lfs_requested.then_some(true)),
+                        revision,
+                        None,
+                    ));
+                }
+                Some(db)
+            }
+            Err(_) => None,
+        };
+
+        // Updating the database checks offline mode, including when a locked revision is
+        // missing from the local database.
+        debug!("Updating Git source `{}`", self.git.url());
+        let task = self.reporter.as_ref().map(|reporter| {
+            reporter.on_checkout_start(remote.url(), self.git.reference().as_rev())
+        });
+        let (db, actual_rev) = remote.checkout(
+            db_path,
+            maybe_db,
+            self.git.reference(),
+            self.git.precise(),
+            self.disable_ssl,
+            self.offline,
+            lfs_requested,
+        )?;
+
+        Ok((db, actual_rev, task))
+    }
+
     /// Fetch the underlying Git repository at the given revision.
     #[instrument(skip(self), fields(repository = %self.git.url(), rev = ?self.git.precise()))]
     pub(crate) fn fetch(self) -> Result<Fetch> {
@@ -70,69 +118,25 @@ impl GitSource {
         let db_path = self.cache.join("db").join(&ident);
 
         // Authenticate the URL, if necessary.
-        let remote = if let Some(credentials) = GIT_STORE.get(self.git.repository()) {
-            Cow::Owned(credentials.apply(self.git.url().clone()))
-        } else {
-            Cow::Borrowed(self.git.url())
-        };
+        let url = self.git.url().clone();
+        let remote = GitRemote::new(match GIT_STORE.get(self.git.repository()) {
+            Some(credentials) => credentials.apply(url),
+            None => url,
+        });
 
-        // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes
-        // it easier to short-circuit this in the cases where we do have the commit.
-        let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {
-            let git_remote = GitRemote::new(remote.clone().into_owned());
-            let maybe_db = git_remote.db_at(&db_path).ok();
-
-            // If we have a locked revision, and we have a pre-existing database which has that
-            // revision, then no update needs to happen.
-            // When requested, we also check if LFS artifacts have been fetched and validated.
-            if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {
-                if db.contains(rev) && (!lfs_requested || db.contains_lfs_artifacts(rev)) {
-                    debug!("Using existing Git source `{}`", self.git.url());
-                    return Ok((
-                        maybe_db
-                            .unwrap()
-                            .with_lfs_ready(lfs_requested.then_some(true)),
-                        rev,
-                        None,
-                    ));
-                }
-            }
-
-            // ... otherwise, we use this state to update the Git database. Note that we still check
-            // for being offline here, for example in the situation that we have a locked revision
-            // but the database doesn't have it.
-            debug!("Updating Git source `{}`", self.git.url());
-
-            // Report the checkout operation to the reporter.
-            let task = self.reporter.as_ref().map(|reporter| {
-                reporter.on_checkout_start(git_remote.url(), self.git.reference().as_rev())
-            });
-
-            let (db, actual_rev) = git_remote.checkout(
-                &db_path,
-                maybe_db,
-                self.git.reference(),
-                self.git.precise(),
-                self.disable_ssl,
-                self.offline,
-                lfs_requested,
-            )?;
-
-            Ok((db, actual_rev, task))
-        }()?;
+        let (db, actual_rev, maybe_task) = self.fetch_database(remote, &db_path, lfs_requested)?;
 
         // Validate the resolved commit before checking out its contents.
-        let git = self.git.clone().with_precise(actual_rev)?;
+        let git = self.git.with_precise(actual_rev)?;
 
         // Don’t use the full hash, in order to contribute less to reaching the
         // path length limit on Windows.
         let short_id = db.to_short_id(actual_rev)?;
 
-        // Compute the canonical URL for the repository checkout.
-        let canonical = git.repository().clone().with_lfs(Some(lfs_requested));
         // Recompute the checkout hash when Git LFS is enabled as we want
         // to distinctly differentiate between LFS vs non-LFS source trees.
         let ident = if lfs_requested {
+            let canonical = git.repository().clone().with_lfs(Some(true));
             cache_digest(&canonical)
         } else {
             ident
@@ -149,10 +153,10 @@ impl GitSource {
         let checkout = db.copy_to(actual_rev, &checkout_path)?;
 
         // Report the checkout operation to the reporter.
-        if let Some(task) = maybe_task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_checkout_complete(remote.as_ref(), actual_rev.as_str(), task);
-            }
+        if let Some(task) = maybe_task
+            && let Some(reporter) = self.reporter.as_ref()
+        {
+            reporter.on_checkout_complete(db.remote_url(), actual_rev.as_str(), task);
         }
 
         Ok(Fetch {
@@ -181,8 +185,8 @@ impl Fetch {
         &self.path
     }
 
-    pub fn lfs_ready(&self) -> &bool {
-        &self.lfs_ready
+    pub fn lfs_ready(&self) -> bool {
+        self.lfs_ready
     }
 }
 
