@@ -1,9 +1,9 @@
 #[cfg(feature = "test-universal")]
 use std::process::Command;
 
-use anyhow::Result;
 #[cfg(feature = "test-universal")]
-use anyhow::{Context, bail};
+use anyhow::Context;
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
@@ -813,34 +813,23 @@ fn json_output_root_contexts_respect_depth() -> Result<()> {
         "#})?;
     }
 
-    let projected_contexts = |depth: usize| -> Result<(Vec<String>, Vec<String>)> {
-        let output = context
-            .tree()
-            .arg("--preview-features")
-            .arg("json-output")
-            .arg("--format")
-            .arg("json")
-            .arg("--universal")
-            .arg("--depth")
-            .arg(depth.to_string())
-            .output()?;
-        output.clone().assert().success();
-
-        let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let projected_contexts = |stdout: &[u8]| -> Result<(Vec<String>, Vec<String>)> {
+        let report: serde_json::Value = serde_json::from_slice(stdout)?;
         let roots = report["roots"]
             .as_array()
             .context("dependency graph roots should be an array")?;
         let resolution = report["resolution"]
             .as_object()
             .context("dependency graph resolution should be an object")?;
-        let context_kind = |node: &serde_json::Value| {
+        let context_kind = |node: &serde_json::Value| -> Result<String> {
             let kind = &node["kind"];
             if let Some(extra) = kind["extra"].as_str() {
-                Some(format!("extra: {extra}"))
+                Ok(format!("extra: {extra}"))
             } else {
                 kind["group"]
                     .as_str()
                     .map(|group| format!("group: {group}"))
+                    .with_context(|| format!("unknown dependency graph context kind: {kind}"))
             }
         };
         let root_kinds = roots
@@ -855,21 +844,32 @@ fn json_output_root_contexts_respect_depth() -> Result<()> {
                 let kind = &node["kind"];
                 if kind == "package" {
                     Ok("package".to_owned())
-                } else if let Some(context) = context_kind(node) {
-                    Ok(context)
                 } else {
-                    bail!("dependency graph root should have a known kind")
+                    context_kind(node)
                 }
             })
             .collect::<Result<Vec<_>>>()?;
         let contexts = resolution
             .values()
-            .filter_map(context_kind)
-            .collect::<Vec<_>>();
+            .filter(|node| !matches!(node["kind"].as_str(), Some("package" | "workspace")))
+            .map(context_kind)
+            .collect::<Result<Vec<_>>>()?;
         Ok((root_kinds, contexts))
     };
 
-    let (root_kinds, contexts) = projected_contexts(0)?;
+    let tree = || {
+        let mut tree = context.tree();
+        tree.args([
+            "--preview-features",
+            "json-output",
+            "--format",
+            "json",
+            "--universal",
+        ]);
+        tree
+    };
+    let depth_zero = tree().args(["--depth", "0"]).assert().success();
+    let (root_kinds, contexts) = projected_contexts(&depth_zero.get_output().stdout)?;
     assert_json_snapshot!(root_kinds, @r#"
     [
       "package"
@@ -877,7 +877,8 @@ fn json_output_root_contexts_respect_depth() -> Result<()> {
     "#);
     assert_json_snapshot!(contexts, @r#"[]"#);
 
-    let (root_kinds, contexts) = projected_contexts(1)?;
+    let depth_one = tree().args(["--depth", "1"]).assert().success();
+    let (root_kinds, contexts) = projected_contexts(&depth_one.get_output().stdout)?;
     assert_json_snapshot!(root_kinds, @r#"
     [
       "group: dev",
