@@ -3619,34 +3619,30 @@ impl ForkedDependencies {
                 // 2. At least two items are not already excluded in this fork's environment
                 //    (otherwise the conflict constraint is already satisfied and no fork is
                 //    needed).
-                let mut has_conflicting_dependency = false;
-                for item in set.iter() {
-                    if fork.contains_conflicting_item(item.as_ref()) {
-                        has_conflicting_dependency = true;
-                        diverging_packages.insert(item.package().clone());
-                        break;
-                    }
-                }
-                if !has_conflicting_dependency {
+                let Some(item) = set
+                    .iter()
+                    .find(|item| fork.contains_conflicting_item(item.as_ref()))
+                else {
                     new.push(fork);
                     continue;
-                }
+                };
+                diverging_packages.insert(item.package().clone());
 
                 // If fewer than two items in this conflict set are still possible (not already
                 // excluded) in this fork, the conflict constraint is already satisfied by prior
                 // forking. We can skip the full N+1 fork split if the single remaining non-excluded
                 // item doesn't appear in any other conflict set (since it would never need its own
                 // "excluded" variant).
-                let non_excluded: Vec<_> = set
+                if let Ok(non_excluded) = set
                     .iter()
                     .filter(|item| fork.env.included_by_group(item.as_ref()))
-                    .collect();
-                if non_excluded.len() < 2 {
+                    .at_most_one()
+                {
                     // Check if any non-excluded item still has a live conflict in another set —
                     // i.e., another set where this item AND at least one other non-excluded item
                     // both appear. If so, we still need to fork to create the "excluded" variant
                     // for that item.
-                    let dominated = non_excluded.iter().all(|item| {
+                    let dominated = non_excluded.is_none_or(|item| {
                         !conflicts.iter().any(|other_set| {
                             !std::ptr::eq(set, other_set)
                                 && other_set.contains(item.package(), item.kind().as_ref())
