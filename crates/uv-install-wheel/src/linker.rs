@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -87,7 +88,7 @@ impl InstallState {
     ///
     /// # Performance
     ///
-    /// When there are no namespace packages, this method is a Mutex lock and a hash map iteration.
+    /// When there are no namespace packages, this method is a hash map iteration.
     ///
     /// When there are namespace packages, we only traverse into directories shared by at least two
     /// packages. For example, for namespace packages gpu-a, gpu-b, and gpu-c with
@@ -112,7 +113,8 @@ impl InstallState {
             return Ok(());
         }
 
-        for (relative, wheels) in &*self.site_packages_paths.lock().unwrap() {
+        let site_packages_paths = self.site_packages_paths.into_inner().unwrap();
+        for (relative, wheels) in &site_packages_paths {
             // Fast path: Only one package is using this module name, no conflicts.
             let mut wheel_iter = wheels.iter();
             let Some(first_wheel) = wheel_iter.next() else {
@@ -157,18 +159,19 @@ impl InstallState {
     /// Returns `true` if a warning was emitted.
     fn warn_directory_conflict(
         directory: &Path,
-        wheels: &BTreeSet<(WheelFilename, PathBuf)>,
+        wheels: &BTreeSet<(impl Borrow<WheelFilename>, PathBuf)>,
     ) -> Result<bool, io::Error> {
         // The files in the directory, as paths relative to the site-packages, with their origin and
         // size.
         let mut files: BTreeMap<PathBuf, BTreeSet<(&WheelFilename, u64)>> = BTreeMap::default();
         // The directories in the directory, as paths relative to the site-packages, with their
-        // origin and absolute path.
-        let mut subdirectories: BTreeMap<PathBuf, BTreeSet<(WheelFilename, PathBuf)>> =
+        // origin and absolute path. Borrow wheel filenames from the top-level set during recursion.
+        let mut subdirectories: BTreeMap<PathBuf, BTreeSet<(&WheelFilename, PathBuf)>> =
             BTreeMap::default();
 
         // Read the shared directory in each unpacked wheel.
         for (wheel, absolute) in wheels {
+            let wheel = wheel.borrow();
             for dir_entry in fs_err::read_dir(absolute)? {
                 let dir_entry = dir_entry?;
                 let relative = directory.join(dir_entry.file_name());
@@ -182,7 +185,7 @@ impl InstallState {
                     subdirectories
                         .entry(relative)
                         .or_default()
-                        .insert((wheel.clone(), dir_entry.path()));
+                        .insert((wheel, dir_entry.path()));
                 } else {
                     // We don't expect any other file type, but it's ok if this check has false
                     // negatives.
@@ -227,18 +230,14 @@ impl InstallState {
             return false;
         }
 
-        let packages = file_wheels
-            .iter()
-            .map(|(wheel_filename, _file_len)| {
-                format!("* {} ({})", wheel_filename.name, wheel_filename)
-            })
-            .join("\n");
         warn_user!(
             "The file `{}` is provided by more than one package, \
             which causes an install race condition and can result in a broken module. \
             Packages containing the file:\n{}",
             file.user_display(),
-            packages
+            file_wheels.iter().format_with("\n", |(wheel, _), format| {
+                format(&format_args!("* {} ({wheel})", wheel.name))
+            })
         );
 
         // Assumption: There is generally two packages that have a conflict. The output is
