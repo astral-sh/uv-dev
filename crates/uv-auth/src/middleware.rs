@@ -317,7 +317,7 @@ impl Middleware for AuthMiddleware {
         // to the headers so for display purposes we restore some information
         let url = tracing_url(&request, request_credentials.as_ref());
         let index = self.indexes.index_for(request.url());
-        let auth_policy = self.indexes.auth_policy_for(request.url());
+        let auth_policy = index.map_or(AuthPolicy::Auto, |index| index.auth_policy);
         trace!("Handling request for `{url}` with authentication policy {auth_policy}");
 
         let credentials: Option<Arc<Authentication>> = if matches!(auth_policy, AuthPolicy::Never) {
