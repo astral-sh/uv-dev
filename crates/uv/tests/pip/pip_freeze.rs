@@ -295,40 +295,10 @@ fn freeze_with_editable() -> Result<()> {
 #[test]
 fn freeze_with_egg_info() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let site_packages = ChildPath::new(context.site_packages());
-
-    // Manually create an `.egg-info` directory.
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .create_dir_all()?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("top_level.txt")
-        .write_str("zstd")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("SOURCES.txt")
-        .write_str("")?;
-    site_packages
+    ChildPath::new(context.site_packages())
         .child("zstandard-0.22.0-py3.12.egg-info")
         .child("PKG-INFO")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("dependency_links.txt")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("entry_points.txt")
-        .write_str("")?;
-
-    // Manually create the package directory.
-    site_packages.child("zstd").create_dir_all()?;
-    site_packages
-        .child("zstd")
-        .child("__init__.py")
-        .write_str("")?;
+        .touch()?;
 
     // Run `pip freeze`.
     uv_snapshot!(context.filters(), context.pip_freeze(), @"
@@ -345,40 +315,10 @@ fn freeze_with_egg_info() -> Result<()> {
 #[test]
 fn freeze_with_egg_info_no_py() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let site_packages = ChildPath::new(context.site_packages());
-
-    // Manually create an `.egg-info` directory.
-    site_packages
-        .child("zstandard-0.22.0.egg-info")
-        .create_dir_all()?;
-    site_packages
-        .child("zstandard-0.22.0.egg-info")
-        .child("top_level.txt")
-        .write_str("zstd")?;
-    site_packages
-        .child("zstandard-0.22.0.egg-info")
-        .child("SOURCES.txt")
-        .write_str("")?;
-    site_packages
+    ChildPath::new(context.site_packages())
         .child("zstandard-0.22.0.egg-info")
         .child("PKG-INFO")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0.egg-info")
-        .child("dependency_links.txt")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0.egg-info")
-        .child("entry_points.txt")
-        .write_str("")?;
-
-    // Manually create the package directory.
-    site_packages.child("zstd").create_dir_all()?;
-    site_packages
-        .child("zstd")
-        .child("__init__.py")
-        .write_str("")?;
+        .touch()?;
 
     // Run `pip freeze`.
     uv_snapshot!(context.filters(), context.pip_freeze(), @"
