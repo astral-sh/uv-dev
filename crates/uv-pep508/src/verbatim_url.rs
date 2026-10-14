@@ -96,12 +96,7 @@ impl VerbatimUrl {
         let given = given.as_ref();
         let url = DisplaySafeUrl::parse(given)?;
 
-        Ok(Self {
-            url,
-            given: None,
-            expanded: false,
-            force_relative: false,
-        })
+        Ok(Self::from_url(url))
     }
 
     /// Convert a [`VerbatimUrl`] from a path or a URL.
@@ -170,12 +165,7 @@ impl VerbatimUrl {
         let url = DisplaySafeUrl::from_file_path(path.clone())
             .map_err(|()| VerbatimUrlError::UrlConversion(path.clone()))?;
 
-        Ok(Self {
-            url,
-            given: None,
-            expanded: false,
-            force_relative: false,
-        })
+        Ok(Self::from_url(url))
     }
 
     /// Parse a URL from an absolute or relative path, including a URL fragment.
@@ -212,12 +202,7 @@ impl VerbatimUrl {
         let url = DisplaySafeUrl::from_file_path(path.clone())
             .unwrap_or_else(|()| panic!("path is absolute: {}", path.display()));
 
-        Ok(Self {
-            url,
-            given: None,
-            expanded: false,
-            force_relative: false,
-        })
+        Ok(Self::from_url(url))
     }
 
     /// Parse a URL from a normalized path.
@@ -237,12 +222,7 @@ impl VerbatimUrl {
         let url = DisplaySafeUrl::from_file_path(path)
             .unwrap_or_else(|()| panic!("path is absolute: {}", path.display()));
 
-        Ok(Self {
-            url,
-            given: None,
-            expanded: false,
-            force_relative: false,
-        })
+        Ok(Self::from_url(url))
     }
 
     /// Set a fragment that was provided as part of a URL.
