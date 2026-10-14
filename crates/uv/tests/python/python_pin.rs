@@ -668,6 +668,33 @@ fn python_pin_resolve() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
+fn python_pin_resolve_implementation_requests() {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("cpython"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Pinned `.python-version` to `[PYTHON-3.12]`
+    ");
+    let first_pin = context.read(PYTHON_VERSION_FILENAME);
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("cpython@3.13"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `[PYTHON-3.12]` -> `[PYTHON-3.13]`
+    ");
+
+    // The partial key leaves platform constraints unspecified and must select 3.12 again.
+    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("cpython-3.12"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `[PYTHON-3.13]` -> `[PYTHON-3.12]`
+    ");
+    assert_eq!(context.read(PYTHON_VERSION_FILENAME), first_pin);
+}
+
+#[test]
 fn python_pin_with_comments_and_whitespace() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
 
