@@ -584,17 +584,7 @@ impl RequirementsSpecification {
                 spec.project = source.project;
             }
 
-            if let Some(index_url) = source.index_url {
-                if let Some(existing) = spec.index_url
-                    && CanonicalUrl::new(index_url.url().clone())
-                        != CanonicalUrl::new(existing.url().clone())
-                {
-                    return Err(anyhow::anyhow!(
-                        "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
-                    ));
-                }
-                spec.index_url = Some(index_url);
-            }
+            spec.merge_index_url(source.index_url)?;
             spec.no_index |= source.no_index;
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
@@ -624,17 +614,7 @@ impl RequirementsSpecification {
             }
             spec.constraints.extend(source.constraints);
 
-            if let Some(index_url) = source.index_url {
-                if let Some(existing) = spec.index_url
-                    && CanonicalUrl::new(index_url.url().clone())
-                        != CanonicalUrl::new(existing.url().clone())
-                {
-                    return Err(anyhow::anyhow!(
-                        "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
-                    ));
-                }
-                spec.index_url = Some(index_url);
-            }
+            spec.merge_index_url(source.index_url)?;
             spec.no_index |= source.no_index;
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
@@ -652,17 +632,7 @@ impl RequirementsSpecification {
             spec.override_dependencies
                 .extend(source.override_dependencies);
 
-            if let Some(index_url) = source.index_url {
-                if let Some(existing) = spec.index_url
-                    && CanonicalUrl::new(index_url.url().clone())
-                        != CanonicalUrl::new(existing.url().clone())
-                {
-                    return Err(anyhow::anyhow!(
-                        "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
-                    ));
-                }
-                spec.index_url = Some(index_url);
-            }
+            spec.merge_index_url(source.index_url)?;
             spec.no_index |= source.no_index;
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
@@ -691,6 +661,23 @@ impl RequirementsSpecification {
         }
 
         Ok(spec)
+    }
+
+    /// Merge a source's index URL, rejecting conflicting indexes.
+    fn merge_index_url(&mut self, index_url: Option<IndexUrl>) -> Result<()> {
+        let Some(index_url) = index_url else {
+            return Ok(());
+        };
+        if let Some(existing) = &self.index_url
+            && CanonicalUrl::new(index_url.url().clone())
+                != CanonicalUrl::new(existing.url().clone())
+        {
+            return Err(anyhow::anyhow!(
+                "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
+            ));
+        }
+        self.index_url = Some(index_url);
+        Ok(())
     }
 
     /// Parse an individual package requirement.
