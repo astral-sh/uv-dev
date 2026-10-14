@@ -505,22 +505,20 @@ async fn show_help(
         Err(err) => return Err(err.into()),
     };
 
-    let tools = installed_tools
+    let mut tools = installed_tools
         .tools()?
         .into_iter()
         // Skip invalid tools
         .filter_map(|(name, tool)| {
-            tool.ok().and_then(|_| {
-                installed_tools
-                    .get_environment(&name, cache)
-                    .ok()
-                    .flatten()
-                    .and_then(|tool_env| tool_env.version().ok())
-                    .map(|version| (name, version))
-            })
+            tool.ok()?;
+            let environment = installed_tools
+                .get_environment(&name, cache)
+                .ok()
+                .flatten()?;
+            Some((name, environment.version().ok()?))
         })
-        .sorted_by(|(name1, ..), (name2, ..)| name1.cmp(name2))
         .collect::<Vec<_>>();
+    tools.sort_by(|(name1, ..), (name2, ..)| name1.cmp(name2));
 
     // No tools installed or they're all malformed
     if tools.is_empty() {
