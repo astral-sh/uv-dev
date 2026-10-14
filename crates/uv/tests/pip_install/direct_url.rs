@@ -9,8 +9,52 @@ use wiremock::{
     matchers::{basic_auth, path, query_param},
 };
 
+use uv_test::archive::generate_source_archive;
 use uv_test::packse::generate_wheel;
-use uv_test::uv_snapshot;
+use uv_test::{TestContext, uv_snapshot};
+
+fn assert_archive_provenance(context: &TestContext, dist_info: &str, url: &str) -> Result<()> {
+    let provenance: Value = serde_json::from_reader(fs_err::File::open(
+        context
+            .site_packages()
+            .join(dist_info)
+            .join("direct_url.json"),
+    )?)?;
+    assert_eq!(provenance, json!({ "url": url, "archive_info": {} }));
+    Ok(())
+}
+
+/// A wheel built from a source archive must record the archive URL as its provenance.
+#[tokio::test]
+async fn direct_url_json_direct_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let filename = "source_distribution-0.0.3.tar.gz";
+    let archive =
+        generate_source_archive(&"source-distribution".parse()?, &"0.0.3".parse()?, "", None)?;
+    let server = MockServer::start().await;
+    Mock::given(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive))
+        .mount(&server)
+        .await;
+    let url = format!("{}/{filename}", server.uri());
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!("source-distribution @ {url}"))?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["-r", "requirements.txt", "--no-index", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + source-distribution==0.0.3 (from http://[LOCALHOST]/source_distribution-0.0.3.tar.gz)
+    ");
+    context.assert_installed("source_distribution", "0.0.3");
+    assert_archive_provenance(&context, "source_distribution-0.0.3.dist-info", &url)?;
+    Ok(())
+}
 
 /// Send credentials and signed query parameters to the server, while recording a reusable URL
 /// without authority credentials in the installed distribution's provenance.
@@ -64,15 +108,7 @@ async fn direct_url_json_query() -> Result<()> {
      + six==1.17.0 (from http://username:****@[LOCALHOST]/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16%3A34%3A14Z&sig=****)
     ");
     context.assert_installed("six", "1.17.0");
-    let provenance: Value = serde_json::from_reader(fs_err::File::open(
-        context
-            .site_packages()
-            .join("six-1.17.0.dist-info/direct_url.json"),
-    )?)?;
-    assert_eq!(
-        provenance,
-        json!({ "url": provenance_url, "archive_info": {} })
-    );
+    assert_archive_provenance(&context, "six-1.17.0.dist-info", &provenance_url)?;
 
     uv_snapshot!(context.pip_install()
         .args(["-r", "requirements.txt", "--no-index", "--dry-run", "--strict"]), @"
