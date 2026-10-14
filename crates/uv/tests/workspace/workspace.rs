@@ -1087,17 +1087,15 @@ fn workspace_gitignored_member_in_subdirectory() -> Result<()> {
 fn workspace_ignored_member() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Build the main workspace ...
     let workspace = context.temp_dir.child("workspace");
     workspace.child("pyproject.toml").write_str(indoc! {r#"
         [tool.uv.workspace]
         members = ["packages/*"]
     "#})?;
 
-    // ... with an `.ignore` file that ignores `__pycache__` ...
-    workspace.child(".ignore").write_str("__pycache__/\n")?;
+    let ignore = workspace.child(".ignore");
+    ignore.write_str("generated-data.txt\n")?;
 
-    // ... with a  ...
     let deps = indoc! {r#"
         dependencies = ["b"]
 
@@ -1106,21 +1104,11 @@ fn workspace_ignored_member() -> Result<()> {
     "#};
     make_project(&workspace.join("packages").join("a"), "a", deps)?;
 
-    // ... and b.
-    let deps = indoc! {r"
-    "};
-    make_project(&workspace.join("packages").join("b"), "b", deps)?;
+    make_project(&workspace.join("packages").join("b"), "b", "")?;
 
-    // ... and a c that only contains ignored files.
-    fs_err::create_dir_all(workspace.join("packages").join("c").join("__pycache__"))?;
-    fs_err::write(
-        workspace
-            .join("packages")
-            .join("c")
-            .join("__pycache__")
-            .join("test.cpython-312.pyc"),
-        "fake",
-    )?;
+    workspace
+        .child("packages/c/generated-data.txt")
+        .write_str("generated content")?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
     exit_code: 0 (success)
@@ -1142,6 +1130,14 @@ fn workspace_ignored_member() -> Result<()> {
       }
     }
     "#);
+
+    // The same member is invalid once the ignore rule is removed.
+    fs_err::remove_file(ignore.path())?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Workspace member `[TEMP_DIR]/workspace/packages/c` is missing a `pyproject.toml` (matches: `packages/*`)
+    ");
 
     Ok(())
 }
