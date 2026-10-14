@@ -98,7 +98,6 @@ use crate::error::{Error as ErrorCode, Result};
 struct SsCredential {
     attributes: HashMap<String, String>,
     label: String,
-    target: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -128,7 +127,7 @@ impl CredentialApi for SsCredential {
         let ss = SecretService::connect(EncryptionType::Dh)
             .await
             .map_err(platform_failure)?;
-        let name = self.target.as_ref().ok_or_else(empty_target)?;
+        let name = self.target().ok_or_else(empty_target)?;
         let collection = match get_collection(&ss, name).await {
             Ok(collection) => collection,
             Err(_) => create_collection(&ss, name).await?,
@@ -218,7 +217,6 @@ impl SsCredential {
                 "{user}@{service}:{target} (uv v{})",
                 env!("CARGO_PKG_VERSION"),
             ),
-            target: Some(target.to_string()),
         })
     }
 
@@ -239,7 +237,6 @@ impl SsCredential {
                 "uv v{} for no target, service '{service}', user '{user}'",
                 env!("CARGO_PKG_VERSION"),
             ),
-            target: None,
         }
     }
 
@@ -249,12 +246,14 @@ impl SsCredential {
     /// of the underlying item, so you can examine them.
     async fn new_from_item(item: &Item<'_>) -> Result<Self> {
         let attributes = item.get_attributes().await.map_err(decode_error)?;
-        let target = attributes.get("target").cloned();
         Ok(Self {
             attributes,
             label: item.get_label().await.map_err(decode_error)?,
-            target,
         })
+    }
+
+    fn target(&self) -> Option<&str> {
+        self.attributes.get("target").map(String::as_str)
     }
 
     /// Construct a credential for this credential's underlying matching item,
@@ -277,7 +276,7 @@ impl SsCredential {
         let attributes: HashMap<&str, &str> = self.search_attributes(false).into_iter().collect();
         let search = ss.search_items(attributes).await.map_err(decode_error)?;
         match (search.locked.as_slice(), search.unlocked.as_slice()) {
-            ([], []) if self.target.as_deref() == Some("default") => {
+            ([], []) if self.target() == Some("default") => {
                 self.with_unique_legacy_item(&ss, f).await
             }
             ([], []) => Err(ErrorCode::NoEntry),
@@ -352,8 +351,8 @@ impl SsCredential {
     /// but this just selects the ones we search on
     fn search_attributes(&self, omit_target: bool) -> HashMap<&str, &str> {
         let mut result: HashMap<&str, &str> = HashMap::new();
-        if self.target.is_some() && !omit_target {
-            result.insert("target", self.attributes["target"].as_str());
+        if !omit_target && let Some(target) = self.target() {
+            result.insert("target", target);
         }
         result.insert("service", self.attributes["service"].as_str());
         result.insert("username", self.attributes["username"].as_str());
