@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anstream::println;
 use anyhow::{Context, Result, bail};
@@ -99,25 +100,28 @@ fn generate() -> Result<String> {
     let json = serde_json::to_string_pretty(&schema).unwrap();
 
     // Format with prettier
-    let output = Command::new("npx")
+    let mut child = Command::new("npx")
         .args(["prettier@3.9.0", "--stdin-filepath", "uv.schema.json"])
         .current_dir(ROOT_DIR)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .context("Failed to spawn prettier")?;
 
-    std::io::Write::write_all(&mut output.stdin.as_ref().unwrap(), json.as_bytes())
-        .context("Failed to write to prettier stdin")?;
+    let write_result = child
+        .stdin
+        .take()
+        .expect("Child must have stdin")
+        .write_all(json.as_bytes());
 
-    let output = output
-        .wait_with_output()
-        .context("Failed to run prettier")?;
+    // Read Prettier's diagnostic even if it exits before consuming the schema.
+    let output = child.wait_with_output().context("Failed to run prettier")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("prettier failed: {stderr}");
+        bail!("prettier failed ({}): {stderr}", output.status);
     }
+    write_result.context("Failed to write to prettier stdin")?;
 
     let mut output = String::from_utf8(output.stdout).context("prettier output is not UTF-8")?;
 
