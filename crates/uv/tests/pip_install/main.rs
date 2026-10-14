@@ -13,7 +13,7 @@ mod json;
 mod no_index;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_install;
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod pylock;
 
 #[cfg(feature = "test-python")]
