@@ -222,30 +222,18 @@ pub fn simplify_conflict_markers(
         // simplifications. Namely, because it follows that out inferences
         // aren't always true. Some of them may sometimes be false.
         let all_paths_satisfied = inference_sets.iter().all(|set| {
-            let extras = set
-                .iter()
-                .filter_map(|inf| {
-                    if !inf.included {
-                        return None;
-                    }
-                    Some((inf.item.package(), inf.item.extra()?))
-                })
-                .collect::<Vec<_>>();
-            let groups = set
-                .iter()
-                .filter_map(|inf| {
-                    if !inf.included {
-                        return None;
-                    }
-                    Some((inf.item.package(), inf.item.group()?))
-                })
-                .collect::<Vec<_>>();
+            let included = set.iter().filter(|inference| inference.included);
+            let extras = included
+                .clone()
+                .filter_map(|inference| Some((inference.item.package(), inference.item.extra()?)));
+            let groups = included
+                .filter_map(|inference| Some((inference.item.package(), inference.item.group()?)));
             // Notably, the marker must be possible to satisfy with the extras and groups alone.
             // For example, when `a` and `b` conflict, this marker does not simplify:
             // ```
             // (platform_machine == 'x86_64' and extra == 'extra-5-foo-b') or extra == 'extra-5-foo-a'
             // ````
-            graph[edge_index].evaluate_only_extras(&extras, &groups)
+            graph[edge_index].evaluate_only_extras(extras, groups)
         });
         if all_paths_satisfied {
             for set in inference_sets {
