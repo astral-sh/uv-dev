@@ -1112,6 +1112,41 @@ impl PythonRunner {
         environment_variables: &FxHashMap<OsString, OsString>,
         modified_path: &OsString,
     ) -> Result<PythonRunnerOutput, Error> {
+        let _permit = self.concurrent_build_slots.acquire().await.unwrap();
+
+        let executable = venv.python_executable();
+        let mut command = Command::new(executable);
+        if uv_preview::is_enabled(PreviewFeature::BuildLazyImports)
+            && venv.interpreter().implementation_name() == "cpython"
+            && venv.interpreter().python_tuple() >= (3, 15)
+        {
+            command.args(["-X", "lazy_imports=all"]);
+        }
+
+        command
+            .args(["-c", script])
+            .current_dir(source_tree.simplified())
+            .envs(environment_variables)
+            .env(EnvVars::UV_INTERNAL__BUILD_DIR, source_tree)
+            .env(EnvVars::PATH, modified_path)
+            .env(EnvVars::VIRTUAL_ENV, venv.root())
+            // NOTE: it would be nice to get colored output from build backends,
+            // but setting CLICOLOR_FORCE=1 changes the output of underlying
+            // tools, which might mess with wrappers trying to parse their
+            // output.
+            .env(EnvVars::PYTHONIOENCODING, "utf-8:backslashreplace")
+            // Remove potentially-sensitive environment variables.
+            .env_remove(EnvVars::PYX_API_KEY)
+            .env_remove(EnvVars::UV_API_KEY)
+            .env_remove(EnvVars::PYX_AUTH_TOKEN)
+            .env_remove(EnvVars::UV_AUTH_TOKEN);
+
+        Self::run_command(command, Printer::from(self.level))
+            .await
+            .map_err(|err| Error::CommandFailed(executable.to_path_buf(), err))
+    }
+
+    async fn run_command(mut command: Command, printer: Printer) -> io::Result<PythonRunnerOutput> {
         /// Read and capture lines from a process stream.
         async fn read_from(
             reader: impl tokio::io::AsyncRead + Unpin,
@@ -1128,54 +1163,26 @@ impl PythonRunner {
             Ok(lines)
         }
 
-        let _permit = self.concurrent_build_slots.acquire().await.unwrap();
-
-        let executable = venv.python_executable();
-        let command_failed = |err| Error::CommandFailed(executable.to_path_buf(), err);
-        let mut command = Command::new(executable);
-        if uv_preview::is_enabled(PreviewFeature::BuildLazyImports)
-            && venv.interpreter().implementation_name() == "cpython"
-            && venv.interpreter().python_tuple() >= (3, 15)
-        {
-            command.args(["-X", "lazy_imports=all"]);
-        }
-
         let mut child = command
-            .args(["-c", script])
-            .current_dir(source_tree.simplified())
-            .envs(environment_variables)
-            .env(EnvVars::UV_INTERNAL__BUILD_DIR, source_tree)
-            .env(EnvVars::PATH, modified_path)
-            .env(EnvVars::VIRTUAL_ENV, venv.root())
-            // NOTE: it would be nice to get colored output from build backends,
-            // but setting CLICOLOR_FORCE=1 changes the output of underlying
-            // tools, which might mess with wrappers trying to parse their
-            // output.
-            .env(EnvVars::PYTHONIOENCODING, "utf-8:backslashreplace")
-            // Remove potentially-sensitive environment variables.
-            .env_remove(EnvVars::PYX_API_KEY)
-            .env_remove(EnvVars::UV_API_KEY)
-            .env_remove(EnvVars::PYX_AUTH_TOKEN)
-            .env_remove(EnvVars::UV_AUTH_TOKEN)
+            // Initiate termination of the backend process if the build is cancelled.
+            .kill_on_drop(true)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(command_failed)?;
+            .spawn()?;
 
         let stdout_reader = child.stdout.take().unwrap();
         let stderr_reader = child.stderr.take().unwrap();
 
         // Asynchronously read from the in-memory pipes.
-        let printer = Printer::from(self.level);
         let (stdout, stderr) = tokio::join!(
             read_from(stdout_reader, printer),
             read_from(stderr_reader, printer),
         );
-        let stdout = stdout.map_err(command_failed)?;
-        let stderr = stderr.map_err(command_failed)?;
+        let stdout = stdout?;
+        let stderr = stderr?;
 
         // Wait for the child process to finish.
-        let status = child.wait().await.map_err(command_failed)?;
+        let status = child.wait().await?;
 
         Ok(PythonRunnerOutput {
             stdout,
@@ -1222,6 +1229,49 @@ impl Printer {
 impl Write for Printer {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         self.print_line(s);
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    use tokio::io::AsyncReadExt;
+    use tokio::process::Command;
+
+    use super::{Printer, PythonRunner};
+
+    #[tokio::test]
+    async fn cancelled_build_kills_direct_child() -> Result<(), Box<dyn std::error::Error>> {
+        let (parent, child) = UnixStream::pair()?;
+        parent.set_nonblocking(true)?;
+        let mut parent = tokio::net::UnixStream::from_std(parent)?;
+
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "printf x >&0; read -r line"])
+            .stdin(Stdio::from(OwnedFd::from(child)));
+
+        // The shell signals readiness over stdin, then waits for input until it is killed.
+        let mut ready = [0u8; 1];
+        tokio::select! {
+            result = parent.read_exact(&mut ready) => { result?; }
+            result = PythonRunner::run_command(command, Printer::Quiet) => {
+                panic!("build command exited before cancellation: {result:?}");
+            }
+            () = tokio::time::sleep(Duration::from_secs(30)) => {
+                panic!("build command did not report readiness");
+            }
+        }
+        assert_eq!(ready, [b'x']);
+
+        let bytes_read =
+            tokio::time::timeout(Duration::from_secs(5), parent.read(&mut [0])).await??;
+        assert_eq!(bytes_read, 0);
         Ok(())
     }
 }
