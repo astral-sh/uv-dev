@@ -24,23 +24,8 @@ fn bytecode_wheel(context: &TestContext) -> Result<PathBuf> {
     Ok(wheel)
 }
 
-/// Install the wheel and verify that the only compiled source is in the requested destination.
-fn install_compiled_wheel(
-    context: &TestContext,
-    wheel: &Path,
-    site_packages: &Path,
-    args: &[&str],
-) -> PathBuf {
-    context
-        .pip_install()
-        .arg(wheel)
-        .arg("--offline")
-        .arg("--compile-bytecode")
-        .args(args)
-        .assert()
-        .success()
-        .stderr(predicates::str::contains("Bytecode compiled 1 file in "));
-
+/// Verify that the compiled source is in the requested destination.
+fn assert_compiled_source(context: &TestContext, site_packages: &Path) -> PathBuf {
     let source = site_packages.join("bytecode_test/__init__.py");
     context
         .python_command()
@@ -64,7 +49,14 @@ fn install_compiled_wheel(
 fn compile_bytecode_excludes_stdlib() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheel = bytecode_wheel(&context)?;
-    install_compiled_wheel(&context, &wheel, &context.site_packages(), &[]);
+    context
+        .pip_install()
+        .arg(wheel)
+        .args(["--offline", "--compile-bytecode"])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("Bytecode compiled 1 file in "));
+    assert_compiled_source(&context, &context.site_packages());
     Ok(())
 }
 
@@ -74,32 +66,49 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
 fn compile_bytecode_with_symlink_link_mode() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheel = bytecode_wheel(&context)?;
-    let source = install_compiled_wheel(
-        &context,
-        &wheel,
-        &context.site_packages(),
-        &["--link-mode", "symlink"],
-    );
+    context
+        .pip_install()
+        .arg(wheel)
+        .args(["--offline", "--compile-bytecode", "--link-mode", "symlink"])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("Bytecode compiled 1 file in "));
+    let source = assert_compiled_source(&context, &context.site_packages());
     assert!(source.is_symlink(), "{} is not a symlink", source.display());
     Ok(())
 }
 
-/// Compile bytecode when installing into a relative `--target` or `--prefix` path.
+/// Compile bytecode when installing into a relative `--target` path.
 #[test]
-fn compile_bytecode_for_relative_install_root() -> Result<()> {
+fn compile_bytecode_for_relative_target() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheel = bytecode_wheel(&context)?;
-    install_compiled_wheel(
+    context
+        .pip_install()
+        .arg(wheel)
+        .args(["--offline", "--compile-bytecode", "--target", "target"])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("Bytecode compiled 1 file in "));
+    assert_compiled_source(&context, &context.temp_dir.join("target"));
+    Ok(())
+}
+
+/// Compile bytecode when installing into a relative `--prefix` path.
+#[test]
+fn compile_bytecode_for_relative_prefix() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = bytecode_wheel(&context)?;
+    context
+        .pip_install()
+        .arg(wheel)
+        .args(["--offline", "--compile-bytecode", "--prefix", "prefix"])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("Bytecode compiled 1 file in "));
+    assert_compiled_source(
         &context,
-        &wheel,
-        &context.temp_dir.join("target"),
-        &["--target", "target"],
-    );
-    install_compiled_wheel(
-        &context,
-        &wheel,
         &site_packages_path(&context.temp_dir.join("prefix"), "python3.12"),
-        &["--prefix", "prefix"],
     );
     Ok(())
 }
