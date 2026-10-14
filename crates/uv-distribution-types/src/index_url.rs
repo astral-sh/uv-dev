@@ -466,7 +466,7 @@ impl<'a> IndexLocations {
     /// PyPI as a fallback default.
     ///
     /// If `no_index` was enabled, then this always returns an empty iterator.
-    pub fn defined_indexes(&'a self) -> impl Iterator<Item = &'a Index> + 'a {
+    pub fn defined_indexes(&'a self) -> impl DoubleEndedIterator<Item = &'a Index> + 'a {
         if self.no_index {
             return Either::Left(std::iter::empty());
         }
