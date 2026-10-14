@@ -6415,7 +6415,7 @@ fn run_pep723_script_with_constraints() -> Result<()> {
 
 #[test]
 fn run_no_sync_incompatible_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11", "3.9"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -6431,15 +6431,18 @@ fn run_no_sync_incompatible_python() -> Result<()> {
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
+        import sys
+
         import iniconfig
-        print("Hello, world!")
+
+        print(f"Python {sys.version_info.major}.{sys.version_info.minor}")
        "#
     })?;
 
     uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Hello, world!
+    Python 3.12
 
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -6450,13 +6453,13 @@ fn run_no_sync_incompatible_python() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
-    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("--python").arg("3.9").arg("main.py"), @"
+    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("--python").arg("3.11").arg("main.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Hello, world!
+    Python 3.12
 
     ----- stderr -----
-    warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.9`)
+    warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.11`)
     ");
 
     Ok(())
