@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
@@ -79,13 +78,8 @@ impl S3EndpointProvider {
         // TODO(charlie): Can `reqsign` infer the region for us? Profiles, for example,
         // often have a region set already.
         let region = std::env::var(EnvVars::AWS_REGION)
-            .map(Cow::Owned)
-            .unwrap_or_else(|_| {
-                std::env::var(EnvVars::AWS_DEFAULT_REGION)
-                    .map(Cow::Owned)
-                    .unwrap_or_else(|_| Cow::Borrowed("us-east-1"))
-            });
-        reqsign::aws::default_signer("s3", &region)
+            .or_else(|_| std::env::var(EnvVars::AWS_DEFAULT_REGION));
+        reqsign::aws::default_signer("s3", region.as_deref().unwrap_or("us-east-1"))
     }
 }
 
