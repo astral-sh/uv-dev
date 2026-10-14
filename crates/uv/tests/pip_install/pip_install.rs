@@ -15034,11 +15034,11 @@ fn switch_platform() {
     );
 }
 
-/// `uv pip install --no-sources` should allow non-registry installations, for compatibility with `pip install`.
+/// A registry-style request with `--no-sources` accepts an existing editable installation.
 ///
 /// See: <https://github.com/astral-sh/uv/issues/15190>
 #[test]
-fn pip_install_no_sources_editable_to_registry_switch() -> Result<()> {
+fn pip_install_no_sources_retains_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     // Create a simple local package.
@@ -15059,14 +15059,9 @@ fn pip_install_no_sources_editable_to_registry_switch() -> Result<()> {
         "#,
     )?;
 
-    local_pkg.child("src").child("iniconfig").create_dir_all()?;
-    local_pkg
-        .child("src")
-        .child("iniconfig")
-        .child("__init__.py")
-        .write_str("__version__ = '2.0.0'")?;
+    let module = local_pkg.child("src/iniconfig/__init__.py");
+    module.write_str("__version__ = '2.0.0'")?;
 
-    // Step 1: Install as editable first.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--editable")
         .arg("./local_pkg"), @"
@@ -15079,7 +15074,6 @@ fn pip_install_no_sources_editable_to_registry_switch() -> Result<()> {
     "
     );
 
-    // Step 2: Use `--no-sources`; we should retain the package.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("iniconfig")
         .arg("--no-sources"), @"
@@ -15088,6 +15082,12 @@ fn pip_install_no_sources_editable_to_registry_switch() -> Result<()> {
     Checked 1 package in [TIME]
     "
     );
+
+    // A source edit remains visible after the registry-style request.
+    module.write_str("editable_marker = 'source mutation visible'\n")?;
+    context
+        .assert_command("from iniconfig import editable_marker; assert editable_marker == 'source mutation visible'")
+        .success();
 
     Ok(())
 }
