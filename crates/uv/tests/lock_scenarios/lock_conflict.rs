@@ -9811,6 +9811,33 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
     ]
     "#);
 
+    let project = expected_lock
+        .get_mut("package")
+        .and_then(toml::Value::as_array_mut)
+        .and_then(|packages| {
+            packages.iter_mut().find(|package| {
+                package.get("name").and_then(toml::Value::as_str)
+                    == Some("resolution-markers-for-days")
+            })
+        })
+        .ok_or_else(|| anyhow!("expected the root project in the lockfile"))?;
+    let cpu_markers = project
+        .get("optional-dependencies")
+        .and_then(|extras| extras.get("cpu"))
+        .and_then(toml::Value::as_array)
+        .ok_or_else(|| anyhow!("expected the CPU extra in the lockfile"))?
+        .iter()
+        .map(|dependency| dependency.get("marker").and_then(toml::Value::as_str))
+        .collect::<Vec<_>>();
+    insta::assert_json_snapshot!(cpu_markers, @r#"
+    [
+      "(sys_platform == 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu') or (extra == 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124')",
+      "(sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu') or (extra == 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124')"
+    ]
+    "#);
+    assert_eq!(project["version"].as_str(), Some("0.1.0"));
+    project["version"] = toml::Value::String("0.1.1".to_owned());
+
     // Changing only the root version should leave every resolution marker unchanged.
     let pyproject = pyproject.replace(r#"version = "0.1.0""#, r#"version = "0.1.1""#);
     pyproject_toml.write_str(&pyproject)?;
@@ -9822,18 +9849,6 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
     Updated resolution-markers-for-days v0.1.0 -> v0.1.1
     ");
 
-    let project = expected_lock
-        .get_mut("package")
-        .and_then(toml::Value::as_array_mut)
-        .and_then(|packages| {
-            packages.iter_mut().find(|package| {
-                package.get("name").and_then(toml::Value::as_str)
-                    == Some("resolution-markers-for-days")
-            })
-        })
-        .ok_or_else(|| anyhow!("expected the root project in the lockfile"))?;
-    assert_eq!(project["version"].as_str(), Some("0.1.0"));
-    project["version"] = toml::Value::String("0.1.1".to_owned());
     assert_eq!(
         toml::from_str::<toml::Value>(&context.read("uv.lock"))?,
         expected_lock
