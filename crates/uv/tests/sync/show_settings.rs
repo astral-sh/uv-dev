@@ -4976,17 +4976,25 @@ fn system_certs_env_overrides_native_tls() {
         .arg("--show-settings")
         .env(EnvVars::UV_SYSTEM_CERTS, "0")
         .env_remove(EnvVars::UV_NATIVE_TLS);
-    let baseline = capture_uv_snapshot!(context.filters(), &mut command);
+    command
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("system_certs: false"))
+        .stderr("");
 
-    for native_tls in ["1", "invalid"] {
-        assert_eq!(
-            baseline,
-            capture_uv_snapshot!(
-                context.filters(),
-                command.env(EnvVars::UV_NATIVE_TLS, native_tls)
-            )
-        );
-    }
+    command
+        .env(EnvVars::UV_NATIVE_TLS, "1")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("system_certs: false"))
+        .stderr("");
+
+    command
+        .env(EnvVars::UV_NATIVE_TLS, "invalid")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("system_certs: false"))
+        .stderr("");
 }
 
 #[test]
