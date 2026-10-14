@@ -2248,7 +2248,8 @@ fn tool_install_force() {
     let bin_dir = context.temp_dir.child("bin");
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    executable.touch().unwrap();
+    let original_black = "original black executable\n";
+    executable.write_str(original_black).unwrap();
 
     // Attempt to install `black`
     uv_snapshot!(context.filters(), context.tool_install()
@@ -2274,13 +2275,7 @@ fn tool_install_force() {
     // We should not write a tools entry
     assert_path_missing(tool_dir.join("black").join("uv-receipt.toml"));
 
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        // Nor should we change the `black` entry point that exists
-        assert_snapshot!(context.read(&executable), @"");
-
-    });
+    assert_eq!(context.read(&executable), original_black);
 
     // Attempt to install `black` with the `--reinstall` flag
     // Should have no effect
@@ -2308,19 +2303,12 @@ fn tool_install_force() {
     // We should not write a tools entry
     assert_path_missing(tool_dir.join("tools.toml"));
 
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        // Nor should we change the `black` entry point that exists
-        assert_snapshot!(context.read(&executable), @"");
-
-    });
+    assert_eq!(context.read(&executable), original_black);
 
     // Test error message when multiple entry points exist
-    bin_dir
-        .child(format!("blackd{}", std::env::consts::EXE_SUFFIX))
-        .touch()
-        .unwrap();
+    let daemon_executable = bin_dir.child(format!("blackd{}", std::env::consts::EXE_SUFFIX));
+    let original_blackd = "original blackd executable\n";
+    daemon_executable.write_str(original_blackd).unwrap();
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("black")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
@@ -2336,6 +2324,8 @@ fn tool_install_force() {
      + platformdirs==4.2.0
     error: Executables already exist: black, blackd (use `--force` to overwrite)
     ");
+    assert_eq!(context.read(&executable), original_black);
+    assert_eq!(context.read(&daemon_executable), original_blackd);
 
     // Install `black` with `--force`
     uv_snapshot!(context.filters(), context.tool_install()
