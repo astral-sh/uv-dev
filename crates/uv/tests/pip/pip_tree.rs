@@ -103,7 +103,7 @@ fn nested_dependencies() {
 #[test]
 fn reverse_dependencies() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    diamond_dependency_graph(&context)?;
+    write_branching_dependency_metadata(&context)?;
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--reverse"), @"
     exit_code: 0 (success)
@@ -113,6 +113,8 @@ fn reverse_dependencies() -> Result<()> {
     │   └── root v1.0.0
     └── right v1.0.0
         └── root v1.0.0
+    unshared v1.0.0
+    └── root v1.0.0
     "
     );
 
@@ -186,13 +188,17 @@ fn depth() {
     );
 }
 
-fn diamond_dependency_graph(context: &TestContext) -> Result<()> {
+fn write_branching_dependency_metadata(context: &TestContext) -> Result<()> {
     let site_packages = ChildPath::new(context.site_packages());
     for (name, requires_dist) in [
-        ("root", "Requires-Dist: left\nRequires-Dist: right\n"),
+        (
+            "root",
+            "Requires-Dist: left\nRequires-Dist: right\nRequires-Dist: unshared\n",
+        ),
         ("left", "Requires-Dist: leaf\n"),
         ("right", "Requires-Dist: leaf\n"),
         ("leaf", ""),
+        ("unshared", ""),
     ] {
         let dist_info = site_packages.child(format!("{name}-1.0.0.dist-info"));
         dist_info.create_dir_all()?;
@@ -206,7 +212,7 @@ fn diamond_dependency_graph(context: &TestContext) -> Result<()> {
 #[test]
 fn prune() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    diamond_dependency_graph(&context)?;
+    write_branching_dependency_metadata(&context)?;
 
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--prune")
@@ -214,8 +220,9 @@ fn prune() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     root v1.0.0
-    └── left v1.0.0
-        └── leaf v1.0.0
+    ├── left v1.0.0
+    │   └── leaf v1.0.0
+    └── unshared v1.0.0
     "
     );
 
@@ -228,6 +235,7 @@ fn prune() -> Result<()> {
     ----- stdout -----
     leaf v1.0.0
     root v1.0.0
+    └── unshared v1.0.0
     "
     );
 
