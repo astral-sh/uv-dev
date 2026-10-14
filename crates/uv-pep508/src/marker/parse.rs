@@ -1,5 +1,7 @@
-use arcstr::ArcStr;
+use std::fmt::Display;
 use std::str::FromStr;
+
+use arcstr::ArcStr;
 use uv_normalize::{ExtraName, GroupName};
 use uv_pep440::{Version, VersionPattern, VersionSpecifier};
 
@@ -177,7 +179,7 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
             }
 
             // Otherwise, it's a normal version expression
-            parse_version_expr(key, operator, &value, reporter)
+            parse_version_expr(key, operator, &value, VersionPattern::from_str, reporter)
         }
         // The only sound choice for this is `<env key> <op> <string>`
         MarkerValue::MarkerEnvString(key) => {
@@ -237,7 +239,14 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
             match r_value {
                 // The only sound choice for this is `<quoted PEP 440 version> <version op>` <version key>
                 MarkerValue::MarkerEnvVersion(key) => {
-                    parse_inverted_version_expr(&l_string, operator, key, reporter)
+                    // Inverted comparisons do not allow wildcard versions.
+                    parse_version_expr(
+                        key,
+                        operator.invert(),
+                        &l_string,
+                        |value| value.parse::<Version>().map(VersionPattern::verbatim),
+                        reporter,
+                    )
                 }
                 // '...' == <env key>
                 MarkerValue::MarkerEnvString(key) => {
@@ -393,14 +402,16 @@ fn parse_version_in_expr(
 
 /// Creates an instance of [`MarkerExpression::Version`] with the given values.
 ///
+/// The parser distinguishes version patterns from exact versions in inverted comparisons.
 /// Reports a warning on failure, and returns `None`.
-fn parse_version_expr(
+fn parse_version_expr<E: Display>(
     key: MarkerValueVersion,
     marker_operator: MarkerOperator,
     value: &str,
+    parse_version: impl FnOnce(&str) -> Result<VersionPattern, E>,
     reporter: &mut impl Reporter,
 ) -> Option<MarkerExpression> {
-    let pattern = match value.parse::<VersionPattern>() {
+    let pattern = match parse_version(value) {
         Ok(pattern) => pattern,
         Err(err) => {
             reporter.report(
@@ -429,60 +440,6 @@ fn parse_version_expr(
     };
 
     let specifier = match VersionSpecifier::from_pattern(operator, pattern) {
-        Ok(specifier) => specifier,
-        Err(err) => {
-            reporter.report(
-                MarkerWarningKind::Pep440Error,
-                format!("Invalid operator/version combination: {err}"),
-            );
-            return None;
-        }
-    };
-
-    Some(MarkerExpression::Version { key, specifier })
-}
-
-/// Creates an instance of [`MarkerExpression::Version`] from an inverted expression.
-///
-/// Reports a warning on failure, and returns `None`.
-fn parse_inverted_version_expr(
-    value: &str,
-    marker_operator: MarkerOperator,
-    key: MarkerValueVersion,
-    reporter: &mut impl Reporter,
-) -> Option<MarkerExpression> {
-    // Invert the operator to normalize the expression order.
-    let marker_operator = marker_operator.invert();
-
-    // Not star allowed here, `'3.*' == python_version` is not a valid PEP 440 comparison.
-    let version = match value.parse::<Version>() {
-        Ok(version) => version,
-        Err(err) => {
-            reporter.report(
-                MarkerWarningKind::Pep440Error,
-                format!(
-                    "Expected PEP 440 version to compare with {key}, found {value},
-                    will be ignored: {err}"
-                ),
-            );
-
-            return None;
-        }
-    };
-
-    let Some(operator) = marker_operator.to_pep440_operator() else {
-        reporter.report(
-            MarkerWarningKind::Pep440Error,
-            format!(
-                "Expected PEP 440 version operator to compare {key} with `{version}`,
-                    found `{marker_operator}`, will be ignored"
-            ),
-        );
-
-        return None;
-    };
-
-    let specifier = match VersionSpecifier::from_version(operator, version) {
         Ok(specifier) => specifier,
         Err(err) => {
             reporter.report(
