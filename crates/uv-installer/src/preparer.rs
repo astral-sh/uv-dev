@@ -6,6 +6,7 @@ use tracing::{debug, instrument};
 
 use uv_configuration::BuildOptions;
 use uv_distribution::DistributionDatabase;
+use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed, Identifier, Name,
     RemoteSource, Resolution,
@@ -130,34 +131,8 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
         let id = dist.distribution_id();
         if let Some(result) = in_flight.downloads.register_or_wait(&id).await {
             let cached = result.map_err(Error::Thread)?;
-
-            // Validate that the wheel is compatible with the distribution.
-            //
-            // `get_or_build_wheel` is guaranteed to return a wheel that matches the
-            // distribution. But there could be multiple requested distributions that share
-            // a cache entry in `in_flight`, so we need to double-check here.
-            //
-            // For example, if two requirements are based on the same local path, but use
-            // different names, then they'll share an `in_flight` entry, but one of the two
-            // should be rejected (since at least one of the names will not match the
-            // package name).
-            if *dist.name() != cached.filename().name {
-                let err = uv_distribution::Error::WheelMetadataNameMismatch {
-                    given: dist.name().clone(),
-                    metadata: cached.filename().name.clone(),
-                };
-                return Err(Error::from_dist(dist, err, resolution));
-            }
-            if let Some(version) = dist.version()
-                && *version != cached.filename().version
-                && *version != cached.filename().version.clone().without_local()
-            {
-                let err = uv_distribution::Error::WheelMetadataVersionMismatch {
-                    given: version.clone(),
-                    metadata: cached.filename().version.clone(),
-                };
-                return Err(Error::from_dist(dist, err, resolution));
-            }
+            validate_in_flight_wheel(&dist, cached.filename())
+                .map_err(|err| Error::from_dist(dist, err, resolution))?;
             return Ok(cached);
         }
 
@@ -185,6 +160,32 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             .done(id, result.as_ref().cloned().map_err(ToString::to_string));
         result
     }
+}
+
+/// Validate that a wheel shared by an in-flight download matches the requested distribution.
+///
+/// The wheel matches the distribution that started the download, but other requests can share the
+/// same in-flight entry, such as requirements using the same local path with different names.
+fn validate_in_flight_wheel(
+    dist: &Dist,
+    filename: &WheelFilename,
+) -> Result<(), uv_distribution::Error> {
+    if *dist.name() != filename.name {
+        return Err(uv_distribution::Error::WheelMetadataNameMismatch {
+            given: dist.name().clone(),
+            metadata: filename.name.clone(),
+        });
+    }
+    if let Some(version) = dist.version()
+        && *version != filename.version
+        && *version != filename.version.clone().without_local()
+    {
+        return Err(uv_distribution::Error::WheelMetadataVersionMismatch {
+            given: version.clone(),
+            metadata: filename.version.clone(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(thiserror::Error, Debug)]
