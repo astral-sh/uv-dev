@@ -4969,32 +4969,34 @@ fn system_certs_cli_aliases_override_env() {
     windows,
     ignore = "Configuration tests are not yet supported on Windows"
 )]
-fn system_certs_env_overrides_native_tls() {
+fn system_certs_env_overrides_native_tls() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
     let mut command = add_shared_args(context.version());
     command
         .arg("--show-settings")
         .env(EnvVars::UV_SYSTEM_CERTS, "0")
         .env_remove(EnvVars::UV_NATIVE_TLS);
-    command
+    let baseline = command
         .assert()
         .success()
         .stdout(predicates::str::contains("system_certs: false"))
         .stderr("");
+    let expected_settings = String::from_utf8(baseline.get_output().stdout.clone())?;
 
     command
         .env(EnvVars::UV_NATIVE_TLS, "1")
         .assert()
         .success()
-        .stdout(predicates::str::contains("system_certs: false"))
+        .stdout(expected_settings.clone())
         .stderr("");
 
     command
         .env(EnvVars::UV_NATIVE_TLS, "invalid")
         .assert()
         .success()
-        .stdout(predicates::str::contains("system_certs: false"))
+        .stdout(expected_settings)
         .stderr("");
+    Ok(())
 }
 
 #[test]
