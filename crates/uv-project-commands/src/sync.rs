@@ -640,11 +640,10 @@ impl SyncTarget<'_> {
                 ..
             } => {
                 let root = workspace.root();
-                let path = workspace
-                    .lock()
-                    .workspace_member_paths()
-                    .find(|(name, _)| Some(*name) == project_name.as_ref())
-                    .map_or_else(|| root.to_path_buf(), |(_, path)| root.join(path));
+                let path = project_name
+                    .as_ref()
+                    .and_then(|name| workspace.lock().workspace_member_path(name))
+                    .map_or_else(|| root.to_path_buf(), |path| root.join(path));
                 Some(ProjectReport {
                     path: uv_fs::normalize_path(&path).as_ref().into(),
                     workspace: WorkspaceReport { path: root.into() },
