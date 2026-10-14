@@ -4,7 +4,10 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::formatdoc;
+use sha2::{Digest, Sha256};
+use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
+use uv_test::archive::generate_source_archive;
 use uv_test::packse::PackseServer;
 use uv_test::{TestContext, uv_snapshot};
 
@@ -50,6 +53,30 @@ fn setup(filename: &'static str) -> (TestContext, PackseServer, GeneratedArtifac
         .with_filtered_http_retries()
         .with_filter(artifact.size_filter());
     (context, server, artifact)
+}
+
+/// Build without fetching backend dependencies from the test server's vendor cache.
+async fn self_contained_sdist() -> Result<(TestContext, MockServer, GeneratedArtifact)> {
+    let archive = generate_source_archive(&"a".parse()?, &"1.0.0".parse()?, "", None)?;
+    let server = MockServer::start().await;
+    let artifact = GeneratedArtifact {
+        filename: SDIST,
+        url: format!("{}/files/{SDIST}", server.uri()),
+        size: archive.len(),
+        sha256: hex::encode(Sha256::digest(&archive)),
+    };
+    Mock::given(path(format!("/files/{SDIST}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "max-age=3600")
+                .set_body_bytes(archive),
+        )
+        .mount(&server)
+        .await;
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_http_retries()
+        .with_filter(artifact.size_filter());
+    Ok((context, server, artifact))
 }
 
 #[test]
@@ -267,9 +294,10 @@ fn pep_751_validates_cached_registry_wheel_size() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
-    let (context, server, sdist) = setup(SDIST);
+#[tokio::test]
+async fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
+    let (context, server, sdist) = self_contained_sdist().await?;
+    let index_url = format!("{}/simple/", server.uri());
     let pylock = |size| {
         formatdoc! {
             r#"
@@ -282,7 +310,7 @@ fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
             index = "{index}"
             sdist = {{ url = "{url}", size = {size}, hashes = {{ sha256 = "{sha256}" }} }}
             "#,
-            index = server.index_url(),
+            index = index_url,
             url = sdist.url,
             sha256 = sdist.sha256,
         }
@@ -293,7 +321,7 @@ fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
         .pip_sync()
         .arg("--preview")
         .arg("--index-url")
-        .arg(server.index_url())
+        .arg(&index_url)
         .arg("pylock.toml")
         .assert()
         .success();
@@ -302,7 +330,7 @@ fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("--preview")
         .arg("--index-url")
-        .arg(server.index_url())
+        .arg(&index_url)
         .arg("--offline")
         .arg("pylock.toml"), @"
     exit_code: 0 (success)
@@ -317,7 +345,7 @@ fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("--preview")
         .arg("--index-url")
-        .arg(server.index_url())
+        .arg(&index_url)
         .arg("--offline")
         .arg("pylock.toml"), @"
     exit_code: 1 (failure)
@@ -330,9 +358,9 @@ fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
-    let (context, server, sdist) = setup(SDIST);
+#[tokio::test]
+async fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
+    let (context, _server, sdist) = self_contained_sdist().await?;
     let pylock = |size| {
         formatdoc! {
             r#"
@@ -353,8 +381,7 @@ fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
     context
         .pip_sync()
         .arg("--preview")
-        .arg("--index-url")
-        .arg(server.index_url())
+        .arg("--no-index")
         .arg("pylock.toml")
         .assert()
         .success();
