@@ -30,7 +30,7 @@ use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::{
     FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment, UniversalMarker,
 };
-use uv_settings::{LockCheck, LockedSource, ResolverSettings};
+use uv_settings::{FrozenSource, LockCheck, LockedSource, ResolverSettings};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
@@ -78,6 +78,33 @@ pub enum LockMode<'env> {
 }
 
 impl<'env> LockMode<'env> {
+    /// Select the lock mode for commands that consume a lockfile.
+    ///
+    /// Workspace lockfiles may be created or updated; script lockfiles are only updated if they exist.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `frozen` is `None` and `interpreter` is `None`.
+    pub fn for_read(
+        target: LockTarget<'_>,
+        interpreter: Option<&'env Interpreter>,
+        frozen: Option<FrozenSource>,
+        lock_check: LockCheck,
+    ) -> Self {
+        if let Some(frozen) = frozen {
+            return Self::Frozen(frozen.into());
+        }
+
+        let dry_run = matches!(lock_check, LockCheck::Disabled)
+            && matches!(target, LockTarget::Script(_))
+            && !target.lock_path().is_file();
+        Self::from_settings(
+            interpreter.expect("a non-frozen lock operation requires an interpreter"),
+            lock_check,
+            dry_run,
+        )
+    }
+
     /// Select whether to write, check, or only resolve a lockfile.
     pub fn from_settings(
         interpreter: &'env Interpreter,

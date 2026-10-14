@@ -25,7 +25,7 @@ use uv_environment_operations::{
 };
 use uv_fs::CWD;
 use uv_lock::{Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
-use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockOperation, LockTarget};
+use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -328,12 +328,7 @@ pub async fn export(
 
             // Determine the lock mode.
             let lock_target = LockTarget::from(*target);
-            let mode = crate::lock::lock_mode_for_read(
-                lock_target,
-                interpreter.as_ref(),
-                frozen,
-                lock_check,
-            );
+            let mode = LockMode::for_read(lock_target, interpreter.as_ref(), frozen, lock_check);
 
             // Initialize any shared state.
             let state = UniversalState::default();

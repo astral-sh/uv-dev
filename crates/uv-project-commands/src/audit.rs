@@ -15,7 +15,7 @@ use uv_dispatch::UniversalState;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
-use uv_lock_operations::{LockOperation, LockTarget};
+use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::ResolverMarkerEnvironment;
@@ -155,7 +155,7 @@ pub async fn audit(
     };
 
     // Determine the lock mode.
-    let mode = crate::lock::lock_mode_for_read(target, interpreter.as_ref(), frozen, lock_check);
+    let mode = LockMode::for_read(target, interpreter.as_ref(), frozen, lock_check);
 
     // Initialize any shared state.
     let state = UniversalState::default();
