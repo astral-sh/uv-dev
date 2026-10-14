@@ -4902,9 +4902,10 @@ fn run_remote_pep723_requirements_fetch_error_does_not_leak_credentials() -> Res
     let script = context.temp_dir.child("main.py");
     script.write_str("print('hello')")?;
 
-    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
+    // Reserve the port without listening so connection attempts fail deterministically.
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    socket.bind((std::net::Ipv4Addr::LOCALHOST, 0).into())?;
+    let port = socket.local_addr()?.port();
     let url = format!("http://username:password@127.0.0.1:{port}/requirements.py");
 
     uv_snapshot!(context.filters(), context.run()
