@@ -39,6 +39,8 @@ pub fn uninstall_wheel(
     };
 
     let mut uninstall = Uninstall::default();
+    let canonical_site_packages = canonicalize_directory(site_packages)?;
+    let mut record_paths = RecordPathResolver::new(site_packages, layout);
 
     #[cfg(windows)]
     let itself = std::env::current_exe().ok();
@@ -46,8 +48,7 @@ pub fn uninstall_wheel(
     // Uninstall the files, keeping track of any directories that are left empty.
     let mut visited = BTreeSet::new();
     for entry in record {
-        let Some(path) = record_path_in_scheme(&entry.path, site_packages, &distribution, layout)
-        else {
+        let Some(path) = record_paths.resolve(&entry.path, &distribution)? else {
             continue;
         };
 
@@ -61,7 +62,7 @@ pub fn uninstall_wheel(
         {
             tracing::debug!("Detected self-delete of executable: {}", path.display());
             match self_replace::self_delete_outside_path(site_packages) {
-                Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
+                Ok(()) => uninstall.record_removed_wheel_file(path, &mut visited),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err.into()),
             }
@@ -69,13 +70,32 @@ pub fn uninstall_wheel(
         }
 
         match fs_err::remove_file(&path) {
-            Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
+            Ok(()) => uninstall.record_removed_wheel_file(path, &mut visited),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => match fs_err::remove_dir_all(&path) {
-                Ok(()) => uninstall.record_removed_directory(&path),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => return Err(err.into()),
-            },
+            Err(err) => {
+                match contains_installation_scheme(&path, layout) {
+                    Ok(true) => {
+                        if should_warn_for_distribution(
+                            &WARNED_FOR_RECORD_ENTRY_PACKAGE,
+                            &distribution,
+                        ) {
+                            warn_user!(
+                                "Invalid `RECORD` entry in `{distribution}` that would remove an installation directory, skipping: {}",
+                                entry.path
+                            );
+                        }
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(check_err) if check_err.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(_) => return Err(err.into()),
+                }
+                match fs_err::remove_dir_all(&path) {
+                    Ok(()) => uninstall.record_removed_directory(&path),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return Err(err.into()),
+                }
+            }
         }
     }
 
@@ -83,14 +103,17 @@ pub fn uninstall_wheel(
     // the deepest directories first.
     for path in visited.into_iter().rev() {
         // No need to look at directories outside of `site-packages` (like `bin`).
-        if !path.starts_with(site_packages) {
+        if !path.starts_with(&canonical_site_packages) {
             continue;
         }
 
         // Iterate up the directory tree, removing any empty directories. It's insufficient to
         // rely on `visited` alone here, because we may end up removing a directory whose parent
         // directory doesn't contain any files, leaving the _parent_ directory empty.
-        for path in path.ancestors().take_while(|&path| path != site_packages) {
+        for path in path
+            .ancestors()
+            .take_while(|&path| path != canonical_site_packages)
+        {
             // If the directory contains a `__pycache__` directory, always remove it. `__pycache__`
             // may or may not be listed in the RECORD, but installers are expected to be smart
             // enough to remove it either way.
@@ -135,37 +158,89 @@ fn should_warn_for_distribution(
         .insert(distribution.to_string())
 }
 
-/// Resolve a `RECORD` entry to a path inside the installation scheme, warning otherwise.
-///
-/// Reject entries that escape site-packages via path traversal (e.g., `../../../etc/passwd`). A
-/// malicious wheel could otherwise include such entries to cause deletion of arbitrary files on
-/// uninstall.
-fn record_path_in_scheme(
-    path: &str,
-    site_packages: &Path,
-    distribution: impl Display,
-    layout: &Layout,
-) -> Option<PathBuf> {
-    let target = site_packages.join(path);
-    let normalized = normalize_path(&target);
+struct RecordPathResolver<'a> {
+    site_packages: &'a Path,
+    roots: [InstallationSchemeRoot<'a>; 5],
+    /// Cache one parent so processing an ancestor evicts its descendant before deletion.
+    cached_parent: Option<ResolvedRecordParent>,
+}
 
-    // `purelib` or `platlib` are site-packages (depending on `Root-Is-Purelib`). As
-    // `.data/*` goes into the directories of `scheme`, `.dist-info` goes into site-packages
-    // and all other content goes into site-packages, the condition below covers all valid
-    // directories, in venvs, system interpreters and custom installation schemes.
-    //
-    // For a venv, `data` is the venv root: A wheel can write into the entire venv through
-    // `.data/data`. For a system environment, wheels are allowed to write to
-    // whole system directories, for example `data` is `/usr/local` for system Python on
-    // Ubuntu 24.04.
-    if normalized.starts_with(&layout.scheme.data)
-        || normalized.starts_with(&layout.scheme.purelib)
-        || normalized.starts_with(&layout.scheme.platlib)
-        || normalized.starts_with(&layout.scheme.scripts)
-        || normalized.starts_with(&layout.scheme.include)
-    {
-        Some(target)
-    } else {
+impl<'a> RecordPathResolver<'a> {
+    fn new(site_packages: &'a Path, layout: &'a Layout) -> Self {
+        Self {
+            site_packages,
+            roots: installation_scheme_paths(layout).map(|path| InstallationSchemeRoot {
+                path,
+                resolved: None,
+            }),
+            cached_parent: None,
+        }
+    }
+
+    /// Resolve a `RECORD` entry inside the installation scheme, warning otherwise.
+    ///
+    /// Resolve parent components to prevent an entry from escaping through a symlink. Keep the
+    /// final component unresolved so an entry that names a symlink removes the link itself.
+    fn resolve(
+        &mut self,
+        path: &str,
+        distribution: impl Display,
+    ) -> std::io::Result<Option<PathBuf>> {
+        let target = self.site_packages.join(path);
+        let normalized = normalize_path(&target);
+
+        // `purelib` or `platlib` are site-packages (depending on `Root-Is-Purelib`). As
+        // `.data/*` goes into the directories of `scheme`, `.dist-info` goes into site-packages
+        // and all other content goes into site-packages, the condition below covers all valid
+        // directories, in venvs, system interpreters and custom installation schemes.
+        //
+        // For a venv, `data` is the venv root: A wheel can write into the entire venv through
+        // `.data/data`. For a system environment, wheels are allowed to write to
+        // whole system directories, for example `data` is `/usr/local` for system Python on
+        // Ubuntu 24.04.
+        if self
+            .roots
+            .iter()
+            .any(|root| normalized.starts_with(root.path))
+            && let Some((parent, filename)) = target.parent().zip(target.file_name())
+        {
+            if let Some(cached) = &self.cached_parent
+                && cached.original == parent
+            {
+                return Ok(Some(cached.resolved.join(filename)));
+            }
+            self.cached_parent = None;
+            let resolved_parent = match canonicalize_directory(parent) {
+                Ok(parent) => parent,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(err) => return Err(err),
+            };
+            let resolved = resolved_parent.join(filename);
+            let mut first_error = None;
+            for root in &mut self.roots {
+                match root.resolve() {
+                    Ok(root) if resolved.starts_with(root) => {
+                        // A target can be a scheme root even when its parent is outside the scheme.
+                        if resolved_parent.starts_with(root) {
+                            self.cached_parent = Some(ResolvedRecordParent {
+                                original: parent.to_path_buf(),
+                                resolved: resolved_parent,
+                            });
+                        }
+                        return Ok(Some(resolved));
+                    }
+                    Ok(_) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => {
+                        first_error.get_or_insert(err);
+                    }
+                }
+            }
+            if let Some(err) = first_error {
+                return Err(err);
+            }
+        }
+
         // A package that does this is malformed to the point of being a risk to the user, be
         // annoying about it, but only once per package.
         if should_warn_for_distribution(&WARNED_FOR_RECORD_ENTRY_PACKAGE, &distribution) {
@@ -175,8 +250,65 @@ fn record_path_in_scheme(
                 path
             );
         }
-        None
+        Ok(None)
     }
+}
+
+/// A parent directory validated inside the scheme for consecutive `RECORD` entries.
+struct ResolvedRecordParent {
+    original: PathBuf,
+    resolved: PathBuf,
+}
+
+struct InstallationSchemeRoot<'a> {
+    path: &'a Path,
+    resolved: Option<PathBuf>,
+}
+
+impl InstallationSchemeRoot<'_> {
+    fn resolve(&mut self) -> std::io::Result<&Path> {
+        let resolved = match &mut self.resolved {
+            Some(resolved) => resolved,
+            slot @ None => slot.insert(canonicalize_directory(self.path)?),
+        };
+        Ok(resolved)
+    }
+}
+
+/// Resolve a directory, treating the empty parent of a relative path as the working directory.
+fn canonicalize_directory(path: &Path) -> std::io::Result<PathBuf> {
+    fs_err::canonicalize(if path.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        path
+    })
+}
+
+/// Return whether deleting a directory would remove an installation-scheme root or its contents.
+fn contains_installation_scheme(path: &Path, layout: &Layout) -> std::io::Result<bool> {
+    let target = fs_err::canonicalize(path)?;
+    for root in installation_scheme_paths(layout) {
+        // An ancestor can contain a symlink to a scheme root even when the root resolves elsewhere.
+        for ancestor in root.ancestors() {
+            match fs_err::canonicalize(ancestor) {
+                Ok(ancestor) if ancestor.starts_with(&target) => return Ok(true),
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn installation_scheme_paths(layout: &Layout) -> [&Path; 5] {
+    [
+        &layout.scheme.data,
+        &layout.scheme.purelib,
+        &layout.scheme.platlib,
+        &layout.scheme.scripts,
+        &layout.scheme.include,
+    ]
 }
 
 /// Iterate over trimmed, nonempty lines in legacy installation metadata.
@@ -352,11 +484,11 @@ pub struct Uninstall {
 }
 
 impl Uninstall {
-    /// Record a removed wheel file and its parent for empty-directory cleanup.
-    fn record_removed_wheel_file(&mut self, path: &Path, visited: &mut BTreeSet<PathBuf>) {
-        self.record_removed_file(path);
-        if let Some(parent) = path.parent() {
-            visited.insert(normalize_path(parent));
+    /// Record a removed wheel file and retain its resolved parent for empty-directory cleanup.
+    fn record_removed_wheel_file(&mut self, mut path: PathBuf, visited: &mut BTreeSet<PathBuf>) {
+        self.record_removed_file(&path);
+        if path.pop() {
+            visited.insert(path);
         }
     }
 
@@ -500,6 +632,101 @@ mod tests {
         assert!(target_file.exists());
         assert!(!metadata.exists());
         assert!(!init_py.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_uninstall_record_symlink_containment() -> anyhow::Result<()> {
+        let temp = assert_fs::TempDir::new()?;
+        let venv = temp.child("venv");
+        venv.child("lib/python3.12").create_dir_all()?;
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        let actual_site_packages = temp.child("actual-site-packages");
+        actual_site_packages.create_dir_all()?;
+        std::os::unix::fs::symlink(actual_site_packages.path(), site_packages.path())?;
+
+        let outside = temp.child("outside");
+        let sentinel = outside.child("sentinel.txt");
+        sentinel.write_str("keep")?;
+        std::os::unix::fs::symlink(outside.path(), site_packages.child("escape").path())?;
+        let final_symlink = site_packages.child("final-symlink");
+        std::os::unix::fs::symlink(sentinel.path(), final_symlink.path())?;
+
+        let shared = actual_site_packages.child("shared");
+        let first = shared.child("first.txt");
+        let second = shared.child("second.txt");
+        first.touch()?;
+        second.touch()?;
+        let alias = site_packages.child("alias");
+        std::os::unix::fs::symlink(shared.path(), alias.path())?;
+
+        let dist_info = site_packages.child("example-1.0.dist-info");
+        dist_info.child("RECORD").write_str(concat!(
+            "escape/sentinel.txt,,\n",
+            "alias/first.txt,,\n",
+            "alias,,\n",
+            "alias/second.txt,,\n",
+            "final-symlink,,\n",
+            "example-1.0.dist-info/RECORD,,\n",
+        ))?;
+        let layout = Layout {
+            sys_executable: venv.path().join("bin/python"),
+            python_version: (3, 12),
+            os_name: "posix".to_string(),
+            scheme: Scheme {
+                purelib: site_packages.to_path_buf(),
+                platlib: site_packages.to_path_buf(),
+                scripts: venv.path().join("bin"),
+                data: venv.path().to_path_buf(),
+                include: venv.path().join("include"),
+            },
+        };
+
+        let result = uninstall_wheel(dist_info.path(), "example 1.0", &layout);
+        assert!(sentinel.exists());
+        result?;
+        assert!(!first.exists());
+        assert!(second.exists());
+        assert!(!alias.exists());
+        assert!(!final_symlink.exists());
+        assert!(!dist_info.exists());
+        Ok(())
+    }
+
+    /// A directory can lie within the data scheme while containing another scheme's root.
+    #[test]
+    fn test_uninstall_record_preserves_installation_scheme() {
+        let venv = assert_fs::TempDir::new().unwrap();
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        let dist_info = site_packages.child("evilpkg-0.1.0.dist-info");
+        dist_info.create_dir_all().unwrap();
+        dist_info
+            .child("RECORD")
+            .write_str("../../../lib,,\nevilpkg,,\nevilpkg-0.1.0.dist-info/RECORD,,\n")
+            .unwrap();
+        let sibling = site_packages.child("sibling/__init__.py");
+        sibling.touch().unwrap();
+        let package = site_packages.child("evilpkg");
+        package.child("__init__.py").touch().unwrap();
+
+        let layout = Layout {
+            sys_executable: venv.path().join("bin/python"),
+            python_version: (3, 12),
+            os_name: "posix".to_string(),
+            scheme: Scheme {
+                purelib: site_packages.to_path_buf(),
+                platlib: site_packages.to_path_buf(),
+                scripts: venv.path().join("bin"),
+                data: venv.path().to_path_buf(),
+                include: venv.path().join("include/python3.12"),
+            },
+        };
+
+        uninstall_wheel(dist_info.path(), "evilpkg 0.1.0", &layout).unwrap();
+
+        assert!(sibling.exists());
+        assert!(!package.exists());
+        assert!(!dist_info.exists());
     }
 
     #[test]
