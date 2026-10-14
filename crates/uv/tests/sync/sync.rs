@@ -18222,7 +18222,7 @@ fn sync_fails_ambiguous_url() -> Result<()> {
 }
 
 /// Test that when a local directory dependency's version changes, the planner reinstalls it
-/// even if the source directory content (cache info) hasn't changed.
+/// even if the source fingerprint recorded on the installed distribution hasn't changed.
 ///
 /// Regression test for astral-sh/uv#17370.
 #[test]
@@ -18277,7 +18277,8 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    // Use an ephemeral build cache to isolate the planner's version comparison from wheel reuse.
+    uv_snapshot!(context.filters(), context.sync().arg("--no-cache"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -18285,8 +18286,17 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
     Installed 1 package in [TIME]
      + child==0.1.0 (from file://[TEMP_DIR]/packages/child)
     ");
-    let initial_cache_info = uv_cache_info::CacheInfo::from_path(child.path())?;
-    assert!(!initial_cache_info.is_empty(), "the child must be cached");
+    let installed_cache_info: uv_cache_info::CacheInfo = serde_json::from_slice(
+        &context.read_bytes(
+            context
+                .site_packages()
+                .join("child-0.1.0.dist-info/uv_cache.json"),
+        ),
+    )?;
+    assert!(
+        !installed_cache_info.is_empty(),
+        "the installed child must record a source fingerprint"
+    );
 
     // Change the version without changing the source cache key.
     child
@@ -18302,7 +18312,7 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
     ");
     assert_eq!(
         uv_cache_info::CacheInfo::from_path(child.path())?,
-        initial_cache_info,
+        installed_cache_info,
         "the version mismatch must trigger reinstallation without source cache invalidation"
     );
 
@@ -18318,6 +18328,11 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
      - child==0.1.0 (from file://[TEMP_DIR]/packages/child)
      + child==0.1.1 (from file://[TEMP_DIR]/packages/child)
     ");
+    context
+        .assert_command(
+            "from importlib.metadata import version; assert version('child') == '0.1.1'",
+        )
+        .success();
 
     Ok(())
 }
