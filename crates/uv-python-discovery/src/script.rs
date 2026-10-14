@@ -44,22 +44,16 @@ pub async fn init_script_python_requirement(
     reporter: &PythonDownloadReporter,
 ) -> Result<RequiresPython, PythonSelectionError> {
     let python_request = if let Some(request) = python {
-        // (1) Explicit request from user
         Some(PythonRequest::parse(request))
-    } else if let (false, Some(request)) = (
-        no_pin_python,
+    } else if no_pin_python {
+        None
+    } else {
         PythonVersionFile::discover(
             directory,
             &VersionFileDiscoveryOptions::default().with_config_discovery(config_discovery),
         )
         .await?
-        .and_then(PythonVersionFile::into_version),
-    ) {
-        // (2) Request from `.python-version`
-        Some(request)
-    } else {
-        // (3) No explicit request
-        None
+        .and_then(PythonVersionFile::into_version)
     };
 
     let interpreter = PythonInstallation::find_or_download(
