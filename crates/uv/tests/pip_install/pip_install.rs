@@ -12757,6 +12757,7 @@ fn install_git_submodule_relative_url() -> Result<()> {
         def help():
             return 'I am a helper'
     "})?;
+    helpers_dir.child("__init__.py").touch()?;
 
     // Create a nested dependency of the helper repository. This lives outside the parent
     // repository so the helper must resolve it through its own relative submodule URL.
@@ -12773,6 +12774,7 @@ fn install_git_submodule_relative_url() -> Result<()> {
         def help():
             return 'I am a nested helper'
     "})?;
+    grandchild_dir.child("__init__.py").touch()?;
 
     Command::new("git")
         .args(["add", "."])
@@ -12804,6 +12806,7 @@ fn install_git_submodule_relative_url() -> Result<()> {
         .child("grandchild")
         .child("grandchild.py")
         .assert(predicate::path::is_file());
+    helpers_dir.child("nested/__init__.py").touch()?;
 
     // Add and commit in helpers
     Command::new("git")
@@ -12857,9 +12860,10 @@ setup(
     mylib_package.child("__init__.py").write_str(
         r#"
 from .helpers import helper
+from .helpers.nested.grandchild import grandchild
 
 def main():
-    return f"Hello from mylib, {helper.help()}"
+    return f"Hello from mylib, {helper.help()}, {grandchild.help()}"
 "#,
     )?;
 
@@ -12909,6 +12913,12 @@ def main():
     Installed 1 package in [TIME]
      + mylib==0.1.0 (from git+file://[TEMP_DIR]/mylib@COMMIT_HASH)
     ");
+    context
+        .python_command()
+        .args(["-I", "-c", "import mylib; print(mylib.main())"])
+        .assert()
+        .success()
+        .stdout("Hello from mylib, I am a helper, I am a nested helper\n");
 
     Ok(())
 }
