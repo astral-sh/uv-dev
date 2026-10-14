@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use either::Either;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
@@ -253,6 +255,9 @@ impl Urls {
 
 /// Returns `true` if the [`ParsedUrl`] instances point to the same resource.
 fn same_resource(a: &ParsedUrl, b: &ParsedUrl, git: &GitResolver) -> bool {
+    // Equal installation paths identify the same resource even when the file is unavailable.
+    let same_install_path = |a: &Path, b: &Path| a == b || is_same_file(a, b).unwrap_or(false);
+
     match (a, b) {
         (ParsedUrl::Archive(a), ParsedUrl::Archive(b)) => {
             a.subdirectory.as_deref().map(uv_fs::normalize_path)
@@ -269,12 +274,10 @@ fn same_resource(a: &ParsedUrl, b: &ParsedUrl, git: &GitResolver) -> bool {
                 && git.same_ref(&a.url, &b.url)
         }
         (ParsedUrl::Path(a), ParsedUrl::Path(b)) => {
-            a.install_path == b.install_path
-                || is_same_file(&a.install_path, &b.install_path).unwrap_or(false)
+            same_install_path(&a.install_path, &b.install_path)
         }
         (ParsedUrl::Directory(a), ParsedUrl::Directory(b)) => {
-            (a.install_path == b.install_path
-                || is_same_file(&a.install_path, &b.install_path).unwrap_or(false))
+            same_install_path(&a.install_path, &b.install_path)
                 && a.editable.is_none_or(|a| b.editable.is_none_or(|b| a == b))
         }
         _ => false,
