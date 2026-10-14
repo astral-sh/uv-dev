@@ -55,8 +55,8 @@ pub async fn list(
         Err(err) => return Err(err.into()),
     };
 
-    let mut tools = installed_tools.tools()?.into_iter().collect::<Vec<_>>();
-    tools.sort_by_key(|(name, _)| name.clone());
+    let mut tools = installed_tools.tools()?;
+    tools.sort_by(|(left, _), (right, _)| left.cmp(right));
 
     if tools.is_empty() {
         writeln!(printer.stderr(), "No tools installed")?;
@@ -114,9 +114,7 @@ pub async fn list(
     }
 
     // Determine the latest version for each tool when `--outdated` is requested.
-    let latest: FxHashMap<PackageName, Option<DistFilename>> = if outdated
-        && !valid_tools.is_empty()
-    {
+    let latest: FxHashMap<PackageName, DistFilename> = if outdated && !valid_tools.is_empty() {
         let download_concurrency = concurrency.downloads_semaphore.clone();
 
         let reporter = LatestVersionReporter::from(printer).with_length(valid_tools.len() as u64);
@@ -136,9 +134,7 @@ pub async fn list(
                     let interpreter = tool_env.environment().interpreter();
 
                     let client = RegistryClientBuilder::new(
-                        client_builder
-                            .clone()
-                            .keyring(settings.resolver.keyring_provider),
+                        client_builder.keyring(settings.resolver.keyring_provider),
                         cache.clone().with_refresh(Refresh::All(Timestamp::now())),
                     )
                     .index_locations(settings.resolver.index_locations.clone())
@@ -170,12 +166,14 @@ pub async fn list(
 
         let mut map = FxHashMap::default();
         while let Some((name, version)) = fetches.next().await.transpose()? {
-            if let Some(version) = version.as_ref() {
+            if let Some(version) = version {
                 reporter.on_fetch_version(name, version.version());
+                map.insert(name.clone(), version);
             } else {
                 reporter.on_fetch_progress();
+                // A later result supersedes an earlier one for the same normalized tool name.
+                map.remove(name);
             }
-            map.insert(name.clone(), version);
         }
         reporter.on_fetch_complete();
         map
@@ -185,46 +183,42 @@ pub async fn list(
 
     for (name, tool, tool_env, version) in valid_tools {
         // If `--outdated` is set, skip tools that are up-to-date.
-        if outdated {
-            let is_outdated = latest
+        let latest_version = if outdated {
+            let Some(latest) = latest
                 .get(&name)
-                .and_then(Option::as_ref)
-                .is_some_and(|filename| filename.version() > &version);
-            if !is_outdated {
+                .filter(|latest| latest.version() > &version)
+            else {
                 continue;
-            }
-        }
+            };
+            format!(" [latest: {}]", latest.version())
+        } else {
+            String::new()
+        };
 
-        let version_specifier = show_version_specifiers
-            .then(|| {
+        let version_specifier = if show_version_specifiers {
+            format_annotation(
+                "required",
                 tool.requirements()
                     .iter()
                     .filter(|req| req.name == name)
                     .map(|req| req.source.to_string())
-                    .filter(|s| !s.is_empty())
-                    .peekable()
-            })
-            .take_if(|specifiers| specifiers.peek().is_some())
-            .map(|mut specifiers| {
-                let specifiers = specifiers.join(", ");
-                format!(" [required: {specifiers}]")
-            })
-            .unwrap_or_default();
+                    .filter(|source| !source.is_empty()),
+            )
+        } else {
+            String::new()
+        };
 
-        let extra_requirements = show_extras
-            .then(|| {
+        let extra_requirements = if show_extras {
+            format_annotation(
+                "extras",
                 tool.requirements()
                     .iter()
                     .filter(|req| req.name == name)
-                    .flat_map(|req| req.extras.iter()) // Flatten the extras from all matching requirements
-                    .peekable()
-            })
-            .take_if(|extras| extras.peek().is_some())
-            .map(|extras| {
-                let extras_str = extras.map(ToString::to_string).join(", ");
-                format!(" [extras: {extras_str}]")
-            })
-            .unwrap_or_default();
+                    .flat_map(|req| req.extras.iter()),
+            )
+        } else {
+            String::new()
+        };
 
         let python_version = if show_python {
             let interpreter = tool_env.environment().interpreter();
@@ -238,51 +232,30 @@ pub async fn list(
             String::new()
         };
 
-        let with_requirements = show_with
-            .then(|| {
+        let with_requirements = if show_with {
+            format_annotation(
+                "with",
                 tool.requirements()
                     .iter()
                     .filter(|req| req.name != name)
-                    .peekable()
-            })
-            .take_if(|requirements| requirements.peek().is_some())
-            .map(|requirements| {
-                let requirements = requirements
-                    .map(|req| format!("{}{}", req.name, req.source))
-                    .join(", ");
-                format!(" [with: {requirements}]")
-            })
-            .unwrap_or_default();
-
-        let latest_version = if outdated {
-            latest
-                .get(&name)
-                .and_then(Option::as_ref)
-                .map(|filename| format!(" [latest: {}]", filename.version()))
-                .unwrap_or_default()
+                    .map(|req| format!("{}{}", req.name, req.source)),
+            )
         } else {
             String::new()
         };
 
+        let summary = format!(
+            "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
+        );
         if show_paths {
             writeln!(
                 printer.stdout(),
                 "{} ({})",
-                format!(
-                    "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
-                )
-                .bold(),
+                summary.bold(),
                 installed_tools.tool_dir(&name).simplified_display().cyan(),
             )?;
         } else {
-            writeln!(
-                printer.stdout(),
-                "{}",
-                format!(
-                    "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
-                )
-                .bold()
-            )?;
+            writeln!(printer.stdout(), "{}", summary.bold())?;
         }
 
         // Output tool entrypoints
@@ -296,4 +269,14 @@ pub async fn list(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Format a nonempty list of values as a tool annotation.
+fn format_annotation<T: std::fmt::Display>(label: &str, values: impl Iterator<Item = T>) -> String {
+    let mut values = values.peekable();
+    if values.peek().is_none() {
+        String::new()
+    } else {
+        format!(" [{label}: {}]", values.format(", "))
+    }
 }
