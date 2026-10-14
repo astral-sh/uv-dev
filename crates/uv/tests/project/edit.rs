@@ -7855,16 +7855,16 @@ fn add_remove_script_lock() -> Result<()> {
         assert_snapshot!(lock_changes, @r#"
         --- old
         +++ new
-        @@ -7,8 +7,22 @@
+        @@ -7,11 +7,25 @@
 
          [manifest]
          requirements = [
         +    { name = "anyio", specifier = ">=4.3.0" },
              { name = "requests", specifier = "<3" },
              { name = "rich" },
-        +]
-        +
-        +[[package]]
+         ]
+
+         [[package]]
         +name = "anyio"
         +version = "4.3.0"
         +source = { registry = "https://pypi.org/simple" }
@@ -7875,9 +7875,12 @@ fn add_remove_script_lock() -> Result<()> {
         +sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
         +wheels = [
         +    { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
-         ]
-
-         [[package]]
+        +]
+        +
+        +[[package]]
+         name = "certifi"
+         version = "2024.2.2"
+         source = { registry = "https://pypi.org/simple" }
         @@ -127,6 +141,15 @@
          ]
 
