@@ -7,6 +7,49 @@ use uv_test::archive::generate_failing_source_archive;
 use uv_test::package_server::PackageServer;
 use uv_test::uv_snapshot;
 
+/// Reject invalid workspace sources before invoking the build backend.
+#[test]
+fn compile_pyproject_toml_eager_validation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+
+            [project]
+            name = "project"
+            dynamic = ["version"]
+            requires-python = ">=3.10"
+            dependencies = ["anyio==4.7.0"]
+
+            [tool.uv.sources]
+            anyio = { workspace = true }
+        "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        Path(__file__).with_name("backend-invoked").touch()
+        raise RuntimeError("build backend should not run")
+    "#})?;
+
+    uv_snapshot!(context.pip_compile().arg("pyproject.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse entry: `anyio`
+      cause: `anyio` references a workspace in `tool.uv.sources` (e.g., `anyio = { workspace = true }`), but is not a workspace member
+    ");
+    context
+        .temp_dir
+        .child("backend-invoked")
+        .assert(predicates::path::missing());
+
+    Ok(())
+}
+
 /// Identify the direct parent of a transitive dependency that fails to build.
 #[tokio::test]
 async fn compile_derivation_chain() -> Result<()> {
