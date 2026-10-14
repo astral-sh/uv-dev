@@ -629,14 +629,11 @@ fn parse_extras_cursor<T: Pep508Url>(
 
         // wsp* before the identifier
         cursor.eat_whitespace();
-        let mut buffer = String::new();
 
         // First char of the identifier.
-        match cursor.next() {
+        let start = match cursor.next() {
             // letterOrDigit
-            Some((_, alphanumeric @ ('a'..='z' | 'A'..='Z' | '0'..='9'))) => {
-                buffer.push(alphanumeric);
-            }
+            Some((start, 'a'..='z' | 'A'..='Z' | '0'..='9')) => start,
             Some((pos, other)) => {
                 return Err(Pep508Error {
                     message: Pep508ErrorSource::String(format!(
@@ -658,14 +655,14 @@ fn parse_extras_cursor<T: Pep508Url>(
                     input: cursor.to_string(),
                 });
             }
-        }
+        };
         // Parse from the second char of the identifier
         // We handle the illegal character case below
         // identifier_end = letterOrDigit | (('-' | '_' | '.' )* letterOrDigit)
         // identifier_end*
-        let (start, len) = cursor
+        cursor
             .take_while(|char| matches!(char, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.'));
-        buffer.push_str(cursor.slice(start, len));
+        let len = cursor.pos() - start;
         match cursor.peek() {
             Some((pos, char)) if char != ',' && char != ']' && !char.is_whitespace() => {
                 return Err(Pep508Error {
@@ -679,7 +676,7 @@ fn parse_extras_cursor<T: Pep508Url>(
             }
             _ => {}
         }
-        if let Some(last @ ('-' | '_' | '.')) = buffer.chars().last() {
+        if let Some(last @ ('-' | '_' | '.')) = cursor.slice(start, len).chars().last() {
             return Err(Pep508Error {
                 message: Pep508ErrorSource::String(format!(
                     "Extra name must end with an alphanumeric character, not `{last}`"
@@ -694,7 +691,7 @@ fn parse_extras_cursor<T: Pep508Url>(
 
         // Add the parsed extra
         extras.push(
-            ExtraName::from_str(&buffer)
+            ExtraName::from_str(cursor.slice(start, len))
                 .expect("`ExtraName` validation should match PEP 508 parsing"),
         );
     }
