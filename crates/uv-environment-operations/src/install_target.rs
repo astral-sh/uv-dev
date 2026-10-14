@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -748,12 +748,8 @@ impl<'lock> InstallTarget<'lock> {
                 let lock = self.lock();
                 let roots = self.roots().collect::<FxHashSet<_>>();
 
-                // Collect the packages by name for efficient lookup.
-                let packages = lock
-                    .packages()
-                    .iter()
-                    .map(|package| (package.name(), package))
-                    .collect::<BTreeMap<_, _>>();
+                // Workspace traversal uses the last locked fork for each package name.
+                let package_for_name = |name: &PackageName| lock.packages_for_name(name).last();
 
                 // Include all specified projects.
                 let mut required_members = roots.iter().copied().collect::<BTreeSet<_>>();
@@ -770,7 +766,7 @@ impl<'lock> InstallTarget<'lock> {
                             .map(|name| (name, InstallableRootKind::DependencyGroups)),
                     )
                 {
-                    let Some(root_package) = packages.get(name) else {
+                    let Some(root_package) = package_for_name(name) else {
                         continue;
                     };
 
@@ -797,7 +793,7 @@ impl<'lock> InstallTarget<'lock> {
                         required_members.insert(package_name);
                     }
 
-                    let Some(package) = packages.get(package_name) else {
+                    let Some(package) = package_for_name(package_name) else {
                         continue;
                     };
 
