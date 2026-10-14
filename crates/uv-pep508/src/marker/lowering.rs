@@ -184,11 +184,11 @@ impl CanonicalMarkerListPair {
     }
 
     /// The value (LHS) of the marker expression.
-    pub(crate) fn value(&self) -> String {
+    pub(crate) fn value(&self) -> &str {
         match self {
-            Self::Extras(extra) => extra.to_string(),
-            Self::DependencyGroup(group) => group.to_string(),
-            Self::Arbitrary { value, .. } => value.clone(),
+            Self::Extras(extra) => extra.as_str(),
+            Self::DependencyGroup(group) => group.as_str(),
+            Self::Arbitrary { value, .. } => value,
         }
     }
 }
