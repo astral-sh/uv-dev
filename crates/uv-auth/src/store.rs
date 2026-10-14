@@ -26,7 +26,7 @@ pub enum AuthBackend {
     // where the native implementation is living at the moment. We should consider refactoring these
     // into a shared API in the future.
     System(KeyringProvider),
-    TextStore(TextCredentialStore, LockedFile),
+    TextStore(TextCredentialStore, CredentialStoreLock),
 }
 
 impl AuthBackend {
@@ -215,6 +215,31 @@ pub struct TextCredentialStore {
     credentials: FxHashMap<(Service, Username), Credentials>,
 }
 
+/// Exclusive access to a specific plaintext credential-store file.
+#[derive(Debug)]
+pub struct CredentialStoreLock {
+    path: PathBuf,
+    _file: LockedFile,
+}
+
+impl CredentialStoreLock {
+    async fn acquire(path: &Path) -> Result<Self, TomlCredentialError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = LockedFile::acquire(
+            path.with_added_extension("lock"),
+            LockedFileMode::Exclusive,
+            "credentials store",
+        )
+        .await?;
+        Ok(Self {
+            path: path.to_owned(),
+            _file: file,
+        })
+    }
+}
+
 impl TextCredentialStore {
     /// Return the directory for storing credentials.
     pub fn directory_path() -> Result<PathBuf, TomlCredentialError> {
@@ -232,15 +257,6 @@ impl TextCredentialStore {
     pub fn default_file() -> Result<PathBuf, TomlCredentialError> {
         let dir = Self::directory_path()?;
         Ok(dir.join("credentials.toml"))
-    }
-
-    /// Acquire a lock on the credentials file at the given path.
-    async fn lock(path: &Path) -> Result<LockedFile, TomlCredentialError> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let lock = path.with_added_extension("lock");
-        Ok(LockedFile::acquire(lock, LockedFileMode::Exclusive, "credentials store").await?)
     }
 
     /// Read credentials from a file.
@@ -262,16 +278,16 @@ impl TextCredentialStore {
 
     /// Read credentials from a file.
     ///
-    /// Returns the existing store, if any, and a [`LockedFile`] to hold if mutating the store.
+    /// Returns the existing store, if any, and a [`CredentialStoreLock`] to hold if mutating it.
     /// The lock is retained when the file is absent so another writer cannot create it between
     /// the read and a subsequent write.
     ///
     /// If the store will not be written to following the read, the lock can be dropped.
     pub(crate) async fn read<P: AsRef<Path>>(
         path: P,
-    ) -> Result<(Option<Self>, LockedFile), TomlCredentialError> {
-        let lock = Self::lock(path.as_ref()).await?;
-        let store = match Self::from_file(path) {
+    ) -> Result<(Option<Self>, CredentialStoreLock), TomlCredentialError> {
+        let lock = CredentialStoreLock::acquire(path.as_ref()).await?;
+        let store = match Self::from_file(&lock.path) {
             Ok(store) => Some(store),
             Err(TomlCredentialError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => None,
             Err(err) => return Err(err),
@@ -279,15 +295,8 @@ impl TextCredentialStore {
         Ok((store, lock))
     }
 
-    /// Persist credentials to a file.
-    ///
-    /// Requires a [`LockedFile`] from [`TextCredentialStore::lock`] or
-    /// [`TextCredentialStore::read`] to ensure exclusive access.
-    pub fn write<P: AsRef<Path>>(
-        self,
-        path: P,
-        _lock: LockedFile,
-    ) -> Result<(), TomlCredentialError> {
+    /// Persist credentials to the locked file.
+    pub fn write(self, lock: CredentialStoreLock) -> Result<(), TomlCredentialError> {
         let credentials = self
             .credentials
             .into_iter()
@@ -302,13 +311,13 @@ impl TextCredentialStore {
         let toml_creds = TomlCredentials { credentials };
         let content = toml::to_string_pretty(&toml_creds)?;
         fs::create_dir_all(
-            path.as_ref()
+            lock.path
                 .parent()
                 .ok_or(TomlCredentialError::CredentialsDirError)?,
         )?;
 
         // TODO(zanieb): We should use an atomic write here
-        fs::write(path, content)?;
+        fs::write(lock.path, content)?;
         Ok(())
     }
 
@@ -523,8 +532,9 @@ password = "pass2"
         let temp_output = NamedTempFile::new().unwrap();
         store
             .write(
-                temp_output.path(),
-                TextCredentialStore::lock(temp_file.path()).await.unwrap(),
+                CredentialStoreLock::acquire(temp_output.path())
+                    .await
+                    .unwrap(),
             )
             .unwrap();
 
@@ -553,7 +563,7 @@ password = "pass2"
     async fn credential_store_rejects_non_utf8_bearer_tokens() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("credentials.toml");
-        let lock = TextCredentialStore::lock(&path).await.unwrap();
+        let (_, lock) = TextCredentialStore::read(&path).await.unwrap();
         let mut store = TextCredentialStore::default();
         store.insert(
             Service::from_str("https://example.com").unwrap(),
@@ -561,7 +571,7 @@ password = "pass2"
         );
 
         assert!(matches!(
-            store.write(&path, lock),
+            store.write(lock),
             Err(TomlCredentialError::TokenNotUnicode(_))
         ));
         assert!(!path.exists());
