@@ -635,20 +635,19 @@ impl IntoIterator for SitePackages {
 }
 
 fn sorted_dist_like_paths(read_dir: fs::ReadDir) -> Result<Vec<PathBuf>, std::io::Error> {
-    let mut paths = read_dir
-        .filter_map(|read_dir| match read_dir {
-            Ok(entry) => match entry.file_type() {
-                Ok(file_type) => (file_type.is_dir()
-                    || entry
-                        .path()
-                        .extension()
-                        .is_some_and(|ext| ext == "egg-link" || ext == "egg-info"))
-                .then_some(Ok(entry.path())),
-                Err(err) => Some(Err(err)),
-            },
-            Err(err) => Some(Err(err)),
-        })
-        .collect::<Result<Vec<_>, std::io::Error>>()?;
+    let mut paths = Vec::new();
+    for entry in read_dir {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+        if file_type.is_dir()
+            || path
+                .extension()
+                .is_some_and(|ext| ext == "egg-link" || ext == "egg-info")
+        {
+            paths.push(path);
+        }
+    }
     paths.sort_unstable();
     Ok(paths)
 }
