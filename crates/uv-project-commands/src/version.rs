@@ -410,15 +410,12 @@ async fn print_frozen_version(
         .await
         .map_err(UvError::from)?;
 
-    // Try to find the package of interest in the lock
     let version = lock
-        .packages()
-        .iter()
-        .find(|package| package.name() == name)
+        .packages_for_name(name)
+        .first()
         .and_then(|package| package.version())
         .ok_or_else(|| anyhow!("Failed to find the {name}'s version in the frozen lockfile"))?;
 
-    // Finally, print!
     print_version(name, version, None, short, output_format, printer)?;
 
     Ok(ExitStatus::Success)
