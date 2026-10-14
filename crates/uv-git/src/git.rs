@@ -198,7 +198,7 @@ impl GitRepository {
 
     /// Configures the given remote as the promisor remote for this repository.
     fn configure_promisor_remote(&self, remote: &str, url: &SafeUrl) -> Result<()> {
-        let url = without_credentials(url);
+        let url = url.without_credentials();
         GIT.as_ref()
             .cloned()?
             .arg("config")
@@ -433,7 +433,7 @@ impl GitDatabase {
             Some(false) => Ok(Some(false)),
             Some(true) => {
                 let path = absolute(&self.repo.path)?;
-                let url = DisplaySafeUrl::from_file_path(&path)
+                let url = SafeUrl::from_file_path(&path)
                     .map_err(|()| anyhow!("Invalid Git database path: {}", path.user_display()))?;
                 fetch_lfs(&checkout.repo, &url, &checkout.revision, false, true).map(Some)
             }
@@ -775,24 +775,6 @@ fn remote_url_root(mut url: SafeUrl) -> SafeUrl {
     url
 }
 
-/// Returns the URL without embedded credentials for persistence in Git config.
-fn without_credentials(url: &SafeUrl) -> SafeUrl {
-    url.without_credentials().into_owned()
-}
-
-/// Adds a one-shot Git URL rewrite so commands that perform lazy fetches can
-/// authenticate without storing credentials in the repository config.
-fn apply_url_rewrite(cmd: &mut ProcessBuilder, url: &SafeUrl) {
-    let url_without_credentials = without_credentials(url);
-    if url_without_credentials != *url {
-        append_git_config(
-            cmd,
-            &format!("url.{}.insteadOf", url.as_str()),
-            url_without_credentials.as_str(),
-        );
-    }
-}
-
 /// Append command-local configuration without replacing inherited entries.
 fn append_git_config(cmd: &mut ProcessBuilder, key: &str, value: &str) {
     // Git before 2.31 accepts quoted `key=value` entries. Newer Git also accepts
@@ -824,7 +806,6 @@ fn configure_git_network(
 ) {
     // Terminal prompts would be hidden by the progress bar. GUI prompts remain available.
     cmd.env(EnvVars::GIT_TERMINAL_PROMPT, "0");
-    apply_url_rewrite(cmd, url);
     if disable_ssl {
         let remote_url = url.without_credentials();
         let origin = remote_url_root(remote_url.clone().into_owned());
@@ -832,9 +813,13 @@ fn configure_git_network(
         // Git prefers URL path specificity over configuration scope.
         append_git_config(cmd, &format!("http.{remote_url}.sslVerify"), "false");
         // Username matching breaks ties between equally specific paths; passwords are ignored.
-        let mut username_url = (**url).clone();
+        let mut username_url = url.clone();
         if !username_url.username().is_empty() && username_url.set_password(None).is_ok() {
-            append_git_config(cmd, &format!("http.{username_url}.sslVerify"), "false");
+            append_git_config(
+                cmd,
+                &format!("http.{}.sslVerify", username_url.as_str()),
+                "false",
+            );
         }
     }
     if offline {
@@ -1056,7 +1041,7 @@ pub static GIT_LFS: LazyLock<Result<ProcessBuilder>> = LazyLock::new(|| {
 /// Fetch the Git objects needed to scan one revision's tree for LFS pointers.
 fn fetch_lfs_git_objects(
     repo: &GitRepository,
-    url: &DisplaySafeUrl,
+    url: &SafeUrl,
     revision: &GitOid,
     disable_ssl: bool,
     offline: bool,
@@ -1279,7 +1264,7 @@ mod tests {
     #[test]
     #[cfg(feature = "test-git")]
     fn git_tls_exception_is_scoped_to_remote_host() -> Result<()> {
-        let url = DisplaySafeUrl::parse("https://user:password@allowed.example/org/repo.git")?;
+        let url = SafeUrl::parse("https://user:password@allowed.example/org/repo.git")?;
         let mut command = GIT.as_ref().cloned()?;
         command
             .arg("-c")
