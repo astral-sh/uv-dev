@@ -5053,31 +5053,58 @@ fn require_hashes_registry_valid_hash() -> Result<()> {
 }
 
 /// Verify the index's wheel hash even when no explicit hash policy is requested.
-#[test]
-fn index_wheel_hash_mismatch() -> Result<()> {
+#[tokio::test]
+async fn index_wheel_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let filename = "tqdm-1000.0.0-py3-none-any.whl";
+    let wheel = context.read_bytes(context.workspace_root.join("test/links").join(filename));
+    let computed_hash = hex::encode(Sha256::digest(&wheel));
+    let index_hash = "0".repeat(64);
+    assert_ne!(
+        index_hash, computed_hash,
+        "the index must advertise a wrong hash"
+    );
+    let context = context
+        .with_filter((computed_hash, "[WHEEL_SHA256]"))
+        .with_filter((index_hash.clone(), "[INDEX_SHA256]"));
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/tqdm/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(r#"<a href="/{filename}#sha256={index_hash}">{filename}</a>"#),
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+
     context
         .temp_dir
         .child("requirements.txt")
-        .write_str("example-a-961b4c22==1.0.0")?;
+        .write_str("tqdm==1000.0.0")?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("requirements.txt")
         .arg("--only-binary=:all:")
         .arg("--index-url")
-        .arg("https://astral-test.github.io/astral-test-hash/invalid-hash/simple-html/"), @"
+        .arg(format!("{}/simple/", server.uri())), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    error: Failed to download `example-a-961b4c22==1.0.0`
-      cause: Hash mismatch for `example-a-961b4c22==1.0.0`
+    error: Failed to download `tqdm==1000.0.0`
+      cause: Hash mismatch for `tqdm==1000.0.0`
 
              Expected:
-               sha256:8838f9d005ff0432b258ba648d9cabb1cbdf06ac29d14f788b02edae544032ea
+               sha256:[INDEX_SHA256]
 
              Computed:
-               sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e
+               sha256:[WHEEL_SHA256]
     ");
 
     assert_archive_bucket_missing(&context);
