@@ -113,8 +113,7 @@ impl InstallState {
             return Ok(());
         };
 
-        let site_packages_paths = site_packages_paths.into_inner().unwrap();
-        for (relative, wheels) in &site_packages_paths {
+        for (relative, wheels) in site_packages_paths.into_inner().unwrap() {
             // Fast path: Only one package is using this module name, no conflicts.
             let mut wheel_iter = wheels.iter();
             let Some(first_wheel) = wheel_iter.next() else {
@@ -134,11 +133,11 @@ impl InstallState {
                     .iter()
                     .map(|(wheel, absolute)| Ok((wheel, absolute.metadata()?.len())))
                     .collect::<Result<_, io::Error>>()?;
-                Self::warn_file_conflict(relative, &files);
+                Self::warn_file_conflict(&relative, &files);
             } else if file_type.is_dir() {
                 // Don't early return if the method returns true, so we show warnings for each
                 // top-level module.
-                Self::warn_directory_conflict(relative, wheels)?;
+                Self::warn_directory_conflict(&relative, &wheels)?;
             } else {
                 // We don't expect any other file type, but it's ok if this check has false
                 // negatives.
