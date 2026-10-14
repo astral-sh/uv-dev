@@ -14216,6 +14216,7 @@ fn sync_locked_script() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn sync_script_with_compatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -14259,7 +14260,7 @@ fn sync_script_with_compatible_build_constraints() -> Result<()> {
 
 #[test]
 fn sync_script_with_incompatible_build_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.12");
 
     let test_script = context.temp_dir.child("script.py");
 

@@ -5054,7 +5054,7 @@ fn lock_project_with_build_constraints() -> Result<()> {
 }
 
 /// Lock a project with `uv.tool.build-constraint-dependencies` that reference `tool.uv.sources`.
-#[cfg(feature = "test-universal")]
+#[cfg(all(feature = "test-universal", feature = "test-python-eol"))]
 #[test]
 fn lock_project_with_build_constraint_sources() -> Result<()> {
     let context = uv_test::test_context!("3.9");

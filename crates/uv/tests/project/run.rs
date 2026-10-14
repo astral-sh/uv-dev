@@ -1112,6 +1112,7 @@ fn run_pep723_script_excludes() -> Result<()> {
 }
 
 /// Run a PEP 723-compatible script with `tool.uv` build constraints.
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn run_pep723_script_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -2032,6 +2033,7 @@ fn run_with_overlay_interpreter() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn run_with_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9");

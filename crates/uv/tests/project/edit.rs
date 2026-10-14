@@ -13218,6 +13218,7 @@ fn repeated_index_cli_reversed() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn add_with_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9");
