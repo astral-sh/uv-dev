@@ -44,8 +44,12 @@ fn glob_invalidates_local_source_build() -> Result<()> {
     // An empty match set has no cache fingerprint, so it cannot prove cache reuse.
     project.child("seed.txt").write_str("initial match")?;
     let builds = context.temp_dir.child("builds.log");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("ok @ ./project\n")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().args(["./project", "--offline"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().args(["-r", "requirements.txt", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -58,7 +62,7 @@ fn glob_invalidates_local_source_build() -> Result<()> {
     project
         .child("resources/untracked.bin")
         .write_str("untracked")?;
-    uv_snapshot!(context.filters(), context.pip_install().args(["./project", "--offline"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().args(["-r", "requirements.txt", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Checked 1 package in [TIME]
@@ -68,7 +72,7 @@ fn glob_invalidates_local_source_build() -> Result<()> {
     project
         .child("resources/data.txt")
         .write_str("nested match")?;
-    uv_snapshot!(context.filters(), context.pip_install().args(["./project", "--offline"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().args(["-r", "requirements.txt", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -80,7 +84,7 @@ fn glob_invalidates_local_source_build() -> Result<()> {
     builds.assert("built\nbuilt\n");
 
     project.child("data.txt").write_str("root match")?;
-    uv_snapshot!(context.filters(), context.pip_install().args(["./project", "--offline"]), @"
+    uv_snapshot!(context.filters(), context.pip_install().args(["-r", "requirements.txt", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
