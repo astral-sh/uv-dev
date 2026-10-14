@@ -1020,8 +1020,7 @@ struct Project {
 
 /// The optional `project.readme` key in a pyproject.toml as specified in
 /// <https://packaging.python.org/en/latest/specifications/pyproject-toml/#readme>.
-#[derive(Deserialize, Debug, Clone)]
-#[serde(untagged, rename_all_fields = "kebab-case")]
+#[derive(Debug, Clone)]
 pub(crate) enum Readme {
     /// Relative path to the README.
     String(PathBuf),
@@ -1039,6 +1038,49 @@ pub(crate) enum Readme {
     },
 }
 
+impl<'de> Deserialize<'de> for Readme {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        const EXPECTED: &str = "data did not match any variant of untagged enum Readme";
+        let value = toml::Value::deserialize(deserializer)?;
+        if let toml::Value::String(path) = value {
+            return Ok(Self::String(PathBuf::from(path)));
+        }
+        if let toml::Value::Table(mut fields) = value {
+            let Some(toml::Value::String(content_type)) = fields.remove("content-type") else {
+                return Err(de::Error::custom(EXPECTED));
+            };
+            let charset = fields
+                .remove("charset")
+                .map(|value| {
+                    if let toml::Value::String(charset) = value {
+                        Ok(charset)
+                    } else {
+                        Err(de::Error::custom(EXPECTED))
+                    }
+                })
+                .transpose()?;
+            if let Some(toml::Value::String(file)) = fields.remove("file") {
+                return Ok(Self::File {
+                    file: PathBuf::from(file),
+                    content_type,
+                    charset,
+                });
+            }
+            if let Some(toml::Value::String(text)) = fields.remove("text") {
+                return Ok(Self::Text {
+                    text,
+                    content_type,
+                    charset,
+                });
+            }
+        }
+        Err(de::Error::custom(EXPECTED))
+    }
+}
+
 impl Readme {
     /// If the readme is a file, return the path to the file.
     pub(crate) fn path(&self) -> Option<&Path> {
@@ -1052,8 +1094,7 @@ impl Readme {
 
 /// The optional `project.license` key in a pyproject.toml as specified in
 /// <https://packaging.python.org/en/latest/specifications/pyproject-toml/#license>.
-#[derive(Deserialize, Debug, Clone)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub(crate) enum License {
     /// An SPDX Expression.
     ///
@@ -1067,6 +1108,29 @@ pub(crate) enum License {
         /// The file containing the license text.
         file: String,
     },
+}
+
+impl<'de> Deserialize<'de> for License {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = toml::Value::deserialize(deserializer)?;
+        if let toml::Value::String(expression) = value {
+            return Ok(Self::Spdx(expression));
+        }
+        if let toml::Value::Table(mut fields) = value {
+            if let Some(toml::Value::String(text)) = fields.remove("text") {
+                return Ok(Self::Text { text });
+            }
+            if let Some(toml::Value::String(file)) = fields.remove("file") {
+                return Ok(Self::File { file });
+            }
+        }
+        Err(de::Error::custom(
+            "data did not match any variant of untagged enum License",
+        ))
+    }
 }
 
 impl License {
@@ -1690,6 +1754,52 @@ mod tests {
         # Foo
 
         This is the foo library.
+        ");
+    }
+
+    #[test]
+    fn metadata_table_precedence() {
+        let temp_dir = TempDir::new().unwrap();
+        fs_err::write(temp_dir.path().join("Readme.md"), "File readme").unwrap();
+        let contents = extend_project(indoc! {r#"
+            readme = { file = "Readme.md", text = "Inline readme", content-type = "text/markdown" }
+            license = { text = "Inline license", file = "missing.txt" }
+        "#});
+        let metadata = toml::from_str::<PyProjectToml>(&contents)
+            .unwrap()
+            .to_metadata(temp_dir.path())
+            .unwrap();
+        assert_snapshot!(metadata.core_metadata_format(), @"
+        Metadata-Version: 2.3
+        Name: hello-world
+        Version: 0.1.0
+        License: Inline license
+        Description-Content-Type: text/markdown
+
+        File readme
+        ");
+    }
+
+    #[test]
+    fn metadata_table_fallback() {
+        let temp_dir = TempDir::new().unwrap();
+        fs_err::write(temp_dir.path().join("License.txt"), "File license").unwrap();
+        let contents = extend_project(indoc! {r#"
+            readme = { file = 42, text = "Inline readme", content-type = "text/markdown" }
+            license = { text = 42, file = "License.txt" }
+        "#});
+        let metadata = toml::from_str::<PyProjectToml>(&contents)
+            .unwrap()
+            .to_metadata(temp_dir.path())
+            .unwrap();
+        assert_snapshot!(metadata.core_metadata_format(), @"
+        Metadata-Version: 2.3
+        Name: hello-world
+        Version: 0.1.0
+        License: File license
+        Description-Content-Type: text/markdown
+
+        Inline readme
         ");
     }
 
