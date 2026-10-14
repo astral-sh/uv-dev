@@ -152,7 +152,7 @@ impl InstalledTools {
     /// If a tool is present, but is missing a receipt or the receipt is invalid, the tool will be
     /// included with an error.
     ///
-    /// Note it is generally incorrect to use this without [`Self::acquire_lock`].
+    /// Note it is generally incorrect to use this without [`Self::lock`].
     #[expect(clippy::type_complexity)]
     pub fn tools(&self) -> Result<Vec<(PackageName, Result<Tool, Error>)>, Error> {
         let mut tools = Vec::new();
@@ -189,7 +189,7 @@ impl InstalledTools {
     /// If the tool is not installed, returns `Ok(None)`. If the receipt is invalid, returns an
     /// error.
     ///
-    /// Note it is generally incorrect to use this without [`Self::acquire_lock`].
+    /// Note it is generally incorrect to use this without [`Self::lock`].
     pub fn get_tool_receipt(&self, name: &PackageName) -> Result<Option<Tool>, Error> {
         let path = self.tool_dir(name).join("uv-receipt.toml");
         match ToolReceipt::from_path(&path) {
@@ -213,7 +213,7 @@ impl InstalledTools {
     ///
     /// Any existing receipt will be replaced.
     ///
-    /// Note it is generally incorrect to use this without [`Self::acquire_lock`].
+    /// Note it is generally incorrect to use this without [`Self::lock`].
     pub fn add_tool_receipt(&self, name: &PackageName, tool: Tool) -> Result<(), Error> {
         let tool_receipt = ToolReceipt::from(tool);
         let path = self.tool_dir(name).join("uv-receipt.toml");
@@ -237,7 +237,7 @@ impl InstalledTools {
     ///
     /// Does not remove the tool's entrypoints.
     ///
-    /// Note it is generally incorrect to use this without [`Self::acquire_lock`].
+    /// Note it is generally incorrect to use this without [`Self::lock`].
     ///
     /// # Errors
     ///
@@ -260,7 +260,7 @@ impl InstalledTools {
     /// Returns `Ok(None)` if the environment does not exist or is linked to a non-existent
     /// interpreter.
     ///
-    /// Note it is generally incorrect to use this without [`Self::acquire_lock`].
+    /// Note it is generally incorrect to use this without [`Self::lock`].
     pub fn get_environment(
         &self,
         name: &PackageName,
@@ -316,7 +316,7 @@ impl InstalledTools {
 
     /// Create the [`PythonEnvironment`] for a given tool, removing any existing environments.
     ///
-    /// Note it is generally incorrect to use this without [`Self::acquire_lock`].
+    /// Note it is generally incorrect to use this without [`Self::lock`].
     pub fn create_environment(
         &self,
         name: &PackageName,
