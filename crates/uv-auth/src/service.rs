@@ -54,9 +54,7 @@ impl FromStr for Service {
             Err(err) => return Err(err.into()),
         };
 
-        Self::check_scheme(&url)?;
-
-        Ok(Self(url))
+        Self::try_from(url)
     }
 }
 
