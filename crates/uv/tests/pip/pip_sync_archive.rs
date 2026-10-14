@@ -5,10 +5,69 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use url::Url;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_cache::CacheBucket;
 use uv_test::archive::generate_source_archive;
 use uv_test::uv_snapshot;
+
+/// Skip a wheel member that would escape the extraction directory.
+#[tokio::test]
+async fn sanitize_streamed_wheel_paths() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    let wheel = context.temp_dir.child(filename);
+    fs_err::copy(
+        context.workspace_root.join("test/links").join(filename),
+        &wheel,
+    )?;
+    // Append an unrecorded member, matching a wheel with a valid RECORD and an unsafe ZIP path.
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r"
+            import sys
+            from zipfile import ZipFile
+
+            with ZipFile(sys.argv[1], 'a') as archive:
+                archive.writestr('../../payload', b'')
+        "})
+        .arg(wheel.path())
+        .assert()
+        .success();
+
+    // Wheels are staged in a child of the cache root, so `../../payload` targets its parent.
+    let victim = context
+        .cache_dir
+        .parent()
+        .context("cache root must have a parent")?
+        .join("payload");
+    fs_err::write(&victim, "victim contents")?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(fs_err::read(&wheel)?))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!("ok @ {}/{filename}", server.uri()))?;
+
+    uv_snapshot!(context.filters(), context.pip_sync().arg("requirements.txt"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0 (from http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl)
+    ");
+    assert_eq!(fs_err::read_to_string(&victim)?, "victim contents");
+    context.assert_installed("ok", "1.0.0");
+    Ok(())
+}
 
 /// Source files with epoch mtimes must be extracted with dates usable by ZIP-based wheel builders.
 #[test]
