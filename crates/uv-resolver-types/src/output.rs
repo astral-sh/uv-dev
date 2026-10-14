@@ -10,7 +10,6 @@ use petgraph::{
     visit::EdgeRef,
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use uv_configuration::{BuildOptions, Constraints, DependencyModifierScope, DependencyModifiers};
 use uv_distribution_types::{
@@ -332,18 +331,17 @@ impl ResolverOutput {
     /// an installation in that marker environment could wind up trying to
     /// install different versions of the same package, which is not allowed.
     pub fn find_conflicting_distributions(&self) -> Vec<ConflictingDistributionError> {
-        let mut by_name: BTreeMap<&PackageName, Vec<&AnnotatedDist>> = BTreeMap::new();
-        for dist in self.dists() {
-            by_name.entry(&dist.name).or_default().push(dist);
-        }
+        let mut by_name = self.dists().collect::<Vec<_>>();
+        // Retain graph order within each package so conflict diagnostics stay deterministic.
+        by_name.sort_by(|left, right| left.name.cmp(&right.name));
         let mut conflicts = Vec::new();
-        for (name, dists) in by_name {
+        for dists in by_name.chunk_by(|left, right| left.name == right.name) {
             for (dist1, dist2) in dists.iter().copied().tuple_combinations() {
                 if dist1.version == dist2.version || dist1.marker.is_disjoint(dist2.marker) {
                     continue;
                 }
                 conflicts.push(ConflictingDistributionError {
-                    name: name.clone(),
+                    name: dist1.name.clone(),
                     version1: dist1.version.clone(),
                     version2: dist2.version.clone(),
                     marker1: dist1.marker,
