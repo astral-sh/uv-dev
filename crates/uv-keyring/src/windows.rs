@@ -397,12 +397,6 @@ impl CredentialBuilderApi for WinCredentialBuilder {
             target, service, user,
         )?))
     }
-
-    /// Return the underlying builder object with an `Any` type so that it can
-    /// be downgraded to a [`WinCredentialBuilder`] for platform-specific processing.
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn extract_password(credential: &CREDENTIALW) -> Result<String> {
