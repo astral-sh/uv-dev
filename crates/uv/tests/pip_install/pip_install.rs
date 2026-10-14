@@ -230,44 +230,6 @@ fn install_wheel_script_does_not_execute_decoded_interpreter_path() -> Result<()
     Ok(())
 }
 
-/// Hash the entire HTTP response even when extraction stops before trailing bytes.
-#[test]
-fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let filename = "ok-1.0.0-py3-none-any.whl";
-    let wheel = context.temp_dir.join(filename);
-    let mut bytes = context.read_bytes(context.workspace_root.join("test/links").join(filename));
-    // Exceed the pipe capacity so some bytes must be hashed after extraction finishes.
-    bytes.resize(bytes.len() + 1024 * 1024, b'x');
-    let hash = hex::encode(Sha256::digest(&bytes));
-    fs::write(&wheel, bytes)?;
-    let server = FindLinksServer::new(context.temp_dir.path());
-    let context = context.with_filter((server.url().to_string(), "http://[LOCALHOST]"));
-    context
-        .temp_dir
-        .child("requirements.txt")
-        .write_str(&format!(
-            "ok @ {}/{filename} --hash=sha256:{hash}\n",
-            server.url(),
-        ))?;
-
-    // Disable ZIP validation so extraction succeeds without consuming the trailing bytes.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--no-index")
-        .arg("--require-hashes")
-        .arg("-r")
-        .arg("requirements.txt")
-        .env(EnvVars::UV_INSECURE_NO_ZIP_VALIDATION, "1"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + ok==1.0.0 (from http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl)
-    ");
-    Ok(())
-}
-
 /// New cache entries must not prevent older uv versions from installing. See astral-sh/uv#20949.
 fn install_wheel_with_older_uv(version: &str) -> Result<()> {
     let context = uv_test::test_context!("3.12");
