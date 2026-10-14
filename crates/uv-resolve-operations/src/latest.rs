@@ -38,7 +38,7 @@ impl LatestClient<'_> {
 
     fn consider_candidate(
         &self,
-        package: &PackageName,
+        prerelease: PrereleaseMode,
         filename: &DistFilename,
         file: &File,
         exclude_newer: Option<&jiff::Timestamp>,
@@ -61,7 +61,6 @@ impl LatestClient<'_> {
         }
 
         // Unless explicitly allowed, skip pre-release artifacts.
-        let prerelease = self.prerelease.mode(package);
         if !filename.version().is_stable() && !matches!(prerelease, PrereleaseMode::Allow) {
             return false;
         }
@@ -110,11 +109,12 @@ impl LatestClient<'_> {
     ) -> Result<Option<DistFilename>, uv_client::Error> {
         debug!("Fetching latest version of: `{package}`");
 
+        let prerelease = self.prerelease.mode(package);
         let mut latest: Option<DistFilename> = None;
 
         let mut update_latest =
             |candidate: DistFilename, file: &File, exclude_newer: Option<&jiff::Timestamp>| {
-                if !self.consider_candidate(package, &candidate, file, exclude_newer) {
+                if !self.consider_candidate(prerelease, &candidate, file, exclude_newer) {
                     return;
                 }
 
