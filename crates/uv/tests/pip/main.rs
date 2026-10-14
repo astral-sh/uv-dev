@@ -31,6 +31,8 @@ mod pip_sync_archive;
 #[cfg(feature = "test-python")]
 mod pip_sync_cache;
 
+mod pip_sync_diagnostics;
+
 #[cfg(feature = "test-python")]
 mod pip_sync_hashes;
 
