@@ -2470,12 +2470,12 @@ fn init_requires_python_version_file() -> Result<()> {
 /// Run `uv init`, inferring the Python version from an existing `.venv`
 #[test]
 fn init_existing_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     let child = context.temp_dir.child("foo");
     child.create_dir_all()?;
 
-    // Create a new virtual environment in the directory
+    // A local 3.12 environment takes precedence over the default 3.11 interpreter.
     uv_snapshot!(context.filters(), context.venv().current_dir(&child).arg("--python").arg("3.12"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -2520,9 +2520,9 @@ fn init_existing_environment() -> Result<()> {
 /// Run `uv init`, it should ignore the Python version from a parent `.venv`
 #[test]
 fn init_existing_environment_parent() {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
-    // Create a new virtual environment in the parent directory
+    // A parent 3.12 environment must not override the default 3.11 interpreter.
     uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.12"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -2550,7 +2550,7 @@ fn init_existing_environment_parent() {
         version = "0.1.0"
         description = "Add your description here"
         readme = "README.md"
-        requires-python = ">=3.9"
+        requires-python = ">=3.11"
         dependencies = []
 
         [project.scripts]
