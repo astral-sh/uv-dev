@@ -2877,46 +2877,63 @@ fn find_links_offline_no_match() -> Result<()> {
     Ok(())
 }
 
-/// Sync using `--find-links` with a local directory. Ensure that cached wheels are reused.
-#[test]
-fn find_links_wheel_cache() -> Result<()> {
+/// A second installation reuses the cached `--find-links` wheel without downloading it again.
+#[tokio::test]
+async fn find_links_wheel_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(r#"<a href="/{filename}">{filename}</a>"#),
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(fs::read(
+            context.workspace_root.join("test/links").join(filename),
+        )?))
+        .expect(1)
+        .mount(&server)
+        .await;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        tqdm==1000.0.0
-    "})?;
+    requirements_txt.write_str("ok==1.0.0")?;
 
-    // Install `tqdm`.
+    // Populate the wheel cache.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
+        .arg("--no-index")
         .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + tqdm==1000.0.0
+     + ok==1.0.0
     "
     );
 
-    // Reinstall `tqdm` with `--reinstall`. Ensure that the wheel is reused.
+    context.pip_uninstall().arg("ok").assert().success();
+
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
-        .arg("--reinstall")
+        .arg("--no-index")
         .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     ~ tqdm==1000.0.0
+     + ok==1.0.0
     "
     );
 
+    context.assert_installed("ok", "1.0.0");
     Ok(())
 }
 
