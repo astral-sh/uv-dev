@@ -762,6 +762,35 @@ impl PubGrubReportFormatter<'_> {
         }
 
         let requested_ranges = requested_ranges(derivation_tree);
+        let availability_hints =
+            |name: &PackageName, set: &Range<Version>, output_hints: &mut IndexSet<PubGrubHint>| {
+                // Check for no versions due to pre-release options.
+                if !fork_urls.contains_key(name) {
+                    self.prerelease_hint(
+                        name,
+                        set,
+                        requested_ranges.get(name).map(Vec::as_slice),
+                        selector,
+                        env,
+                        options,
+                        output_hints,
+                    );
+                }
+
+                // Check for no versions due to no `--find-links` flat index.
+                Self::index_hints(
+                    name,
+                    set,
+                    self.included_versions.get(name),
+                    selector,
+                    index_locations,
+                    index_capabilities,
+                    available_indexes,
+                    unavailable_packages,
+                    incomplete_packages,
+                    output_hints,
+                );
+            };
 
         let mut pending = vec![(derivation_tree, inherited_exclude_newer_ranges.clone())];
         while let Some((derivation_tree, inherited_exclude_newer_ranges)) = pending.pop() {
@@ -775,32 +804,7 @@ impl PubGrubReportFormatter<'_> {
                     }
 
                     if let Some(name) = package.name_no_root() {
-                        // Check for no versions due to pre-release options.
-                        if !fork_urls.contains_key(name) {
-                            self.prerelease_hint(
-                                name,
-                                set,
-                                requested_ranges.get(name).map(Vec::as_slice),
-                                selector,
-                                env,
-                                options,
-                                output_hints,
-                            );
-                        }
-
-                        // Check for no versions due to no `--find-links` flat index.
-                        Self::index_hints(
-                            name,
-                            set,
-                            self.included_versions.get(name),
-                            selector,
-                            index_locations,
-                            index_capabilities,
-                            available_indexes,
-                            unavailable_packages,
-                            incomplete_packages,
-                            output_hints,
-                        );
+                        availability_hints(name, set, output_hints);
 
                         if let UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
                             incompatibility,
@@ -842,32 +846,7 @@ impl PubGrubReportFormatter<'_> {
                 }
                 DerivationTree::External(External::NoVersions(package, set)) => {
                     if let Some(name) = package.name_no_root() {
-                        // Check for no versions due to pre-release options.
-                        if !fork_urls.contains_key(name) {
-                            self.prerelease_hint(
-                                name,
-                                set,
-                                requested_ranges.get(name).map(Vec::as_slice),
-                                selector,
-                                env,
-                                options,
-                                output_hints,
-                            );
-                        }
-
-                        // Check for no versions due to no `--find-links` flat index.
-                        Self::index_hints(
-                            name,
-                            set,
-                            self.included_versions.get(name),
-                            selector,
-                            index_locations,
-                            index_capabilities,
-                            available_indexes,
-                            unavailable_packages,
-                            incomplete_packages,
-                            output_hints,
-                        );
+                        availability_hints(name, set, output_hints);
 
                         let exclude_newer = if let Some(index) = fork_indexes.get(name) {
                             options
@@ -985,28 +964,34 @@ impl PubGrubReportFormatter<'_> {
                     let cause2_exclude_newer_ranges =
                         Self::subtree_exclude_newer_ranges(&derived.cause2);
 
-                    let mut cause1_inherited_exclude_newer_ranges =
-                        inherited_exclude_newer_ranges.clone();
-                    for (name, range) in &cause2_exclude_newer_ranges {
-                        cause1_inherited_exclude_newer_ranges
-                            .entry(name.clone())
-                            .and_modify(|existing| *existing = existing.union(range))
-                            .or_insert_with(|| range.clone());
-                    }
-
-                    let mut cause2_inherited_exclude_newer_ranges = inherited_exclude_newer_ranges;
-                    for (name, range) in &cause1_exclude_newer_ranges {
-                        cause2_inherited_exclude_newer_ranges
-                            .entry(name.clone())
-                            .and_modify(|existing| *existing = existing.union(range))
-                            .or_insert_with(|| range.clone());
-                    }
+                    let cause1_inherited_exclude_newer_ranges = Self::inherit_exclude_newer_ranges(
+                        inherited_exclude_newer_ranges.clone(),
+                        cause2_exclude_newer_ranges,
+                    );
+                    let cause2_inherited_exclude_newer_ranges = Self::inherit_exclude_newer_ranges(
+                        inherited_exclude_newer_ranges,
+                        cause1_exclude_newer_ranges,
+                    );
 
                     pending.push((&derived.cause2, cause2_inherited_exclude_newer_ranges));
                     pending.push((&derived.cause1, cause1_inherited_exclude_newer_ranges));
                 }
             }
         }
+    }
+
+    /// Include the sibling subtree's excluded versions in the current subtree's inherited ranges.
+    fn inherit_exclude_newer_ranges(
+        mut inherited: FxHashMap<PackageName, Range<Version>>,
+        sibling: FxHashMap<PackageName, Range<Version>>,
+    ) -> FxHashMap<PackageName, Range<Version>> {
+        for (name, range) in sibling {
+            inherited
+                .entry(name)
+                .and_modify(|existing| *existing = existing.union(&range))
+                .or_insert(range);
+        }
+        inherited
     }
 
     /// Collect the version ranges in `derivation_tree` that were excluded solely by
