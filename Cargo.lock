@@ -7999,6 +7999,7 @@ dependencies = [
  "uv-python-types",
  "uv-redacted",
  "uv-static",
+ "uv-toml",
  "uv-version",
  "walkdir",
  "wiremock",

@@ -18,6 +18,7 @@ use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Requirement};
 use uv_python_types::PythonVersion;
+use uv_toml::deserialize_unique_map;
 
 /// A complete packse scenario definition.
 #[derive(Debug, Deserialize)]
@@ -31,7 +32,7 @@ pub struct Scenario {
     pub description: Option<String>,
 
     /// Packages keyed by the TOML segment in `[packages.<name>]`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_map")]
     pub packages: BTreeMap<PackageName, Package>,
 
     /// The root (entrypoint) requirements.
@@ -88,6 +89,7 @@ impl Scenario {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Package {
+    #[serde(deserialize_with = "deserialize_normalized_map")]
     pub versions: BTreeMap<Version, PackageMetadata>,
 }
 
@@ -107,7 +109,7 @@ pub struct PackageMetadata {
     pub requires: Vec<Requirement>,
 
     /// Extra names mapped to their optional dependency requirements.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_map")]
     pub extras: BTreeMap<ExtraName, Vec<Requirement>>,
 
     /// Console script names that invoke the package's generated stub.
@@ -233,7 +235,7 @@ pub struct Expected {
     pub satisfiable: bool,
 
     /// Expected installed package names mapped to resolved versions.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_map")]
     pub packages: BTreeMap<PackageName, Version>,
 
     /// Optional explanation.
@@ -341,6 +343,18 @@ impl fmt::Display for Resolution {
     }
 }
 
+/// Reject distinct TOML keys that refer to the same package, extra, or version.
+fn deserialize_normalized_map<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    K: Deserialize<'de> + Ord + fmt::Display,
+    V: Deserialize<'de>,
+{
+    deserialize_unique_map(deserializer, |key| {
+        format!("duplicate normalized key `{key}`")
+    })
+}
+
 #[expect(clippy::unnecessary_wraps)] // Must return `Option` for serde `default`
 fn default_requires_python() -> Option<VersionSpecifiers> {
     Some(VersionSpecifiers::from_str(">=3.12").expect("default requires-python should be valid"))
@@ -383,6 +397,42 @@ requires = ["a>=2 ; sys_platform == 'linux'", "a<2 ; sys_platform == 'darwin'"]
         assert!(scenario.resolver_options.universal);
         assert_eq!(scenario.packages.len(), 1);
         assert_eq!(scenario.packages[&package_name].versions.len(), 2);
+    }
+
+    #[test]
+    fn reject_normalized_key_collisions() {
+        let common = "name = 'duplicate'\n[root]\n[expected]\nsatisfiable = true\n";
+        for (table, duplicate, normalized) in [
+            (
+                "packages",
+                "[packages.demo-package.versions.'1']\n[packages.demo_package.versions.'2']",
+                "demo-package",
+            ),
+            (
+                "versions",
+                "[packages.demo.versions.'1.0']\n[packages.demo.versions.'1.0.0']",
+                "1.0",
+            ),
+            (
+                "extras",
+                "[packages.demo.versions.'1'.extras]\nfoo-bar = []\nfoo_bar = []",
+                "foo-bar",
+            ),
+            (
+                "expected packages",
+                "[expected.packages]\nDemo = '1'\ndemo = '2'",
+                "demo",
+            ),
+        ] {
+            let error = toml::from_str::<Scenario>(&format!("{common}{duplicate}"))
+                .expect_err("normalized duplicate should fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("duplicate normalized key `{normalized}`")),
+                "{table}: {error}"
+            );
+        }
     }
 
     #[test]
