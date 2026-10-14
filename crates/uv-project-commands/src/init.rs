@@ -510,6 +510,23 @@ async fn determine_requires_python(
     reporter: &PythonDownloadReporter,
     python_request: Option<PythonRequest>,
 ) -> Result<(RequiresPython, Option<PythonRequest>)> {
+    let find_interpreter = async |request: Option<&PythonRequest>| {
+        PythonInstallation::find_or_download(
+            request,
+            EnvironmentPreference::OnlySystem,
+            python_preference,
+            python_arch,
+            python_downloads,
+            client_builder,
+            cache,
+            Some(reporter),
+            install_mirrors.mirrors(),
+            install_mirrors.python_downloads_json_url.as_deref(),
+        )
+        .await
+        .map(PythonInstallation::into_interpreter)
+    };
+
     // Add a `requires-python` field to the `pyproject.toml` and return the corresponding interpreter.
     if let Some(python_request) = python_request {
         // (1) A request from the user or `.python-version` file
@@ -530,20 +547,7 @@ async fn determine_requires_python(
                 let requires_python = RequiresPython::from_specifiers(specifiers.clone());
 
                 let python_pin = if pin_python {
-                    let interpreter = PythonInstallation::find_or_download(
-                        Some(python_request),
-                        EnvironmentPreference::OnlySystem,
-                        python_preference,
-                        python_arch,
-                        python_downloads,
-                        client_builder,
-                        cache,
-                        Some(reporter),
-                        install_mirrors.mirrors(),
-                        install_mirrors.python_downloads_json_url.as_deref(),
-                    )
-                    .await?
-                    .into_interpreter();
+                    let interpreter = find_interpreter(Some(python_request)).await?;
 
                     Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         interpreter.python_major(),
@@ -557,20 +561,7 @@ async fn determine_requires_python(
                 (requires_python, python_pin)
             }
             python_request => {
-                let interpreter = PythonInstallation::find_or_download(
-                    Some(python_request),
-                    EnvironmentPreference::OnlySystem,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    client_builder,
-                    cache,
-                    Some(reporter),
-                    install_mirrors.mirrors(),
-                    install_mirrors.python_downloads_json_url.as_deref(),
-                )
-                .await?
-                .into_interpreter();
+                let interpreter = find_interpreter(Some(python_request)).await?;
 
                 let requires_python =
                     RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
@@ -627,20 +618,7 @@ async fn determine_requires_python(
 
         // Pin to the minor version.
         let python_pin = if pin_python {
-            let interpreter = PythonInstallation::find_or_download(
-                Some(&python_request),
-                EnvironmentPreference::OnlySystem,
-                python_preference,
-                python_arch,
-                python_downloads,
-                client_builder,
-                cache,
-                Some(reporter),
-                install_mirrors.mirrors(),
-                install_mirrors.python_downloads_json_url.as_deref(),
-            )
-            .await?
-            .into_interpreter();
+            let interpreter = find_interpreter(Some(&python_request)).await?;
 
             Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
@@ -656,20 +634,7 @@ async fn determine_requires_python(
         Ok((requires_python, python_pin))
     } else {
         // (4) Default to the system Python
-        let interpreter = PythonInstallation::find_or_download(
-            None,
-            EnvironmentPreference::OnlySystem,
-            python_preference,
-            python_arch,
-            python_downloads,
-            client_builder,
-            cache,
-            Some(reporter),
-            install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url.as_deref(),
-        )
-        .await?
-        .into_interpreter();
+        let interpreter = find_interpreter(None).await?;
 
         let requires_python =
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
