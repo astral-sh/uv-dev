@@ -13904,6 +13904,13 @@ fn switch_platform() {
      ~ cffi==1.16.0
     "
     );
+
+    uv_snapshot!(context.pip_check().arg("--python-platform").arg("linux"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 2 packages in [TIME]
+    All installed packages are compatible
+    ");
 }
 
 /// A registry-style request with `--no-sources` accepts an existing editable installation.
