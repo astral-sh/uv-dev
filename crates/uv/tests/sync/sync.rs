@@ -16544,9 +16544,9 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
         child = [{ requirement = "a", match-runtime = true }]
     "#})?;
 
-    // The child should be rebuilt with a 0.1, without `--reinstall`.
+    // Changing the matched runtime version should rebuild the child automatically.
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url())
-        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.2"), @"
+        .env("EXPECTED_A_VERSION", "0.2"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -16563,7 +16563,7 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url())
-        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.1"), @"
+        .env("EXPECTED_A_VERSION", "0.1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -16575,22 +16575,7 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    // Now, we'll set a constraint in the parent project
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "parent"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["a<0.2", "child"]
-
-        [tool.uv.sources]
-        child = { path = "child" }
-
-        [tool.uv.extra-build-dependencies]
-        child = [{ requirement = "a", match-runtime = true }]
-    "#})?;
-
-    // And an incompatible constraint in the child project
+    // The child's build requirement conflicts with the parent's runtime constraint.
     child_pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "child"
