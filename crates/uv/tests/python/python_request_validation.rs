@@ -1,4 +1,4 @@
-//! Python installation and upgrade requests rejected before downloading an interpreter.
+//! Python requests rejected without running or downloading an interpreter.
 
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::{PathChild, PathCreateDir};
@@ -70,6 +70,37 @@ fn python_install_armv7_musl_unavailable() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: uv does not yet provide musl Python distributions on armv7.
+    ");
+}
+
+#[test]
+fn python_uninstall_requires_target() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_uninstall(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the following required arguments were not provided:
+      <TARGETS>...
+
+    Usage: uv python uninstall --cache-dir [CACHE_DIR] --install-dir <INSTALL_DIR> <TARGETS>...
+
+    For more information, try '--help'.
+    ");
+}
+
+#[test]
+fn python_uninstall_rejects_target_with_all() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("--all").arg("3.12"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument '--all' cannot be used with '<TARGETS>...'
+
+    Usage: uv python uninstall --cache-dir [CACHE_DIR] --all --install-dir <INSTALL_DIR> <TARGETS>...
+
+    For more information, try '--help'.
     ");
 }
 
