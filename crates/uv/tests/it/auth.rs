@@ -605,36 +605,6 @@ fn login_missing_arguments() {
 
 #[tokio::test]
 #[cfg(feature = "native-auth")]
-async fn login_token_native_auth() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
-    let proxy = crate::pypi_proxy::start().await;
-
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("__token__")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
-    // Successful with token
-    uv_snapshot!(context.filters(), context.auth_login()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--token")
-        .arg("test-token")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for http://[LOCALHOST]/basic-auth
-    "
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-#[cfg(feature = "native-auth")]
 async fn logout_native_auth() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
     let proxy = crate::pypi_proxy::start().await;
@@ -769,41 +739,25 @@ async fn logout_native_auth() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[test]
 #[cfg(feature = "native-auth")]
-async fn logout_token_native_auth() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
-    let proxy = crate::pypi_proxy::start().await;
+fn logout_token_native_auth() -> Result<()> {
+    let fixture = NativeAuthFixture::new_token("test-token")?;
 
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
-    // Login with a token
-    uv_snapshot!(context.filters(), context.auth_login()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--token")
-        .arg("test-token")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(fixture.own_token(), @r"
     exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for http://[LOCALHOST]/basic-auth
+    ----- stdout -----
+    test-token
     "
     );
 
-    // Logout without a username
-    uv_snapshot!(context.filters(), context.auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(fixture.filters(), fixture.logout(), @r"
     exit_code: 0 (success)
     ----- stderr -----
-    Removed credentials for http://[LOCALHOST]/basic-auth
+    Removed credentials for [SERVICE]
     ");
 
-    Ok(())
+    fixture.finish_after_logout()
 }
 
 #[test]
