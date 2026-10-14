@@ -3008,7 +3008,7 @@ fn tar_dont_preserve_mtime() -> Result<()> {
     Ok(())
 }
 
-/// Avoid creating a file with 000 permissions
+/// Installed files must remain owner-readable even if the archive records restrictive modes.
 #[test]
 fn set_read_permissions() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -3024,6 +3024,19 @@ fn set_read_permissions() -> Result<()> {
     Installed 1 package in [TIME]
      + databricks==0.2
     ");
+
+    context
+        .assert_command(indoc! {r#"
+            import stat
+            from importlib.metadata import distribution
+
+            files = [entry.locate() for entry in distribution("databricks").files or ()]
+            files = [path for path in files if path.is_file()]
+            assert files, "no installed files were found"
+            unreadable = [str(path) for path in files if not path.stat().st_mode & stat.S_IRUSR]
+            assert not unreadable, f"installed files without owner read permission: {unreadable}"
+        "#})
+        .success();
 
     Ok(())
 }
