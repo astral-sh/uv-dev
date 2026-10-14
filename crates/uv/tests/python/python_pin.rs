@@ -16,7 +16,6 @@ use indoc::indoc;
 use insta::assert_snapshot;
 use uv_platform::{Arch, Os};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
-use uv_static::EnvVars;
 use uv_test::{assert_path_missing, uv_snapshot};
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
@@ -792,6 +791,8 @@ fn python_pin_with_comments_and_whitespace() -> Result<()> {
 #[test]
 #[cfg(feature = "test-python-managed")]
 fn python_pin_install() {
+    use uv_static::EnvVars;
+
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
 
     // Should not install 3.12 when downloads are not automatic
