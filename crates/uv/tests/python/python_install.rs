@@ -3648,7 +3648,8 @@ fn assert_cpython_bytecode_compiled(context: &TestContext, version: &str) {
 
                 stdlib = Path(sysconfig.get_path("stdlib")).resolve()
                 managed = Path(sys.argv[1]).resolve()
-                assert stdlib.is_relative_to(managed), (stdlib, managed)
+                if not stdlib.is_relative_to(managed):
+                    raise AssertionError(f"stdlib {stdlib} is outside managed installation {managed}")
                 expected = set()
                 actual = set()
                 for directory, _, filenames in os.walk(stdlib, onerror=raise_walk_error):
@@ -3660,13 +3661,15 @@ fn assert_cpython_bytecode_compiled(context: &TestContext, version: &str) {
                             expected.add(Path(importlib.util.cache_from_source(str(path))))
                         elif path.suffix == ".pyc":
                             actual.add(path)
-                assert expected, f"no Python sources in {stdlib}"
+                if not expected:
+                    raise AssertionError(f"no Python sources in {stdlib}")
                 missing = sorted(expected - actual)
                 unexpected = sorted(actual - expected)
-                assert not missing and not unexpected, (
-                    f"missing {len(missing)} bytecode files: {missing[:5]}; "
-                    f"unexpected {len(unexpected)} bytecode files: {unexpected[:5]}"
-                )
+                if missing or unexpected:
+                    raise AssertionError(
+                        f"missing {len(missing)} bytecode files: {missing[:5]}; "
+                        f"unexpected {len(unexpected)} bytecode files: {unexpected[:5]}"
+                    )
             "#},
         ])
         .arg(context.temp_dir.join("managed"))
