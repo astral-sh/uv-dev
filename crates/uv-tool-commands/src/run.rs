@@ -684,7 +684,7 @@ impl std::fmt::Display for ExecutableProviderHints<'_> {
                     let suggested_command = format!("{invocation_source} --from PKG {executable}");
                     write!(
                         f,
-                        "An executable named `{}` is not provided by package `{}` but is available via the following dependencies:\n- {}\nConsider using `{}` instead.",
+                        "An executable named `{}` is not provided by package `{}` but is available via the following dependencies:\n{}\nConsider using `{}` instead.",
                         executable.cyan(),
                         from.name.cyan(),
                         provided_by,
@@ -693,7 +693,7 @@ impl std::fmt::Display for ExecutableProviderHints<'_> {
                 } else {
                     write!(
                         f,
-                        "An executable named `{}` is provided by package `{}` but is also available via the following dependencies:\n- {}\nUnexpected behavior may occur.",
+                        "An executable named `{}` is provided by package `{}` but is also available via the following dependencies:\n{}\nUnexpected behavior may occur.",
                         executable.cyan(),
                         from.name.cyan(),
                         provided_by,
