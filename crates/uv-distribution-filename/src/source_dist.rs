@@ -37,20 +37,7 @@ impl SourceDistFilename {
         extension: SourceDistExtension,
         package_name: &PackageName,
     ) -> Result<Self, SourceDistFilenameError> {
-        // Drop the extension (e.g., given `tar.gz`, drop `.tar.gz`).
-        if filename.len() <= extension.name().len() + 1 {
-            return Err(SourceDistFilenameError {
-                filename: filename.to_string(),
-                kind: SourceDistFilenameErrorKind::Extension,
-            });
-        }
-
-        let Some(stem) = filename.get(..filename.len() - (extension.name().len() + 1)) else {
-            return Err(SourceDistFilenameError {
-                filename: filename.to_string(),
-                kind: SourceDistFilenameErrorKind::Extension,
-            });
-        };
+        let stem = source_dist_stem(filename, extension)?;
 
         let package_name_len = package_name.as_ref().len();
         if stem.len() <= package_name_len + "-".len() {
@@ -104,15 +91,7 @@ impl SourceDistFilename {
             });
         };
 
-        // Drop the extension (e.g., given `tar.gz`, drop `.tar.gz`).
-        if filename.len() <= extension.name().len() + 1 {
-            return Err(SourceDistFilenameError {
-                filename: filename.to_string(),
-                kind: SourceDistFilenameErrorKind::Extension,
-            });
-        }
-
-        let stem = &filename[..(filename.len() - (extension.name().len() + 1))];
+        let stem = source_dist_stem(filename, extension)?;
 
         let Some((package_name, version)) = stem.rsplit_once('-') else {
             return Err(SourceDistFilenameError {
@@ -126,7 +105,6 @@ impl SourceDistFilename {
                 kind: SourceDistFilenameErrorKind::PackageName(err),
             })?;
 
-        // We checked the length above
         let version = Version::from_str(version).map_err(|err| SourceDistFilenameError {
             filename: filename.to_string(),
             kind: SourceDistFilenameErrorKind::Version(err),
@@ -138,6 +116,22 @@ impl SourceDistFilename {
             extension,
         })
     }
+}
+
+/// Strip the extension and its preceding dot, leaving a nonempty filename stem.
+fn source_dist_stem(
+    filename: &str,
+    extension: SourceDistExtension,
+) -> Result<&str, SourceDistFilenameError> {
+    filename
+        .len()
+        .checked_sub(extension.name().len() + 1)
+        .and_then(|end| filename.get(..end))
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| SourceDistFilenameError {
+            filename: filename.to_string(),
+            kind: SourceDistFilenameErrorKind::Extension,
+        })
 }
 
 impl Display for SourceDistFilename {
