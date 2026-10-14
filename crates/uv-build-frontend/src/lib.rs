@@ -1118,14 +1118,14 @@ impl PythonRunner {
         /// Read and capture lines from a process stream.
         async fn read_from(
             reader: impl tokio::io::AsyncRead + Unpin,
-            mut printer: Printer,
+            printer: Printer,
         ) -> io::Result<Vec<String>> {
             let mut reader = tokio::io::BufReader::new(reader).split(b'\n');
             let mut buffer = Vec::with_capacity(1024);
             while let Some(line_buf) = reader.next_segment().await? {
                 let line_buf = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
-                let line = String::from_utf8_lossy(line_buf).into();
-                let _ = write!(printer, "{line}");
+                let line = String::from_utf8_lossy(line_buf).into_owned();
+                printer.print_line(&line);
                 buffer.push(line);
             }
             Ok(buffer)
@@ -1208,17 +1208,23 @@ impl From<BuildOutput> for Printer {
     }
 }
 
-impl Write for Printer {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+impl Printer {
+    fn print_line(self, line: &str) {
         match self {
             Self::Stderr => {
-                anstream::eprintln!("{s}");
+                anstream::eprintln!("{line}");
             }
             Self::Debug => {
-                debug!("{s}");
+                debug!("{line}");
             }
             Self::Quiet => {}
         }
+    }
+}
+
+impl Write for Printer {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.print_line(s);
         Ok(())
     }
 }
