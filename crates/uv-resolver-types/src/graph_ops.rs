@@ -109,6 +109,7 @@ pub fn simplify_conflict_markers(
     // don't have any extras/groups activated.
     let mut activated: FxHashMap<NodeIndex, Vec<FxHashSet<ConflictItemRef<'_>>>> =
         FxHashMap::default();
+    let unactivated = [FxHashSet::default()];
 
     let mut queue = root_nodes(graph);
 
@@ -124,20 +125,18 @@ pub fn simplify_conflict_markers(
                 set.insert(item);
             }
         }
-        let mut children = graph
-            .neighbors_directed(parent_index, Direction::Outgoing)
-            .peekable();
-        if children.peek().is_none() {
-            continue;
-        }
-        let sets = activated
-            .get(&parent_index)
-            .cloned()
-            .unwrap_or_else(|| vec![FxHashSet::default()]);
-        for child in children {
+        for child in graph.neighbors_directed(parent_index, Direction::Outgoing) {
+            // A self-edge cannot add anything to the node's own activation state.
+            if child == parent_index {
+                continue;
+            }
+            activated.entry(child).or_default();
+            let [source, Some(existing)] = activated.get_disjoint_mut([&parent_index, &child])
+            else {
+                unreachable!("Child activation state was initialized");
+            };
             let mut change = false;
-            let existing = activated.entry(child).or_default();
-            for set in &sets {
+            for set in source.map_or(unactivated.as_slice(), |sets| sets.as_slice()) {
                 if !existing.contains(set) {
                     existing.push(set.clone());
                     change = true;
