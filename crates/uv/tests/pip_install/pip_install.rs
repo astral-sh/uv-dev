@@ -4214,36 +4214,6 @@ fn install_no_binary_env() {
     context.assert_command("import idna").success();
 }
 
-/// Overlapping usage of `--no-binary` and `--only-binary`
-// TODO(zanieb): We should have a better error message here
-#[test]
-fn install_only_binary_all_and_no_binary_all() {
-    let context = uv_test::test_context!("3.12");
-
-    // With both as `:all:` we can't install
-    let mut command = context.pip_install();
-    command
-        .arg("anyio")
-        .arg("--no-binary")
-        .arg(":all:")
-        .arg("--only-binary")
-        .arg(":all:")
-        .arg("--strict");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because all versions of anyio have no usable wheels and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: Wheels are required for `anyio` because building from source is disabled for all packages (i.e., with `--no-build`)
-    "
-    );
-
-    context.assert_command("import anyio").failure();
-}
-
 /// Cached registry wheels should respect `--no-build` and `--no-binary`.
 #[test]
 fn install_build_policy_cache() {

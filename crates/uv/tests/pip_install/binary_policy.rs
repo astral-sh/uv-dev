@@ -181,3 +181,30 @@ fn only_binary_comma_separated() -> Result<()> {
     beta.assert_wheel_selected();
     Ok(())
 }
+
+/// Simultaneous global source-only and wheel-only policies reject both artifacts.
+// TODO(zanieb): We should have a better error message here.
+#[test]
+fn only_binary_all_and_no_binary_all() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let markers = wheel_and_sdist(&context, "anyio")?;
+
+    uv_snapshot!(context.filters(), install(&context)
+        .arg("anyio")
+        .arg("--no-binary")
+        .arg(":all:")
+        .arg("--only-binary")
+        .arg(":all:")
+        .arg("--strict"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because all versions of anyio have no usable wheels and you require anyio, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `anyio` because building from source is disabled for all packages (i.e., with `--no-build`)
+    ");
+
+    markers.source_built.assert(predicates::path::missing());
+    context.assert_not_installed("anyio");
+    Ok(())
+}
