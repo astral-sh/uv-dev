@@ -41,6 +41,8 @@ fn glob_invalidates_local_source_build() -> Result<()> {
             copyfile(wheel, Path(wheel_directory) / wheel.name)
             return wheel.name
     "#})?;
+    // An empty match set has no cache fingerprint, so it cannot prove cache reuse.
+    project.child("seed.txt").write_str("initial match")?;
     let builds = context.temp_dir.child("builds.log");
 
     uv_snapshot!(context.filters(), context.pip_install().args(["./project", "--offline"]), @"
