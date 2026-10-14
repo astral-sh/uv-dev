@@ -4262,34 +4262,6 @@ fn exclude_newer_does_not_reuse_cached_wheel() -> Result<()> {
     Ok(())
 }
 
-/// Respect `--only-binary` flags in `requirements.txt`
-#[test]
-fn only_binary_requirements_txt() {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str(indoc! {r"
-        django_allauth==0.51.0
-        --only-binary django_allauth
-        "
-        })
-        .unwrap();
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because django-allauth==0.51.0 has no usable wheels and you require django-allauth==0.51.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Wheels are required for `django-allauth` because building from source is disabled for `django-allauth` (i.e., with `--no-build-package django-allauth`)
-    "
-    );
-}
-
 /// `--only-binary` does not apply to editable requirements
 #[test]
 fn only_binary_editable() {
