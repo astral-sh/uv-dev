@@ -105,11 +105,9 @@ impl Read for CloneableSeekableReader {
             return Ok(amount);
         }
 
-        let read_result = read_at(&self.file, buf, self.pos);
-        if let Ok(bytes_read) = read_result {
-            self.pos += bytes_read as u64;
-        }
-        read_result
+        let bytes_read = read_at(&self.file, buf, self.pos)?;
+        self.pos += bytes_read as u64;
+        Ok(bytes_read)
     }
 }
 
