@@ -45,7 +45,7 @@ struct BytecodeCompiler {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
-    stderr: BufReader<ChildStderr>,
+    stderr: ChildStderr,
 }
 
 #[derive(Debug, Error)]
@@ -415,7 +415,7 @@ async fn launch_bytecode_compiler(
     // Unbuffered, we need to write immediately or the python process will get stuck waiting
     let stdin = child.stdin.take().expect("Child must have stdin");
     let mut stdout = BufReader::new(child.stdout.take().expect("Child must have stdout"));
-    let stderr = BufReader::new(child.stderr.take().expect("Child must have stderr"));
+    let stderr = child.stderr.take().expect("Child must have stderr");
 
     // Check if the launch was successful.
     let mut out_line = String::new();
