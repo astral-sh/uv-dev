@@ -847,11 +847,19 @@ impl SourceBuild {
 
     /// Construct an error for a failed hook from its captured output.
     fn build_hook_failure(&self, hook_prefix: &str, output: PythonRunnerOutput) -> Error {
-        Error::from_command_output(
+        self.command_failure(
             format!(
                 "Call to `{}.{hook_prefix}_{}` failed",
                 self.pep517_backend.backend, self.build_kind
             ),
+            output,
+        )
+    }
+
+    /// Construct a command error with this build's diagnostic context.
+    fn command_failure(&self, message: String, output: PythonRunnerOutput) -> Error {
+        Error::from_command_output(
+            message,
             output,
             self.runner.level,
             self.package_name.as_ref(),
@@ -1022,16 +1030,12 @@ impl SourceBuild {
             .map_err(|err| err.to_string())
             .and_then(|contents| serde_json::from_slice(&contents).map_err(|err| err.to_string()))
             .map_err(|err| {
-                Error::from_command_output(
+                self.command_failure(
                     format!(
                         "Call to `{}.{hook_prefix}_{}` failed: {}",
                         self.pep517_backend.backend, self.build_kind, err
                     ),
                     output,
-                    self.runner.level,
-                    self.package_name.as_ref(),
-                    self.package_version.as_ref(),
-                    self.version_id.as_deref(),
                 )
             })?;
 
