@@ -2752,6 +2752,7 @@ fn pip_entrypoints_24_1() -> Result<()> {
 #[test]
 fn invalidate_on_change() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let inspect_requirements = "from importlib.metadata import requires; print([''.join(r.split()) for r in requires('example')])";
 
     // Create an editable package.
     let editable_dir = context.temp_dir.child("editable");
@@ -2783,7 +2784,7 @@ requires-python = ">=3.8"
     "
     );
     context
-        .assert_command("from importlib.metadata import requires; print(requires('example'))")
+        .assert_command(inspect_requirements)
         .success()
         .stdout(predicates::str::contains("['anyio==4.0.0']"));
 
@@ -2822,7 +2823,7 @@ requires-python = ">=3.8"
     "
     );
     context
-        .assert_command("from importlib.metadata import requires; print(requires('example'))")
+        .assert_command(inspect_requirements)
         .success()
         .stdout(predicates::str::contains("['anyio==3.7.1']"));
 
