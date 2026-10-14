@@ -3,6 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use itertools::Itertools;
 use thiserror::Error;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_distribution_filename::DistExtension;
@@ -375,71 +376,9 @@ impl Display for Requirement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)?;
         if !self.extras.is_empty() {
-            write!(
-                f,
-                "[{}]",
-                self.extras
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )?;
+            write!(f, "[{}]", self.extras.iter().format(","))?;
         }
-        match &self.source {
-            RequirementSource::Registry {
-                specifier, index, ..
-            } => {
-                write!(f, "{specifier}")?;
-                if let Some(index) = index {
-                    write!(f, " (index: {})", index.url)?;
-                }
-            }
-            RequirementSource::Url { url, .. } => {
-                write!(f, " @ {url}")?;
-            }
-            RequirementSource::GitDirectory {
-                url: _,
-                git,
-                subdirectory,
-            } => {
-                write!(f, " @ git+{}", git.url())?;
-                if let Some(reference) = git.reference().as_url_rev() {
-                    write!(f, "@{reference}")?;
-                }
-                if let Some(subdirectory) = subdirectory {
-                    writeln!(f, "#subdirectory={}", subdirectory.display())?;
-                }
-                if git.lfs().enabled() {
-                    writeln!(
-                        f,
-                        "{}lfs=true",
-                        if subdirectory.is_some() { "&" } else { "#" }
-                    )?;
-                }
-            }
-            RequirementSource::GitPath {
-                url: _,
-                git,
-                install_path,
-                ext: _,
-            } => {
-                write!(f, " @ git+{}", git.url())?;
-                if let Some(reference) = git.reference().as_url_rev() {
-                    write!(f, "@{reference}")?;
-                }
-                write!(f, "#path={}", install_path.display())?;
-                if git.lfs().enabled() {
-                    write!(f, "&lfs=true")?;
-                }
-                writeln!(f)?;
-            }
-            RequirementSource::Path { url, .. } => {
-                write!(f, " @ {url}")?;
-            }
-            RequirementSource::Directory { url, .. } => {
-                write!(f, " @ {url}")?;
-            }
-        }
+        self.source.fmt_with_prefix(f, Some(" @ "))?;
         if let Some(marker) = self.marker.contents() {
             write!(f, " ; {marker}")?;
         }
@@ -818,12 +757,9 @@ impl RequirementSource {
         }
         self
     }
-}
 
-impl Display for RequirementSource {
-    /// Display the [`RequirementSource`], with the intention of being shown directly to a user,
-    /// rather than for inclusion in a `requirements.txt` file.
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    /// Format the source, optionally prefixing non-registry sources.
+    fn fmt_with_prefix(&self, f: &mut Formatter<'_>, prefix: Option<&str>) -> std::fmt::Result {
         match self {
             Self::Registry {
                 specifier, index, ..
@@ -834,14 +770,14 @@ impl Display for RequirementSource {
                 }
             }
             Self::Url { url, .. } => {
-                write!(f, " {url}")?;
+                write!(f, "{}{url}", prefix.unwrap_or(" "))?;
             }
             Self::GitDirectory {
                 url: _,
                 git,
                 subdirectory,
             } => {
-                write!(f, " git+{}", git.url())?;
+                write!(f, "{}git+{}", prefix.unwrap_or(" "), git.url())?;
                 if let Some(reference) = git.reference().as_url_rev() {
                     write!(f, "@{reference}")?;
                 }
@@ -862,7 +798,7 @@ impl Display for RequirementSource {
                 install_path,
                 ext: _,
             } => {
-                write!(f, " git+{}", git.url())?;
+                write!(f, "{}git+{}", prefix.unwrap_or(" "), git.url())?;
                 if let Some(reference) = git.reference().as_url_rev() {
                     write!(f, "@{reference}")?;
                 }
@@ -872,14 +808,19 @@ impl Display for RequirementSource {
                 }
                 writeln!(f)?;
             }
-            Self::Path { url, .. } => {
-                write!(f, "{url}")?;
-            }
-            Self::Directory { url, .. } => {
-                write!(f, "{url}")?;
+            Self::Path { url, .. } | Self::Directory { url, .. } => {
+                write!(f, "{}{url}", prefix.unwrap_or_default())?;
             }
         }
         Ok(())
+    }
+}
+
+impl Display for RequirementSource {
+    /// Display the [`RequirementSource`], with the intention of being shown directly to a user,
+    /// rather than for inclusion in a `requirements.txt` file.
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.fmt_with_prefix(f, None)
     }
 }
 
