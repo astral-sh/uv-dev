@@ -54,13 +54,10 @@ impl<'a> Cursor<'a> {
 
     /// Eats the next character from the input stream if it matches the given token.
     pub(crate) fn eat_char(&mut self, token: char) -> Option<usize> {
-        let (start_pos, peek_char) = self.peek()?;
-        if peek_char == token {
-            self.next();
-            Some(start_pos)
-        } else {
-            None
-        }
+        let remaining = self.remaining().strip_prefix(token)?;
+        let start = self.pos();
+        self.advance_to(remaining);
+        Some(start)
     }
 
     /// Consumes whitespace from the cursor.
