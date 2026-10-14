@@ -4,6 +4,7 @@ pub use error::Error;
 use regex::regex;
 use rustc_hash::FxHashSet;
 pub use sync::*;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use uv_static::EnvVars;
 
 mod archive_path;
@@ -13,6 +14,9 @@ pub mod hash;
 pub mod stream;
 mod sync;
 mod vendor;
+
+/// Default buffer size for archive reads and file copies.
+pub(crate) const DEFAULT_BUF_SIZE: usize = 128 * 1024;
 
 /// Track directories whose creation has been attempted during archive extraction.
 #[derive(Default)]
@@ -28,6 +32,26 @@ impl ExtractionDirectories {
         }
         Ok(())
     }
+}
+
+/// Copy a ZIP entry, preserving ZIP read errors separately from filesystem write errors.
+pub(crate) async fn copy_zip_entry(
+    mut reader: impl AsyncRead + Unpin,
+    mut writer: impl AsyncWrite + Unpin,
+    buffer: &mut Vec<u8>,
+) -> Result<u64, Error> {
+    buffer.resize(DEFAULT_BUF_SIZE, 0);
+    let mut copied = 0;
+    loop {
+        let read = reader.read(buffer).await.map_err(Error::io_or_zip)?;
+        if read == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..read]).await.map_err(Error::Io)?;
+        copied += read as u64;
+    }
+    writer.flush().await.map_err(Error::Io)?;
+    Ok(copied)
 }
 
 /// Validate the empty payload declared by a ZIP directory entry.

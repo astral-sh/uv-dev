@@ -5,12 +5,15 @@ use std::pin::pin;
 use std::sync::Mutex;
 
 use crate::vendor::CloneableSeekableReader;
-use crate::{Error, ExtractionDirectories, insecure_no_validate, validate_zip_directory_entry};
+use crate::{
+    Error, ExtractionDirectories, copy_zip_entry, insecure_no_validate,
+    validate_zip_directory_entry,
+};
 use async_zip::StoredZipEntry;
 use async_zip::base::read::seek::ZipFileReader;
 use async_zip::error::ZipError;
 use futures::executor::block_on;
-use futures::io::{AllowStdIo, AsyncReadExt, AsyncWriteExt};
+use futures::io::AllowStdIo;
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
@@ -357,20 +360,12 @@ where
     let mut file = archive.reader_with_entry(file_number).await?;
     let mut writer = AllowStdIo::new(writer);
 
-    let mut copied = 0;
-    copy_buffer.resize(128 * 1024, 0);
-    loop {
-        let read = file.read(copy_buffer).await.map_err(Error::io_or_zip)?;
-        if read == 0 {
-            break;
-        }
-        writer
-            .write_all(&copy_buffer[..read])
-            .await
-            .map_err(Error::Io)?;
-        copied += read as u64;
-    }
-    writer.flush().await.map_err(Error::Io)?;
+    let copied = copy_zip_entry(
+        (&mut file).compat(),
+        (&mut writer).compat_write(),
+        copy_buffer,
+    )
+    .await?;
     Ok((copied, file.compute_hash()))
 }
 
