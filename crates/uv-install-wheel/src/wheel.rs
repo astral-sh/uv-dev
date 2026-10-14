@@ -1278,6 +1278,8 @@ mod test {
 
     use anyhow::Result;
     use assert_fs::prelude::*;
+    #[cfg(target_os = "linux")]
+    use fs_err::os::unix::fs::symlink;
     use indoc::{formatdoc, indoc};
 
     use super::{
@@ -1386,7 +1388,7 @@ mod test {
         let wheel = assert_fs::TempDir::new()?;
         let dist_info = wheel.child("demo-1.0.dist-info");
         dist_info.create_dir_all()?;
-        std::os::unix::fs::symlink("/dev/full", dist_info.child("RECORD").path())?;
+        symlink("/dev/full", dist_info.child("RECORD").path())?;
 
         let entry = RecordEntry {
             path: "demo.py".to_owned(),
