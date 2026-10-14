@@ -139,15 +139,15 @@ fn format_shebang(executable: impl AsRef<Path>, os_name: &str, relocatable: bool
         // Same applies for relocatable scripts (executable is relative to script dir, hence `dirname` trick)
         // (note: the Windows trampoline binaries natively support relative paths to executable)
         if shebang_length > 127 || executable.contains(' ') || relocatable {
-            let executable = format!("'{}'", escape_posix_for_single_quotes(&executable));
-            return format_shell_shebang(&executable, relocatable);
+            let executable = escape_posix_for_single_quotes(&executable);
+            return format_shell_shebang(format_args!("'{executable}'"), relocatable);
         }
     }
 
     format!("#!{executable}")
 }
 
-fn format_shell_shebang(executable: &str, relocatable: bool) -> String {
+fn format_shell_shebang(executable: impl Display, relocatable: bool) -> String {
     let prefix = if relocatable {
         r#""$(dirname -- "$(realpath -- "$0")")"/"#
     } else {
