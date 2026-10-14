@@ -566,34 +566,28 @@ pub async fn run(
             )
             .await
             {
-                Ok(project) => {
-                    if no_project {
-                        debug!("Ignoring discovered project due to `--no-project`");
-                        None
-                    } else {
-                        Some(project)
-                    }
+                Ok(_) if no_project => {
+                    debug!("Ignoring discovered project due to `--no-project`");
+                    None
                 }
-                Err(err) => {
+                Ok(project) => Some(project),
+                Err(err)
                     if matches!(
                         err.as_ref(),
                         WorkspaceErrorKind::MissingPyprojectToml
                             | WorkspaceErrorKind::NonWorkspace(_)
-                    ) {
-                        if no_project {
-                            warn!("`--no-project` was provided, but no project was found");
-                        }
-                        None
-                    } else {
-                        // If the user runs with `--no-project`, ignore the error.
-                        if no_project {
-                            warn!("Ignoring project discovery error due to `--no-project`: {err}");
-                            None
-                        } else {
-                            return Err(err.into());
-                        }
+                    ) =>
+                {
+                    if no_project {
+                        warn!("`--no-project` was provided, but no project was found");
                     }
+                    None
                 }
+                Err(err) if no_project => {
+                    warn!("Ignoring project discovery error due to `--no-project`: {err}");
+                    None
+                }
+                Err(err) => return Err(err.into()),
             }
         };
 
