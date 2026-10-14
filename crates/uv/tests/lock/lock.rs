@@ -23620,6 +23620,7 @@ fn lock_metadata_free_shared_git_direct_source() -> Result<()> {
         .arg("-c")
         .arg("user.email=example@example.com")
         .arg("commit")
+        .arg("--no-gpg-sign")
         .arg("-m")
         .arg("Initial commit")
         .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
