@@ -74,9 +74,13 @@ impl PythonExecutableGroup {
         (!executables.is_empty()).then_some(Self(executables))
     }
 
+    fn singleton(executable: (PythonSource, PathBuf)) -> Self {
+        Self(vec![executable])
+    }
+
     fn filter(mut self, mut predicate: impl FnMut(PythonSource, &Path) -> bool) -> Option<Self> {
         self.0.retain(|(source, path)| predicate(*source, path));
-        (!self.0.is_empty()).then_some(self)
+        Self::new(self.0)
     }
 }
 
@@ -277,7 +281,7 @@ fn python_executables_from_installed<'a>(
             })
     })
     .flatten_ok()
-    .map_ok(|executable| PythonExecutableGroup(vec![executable]));
+    .map_ok(PythonExecutableGroup::singleton);
 
     let from_search_path = iter::once_with(move || {
         let mut next_source = PythonSource::SearchPathFirst;
@@ -330,7 +334,7 @@ fn python_executables_from_installed<'a>(
                     .map_err(Error::from)
             })
             .flatten_ok()
-            .map_ok(|executable| PythonExecutableGroup(vec![executable])),
+            .map_ok(PythonExecutableGroup::singleton),
         ),
         Err(err) => Box::new(iter::once(Err(Error::from(err)))),
     };
@@ -386,10 +390,10 @@ fn python_executables<'a>(
         env::var_os(EnvVars::UV_INTERNAL__PARENT_INTERPRETER)
             .into_iter()
             .map(|path| {
-                Ok(PythonExecutableGroup(vec![(
+                Ok(PythonExecutableGroup::singleton((
                     PythonSource::ParentInterpreter,
                     PathBuf::from(path),
-                )]))
+                )))
             })
     })
     .flatten();
@@ -400,16 +404,16 @@ fn python_executables<'a>(
             .into_iter()
             .map(virtualenv_python_executable)
             .map(|path| {
-                Ok(PythonExecutableGroup(vec![(
+                Ok(PythonExecutableGroup::singleton((
                     PythonSource::BaseCondaPrefix,
                     path,
-                )]))
+                )))
             })
     })
     .flatten();
 
-    let from_virtual_environments = python_executables_from_virtual_environments()
-        .map_ok(|executable| PythonExecutableGroup(vec![executable]));
+    let from_virtual_environments =
+        python_executables_from_virtual_environments().map_ok(PythonExecutableGroup::singleton);
     let from_installed =
         python_executables_from_installed(version, implementation, platform, preference);
 
@@ -867,8 +871,7 @@ fn python_installations_with_name<'a>(
     strategy: QueryStrategy,
 ) -> Box<dyn Iterator<Item = Result<PythonInstallation, Error>> + 'a> {
     python_installations_from_executables(
-        python_executables_with_name(name)
-            .map_ok(|executable| PythonExecutableGroup(vec![executable])),
+        python_executables_with_name(name).map_ok(PythonExecutableGroup::singleton),
         cache,
         strategy,
     )
