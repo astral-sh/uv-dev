@@ -19,6 +19,9 @@ mod python_find_missing;
 #[cfg(feature = "test-python-managed")]
 mod python_install;
 
+#[cfg(unix)]
+mod python_install_repair;
+
 mod python_list;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
