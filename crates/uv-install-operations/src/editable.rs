@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use uv_configuration::EditableMode;
-use uv_distribution_types::{DirectorySourceDist, Dist, Resolution, ResolvedDist, SourceDist};
+use uv_distribution_types::{Dist, Resolution, ResolvedDist, SourceDist};
 
 /// Apply editable installation overrides to local directory distributions.
 pub fn apply_editable_mode(resolution: Resolution, editable: Option<EditableMode>) -> Resolution {
@@ -13,32 +13,19 @@ pub fn apply_editable_mode(resolution: Resolution, editable: Option<EditableMode
         let ResolvedDist::Installable { dist, version } = dist else {
             return None;
         };
-        let Dist::Source(SourceDist::Directory(DirectorySourceDist {
-            name,
-            install_path,
-            editable: current_editable,
-            r#virtual,
-            first_party,
-            url,
-        })) = dist.as_ref()
-        else {
+        let Dist::Source(SourceDist::Directory(directory)) = dist.as_ref() else {
             return None;
         };
 
-        let editable = editable.for_package(name)?;
-        if *current_editable == Some(editable) {
+        let editable = editable.for_package(&directory.name)?;
+        if directory.editable == Some(editable) {
             return None;
         }
 
+        let mut directory = directory.clone();
+        directory.editable = Some(editable);
         Some(ResolvedDist::Installable {
-            dist: Arc::new(Dist::Source(SourceDist::Directory(DirectorySourceDist {
-                name: name.clone(),
-                install_path: install_path.clone(),
-                editable: Some(editable),
-                r#virtual: *r#virtual,
-                first_party: *first_party,
-                url: url.clone(),
-            }))),
+            dist: Arc::new(Dist::Source(SourceDist::Directory(directory))),
             version: version.clone(),
         })
     })
