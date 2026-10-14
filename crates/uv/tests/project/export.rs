@@ -7017,7 +7017,7 @@ fn pep_751_relative_and_absolute_paths() -> Result<()> {
     Resolved 3 packages in [TIME]
     "#);
 
-    uv_snapshot!(context.filters(), context.export()
+    let exported = uv_snapshot!(context.filters(), context.export()
         .args(["--frozen", "--no-header", "--output-file", "b/pylock.toml"]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -7037,6 +7037,7 @@ fn pep_751_relative_and_absolute_paths() -> Result<()> {
     name = "c"
     directory = { path = "[TEMP_DIR]/c", editable = false }
     "#);
+    assert_eq!(context.read_bytes("b/pylock.toml"), exported.stdout);
 
     Ok(())
 }
