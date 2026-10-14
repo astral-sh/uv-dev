@@ -4262,6 +4262,15 @@ fn exclude_newer_does_not_reuse_cached_wheel() -> Result<()> {
     Ok(())
 }
 
+fn assert_editable_packages(context: &TestContext, expected: &'static str) {
+    context
+        .pip_list()
+        .args(["--editable", "--format=freeze"])
+        .assert()
+        .success()
+        .stdout(expected);
+}
+
 /// `--only-binary` does not apply to editable requirements
 #[test]
 fn only_binary_editable() {
@@ -4281,6 +4290,7 @@ fn only_binary_editable() {
      + anyio==4.3.0+foo (from file://[WORKSPACE]/test/packages/anyio_local)
     "
     );
+    assert_editable_packages(&context, "anyio==4.3.0+foo\n");
 }
 
 /// `--only-binary` does not apply to editable requirements that depend on each other
@@ -4308,6 +4318,7 @@ fn only_binary_dependent_editables() {
      + second-local==0.1.0 (from file://[WORKSPACE]/test/packages/dependent_locals/second_local)
     "
     );
+    assert_editable_packages(&context, "first-local==0.1.0\nsecond-local==0.1.0\n");
 }
 
 /// `--only-binary` does not apply to editable requirements, with a `setup.py` config
@@ -4336,6 +4347,7 @@ fn only_binary_editable_setup_py() {
      + sniffio==1.3.1
     "
     );
+    assert_editable_packages(&context, "setup-py-editable==0.0.1\n");
 }
 
 /// We should not recommend `--prerelease=allow` in source distribution build failures, since we
