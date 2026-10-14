@@ -208,7 +208,7 @@ impl Overrides {
                             }
                         }
                     }
-                    let packages = scoped.entry(package.package.name.clone()).or_default();
+                    let packages = scoped.entry(package.package.name).or_default();
                     let position = packages
                         .iter()
                         .position(|overrides| overrides.version == package.package.version)
