@@ -6864,7 +6864,6 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "owo-colors",
- "rustc-hash",
  "serde",
  "thiserror",
  "tracing",
