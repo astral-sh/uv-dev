@@ -22,13 +22,13 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_resolver::FlatIndex;
 use uv_settings::InstallerSettingsRef;
-use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
+use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::pyproject::Source;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache};
 
 use crate::install_target::InstallTarget;
 use crate::malware::{MalwareCheckContext, maybe_check_malware};
-use crate::{EnvironmentError, detect_conflicts};
+use crate::{EnvironmentError, bind_build_isolation, detect_conflicts};
 use uv_requirements::script_extra_build_requires;
 
 /// Install the selected packages from a lockfile into an environment.
@@ -269,13 +269,7 @@ pub async fn sync_from_lock(
         .build()?;
 
     // Determine whether to enable build isolation.
-    let build_isolation = match build_isolation {
-        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-        uv_configuration::BuildIsolation::Shared => BuildIsolation::Shared(venv),
-        uv_configuration::BuildIsolation::SharedPackage(packages) => {
-            BuildIsolation::SharedPackage(venv, packages)
-        }
-    };
+    let build_isolation = bind_build_isolation(build_isolation, || venv);
 
     // Read the build constraints from the lockfile.
     let build_constraints = target.build_constraints();
