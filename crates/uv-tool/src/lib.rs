@@ -171,22 +171,15 @@ impl InstalledTools {
                 continue;
             };
             let path = directory.join("uv-receipt.toml");
-            let contents = match fs_err::read_to_string(&path) {
-                Ok(contents) => contents,
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                    let err = Error::MissingToolReceipt(name.to_string(), path);
-                    tools.push((name, Err(err)));
-                    continue;
+            let tool = match ToolReceipt::from_path(&path) {
+                Ok(receipt) => Ok(receipt.tool),
+                Err(Error::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
+                    Err(Error::MissingToolReceipt(name.to_string(), path))
                 }
-                Err(err) => return Err(err.into()),
+                Err(err @ Error::ReceiptRead(..)) => Err(err),
+                Err(err) => return Err(err),
             };
-            match ToolReceipt::from_string(contents) {
-                Ok(tool_receipt) => tools.push((name, Ok(tool_receipt.tool))),
-                Err(err) => {
-                    let err = Error::ReceiptRead(path, Box::new(err));
-                    tools.push((name, Err(err)));
-                }
-            }
+            tools.push((name, tool));
         }
         Ok(tools)
     }
