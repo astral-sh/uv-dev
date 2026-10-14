@@ -871,14 +871,15 @@ fn write_file_recorded(
         relative_path.display()
     );
 
-    uv_fs::write_atomic_sync(site_packages.join(relative_path), content.as_ref())?;
+    let content = content.as_ref();
+    uv_fs::write_atomic_sync(site_packages.join(relative_path), content)?;
 
-    let hash = Sha256::new().chain_update(content.as_ref()).finalize();
+    let hash = Sha256::digest(content);
     let encoded_hash = format!("sha256={}", BASE64URL_NOPAD.encode(&hash));
     record.push(RecordEntry {
         path: relative_path.portable_display().to_string(),
         hash: Some(encoded_hash),
-        size: Some(content.as_ref().len() as u64),
+        size: Some(content.len() as u64),
     });
     Ok(())
 }
