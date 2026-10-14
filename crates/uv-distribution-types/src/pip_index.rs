@@ -31,6 +31,12 @@ macro_rules! impl_index {
             }
         }
 
+        impl AsRef<Index> for $name {
+            fn as_ref(&self) -> &Index {
+                &self.0
+            }
+        }
+
         impl From<Index> for $name {
             fn from(value: Index) -> Self {
                 Self(value)
