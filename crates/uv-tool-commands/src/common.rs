@@ -46,7 +46,7 @@ use uv_python_types::{
     PythonVariant, VersionRequest,
 };
 use uv_requirements::RequirementsSpecification;
-use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
+use uv_resolver::{FlatIndex, OptionsBuilder, ResolverOutput};
 use uv_settings::{PythonInstallMirrors, ToolOptions};
 use uv_shell::Shell;
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
@@ -620,28 +620,22 @@ impl ToolLock {
 
 /// Build an environment specification for a tool, preferring versions from its existing lock when
 /// available, then falling back to the installed environment.
-pub(super) fn tool_environment_spec<'lock>(
+pub(super) fn tool_environment_spec<'a>(
     requirements: RequirementsSpecification,
-    lock: Option<&'lock ToolLock>,
-    site_packages: Option<&SitePackages>,
-) -> EnvironmentSpecification<'lock> {
+    lock: Option<&'a ToolLock>,
+    site_packages: Option<&'a SitePackages>,
+) -> EnvironmentSpecification<'a> {
     let specification = EnvironmentSpecification::from(requirements);
-    if let Some(lock) = lock {
-        return specification.with_preferences(PreferenceLocation::Lock {
+    let preference = lock
+        .map(|lock| PreferenceLocation::Lock {
             lock: &lock.lock,
             install_path: &lock.root,
-        });
+        })
+        .or_else(|| site_packages.map(PreferenceLocation::Installed));
+    match preference {
+        Some(preference) => specification.with_preferences(preference),
+        None => specification,
     }
-
-    let preferences = site_packages
-        .into_iter()
-        .flat_map(|site_packages| site_packages.iter().filter_map(Preference::from_installed))
-        .collect::<Vec<_>>();
-    if preferences.is_empty() {
-        return specification;
-    }
-
-    specification.with_preferences(PreferenceLocation::Entries(preferences))
 }
 /// Given a no-solution error and the [`Interpreter`] that was used during the solve, attempt to
 /// discover an alternate [`Interpreter`] that satisfies the `requires-python` constraint.

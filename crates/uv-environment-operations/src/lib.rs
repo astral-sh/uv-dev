@@ -18,7 +18,7 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, PlatformState, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, HashCollection, Index, RequiresPython, Resolution,
+    ExtraBuildRequires, HashCollection, Index, Name, RequiresPython, Resolution,
 };
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
@@ -1265,22 +1265,22 @@ impl std::ops::Deref for ScriptEnvironment {
 }
 
 #[derive(Debug, Clone)]
-pub enum PreferenceLocation<'lock> {
+pub enum PreferenceLocation<'a> {
     /// The preferences should be extracted from a lockfile.
     Lock {
-        lock: &'lock Lock,
-        install_path: &'lock Path,
+        lock: &'a Lock,
+        install_path: &'a Path,
     },
-    /// The preferences will be provided directly as [`Preference`] entries.
-    Entries(Vec<Preference>),
+    /// The preferences should be extracted from installed distributions.
+    Installed(&'a SitePackages),
 }
 
 #[derive(Debug, Clone)]
-pub struct EnvironmentSpecification<'lock> {
+pub struct EnvironmentSpecification<'a> {
     /// The requirements to include in the environment.
     requirements: RequirementsSpecification,
     /// The preferences to respect when resolving.
-    preferences: Option<PreferenceLocation<'lock>>,
+    preferences: Option<PreferenceLocation<'a>>,
 }
 
 impl From<RequirementsSpecification> for EnvironmentSpecification<'_> {
@@ -1292,10 +1292,10 @@ impl From<RequirementsSpecification> for EnvironmentSpecification<'_> {
     }
 }
 
-impl<'lock> EnvironmentSpecification<'lock> {
+impl<'a> EnvironmentSpecification<'a> {
     /// Set the [`PreferenceLocation`] for the specification.
     #[must_use]
-    pub fn with_preferences(self, preferences: PreferenceLocation<'lock>) -> Self {
+    pub fn with_preferences(self, preferences: PreferenceLocation<'a>) -> Self {
         Self {
             preferences: Some(preferences),
             ..self
@@ -1475,7 +1475,6 @@ pub async fn resolve_environment(
         EnvironmentResolution::Universal => upgrade.clone(),
     };
 
-    // If an existing lockfile exists, build up a set of preferences.
     let preferences = match spec.preferences {
         Some(PreferenceLocation::Lock { lock, install_path }) => {
             let LockedRequirements { preferences, git } =
@@ -1489,17 +1488,20 @@ pub async fn resolve_environment(
 
             preferences
         }
-        Some(PreferenceLocation::Entries(entries)) => {
-            // Drop preferences for any packages that are included in the upgrade strategy.
+        Some(PreferenceLocation::Installed(site_packages)) => {
+            // Avoid pinning versions for packages selected for upgrade.
             if upgrade.is_all() {
                 vec![]
-            } else if let Some(packages) = upgrade.packages() {
-                entries
-                    .into_iter()
-                    .filter(|preference| !packages.contains(preference.name()))
-                    .collect()
             } else {
-                entries
+                let upgraded_packages = upgrade.packages();
+                site_packages
+                    .iter()
+                    .filter(|distribution| {
+                        upgraded_packages
+                            .is_none_or(|packages| !packages.contains(distribution.name()))
+                    })
+                    .filter_map(Preference::from_installed)
+                    .collect()
             }
         }
         None => vec![],
