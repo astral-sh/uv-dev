@@ -8232,6 +8232,7 @@ dependencies = [
  "uv-distribution-types",
  "uv-errors",
  "uv-fs",
+ "uv-git-types",
  "uv-macros",
  "uv-normalize",
  "uv-once-map",
