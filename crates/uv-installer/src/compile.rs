@@ -9,7 +9,7 @@ use tempfile::{TempDir, tempdir_in};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
-use tokio::sync::oneshot;
+use tokio::sync::{OnceCell, oneshot};
 use tracing::{debug, instrument};
 use walkdir::WalkDir;
 
@@ -24,10 +24,9 @@ const DEFAULT_COMPILE_TIMEOUT: Duration = Duration::from_mins(1);
 
 type WorkerHandle = oneshot::Receiver<Result<(), CompileError>>;
 
-/// Bytecode workers and the resources needed until they exit.
+/// Bytecode workers and their input queue.
 struct BytecodeWorkers {
     handles: Vec<WorkerHandle>,
-    _script_directory: TempDir,
     sender: Sender<PathBuf>,
     source_files: usize,
 }
@@ -36,8 +35,39 @@ struct BytecodeWorkers {
 struct BytecodeWorkerContext {
     directory: PathBuf,
     interpreter: PathBuf,
-    script: PathBuf,
+    script: BytecodeScript,
     timeout: Option<Duration>,
+}
+
+/// A compiler script shared by bytecode workers.
+///
+/// Its path is published after the script is fully written, and its directory remains alive until
+/// all workers exit.
+struct BytecodeScript {
+    directory: TempDir,
+    path: OnceCell<PathBuf>,
+}
+
+impl BytecodeScript {
+    fn new(directory: TempDir) -> Self {
+        Self {
+            directory,
+            path: OnceCell::new(),
+        }
+    }
+
+    async fn initialize(&self) -> Result<&Path, CompileError> {
+        self.path
+            .get_or_try_init(|| async {
+                let path = self.directory.path().join("pip_compileall.py");
+                fs_err::tokio::write(&path, COMPILEALL_SCRIPT)
+                    .await
+                    .map(|()| path)
+            })
+            .await
+            .map(PathBuf::as_path)
+            .map_err(CompileError::TempFile)
+    }
 }
 
 /// A ready Python bytecode compiler and its communication streams.
@@ -119,8 +149,7 @@ fn spawn_workers(
     let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
 
     // Running Python with an actual file will produce better error messages.
-    let script_directory = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let script = script_directory.path().join("pip_compileall.py");
+    let script = BytecodeScript::new(tempdir_in(cache).map_err(CompileError::TempFile)?);
     let timeout = compile_timeout()?;
     let context = Arc::new(BytecodeWorkerContext {
         directory: dir.to_path_buf(),
@@ -152,7 +181,6 @@ fn spawn_workers(
     drop(receiver);
     Ok(BytecodeWorkers {
         handles: worker_handles,
-        _script_directory: script_directory,
         sender,
         source_files: 0,
     })
@@ -193,7 +221,6 @@ impl BytecodeWorkers {
     ) -> Result<usize, CompileError> {
         let Self {
             handles,
-            _script_directory,
             sender,
             source_files,
         } = self;
@@ -250,6 +277,8 @@ pub async fn compile_tree(
                     // The directory was removed, just ignore it
                     continue;
                 }
+                // A walk failure takes precedence, but workers must exit before the tree walk does.
+                let _ = workers.finish(Ok(())).await;
                 return Err(err.into());
             }
         };
@@ -314,9 +343,7 @@ async fn worker(
     context: Arc<BytecodeWorkerContext>,
     receiver: Receiver<PathBuf>,
 ) -> Result<(), CompileError> {
-    fs_err::tokio::write(&context.script, COMPILEALL_SCRIPT)
-        .await
-        .map_err(CompileError::TempFile)?;
+    let pip_compileall_py = context.script.initialize().await?;
 
     // Sometimes, the first time we read from stdout, we get an empty string back (no newline). If
     // we try to write to stdin, it will often be a broken pipe. In this case, we have to restart
@@ -325,9 +352,12 @@ async fn worker(
     let wait_until_ready = async {
         loop {
             // If the interpreter started successful, return it, else retry.
-            if let Some(child) =
-                launch_bytecode_compiler(&context.directory, &context.interpreter, &context.script)
-                    .await?
+            if let Some(child) = launch_bytecode_compiler(
+                &context.directory,
+                &context.interpreter,
+                pip_compileall_py,
+            )
+            .await?
             {
                 break Ok::<_, CompileError>(child);
             }
@@ -408,6 +438,8 @@ async fn launch_bytecode_compiler(
         .current_dir(dir)
         // Otherwise stdout is buffered and we'll wait forever for a response
         .env(EnvVars::PYTHONUNBUFFERED, "1")
+        // Startup can time out before the worker takes ownership of the child.
+        .kill_on_drop(true)
         .spawn()
         .map_err(CompileError::PythonSubcommand)?;
 
@@ -419,22 +451,23 @@ async fn launch_bytecode_compiler(
 
     // Check if the launch was successful.
     let mut out_line = String::new();
-    stdout
-        .read_line(&mut out_line)
-        .await
-        .map_err(|err| CompileError::ChildStdio {
-            device: "stdout",
-            err,
-        })?;
-
-    if out_line.trim_end() == "Ready" {
-        Ok(Some(BytecodeCompiler {
+    let read_result = stdout.read_line(&mut out_line).await;
+    if read_result.is_ok() && out_line.trim_end() == "Ready" {
+        return Ok(Some(BytecodeCompiler {
             child,
             stdin,
             stdout,
             stderr,
-        }))
-    } else if out_line.is_empty() {
+        }));
+    }
+
+    // Reap a failed startup before retrying or reporting the error.
+    let _ = child.kill().await;
+    read_result.map_err(|err| CompileError::ChildStdio {
+        device: "stdout",
+        err,
+    })?;
+    if out_line.is_empty() {
         // Failed to launch, try again
         Ok(None)
     } else {
@@ -508,4 +541,78 @@ async fn worker_main_loop(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{ErrorKind, Write};
+    use std::net::Ipv4Addr;
+    use std::time::Duration;
+
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+    use uv_cache::Cache;
+    use uv_python_discovery::find_environment;
+    use uv_python_types::{EnvironmentPreference, PythonPreference, PythonRequest};
+
+    use super::{BytecodeScript, COMPILEALL_SCRIPT, launch_bytecode_compiler};
+
+    /// Once an interpreter can read the compiler script, later workers must not rewrite it.
+    #[tokio::test]
+    async fn bytecode_workers_reuse_initialized_script() -> anyhow::Result<()> {
+        let script = BytecodeScript::new(tempfile::tempdir()?);
+        let path = script.initialize().await?;
+        fs_err::OpenOptions::new()
+            .append(true)
+            .open(path)?
+            .write_all(b"\n# initialized\n")?;
+
+        let (first, second) = tokio::join!(script.initialize(), script.initialize());
+        assert_eq!(first?, path);
+        assert_eq!(second?, path);
+        assert_eq!(
+            fs_err::read_to_string(path)?,
+            format!("{COMPILEALL_SCRIPT}\n# initialized\n")
+        );
+        Ok(())
+    }
+
+    /// Cancelling startup must terminate the interpreter before it reports readiness.
+    #[tokio::test]
+    async fn cancelled_bytecode_compiler_startup_terminates_child() -> anyhow::Result<()> {
+        let _preview = uv_preview::test::with_features(&[]);
+        let cache = Cache::temp()?;
+        let environment = find_environment(
+            &PythonRequest::Any,
+            EnvironmentPreference::Any,
+            PythonPreference::System,
+            None,
+            &cache,
+        )?;
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let script = cache.root().join("startup.py");
+        fs_err::write(
+            &script,
+            format!(
+                "import socket\nsocket.create_connection(('127.0.0.1', {})).recv(1)\n",
+                listener.local_addr()?.port()
+            ),
+        )?;
+
+        let (mut connection, _) = tokio::select! {
+            result = listener.accept() => result?,
+            _ = launch_bytecode_compiler(cache.root(), environment.python_executable(), &script) => {
+                anyhow::bail!("bytecode compiler exited before startup was cancelled")
+            }
+            _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                anyhow::bail!("bytecode compiler did not start")
+            }
+        };
+        match tokio::time::timeout(Duration::from_secs(5), connection.read(&mut [0])).await? {
+            Ok(0) => {}
+            Err(err) if err.kind() == ErrorKind::ConnectionReset => {}
+            result => anyhow::bail!("unexpected compiler connection result: {result:?}"),
+        }
+        Ok(())
+    }
 }
