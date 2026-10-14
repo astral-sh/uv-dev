@@ -50,7 +50,7 @@ impl IndexUrl {
     ///
     /// For indexes with a `/simple` endpoint, this is simply the URL with the final segment
     /// removed. This is useful, e.g., for credential propagation to other endpoints on the index.
-    pub fn root(&self) -> Option<DisplaySafeUrl> {
+    pub(crate) fn root(&self) -> Option<DisplaySafeUrl> {
         Self::root_from_url(self.url())
     }
 

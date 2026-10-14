@@ -336,7 +336,7 @@ impl TextCredentialStore {
     /// Get credentials for a given URL and username.
     ///
     /// The most specific URL prefix match in the same [`crate::Realm`] is returned, if any.
-    pub fn get_credentials(
+    pub(crate) fn get_credentials(
         &self,
         url: &DisplaySafeUrl,
         username: Option<&str>,
