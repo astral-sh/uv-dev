@@ -48,21 +48,7 @@ impl From<&Url> for Realm {
 
 impl Display for Realm {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Some(port) = self.port {
-            write!(
-                f,
-                "{}://{}:{port}",
-                self.scheme,
-                self.host.as_deref().unwrap_or_default()
-            )
-        } else {
-            write!(
-                f,
-                "{}://{}",
-                self.scheme,
-                self.host.as_deref().unwrap_or_default()
-            )
-        }
+        Display::fmt(&RealmRef::from(self), f)
     }
 }
 
@@ -80,12 +66,23 @@ impl Hash for Realm {
     }
 }
 
-/// A reference to a [`Realm`] that can be used for zero-allocation comparisons.
-#[derive(Debug, Copy, Clone)]
+/// A borrowed representation of a [`Realm`] for comparisons and formatting.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct RealmRef<'a> {
     scheme: &'a str,
     host: Option<&'a str>,
     port: Option<u16>,
+}
+
+impl Display for RealmRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let host = self.host.unwrap_or_default();
+        if let Some(port) = self.port {
+            write!(f, "{}://{host}:{port}", self.scheme)
+        } else {
+            write!(f, "{}://{host}", self.scheme)
+        }
+    }
 }
 
 impl RealmRef<'_> {
@@ -113,19 +110,9 @@ impl<'a> From<&'a Url> for RealmRef<'a> {
     }
 }
 
-impl PartialEq for RealmRef<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.scheme == other.scheme && self.host == other.host && self.port == other.port
-    }
-}
-
-impl Eq for RealmRef<'_> {}
-
-impl Hash for RealmRef<'_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.scheme.hash(state);
-        self.host.hash(state);
-        self.port.hash(state);
+impl<'a> From<&'a DisplaySafeUrl> for RealmRef<'a> {
+    fn from(url: &'a DisplaySafeUrl) -> Self {
+        Self::from(&**url)
     }
 }
 

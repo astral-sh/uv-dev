@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::str::FromStr;
 use thiserror::Error;
 use url::Url;
@@ -18,9 +18,15 @@ pub enum ServiceParseError {
 ///
 /// This type provides automatic URL parsing and validation when used as a CLI argument,
 /// eliminating the need for manual parsing in command functions.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
 pub struct Service(DisplaySafeUrl);
+
+impl<'de> Deserialize<'de> for Service {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::try_from(DisplaySafeUrl::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
 
 impl Service {
     /// Get the underlying [`DisplaySafeUrl`].
@@ -54,9 +60,7 @@ impl FromStr for Service {
             Err(err) => return Err(err.into()),
         };
 
-        Self::check_scheme(&url)?;
-
-        Ok(Self(url))
+        Self::try_from(url)
     }
 }
 

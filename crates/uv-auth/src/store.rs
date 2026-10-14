@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
@@ -14,7 +14,7 @@ use uv_static::EnvVars;
 
 use crate::credentials::{Password, Token, Username};
 use crate::index::is_path_prefix;
-use crate::realm::Realm;
+use crate::realm::RealmRef;
 use crate::service::Service;
 use crate::{Credentials, KeyringProvider};
 
@@ -130,8 +130,8 @@ pub enum LookupError {
 }
 
 /// A single credential entry in a TOML credentials file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(try_from = "TomlCredentialWire", into = "TomlCredentialWire")]
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "TomlCredentialWire")]
 struct TomlCredential {
     /// The service URL for this credential.
     service: Service,
@@ -154,9 +154,11 @@ struct TomlCredentialWire {
     token: Option<String>,
 }
 
-impl From<TomlCredential> for TomlCredentialWire {
-    fn from(value: TomlCredential) -> Self {
-        match value.credentials {
+impl TryFrom<TomlCredential> for TomlCredentialWire {
+    type Error = TomlCredentialError;
+
+    fn try_from(value: TomlCredential) -> Result<Self, Self::Error> {
+        Ok(match value.credentials {
             Credentials::Basic { username, password } => Self {
                 service: value.service,
                 username,
@@ -169,9 +171,9 @@ impl From<TomlCredential> for TomlCredentialWire {
                 username: Username::new(None),
                 scheme: AuthScheme::Bearer,
                 password: None,
-                token: Some(String::from_utf8(token.into_bytes()).expect("Token is valid UTF-8")),
+                token: Some(String::from_utf8(token.into_bytes())?),
             },
-        }
+        })
     }
 }
 
@@ -179,60 +181,44 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
     type Error = TomlCredentialError;
 
     fn try_from(value: TomlCredentialWire) -> Result<Self, Self::Error> {
-        match value.scheme {
+        let credentials = match value.scheme {
             AuthScheme::Basic => {
-                if value.username.as_deref().is_none() {
-                    return Err(TomlCredentialError::BasicAuthError(
-                        BasicAuthError::MissingUsername,
-                    ));
+                if value.username.is_none() {
+                    return Err(BasicAuthError::MissingUsername.into());
                 }
                 if value.token.is_some() {
-                    return Err(TomlCredentialError::BasicAuthError(
-                        BasicAuthError::UnexpectedToken,
-                    ));
+                    return Err(BasicAuthError::UnexpectedToken.into());
                 }
-                let credentials = Credentials::Basic {
+                Credentials::Basic {
                     username: value.username,
                     password: value.password,
-                };
-                Ok(Self {
-                    service: value.service,
-                    credentials,
-                })
+                }
             }
             AuthScheme::Bearer => {
                 if value.username.is_some() {
-                    return Err(TomlCredentialError::BearerAuthError(
-                        BearerAuthError::UnexpectedUsername,
-                    ));
+                    return Err(BearerAuthError::UnexpectedUsername.into());
                 }
                 if value.password.is_some() {
-                    return Err(TomlCredentialError::BearerAuthError(
-                        BearerAuthError::UnexpectedPassword,
-                    ));
+                    return Err(BearerAuthError::UnexpectedPassword.into());
                 }
-                if value.token.is_none() {
-                    return Err(TomlCredentialError::BearerAuthError(
-                        BearerAuthError::MissingToken,
-                    ));
+                let token = value.token.ok_or(BearerAuthError::MissingToken)?;
+                Credentials::Bearer {
+                    token: Token::new(token.into_bytes()),
                 }
-                let credentials = Credentials::Bearer {
-                    token: Token::new(value.token.unwrap().into_bytes()),
-                };
-                Ok(Self {
-                    service: value.service,
-                    credentials,
-                })
             }
-        }
+        };
+        Ok(Self {
+            service: value.service,
+            credentials,
+        })
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct TomlCredentials {
+#[derive(Debug, Serialize, Deserialize)]
+struct TomlCredentials<T> {
     /// Array of credential entries.
-    #[serde(default, rename = "credential")]
-    credentials: Vec<TomlCredential>,
+    #[serde(default = "Vec::new", rename = "credential")]
+    credentials: Vec<T>,
 }
 
 /// A credential store with a plain text storage backend.
@@ -272,20 +258,14 @@ impl TextCredentialStore {
     /// Read credentials from a file.
     fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, TomlCredentialError> {
         let content = fs::read_to_string(path)?;
-        let credentials: TomlCredentials = toml::from_str(&content)?;
+        let credentials: TomlCredentials<TomlCredential> = toml::from_str(&content)?;
 
         let credentials: FxHashMap<(Service, Username), Credentials> = credentials
             .credentials
             .into_iter()
             .map(|credential| {
-                let username = match &credential.credentials {
-                    Credentials::Basic { username, .. } => username.clone(),
-                    Credentials::Bearer { .. } => Username::none(),
-                };
-                (
-                    (credential.service.clone(), username),
-                    credential.credentials,
-                )
+                let username = credential.credentials.to_username();
+                ((credential.service, username), credential.credentials)
             })
             .collect();
 
@@ -317,11 +297,13 @@ impl TextCredentialStore {
         let credentials = self
             .credentials
             .into_iter()
-            .map(|((service, _username), credentials)| TomlCredential {
-                service,
-                credentials,
+            .map(|((service, _username), credentials)| {
+                TomlCredentialWire::try_from(TomlCredential {
+                    service,
+                    credentials,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
 
         let toml_creds = TomlCredentials { credentials };
         let content = toml::to_string_pretty(&toml_creds)?;
@@ -338,31 +320,33 @@ impl TextCredentialStore {
 
     /// Get credentials for a given URL and username.
     ///
-    /// The most specific URL prefix match in the same [`Realm`] is returned, if any.
+    /// The most specific URL prefix match in the same [`crate::Realm`] is returned, if any.
     pub fn get_credentials(
         &self,
         url: &DisplaySafeUrl,
         username: Option<&str>,
     ) -> Result<Option<&Credentials>, LookupError> {
-        let request_realm = Realm::from(url);
+        if self.credentials.is_empty() {
+            return Ok(None);
+        }
 
         // Perform an exact lookup first
         // TODO(zanieb): Consider adding `DisplaySafeUrlRef` so we can avoid this clone
         // TODO(zanieb): We could also return early here if we can't normalize to a `Service`
-        if let Ok(url_service) = Service::try_from(url.clone()) {
-            if let Some(credential) = self
+        if let Ok(url_service) = Service::try_from(url.clone())
+            && let Some(credential) = self
                 .credentials
                 .get(&(url_service, Username::from(username.map(str::to_string))))
-            {
-                return Ok(Some(credential));
-            }
+        {
+            return Ok(Some(credential));
         }
 
         // If that fails, iterate through to find a prefix match
-        let mut best: Option<(usize, &Service, &Credentials)> = None;
+        let request_realm = RealmRef::from(url);
+        let mut best: Option<(usize, &Credentials)> = None;
 
         for ((service, stored_username), credential) in &self.credentials {
-            let service_realm = Realm::from(service.url().deref());
+            let service_realm = RealmRef::from(service.url());
 
             // Only consider services in the same realm
             if service_realm != request_realm {
@@ -375,35 +359,29 @@ impl TextCredentialStore {
             }
 
             // If a username is provided, it must match
-            if let Some(request_username) = username {
-                if Some(request_username) != stored_username.as_deref() {
-                    continue;
-                }
+            if username.is_some_and(|username| Some(username) != stored_username.as_deref()) {
+                continue;
             }
 
             // Update our best matching credential based on prefix length
             let specificity = service.url().path().len();
-            if best.is_none_or(|(best_specificity, _, _)| specificity > best_specificity) {
-                best = Some((specificity, service, credential));
-            } else if best.is_some_and(|(best_specificity, _, _)| specificity == best_specificity) {
-                return Err(LookupError::AmbiguousUsername(url.clone()));
+            if let Some((best_specificity, _)) = best {
+                match specificity.cmp(&best_specificity) {
+                    Ordering::Less => continue,
+                    Ordering::Equal => return Err(LookupError::AmbiguousUsername(url.clone())),
+                    Ordering::Greater => {}
+                }
             }
+            best = Some((specificity, credential));
         }
 
         // Return the most specific match
-        if let Some((_, _, credential)) = best {
-            return Ok(Some(credential));
-        }
-
-        Ok(None)
+        Ok(best.map(|(_, credential)| credential))
     }
 
     /// Store credentials for a given service.
     pub fn insert(&mut self, service: Service, credentials: Credentials) -> Option<Credentials> {
-        let username = match &credentials {
-            Credentials::Basic { username, .. } => username.clone(),
-            Credentials::Bearer { .. } => Username::none(),
-        };
+        let username = credentials.to_username();
         self.credentials.insert((service, username), credentials)
     }
 
@@ -425,7 +403,7 @@ mod tests {
 
     #[test]
     fn test_toml_serialization() {
-        let credentials = TomlCredentials {
+        let credentials: TomlCredentials<TomlCredentialWire> = TomlCredentials {
             credentials: vec![
                 TomlCredential {
                     service: Service::from_str("https://example.com").unwrap(),
@@ -433,19 +411,23 @@ mod tests {
                         username: Username::new(Some("user1".to_string())),
                         password: Some(Password::new("pass1".to_string())),
                     },
-                },
+                }
+                .try_into()
+                .unwrap(),
                 TomlCredential {
                     service: Service::from_str("https://test.org").unwrap(),
                     credentials: Credentials::Basic {
                         username: Username::new(Some("user2".to_string())),
                         password: Some(Password::new("pass2".to_string())),
                     },
-                },
+                }
+                .try_into()
+                .unwrap(),
             ],
         };
 
         let toml_str = toml::to_string_pretty(&credentials).unwrap();
-        let parsed: TomlCredentials = toml::from_str(&toml_str).unwrap();
+        let parsed: TomlCredentials<TomlCredential> = toml::from_str(&toml_str).unwrap();
 
         assert_eq!(parsed.credentials.len(), 2);
         assert_eq!(
@@ -455,6 +437,28 @@ mod tests {
         assert_eq!(
             parsed.credentials[1].service.to_string(),
             "https://test.org/"
+        );
+    }
+
+    #[test]
+    fn empty_basic_username_is_rejected() {
+        let error = toml::from_str::<TomlCredentials<TomlCredential>>(
+            "[[credential]]\nservice = 'https://example.com'\nusername = ''\n",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("`username` is required"));
+    }
+
+    #[test]
+    fn credential_store_rejects_insecure_service() {
+        let error = toml::from_str::<TomlCredentials<TomlCredential>>(
+            "[[credential]]\nservice = 'http://example.com'\nusername = 'user'\n",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("HTTPS is required for non-local hosts")
         );
     }
 
@@ -526,6 +530,24 @@ password = "pass2"
         let content = fs::read_to_string(temp_output.path()).unwrap();
         assert!(content.contains("example.com"));
         assert!(content.contains("testuser"));
+    }
+
+    #[tokio::test]
+    async fn credential_store_rejects_non_utf8_bearer_tokens() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("credentials.toml");
+        let lock = TextCredentialStore::lock(&path).await.unwrap();
+        let mut store = TextCredentialStore::default();
+        store.insert(
+            Service::from_str("https://example.com").unwrap(),
+            Credentials::bearer(vec![0xff]),
+        );
+
+        assert!(matches!(
+            store.write(&path, lock),
+            Err(TomlCredentialError::TokenNotUnicode(_))
+        ));
+        assert!(!path.exists());
     }
 
     #[test]

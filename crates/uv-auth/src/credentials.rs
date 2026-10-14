@@ -1,11 +1,9 @@
-use std::borrow::Cow;
 use std::fmt;
-use std::io::Read;
 use std::io::Write;
 use std::str::{FromStr, Utf8Error};
 
+use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
-use base64::read::DecoderReader;
 use base64::write::EncoderWriter;
 use http::Uri;
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
@@ -13,7 +11,7 @@ use reqsign::azure::DefaultSigner as AzureDefaultSigner;
 use reqsign::google::DefaultSigner as GcsDefaultSigner;
 use reqwest::Request;
 use reqwest::header::{HeaderValue, InvalidHeaderValue};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use url::Url;
 
@@ -45,14 +43,29 @@ pub enum CredentialsFromUrlError {
     InvalidPasswordUtf8(#[source] Utf8Error),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Serialize, Deserialize)]
+#[derive(Debug, Error)]
+pub(crate) enum CredentialsFromRequestError {
+    #[error(transparent)]
+    Url(#[from] CredentialsFromUrlError),
+    #[error("HTTP Basic Authentication credentials are not valid base64")]
+    InvalidBasicHeaderBase64,
+    #[error("HTTP Basic Authentication credentials contain invalid UTF-8")]
+    InvalidBasicHeaderUtf8(#[source] Utf8Error),
+    #[error("HTTP Basic Authentication credentials are missing the `:` separator")]
+    MissingBasicHeaderSeparator,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Serialize)]
 #[serde(transparent)]
 pub struct Username(Option<String>);
 
 impl Username {
+    /// A shared reference for authentication methods without a username.
+    const NONE: &Self = &Self(None);
+
     /// Create a new username.
     ///
-    /// Unlike `reqwest`, empty usernames are be encoded as `None` instead of an empty string.
+    /// Unlike `reqwest`, empty usernames are encoded as `None` instead of an empty string.
     pub(crate) fn new(value: Option<String>) -> Self {
         // Ensure empty strings are `None`
         Self(value.filter(|s| !s.is_empty()))
@@ -72,6 +85,12 @@ impl Username {
 
     pub(crate) fn as_deref(&self) -> Option<&str> {
         self.0.as_deref()
+    }
+}
+
+impl<'de> Deserialize<'de> for Username {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<String>::deserialize(deserializer).map(Self::new)
     }
 }
 
@@ -140,7 +159,6 @@ impl fmt::Debug for Token {
 }
 impl Credentials {
     /// Create a set of HTTP Basic Authentication credentials.
-    #[allow(dead_code)]
     pub fn basic(username: Option<String>, password: Option<String>) -> Self {
         Self::Basic {
             username: Username::new(username),
@@ -149,7 +167,6 @@ impl Credentials {
     }
 
     /// Create a set of Bearer Authentication credentials.
-    #[allow(dead_code)]
     pub(crate) fn bearer(token: Vec<u8>) -> Self {
         Self::Bearer {
             token: Token::new(token),
@@ -157,23 +174,18 @@ impl Credentials {
     }
 
     pub fn username(&self) -> Option<&str> {
-        match self {
-            Self::Basic { username, .. } => username.as_deref(),
-            Self::Bearer { .. } => None,
-        }
+        self.as_username().as_deref()
     }
 
-    fn to_username(&self) -> Username {
-        match self {
-            Self::Basic { username, .. } => username.clone(),
-            Self::Bearer { .. } => Username::none(),
-        }
+    /// Return the username as an owned value.
+    pub(crate) fn to_username(&self) -> Username {
+        self.as_username().clone()
     }
 
-    fn as_username(&self) -> Cow<'_, Username> {
+    fn as_username(&self) -> &Username {
         match self {
-            Self::Basic { username, .. } => Cow::Borrowed(username),
-            Self::Bearer { .. } => Cow::Owned(Username::none()),
+            Self::Basic { username, .. } => username,
+            Self::Bearer { .. } => Username::NONE,
         }
     }
 
@@ -278,63 +290,57 @@ impl Credentials {
 
     /// Parse [`Credentials`] from an HTTP request, if any.
     ///
-    /// Only HTTP Basic Authentication is supported.
-    pub(crate) fn from_request(request: &Request) -> Result<Option<Self>, CredentialsFromUrlError> {
+    /// HTTP Basic and Bearer Authentication are supported.
+    pub(crate) fn from_request(
+        request: &Request,
+    ) -> Result<Option<Self>, CredentialsFromRequestError> {
         // First, attempt to retrieve the credentials from the URL
         if let Some(credentials) = Self::from_url(request.url())? {
             return Ok(Some(credentials));
         }
 
         // Then, attempt to pull the credentials from the headers
-        Ok(request
+        request
             .headers()
             .get(reqwest::header::AUTHORIZATION)
-            .and_then(Self::from_header_value))
+            .map_or(Ok(None), Self::from_header_value)
     }
 
     /// Parse [`Credentials`] from an authorization header, if any.
     ///
     /// HTTP Basic and Bearer Authentication are both supported.
     /// [`None`] will be returned if another authorization scheme is detected.
-    ///
-    /// Panics if the authentication is not conformant to the HTTP Basic Authentication scheme:
-    /// - The contents must be base64 encoded
-    /// - There must be a `:` separator
-    fn from_header_value(header: &HeaderValue) -> Option<Self> {
+    fn from_header_value(
+        header: &HeaderValue,
+    ) -> Result<Option<Self>, CredentialsFromRequestError> {
         // Parse a `Basic` authentication header.
-        if let Some(mut value) = header.as_bytes().strip_prefix(b"Basic ") {
-            let mut decoder = DecoderReader::new(&mut value, &BASE64_STANDARD);
-            let mut buf = String::new();
-            decoder
-                .read_to_string(&mut buf)
-                .expect("HTTP Basic Authentication should be base64 encoded");
-            let (username, password) = buf
-                .split_once(':')
-                .expect("HTTP Basic Authentication should include a `:` separator");
-            let username = if username.is_empty() {
-                None
-            } else {
-                Some(username.to_string())
-            };
-            let password = if password.is_empty() {
-                None
-            } else {
-                Some(password.to_string())
-            };
-            return Some(Self::Basic {
-                username: Username::new(username),
-                password: password.map(Password),
-            });
+        if let Some(value) = header.as_bytes().strip_prefix(b"Basic ") {
+            return Self::from_basic_header(value).map(Some);
         }
 
         // Parse a `Bearer` authentication header.
         if let Some(token) = header.as_bytes().strip_prefix(b"Bearer ") {
-            return Some(Self::Bearer {
+            return Ok(Some(Self::Bearer {
                 token: Token::new(token.to_vec()),
-            });
+            }));
         }
 
-        None
+        Ok(None)
+    }
+
+    fn from_basic_header(value: &[u8]) -> Result<Self, CredentialsFromRequestError> {
+        // Base64 errors can include credential bytes, so report only the error category.
+        let decoded = BASE64_STANDARD
+            .decode(value)
+            .map_err(|_| CredentialsFromRequestError::InvalidBasicHeaderBase64)?;
+        let (username, password) = std::str::from_utf8(&decoded)
+            .map_err(CredentialsFromRequestError::InvalidBasicHeaderUtf8)?
+            .split_once(':')
+            .ok_or(CredentialsFromRequestError::MissingBasicHeaderSeparator)?;
+        Ok(Self::basic(
+            (!username.is_empty()).then(|| username.to_owned()),
+            (!password.is_empty()).then(|| password.to_owned()),
+        ))
     }
 
     /// Create an HTTP authorization header for the credentials.
@@ -342,37 +348,42 @@ impl Credentials {
     /// Returns an error if the bearer token contains invalid header characters.
     pub fn to_header_value(&self) -> Result<HeaderValue, InvalidHeaderValue> {
         let header_bytes = match self {
-            Self::Basic { .. } => {
+            Self::Basic { username, password } => {
                 // See: <https://github.com/seanmonstar/reqwest/blob/2c11ef000b151c2eebeed2c18a7b81042220c6b0/src/util.rs#L3>
                 let mut buf = b"Basic ".to_vec();
                 {
                     let mut encoder = EncoderWriter::new(&mut buf, &BASE64_STANDARD);
-                    write!(encoder, "{}:", self.username().unwrap_or_default())
-                        .expect("Write to base64 encoder should succeed");
-                    if let Some(password) = self.password() {
-                        write!(encoder, "{password}")
-                            .expect("Write to base64 encoder should succeed");
-                    }
+                    write!(
+                        encoder,
+                        "{}:{}",
+                        username.as_deref().unwrap_or_default(),
+                        password.as_ref().map_or("", Password::as_str)
+                    )
+                    .expect("Write to base64 encoder should succeed");
                 }
                 buf
             }
             Self::Bearer { token } => [b"Bearer ", token.as_slice()].concat(),
         };
-        let mut header = HeaderValue::from_bytes(&header_bytes)?;
+        let mut header = HeaderValue::try_from(header_bytes)?;
         header.set_sensitive(true);
         Ok(header)
     }
 
-    /// Apply the credentials to the given URL.
+    /// Apply HTTP Basic credentials to the given URL.
     ///
-    /// Any existing credentials will be overridden.
+    /// Each present component replaces its counterpart if the URL supports user information.
+    /// Bearer credentials do not modify the URL.
     #[must_use]
     pub fn apply(&self, mut url: DisplaySafeUrl) -> DisplaySafeUrl {
-        if let Some(username) = self.username() {
+        let Self::Basic { username, password } = self else {
+            return url;
+        };
+        if let Some(username) = username.as_deref() {
             let _ = url.set_username(username);
         }
-        if let Some(password) = self.password() {
-            let _ = url.set_password(Some(password));
+        if let Some(password) = password {
+            let _ = url.set_password(Some(password.as_str()));
         }
         url
     }
@@ -426,20 +437,6 @@ pub(crate) enum AuthenticationError {
     },
 }
 
-impl PartialEq for Authentication {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Credentials(a), Self::Credentials(b)) => a == b,
-            (Self::AwsSigner(..), Self::AwsSigner(..)) => true,
-            (Self::GcsSigner(..), Self::GcsSigner(..)) => true,
-            (Self::AzureSigner(..), Self::AzureSigner(..)) => true,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for Authentication {}
-
 impl From<Credentials> for Authentication {
     fn from(credentials: Credentials) -> Self {
         Self::Credentials(credentials)
@@ -475,28 +472,20 @@ impl Authentication {
 
     /// Return the username used for authentication, if any.
     pub(crate) fn username(&self) -> Option<&str> {
-        match self {
-            Self::Credentials(credentials) => credentials.username(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => None,
-        }
+        self.as_username().as_deref()
     }
 
     /// Return the username used for authentication, if any.
-    pub(crate) fn as_username(&self) -> Cow<'_, Username> {
+    pub(crate) fn as_username(&self) -> &Username {
         match self {
             Self::Credentials(credentials) => credentials.as_username(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => {
-                Cow::Owned(Username::none())
-            }
+            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => Username::NONE,
         }
     }
 
     /// Return the username used for authentication, if any.
     pub(crate) fn to_username(&self) -> Username {
-        match self {
-            Self::Credentials(credentials) => credentials.to_username(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => Username::none(),
-        }
+        self.as_username().clone()
     }
 
     /// Return `true` if the object contains a means of authenticating.
@@ -520,107 +509,41 @@ impl Authentication {
     /// Any existing credentials will be overridden.
     pub(crate) async fn authenticate(
         &self,
-        mut request: Request,
+        request: Request,
     ) -> Result<Request, AuthenticationError> {
         match self {
             Self::Credentials(credentials) => Ok(credentials.authenticate(request)?),
-            Self::AwsSigner(signer) => {
-                // Build an `http::Request` from the `reqwest::Request`.
-                let uri = Uri::from_str(request.url().as_str())?;
-                let mut http_req = http::Request::builder()
-                    .method(request.method().clone())
-                    .uri(uri)
-                    .body(())
-                    .map_err(|source| AuthenticationError::BuildRequest {
-                        provider: "AWS",
-                        source,
-                    })?;
-                *http_req.headers_mut() = request.headers().clone();
-
-                // Sign the parts.
-                let (mut parts, ()) = http_req.into_parts();
-                signer.sign(&mut parts, None).await.map_err(|source| {
-                    AuthenticationError::Sign {
-                        provider: "AWS",
-                        source,
-                    }
-                })?;
-
-                // Copy over the signed headers.
-                request.headers_mut().extend(parts.headers);
-
-                // Copy over the signed path and query, if any.
-                if let Some(path_and_query) = parts.uri.path_and_query() {
-                    request.url_mut().set_path(path_and_query.path());
-                    request.url_mut().set_query(path_and_query.query());
-                }
-                Ok(request)
-            }
-            Self::GcsSigner(signer) => {
-                // Build an `http::Request` from the `reqwest::Request`.
-                let uri = Uri::from_str(request.url().as_str())?;
-                let mut http_req = http::Request::builder()
-                    .method(request.method().clone())
-                    .uri(uri)
-                    .body(())
-                    .map_err(|source| AuthenticationError::BuildRequest {
-                        provider: "GCS",
-                        source,
-                    })?;
-                *http_req.headers_mut() = request.headers().clone();
-
-                // Sign the parts.
-                let (mut parts, ()) = http_req.into_parts();
-                signer.sign(&mut parts, None).await.map_err(|source| {
-                    AuthenticationError::Sign {
-                        provider: "GCS",
-                        source,
-                    }
-                })?;
-
-                // Copy over the signed headers.
-                request.headers_mut().extend(parts.headers);
-
-                // Copy over the signed path and query, if any.
-                if let Some(path_and_query) = parts.uri.path_and_query() {
-                    request.url_mut().set_path(path_and_query.path());
-                    request.url_mut().set_query(path_and_query.query());
-                }
-                Ok(request)
-            }
-            Self::AzureSigner(signer) => {
-                // Build an `http::Request` from the `reqwest::Request`.
-                let uri = Uri::from_str(request.url().as_str())?;
-                let mut http_req = http::Request::builder()
-                    .method(request.method().clone())
-                    .uri(uri)
-                    .body(())
-                    .map_err(|source| AuthenticationError::BuildRequest {
-                        provider: "Azure",
-                        source,
-                    })?;
-                *http_req.headers_mut() = request.headers().clone();
-
-                // Sign the parts.
-                let (mut parts, ()) = http_req.into_parts();
-                signer.sign(&mut parts, None).await.map_err(|source| {
-                    AuthenticationError::Sign {
-                        provider: "Azure",
-                        source,
-                    }
-                })?;
-
-                // Copy over the signed headers.
-                request.headers_mut().extend(parts.headers);
-
-                // Copy over the signed path and query, if any.
-                if let Some(path_and_query) = parts.uri.path_and_query() {
-                    request.url_mut().set_path(path_and_query.path());
-                    request.url_mut().set_query(path_and_query.query());
-                }
-                Ok(request)
-            }
+            Self::AwsSigner(signer) => Self::sign_request(signer, request, "AWS").await,
+            Self::GcsSigner(signer) => Self::sign_request(signer, request, "GCS").await,
+            Self::AzureSigner(signer) => Self::sign_request(signer, request, "Azure").await,
         }
+    }
+
+    async fn sign_request<K: reqsign::SigningCredential>(
+        signer: &reqsign::Signer<K>,
+        mut request: Request,
+        provider: &'static str,
+    ) -> Result<Request, AuthenticationError> {
+        let uri = Uri::from_str(request.url().as_str())?;
+        let mut http_request = http::Request::builder()
+            .method(request.method().clone())
+            .uri(uri)
+            .body(())
+            .map_err(|source| AuthenticationError::BuildRequest { provider, source })?;
+        *http_request.headers_mut() = request.headers().clone();
+
+        let (mut parts, ()) = http_request.into_parts();
+        signer
+            .sign(&mut parts, None)
+            .await
+            .map_err(|source| AuthenticationError::Sign { provider, source })?;
+
+        request.headers_mut().extend(parts.headers);
+        if let Some(path_and_query) = parts.uri.path_and_query() {
+            request.url_mut().set_path(path_and_query.path());
+            request.url_mut().set_query(path_and_query.query());
+        }
+        Ok(request)
     }
 }
 
@@ -751,7 +674,10 @@ mod tests {
         header.set_sensitive(false);
 
         assert_debug_snapshot!(header, @r#""Basic dXNlcjpwYXNzd29yZA==""#);
-        assert_eq!(Credentials::from_header_value(&header), Some(credentials));
+        assert_eq!(
+            Credentials::from_header_value(&header).unwrap(),
+            Some(credentials)
+        );
     }
 
     #[test]
@@ -773,7 +699,10 @@ mod tests {
         header.set_sensitive(false);
 
         assert_debug_snapshot!(header, @r#""Basic dXNlckBkb21haW46cGFzc3dvcmQ=""#);
-        assert_eq!(Credentials::from_header_value(&header), Some(credentials));
+        assert_eq!(
+            Credentials::from_header_value(&header).unwrap(),
+            Some(credentials)
+        );
     }
 
     #[test]
@@ -795,7 +724,38 @@ mod tests {
         header.set_sensitive(false);
 
         assert_debug_snapshot!(header, @r#""Basic dXNlcjpwYXNzd29yZD09""#);
-        assert_eq!(Credentials::from_header_value(&header), Some(credentials));
+        assert_eq!(
+            Credentials::from_header_value(&header).unwrap(),
+            Some(credentials)
+        );
+    }
+
+    #[test]
+    fn malformed_basic_authorization_header_is_an_error() {
+        let parse_header = |header| {
+            let mut request = Request::new(
+                reqwest::Method::GET,
+                Url::parse("https://example.com/").unwrap(),
+            );
+            request.headers_mut().insert(
+                reqwest::header::AUTHORIZATION,
+                HeaderValue::from_static(header),
+            );
+            Credentials::from_request(&request)
+        };
+
+        assert_matches!(
+            parse_header("Basic !!!"),
+            Err(CredentialsFromRequestError::InvalidBasicHeaderBase64)
+        );
+        assert_matches!(
+            parse_header("Basic /w=="),
+            Err(CredentialsFromRequestError::InvalidBasicHeaderUtf8(_))
+        );
+        assert_matches!(
+            parse_header("Basic dXNlcg=="),
+            Err(CredentialsFromRequestError::MissingBasicHeaderSeparator)
+        );
     }
 
     #[tokio::test]

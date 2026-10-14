@@ -12,7 +12,7 @@ use uv_once_map::OnceMap;
 use uv_redacted::DisplaySafeUrl;
 
 use crate::credentials::{Authentication, CredentialsFromUrlError, Username};
-use crate::{Credentials, Realm};
+use crate::{Credentials, Realm, RealmRef};
 
 type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
 
@@ -255,7 +255,7 @@ impl<T> UrlTrie<T> {
         if url.path().ends_with('/') {
             segments.next_back();
         }
-        let realm = Cow::Owned(Realm::from(url).to_string());
+        let realm = Cow::Owned(RealmRef::from(url).to_string());
         Some(std::iter::once(realm).chain(segments.map(Cow::Borrowed)))
     }
 
@@ -382,12 +382,20 @@ mod tests {
         let cache = CredentialsCache::default();
         // Insert with URL with credentials and get with redacted URL.
         let url = DisplaySafeUrl::parse("https://username:password@example.com/foobar").unwrap();
-        cache.insert(&url, credentials.clone());
-        assert_eq!(cache.get_url(&url, &username), Some(credentials.clone()));
+        cache.insert(&url, Arc::clone(&credentials));
+        let redacted = DisplaySafeUrl::parse("https://example.com/foobar").unwrap();
+        assert!(Arc::ptr_eq(
+            &cache.get_url(&redacted, &username).unwrap(),
+            &credentials
+        ));
         // Insert with redacted URL and get with URL with credentials.
+        let redacted = DisplaySafeUrl::parse("https://second-example.com/foobar").unwrap();
+        cache.insert(&redacted, Arc::clone(&credentials));
         let url =
             DisplaySafeUrl::parse("https://username:password@second-example.com/foobar").unwrap();
-        cache.insert(&url, credentials.clone());
-        assert_eq!(cache.get_url(&url, &username), Some(credentials.clone()));
+        assert!(Arc::ptr_eq(
+            &cache.get_url(&url, &username).unwrap(),
+            &credentials
+        ));
     }
 }

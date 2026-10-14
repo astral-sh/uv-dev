@@ -19,7 +19,7 @@ use crate::{
     CredentialsCache, KeyringProvider,
     cache::FetchUrl,
     credentials::{
-        Authentication, AuthenticationError, Credentials, CredentialsFromUrlError, Username,
+        Authentication, AuthenticationError, Credentials, CredentialsFromRequestError, Username,
     },
     index::{AuthPolicy, Indexes},
     realm::Realm,
@@ -36,8 +36,8 @@ impl From<AuthenticationError> for Error {
     }
 }
 
-impl From<CredentialsFromUrlError> for Error {
-    fn from(err: CredentialsFromUrlError) -> Self {
+impl From<CredentialsFromRequestError> for Error {
+    fn from(err: CredentialsFromRequestError) -> Self {
         Self::middleware(err)
     }
 }
@@ -521,10 +521,10 @@ impl AuthMiddleware {
         // check for the realm.
         let maybe_cached_credentials = if let Some(index) = index {
             self.cache()
-                .get_url(&index.url, credentials.as_username().as_ref())
+                .get_url(&index.url, credentials.as_username())
                 .or_else(|| {
                     self.cache()
-                        .get_url(&index.root_url, credentials.as_username().as_ref())
+                        .get_url(&index.root_url, credentials.as_username())
                 })
         } else {
             self.cache()
@@ -541,7 +541,7 @@ impl AuthMiddleware {
 
         let credentials = if let Some(credentials) = self.cache().get_url(
             DisplaySafeUrl::ref_cast(request.url()),
-            credentials.as_username().as_ref(),
+            credentials.as_username(),
         ) {
             request = credentials.authenticate(request).await?;
             // Do not insert already-cached credentials
