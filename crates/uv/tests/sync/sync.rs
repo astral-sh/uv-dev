@@ -10432,7 +10432,8 @@ fn transitive_dev() -> Result<()> {
     Ok(())
 }
 
-/// Avoid installing dev dependencies of transitive dependencies.
+/// `--no-editable` builds first-party workspace packages under `--no-build` and installs them
+/// independently of their source directories.
 #[test]
 fn sync_no_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -10458,22 +10459,10 @@ fn sync_no_editable() -> Result<()> {
         "#,
     )?;
 
-    let src = context.temp_dir.child("src").child("albatross");
-    src.create_dir_all()?;
-
-    let init = src.child("__init__.py");
-    init.touch()?;
-
-    context
-        .temp_dir
-        .child("src")
-        .child("root")
-        .child("__init__.py")
-        .touch()?;
+    let root_source = context.temp_dir.child("src/root");
+    root_source.child("__init__.py").touch()?;
 
     let child = context.temp_dir.child("child");
-    fs_err::create_dir_all(&child)?;
-
     let pyproject_toml = child.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -10488,13 +10477,8 @@ fn sync_no_editable() -> Result<()> {
         "#,
     )?;
 
-    let src = child.child("src").child("child");
-    src.create_dir_all()?;
+    child.child("src/child/__init__.py").touch()?;
 
-    let init = src.child("__init__.py");
-    init.touch()?;
-
-    // `--no-build` should allow building first-party workspace packages in non-editable mode.
     uv_snapshot!(context.filters(), context.sync().arg("--no-editable").arg("--no-build"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -10512,11 +10496,11 @@ fn sync_no_editable() -> Result<()> {
     Checked 2 packages in [TIME]
     ");
 
-    // Remove the project.
+    // Both installations must remain usable after their source directories disappear.
+    fs_err::remove_dir_all(&root_source)?;
     fs_err::remove_dir_all(&child)?;
 
-    // Ensure that we can still import it.
-    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("python").arg("-c").arg("import child"), @"
+    uv_snapshot!(context.filters(), context.run().args(["--no-sync", "python", "-I", "-c", "import root, child"]), @"
     exit_code: 0 (success)
     ");
 
