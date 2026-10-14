@@ -13,7 +13,7 @@ use fs_err::{DirEntry, File};
 use itertools::Itertools;
 use regex_automata::dfa::{Automaton, dense};
 use regex_automata::{Input, util::syntax};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace, warn};
 use walkdir::WalkDir;
@@ -94,26 +94,21 @@ if __name__ == "__main__":
     )
 }
 
-/// Shamelessly stolen (and updated for recent sha2)
-/// <https://github.com/richo/hashing-copy/blob/d8dd2fdb63c6faf198de0c9e5713d6249cbb5323/src/lib.rs#L10-L52>
-/// which in turn got it from std
-/// <https://doc.rust-lang.org/1.58.0/src/std/io/copy.rs.html#128-156>
-fn copy_and_hash(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<(u64, String)> {
-    // TODO: Do we need to support anything besides sha256?
+/// Copy a script into its destination and compute its size and SHA-256 hash for `RECORD`.
+fn copy_and_hash(mut reader: impl BufRead, writer: &mut impl Write) -> io::Result<(u64, String)> {
     let mut hasher = Sha256::new();
-    // Same buf size as std. Note that this number is important for performance
-    let mut buf = vec![0; 8 * 1024];
-
     let mut written = 0;
     loop {
-        let len = match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(len) => len,
+        let bytes = match reader.fill_buf() {
+            Ok([]) => break,
+            Ok(bytes) => bytes,
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         };
-        hasher.update(&buf[..len]);
-        writer.write_all(&buf[..len])?;
+        hasher.update(bytes);
+        writer.write_all(bytes)?;
+        let len = bytes.len();
+        reader.consume(len);
         written += len as u64;
     }
     Ok((written, encode_sha256(&hasher.finalize())))
@@ -139,15 +134,15 @@ fn format_shebang(executable: impl AsRef<Path>, os_name: &str, relocatable: bool
         // Same applies for relocatable scripts (executable is relative to script dir, hence `dirname` trick)
         // (note: the Windows trampoline binaries natively support relative paths to executable)
         if shebang_length > 127 || executable.contains(' ') || relocatable {
-            let executable = format!("'{}'", escape_posix_for_single_quotes(&executable));
-            return format_shell_shebang(&executable, relocatable);
+            let executable = escape_posix_for_single_quotes(&executable);
+            return format_shell_shebang(format_args!("'{executable}'"), relocatable);
         }
     }
 
     format!("#!{executable}")
 }
 
-fn format_shell_shebang(executable: &str, relocatable: bool) -> String {
+fn format_shell_shebang(executable: impl Display, relocatable: bool) -> String {
     let prefix = if relocatable {
         r#""$(dirname -- "$(realpath -- "$0")")"/"#
     } else {
@@ -175,23 +170,22 @@ fn quote_executable_for_encoded_script(executable: &Path) -> String {
     format!("\"$(printf %b {octal}){}\"", "\n".repeat(trailing_newlines))
 }
 
-/// Returns a [`PathBuf`] to `python[w].exe` for script execution.
+/// Return the interpreter to use for script execution.
 ///
 /// <https://github.com/pypa/pip/blob/76e82a43f8fb04695e834810df64f2d9a2ff6020/src/pip/_vendor/distlib/scripts.py#L121-L126>
-fn get_script_executable(python_executable: &Path, is_gui: bool) -> PathBuf {
+fn get_script_executable(python_executable: &Path, is_gui: bool) -> Cow<'_, Path> {
     // Only check for `pythonw.exe` on Windows.
-    if cfg!(windows) && is_gui {
-        python_executable
-            .file_name()
-            .map(|name| {
-                let new_name = name.to_string_lossy().replace("python", "pythonw");
-                python_executable.with_file_name(new_name)
-            })
-            .filter(|path| path.is_file())
-            .unwrap_or_else(|| python_executable.to_path_buf())
-    } else {
-        python_executable.to_path_buf()
+    if cfg!(windows)
+        && is_gui
+        && let Some(name) = python_executable.file_name()
+    {
+        let pythonw =
+            python_executable.with_file_name(name.to_string_lossy().replace("python", "pythonw"));
+        if pythonw.is_file() {
+            return Cow::Owned(pythonw);
+        }
     }
+    Cow::Borrowed(python_executable)
 }
 
 const RESERVED_SCRIPT_NAMES_ERROR: &[&str; 7] = &[
@@ -247,7 +241,10 @@ impl<'wheel> ValidatedWheel<'wheel> {
                     continue;
                 }
 
-                let relative = relative_to(entry.path(), &source)?;
+                let relative = entry
+                    .path()
+                    .strip_prefix(&source)
+                    .expect("walkdir prefix must not change");
                 validate_data_script_destination(
                     &destination.join(relative),
                     &layout.scheme.scripts,
@@ -306,11 +303,10 @@ impl<'script> ValidatedScript<'script> {
             )));
         };
 
-        let name = relative_to(&path, &layout.scheme.scripts)?
-            .to_string_lossy()
-            .into_owned();
+        let relative = relative_to(&path, &layout.scheme.scripts)?;
+        let name = relative.to_string_lossy();
 
-        if RESERVED_SCRIPT_NAMES_WARN.contains(&name.as_str()) || name.starts_with("activate.") {
+        if RESERVED_SCRIPT_NAMES_WARN.contains(&name.as_ref()) || name.starts_with("activate.") {
             warn_user_once!(
                 "The script name `{}` is reserved for virtual environment activation scripts.",
                 name
@@ -330,12 +326,12 @@ impl<'script> ValidatedScript<'script> {
         let path = if cfg!(windows) {
             // On Windows we actually build an `.exe` wrapper.
             // FIXME: What are the in-reality rules here for name normalization?
-            let normalized_name = name.strip_suffix(".py").unwrap_or(name.as_str());
-            let name = normalized_name.to_string() + std::env::consts::EXE_SUFFIX;
+            let normalized_name = name.strip_suffix(".py").unwrap_or(&name);
+            let name = format!("{normalized_name}{}", std::env::consts::EXE_SUFFIX);
 
             layout.scheme.scripts.join(name)
         } else {
-            layout.scheme.scripts.join(name)
+            layout.scheme.scripts.join(name.as_ref())
         };
 
         Ok(Self { path, script })
@@ -362,6 +358,19 @@ fn relative_install_path(path: &Path, base: &Path) -> Result<PathBuf, Error> {
     })
 }
 
+/// Set executable bits on a newly created script.
+#[cfg(unix)]
+fn make_executable(path: &Path) -> io::Result<()> {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    let permissions = fs::metadata(path)?.permissions();
+    if permissions.mode() & 0o111 != 0o111 {
+        fs::set_permissions(path, Permissions::from_mode(permissions.mode() | 0o111))?;
+    }
+    Ok(())
+}
+
 /// Create the wrapper scripts in the bin folder of the venv for launching console scripts.
 pub(crate) fn write_script_entrypoints(
     layout: &Layout,
@@ -385,34 +394,15 @@ pub(crate) fn write_script_entrypoints(
         );
 
         // If necessary, wrap the launcher script in a Windows launcher binary.
-        if cfg!(windows) {
-            write_file_recorded(
-                site_packages,
-                &entrypoint_relative,
-                &windows_script_launcher(&launcher_python_script, is_gui, &launcher_executable)?,
-                record,
-            )?;
+        let launcher = if cfg!(windows) {
+            windows_script_launcher(&launcher_python_script, is_gui, &launcher_executable)?
         } else {
-            write_file_recorded(
-                site_packages,
-                &entrypoint_relative,
-                &launcher_python_script,
-                record,
-            )?;
+            launcher_python_script.into_bytes()
+        };
+        write_file_recorded(site_packages, &entrypoint_relative, launcher, record)?;
 
-            // Make the launcher executable.
-            #[cfg(unix)]
-            {
-                use std::fs::Permissions;
-                use std::os::unix::fs::PermissionsExt;
-
-                let path = script.as_path();
-                let permissions = fs::metadata(path)?.permissions();
-                if permissions.mode() & 0o111 != 0o111 {
-                    fs::set_permissions(path, Permissions::from_mode(permissions.mode() | 0o111))?;
-                }
-            }
-        }
+        #[cfg(unix)]
+        make_executable(script.as_path())?;
     }
     Ok(())
 }
@@ -563,28 +553,31 @@ fn install_script(
     site_packages: &Path,
     record: &mut [RecordEntry],
     file: &DirEntry,
-    #[allow(unused)] rename_or_copy: &mut RenameOrCopy,
+    #[cfg_attr(not(unix), expect(unused_variables))] rename_or_copy: &mut RenameOrCopy,
 ) -> Result<(), Error> {
+    const PLACEHOLDER_PYTHON: &[u8; 8] = b"#!python";
+
     let file_type = file.file_type()?;
+    let path = file.path();
 
     if file_type.is_dir() {
         return Err(Error::InvalidWheel(format!(
             "Wheel contains an invalid entry (directory) in the `scripts` directory: {}",
-            file.path().simplified_display()
+            path.simplified_display()
         )));
     }
 
     if file_type.is_symlink() {
-        let Ok(target) = file.path().canonicalize() else {
+        let Ok(target) = path.canonicalize() else {
             return Err(Error::InvalidWheel(format!(
                 "Wheel contains an invalid entry (broken symlink) in the `scripts` directory: {}",
-                file.path().simplified_display(),
+                path.simplified_display(),
             )));
         };
         if target.is_dir() {
             return Err(Error::InvalidWheel(format!(
                 "Wheel contains an invalid entry (directory symlink) in the `scripts` directory: {} ({})",
-                file.path().simplified_display(),
+                path.simplified_display(),
                 target.simplified_display()
             )));
         }
@@ -594,7 +587,6 @@ fn install_script(
     validate_data_script_destination(&script_absolute, &layout.scheme.scripts)?;
     let script_relative = relative_install_path(&script_absolute, site_packages)?;
 
-    let path = file.path();
     let mut script = BufReader::new(File::open(&path)?);
 
     // https://sphinx-locales.github.io/peps/pep-0427/#recommended-installer-features
@@ -605,39 +597,16 @@ fn install_script(
     //
     // > The b'#!pythonw' convention is allowed. b'#!pythonw' indicates a GUI script
     // > instead of a console script.
-    let placeholder_python = b"#!python";
     // scripts might be binaries, so we read an exact number of bytes instead of the first line as string
-    let mut start = vec![0; placeholder_python.len()];
+    let mut start = [0; PLACEHOLDER_PYTHON.len()];
     match script.read_exact(&mut start) {
         Ok(()) => {}
         // Ignore scripts shorter than the buffer.
         Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {}
         Err(err) => return Err(Error::Io(err)),
     }
-    let size_and_encoded_hash = if start == placeholder_python {
-        // `#!pythonw` denotes a GUI script.
-        let is_gui = script.fill_buf()?.first() == Some(&b'w');
-
-        // Read the rest of the first line, one byte at a time, until we hit a newline.
-        let mut byte = [0u8; 1];
-        loop {
-            match script.read_exact(&mut byte) {
-                Ok(()) => {
-                    if byte[0] == b'\n' {
-                        break;
-                    }
-                    if byte[0] == b'\r' {
-                        if script.fill_buf()?.first() == Some(&b'\n') {
-                            script.consume(1);
-                        }
-                        break;
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
-                Err(err) => return Err(Error::Io(err)),
-            }
-        }
-
+    let size_and_encoded_hash = if &start == PLACEHOLDER_PYTHON {
+        let is_gui = consume_script_shebang(&mut script)?;
         let executable = get_script_executable(&layout.sys_executable, is_gui);
         let executable = get_relocatable_executable(executable, layout, relocatable)?;
         let mut shebang = format_shebang(&executable, &layout.os_name, relocatable);
@@ -656,19 +625,19 @@ fn install_script(
             let executable = quote_executable_for_encoded_script(&executable);
             let shebang = format_shell_shebang(&executable, relocatable);
             let (shebang, launcher) = shebang.split_at(SHELL_SHEBANG.len());
-            let mut contents = shebang
+            let contents = shebang
                 .as_bytes()
                 .chain(b"# coding: ".as_slice())
-                .chain(encoding_source.take(encoding.end - encoding.start))
+                .chain(BufReader::new(encoding_source).take(encoding.end - encoding.start))
                 .chain(b"\n".as_slice())
                 .chain(launcher.as_bytes())
                 .chain(b"\n".as_slice())
                 .chain(script);
-            copy_and_hash(&mut contents, &mut target)?
+            copy_and_hash(contents, &mut target)?
         } else {
             // Use appropriate line ending for the platform.
             shebang.push_str(if layout.os_name == "nt" { "\r\n" } else { "\n" });
-            copy_and_hash(&mut shebang.as_bytes().chain(script), &mut target)?
+            copy_and_hash(shebang.as_bytes().chain(script), &mut target)?
         };
 
         persist_with_retry_sync(target, &script_absolute)?;
@@ -676,18 +645,7 @@ fn install_script(
 
         // Make the script executable. We just created the file, so we can set permissions directly.
         #[cfg(unix)]
-        {
-            use std::fs::Permissions;
-            use std::os::unix::fs::PermissionsExt;
-
-            let permissions = fs::metadata(&script_absolute)?.permissions();
-            if permissions.mode() & 0o111 != 0o111 {
-                fs::set_permissions(
-                    script_absolute,
-                    Permissions::from_mode(permissions.mode() | 0o111),
-                )?;
-            }
-        }
+        make_executable(&script_absolute)?;
 
         Some(size_and_encoded_hash)
     } else {
@@ -762,6 +720,34 @@ fn install_script(
     Ok(())
 }
 
+/// Consume the rest of a wheel script's placeholder shebang and return whether it denotes a GUI
+/// script.
+fn consume_script_shebang(script: &mut impl BufRead) -> io::Result<bool> {
+    let mut first_byte = None;
+    let mut byte = [0u8; 1];
+    loop {
+        match script.read_exact(&mut byte) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(err) => return Err(err),
+        }
+
+        match byte[0] {
+            b'\n' => break,
+            b'\r' => {
+                if script.fill_buf()?.first() == Some(&b'\n') {
+                    script.consume(1);
+                }
+                break;
+            }
+            byte => {
+                first_byte.get_or_insert(byte);
+            }
+        }
+    }
+    Ok(first_byte == Some(b'w'))
+}
+
 /// Move the files from the .data directory to the right location in the venv
 #[instrument(skip_all)]
 pub(crate) fn install_data(
@@ -770,8 +756,7 @@ pub(crate) fn install_data(
     site_packages: &Path,
     data_dir: &Path,
     dist_name: &PackageName,
-    console_scripts: &[Script],
-    gui_scripts: &[Script],
+    entrypoints: &EntryPoints,
     record: &mut [RecordEntry],
 ) -> Result<(), Error> {
     for entry in fs::read_dir(data_dir)? {
@@ -787,42 +772,14 @@ pub(crate) fn install_data(
                     "Installing data/scripts to `{}`",
                     layout.scheme.scripts.user_display()
                 );
-                let mut rename_or_copy = RenameOrCopy::default();
-                let mut initialized = false;
-                for file in fs::read_dir(path)? {
-                    let file = file?;
-
-                    // Couldn't find any docs for this, took it directly from
-                    // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
-                    let name = file.file_name().to_string_lossy().to_string();
-                    let match_name = name
-                        .strip_suffix(".exe")
-                        .or_else(|| name.strip_suffix("-script.py"))
-                        .or_else(|| name.strip_suffix(".pya"))
-                        .unwrap_or(&name);
-                    if console_scripts
-                        .iter()
-                        .chain(gui_scripts)
-                        .any(|script| script.name == match_name)
-                    {
-                        continue;
-                    }
-
-                    // Create the scripts directory, if it doesn't exist.
-                    if !initialized {
-                        fs::create_dir_all(&layout.scheme.scripts)?;
-                        initialized = true;
-                    }
-
-                    install_script(
-                        layout,
-                        relocatable,
-                        site_packages,
-                        record,
-                        &file,
-                        &mut rename_or_copy,
-                    )?;
-                }
+                install_data_scripts(
+                    layout,
+                    relocatable,
+                    site_packages,
+                    &path,
+                    entrypoints,
+                    record,
+                )?;
                 continue;
             }
             Some(kind @ "headers") => (
@@ -849,6 +806,56 @@ pub(crate) fn install_data(
             &layout.scheme.scripts,
             site_packages,
             record,
+        )?;
+    }
+    Ok(())
+}
+
+/// Install wheel-provided scripts that are not generated entry-point wrappers.
+fn install_data_scripts(
+    layout: &Layout,
+    relocatable: bool,
+    site_packages: &Path,
+    source: &Path,
+    entrypoints: &EntryPoints,
+    record: &mut [RecordEntry],
+) -> Result<(), Error> {
+    let files = fs::read_dir(source)?;
+    let entrypoint_names = entrypoints
+        .scripts()
+        .map(|script| script.name.as_str())
+        .collect::<FxHashSet<_>>();
+    let mut rename_or_copy = RenameOrCopy::default();
+    let mut destination_ready = false;
+    for file in files {
+        let file = file?;
+
+        // Recognize the wrapper filename variants used by pip.
+        // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
+        let name = file.file_name();
+        let name = name.to_string_lossy();
+        let match_name = name
+            .strip_suffix(".exe")
+            .or_else(|| name.strip_suffix("-script.py"))
+            .or_else(|| name.strip_suffix(".pya"))
+            .unwrap_or(&name);
+        if entrypoint_names.contains(match_name) {
+            continue;
+        }
+
+        // Create the destination on the first script that needs installing.
+        if !destination_ready {
+            fs::create_dir_all(&layout.scheme.scripts)?;
+            destination_ready = true;
+        }
+
+        install_script(
+            layout,
+            relocatable,
+            site_packages,
+            record,
+            &file,
+            &mut rename_or_copy,
         )?;
     }
     Ok(())
@@ -944,15 +951,15 @@ pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Se
 ///
 /// Returns `sys.executable` if the wheel is not relocatable; otherwise, returns a path relative
 /// to the scripts directory.
-fn get_relocatable_executable(
-    executable: PathBuf,
+fn get_relocatable_executable<'a>(
+    executable: Cow<'a, Path>,
     layout: &Layout,
     relocatable: bool,
-) -> Result<PathBuf, Error> {
+) -> Result<Cow<'a, Path>, Error> {
     if !relocatable {
         return Ok(executable);
     }
-    relative_install_path(&executable, &layout.scheme.scripts)
+    relative_install_path(executable.as_ref(), &layout.scheme.scripts).map(Cow::Owned)
 }
 
 /// Reads the record file
@@ -1149,24 +1156,15 @@ pub(crate) fn dist_info_file(base: &Path, prefix: &str, file: &str) -> PathBuf {
     base.join(format!("{prefix}.dist-info/{file}"))
 }
 
-/// Parses the `entry_points.txt` entry in the wheel for console scripts
-///
-/// Returns (`script_name`, module, function)
-///
-/// Extras declared by an entry point are accepted but ignored.
+/// Parse the wheel's `entry_points.txt` metadata.
 pub(crate) fn parse_scripts(
     wheel: impl AsRef<Path>,
     dist_info_prefix: &str,
     python_minor: u8,
-) -> Result<(Vec<Script>, Vec<Script>), Error> {
+) -> Result<EntryPoints, Error> {
     let entry_points_path = dist_info_file(wheel.as_ref(), dist_info_prefix, "entry_points.txt");
 
-    let EntryPoints {
-        console_scripts,
-        gui_scripts,
-    } = EntryPoints::read(entry_points_path, python_minor)?;
-
-    Ok((console_scripts, gui_scripts))
+    EntryPoints::read(entry_points_path, python_minor)
 }
 
 /// Rename a file with a fallback to copy that switches over on the first failure.

@@ -8,7 +8,7 @@ use crate::Error;
 
 /// A script defining the name of the runnable entrypoint and the module and function that should be
 /// run.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Script {
     pub(crate) name: String,
     pub(crate) module: String,
@@ -26,15 +26,16 @@ impl Script {
         //  between the object reference and the left square bracket, between the extra names and the square brackets and colons delimiting them,
         //  and after the right square bracket."
         // – https://packaging.python.org/en/latest/specifications/entry-points/#file-format
-        let captures = regex!(
-            r"^(?P<module>[\w\d_\-.]+)\s*:\s*(?P<function>[\w\d_\-.]+)(?:\s*\[\s*(?P<extras>(?:[^,]+,?\s*)+)\])?\s*$"
+        let (_, [module, function]) = regex!(
+            r"^(?P<module>[\w.-]+)\s*:\s*(?P<function>[\w.-]+)(?:\s*\[\s*(?:[^,]+,?\s*)+\])?\s*$"
         )
-            .captures(value)
-            .ok_or_else(|| Error::InvalidWheel(format!("invalid console script: '{value}'")))?;
+        .captures(value)
+        .ok_or_else(|| Error::InvalidWheel(format!("invalid console script: '{value}'")))?
+        .extract();
         Ok(Self {
             name: script_name.to_string(),
-            module: captures.name("module").unwrap().as_str().to_string(),
-            function: captures.name("function").unwrap().as_str().to_string(),
+            module: module.to_string(),
+            function: function.to_string(),
         })
     }
 
@@ -53,6 +54,15 @@ pub(crate) struct EntryPoints {
 }
 
 impl EntryPoints {
+    /// Return all console and GUI scripts.
+    pub(crate) fn scripts(&self) -> impl Iterator<Item = &Script> {
+        self.console_scripts.iter().chain(&self.gui_scripts)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.scripts().next().is_none()
+    }
+
     pub(crate) fn read(path: impl AsRef<Path>, python_minor: u8) -> Result<Self, Error> {
         let ini = match fs_err::read_to_string(path) {
             Ok(ini) => ini,
@@ -99,7 +109,8 @@ impl EntryPoints {
         if let Some(pip_script) = console_scripts.iter().find(|script| script.name == "pip3") {
             console_scripts.push(Script {
                 name: format!("pip3.{python_minor}"),
-                ..pip_script.clone()
+                module: pip_script.module.clone(),
+                function: pip_script.function.clone(),
             });
         }
 

@@ -91,31 +91,27 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     let record_file = File::open(dist_info_file(wheel, &dist_info_prefix, "RECORD"))?;
     let mut record = read_record(record_file)?;
 
-    let (console_scripts, gui_scripts) =
-        parse_scripts(wheel, &dist_info_prefix, layout.python_version.1)?;
+    let entrypoints = parse_scripts(wheel, &dist_info_prefix, layout.python_version.1)?;
 
-    if console_scripts.is_empty() && gui_scripts.is_empty() {
+    if entrypoints.is_empty() {
         trace!(?name, "No entrypoints");
     } else {
         trace!(?name, "Writing entrypoints");
 
         fs_err::create_dir_all(&layout.scheme.scripts)?;
-        write_script_entrypoints(
-            layout,
-            relocatable,
-            site_packages,
-            &console_scripts,
-            &mut record,
-            false,
-        )?;
-        write_script_entrypoints(
-            layout,
-            relocatable,
-            site_packages,
-            &gui_scripts,
-            &mut record,
-            true,
-        )?;
+        for (scripts, is_gui) in [
+            (&entrypoints.console_scripts, false),
+            (&entrypoints.gui_scripts, true),
+        ] {
+            write_script_entrypoints(
+                layout,
+                relocatable,
+                site_packages,
+                scripts,
+                &mut record,
+                is_gui,
+            )?;
+        }
     }
 
     // Move wheel data into the interpreter's installation scheme.
@@ -127,8 +123,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
             site_packages,
             &data_dir,
             &name,
-            &console_scripts,
-            &gui_scripts,
+            &entrypoints,
             &mut record,
         )?;
         fs_err::remove_dir_all(data_dir)?;
