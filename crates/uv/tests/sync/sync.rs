@@ -13782,6 +13782,9 @@ fn sync_dry_run_and_locked() -> Result<()> {
         "#,
     )?;
 
+    let environment_marker = context.venv.child("preview-marker");
+    environment_marker.write_str("original environment")?;
+
     // Running with `--locked` and `--dry-run` should error.
     uv_snapshot!(context.filters(), context.sync().arg("--locked").arg("--dry-run"), @"
     exit_code: 1 (failure)
@@ -13797,6 +13800,7 @@ fn sync_dry_run_and_locked() -> Result<()> {
     ");
 
     assert_eq!(context.read("uv.lock"), existing);
+    environment_marker.assert("original environment");
     context.assert_not_installed("iniconfig");
 
     Ok(())
@@ -13832,6 +13836,9 @@ fn sync_dry_run_and_frozen() -> Result<()> {
         "#,
     )?;
 
+    let environment_marker = context.venv.child("preview-marker");
+    environment_marker.write_str("original environment")?;
+
     // Running with `--frozen` with `--dry-run` should preview dependencies to be installed.
     uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--dry-run"), @"
     exit_code: 0 (success)
@@ -13844,6 +13851,7 @@ fn sync_dry_run_and_frozen() -> Result<()> {
      + sniffio==1.3.1
     ");
     assert_eq!(context.read("uv.lock"), existing);
+    environment_marker.assert("original environment");
     context.assert_not_installed("anyio");
 
     Ok(())
