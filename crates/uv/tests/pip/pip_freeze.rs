@@ -204,6 +204,7 @@ fn freeze_direct_archive_hash_roundtrip() -> Result<()> {
         .arg(requirements_txt.path())
         .arg("--no-deps")
         .arg("--require-hashes")
+        .arg("--offline")
         .assert()
         .success();
 
@@ -217,6 +218,7 @@ fn freeze_direct_archive_hash_roundtrip() -> Result<()> {
         .arg(requirements_txt.path())
         .arg("--no-deps")
         .arg("--require-hashes")
+        .arg("--offline")
         .arg("--reinstall"), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -230,6 +232,8 @@ fn freeze_direct_archive_hash_roundtrip() -> Result<()> {
              Computed:
                sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f
     ");
+
+    context.assert_installed("ok", "1.0.0");
 
     Ok(())
 }
