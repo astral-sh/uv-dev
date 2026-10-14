@@ -6,24 +6,20 @@ use uv_test::{assert_path_missing, uv_snapshot};
 
 #[test]
 fn python_install_invalid_request() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_managed_python_dirs();
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
 
-    // Request something that is not a Python version
     uv_snapshot!(context.filters(), context.python_install().arg("foobar"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: `foobar` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions
     ");
+}
 
-    // Request a version we don't have a download for
-    uv_snapshot!(context.filters(), context.python_install().arg("3.8.0"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No download found for request: cpython-3.8.0-[PLATFORM]
-    ");
+#[test]
+fn python_install_resolves_all_requests_before_installation() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs();
 
     // Resolve every request before installing; an unavailable later request must not leave the
     // earlier valid request installed. The explicit platform makes the first request available
