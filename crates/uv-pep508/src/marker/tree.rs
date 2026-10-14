@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use arcstr::ArcStr;
 use itertools::Itertools;
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use version_ranges::Ranges;
 
@@ -1031,18 +1032,24 @@ impl MarkerTree {
         extras: ExtrasEnvironment,
         reporter: &mut impl Reporter,
     ) -> bool {
-        match self.kind() {
-            MarkerTreeKind::True => return true,
-            MarkerTreeKind::False => return false,
-            MarkerTreeKind::Version(marker) => {
-                for (range, tree) in marker.edges() {
-                    if range.contains(env.get_version(marker.key())) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
-                }
-            }
-            MarkerTreeKind::String(marker) => {
-                for (range, tree) in marker.children() {
+        fn find_matching_edge<R>(
+            mut edges: impl Iterator<Item = (R, MarkerTree)>,
+            mut matches: impl FnMut(R) -> bool,
+        ) -> MarkerTree {
+            edges
+                .find_map(|(range, tree)| matches(range).then_some(tree))
+                .unwrap_or(MarkerTree::FALSE)
+        }
+
+        let mut tree = self;
+        loop {
+            tree = match tree.kind() {
+                MarkerTreeKind::True => return true,
+                MarkerTreeKind::False => return false,
+                MarkerTreeKind::Version(marker) => find_matching_edge(marker.edges(), |range| {
+                    range.contains(env.get_version(marker.key()))
+                }),
+                MarkerTreeKind::String(marker) => find_matching_edge(marker.children(), |range| {
                     let l_string = env.get_string(marker.key());
 
                     if matches!(
@@ -1067,53 +1074,36 @@ impl MarkerTree {
                         }
                     }
 
-                    if range.contains(l_string) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
+                    range.contains(l_string)
+                }),
+                MarkerTreeKind::VersionString(marker) => {
+                    let Ok(version) = env.get_string(marker.key()).parse::<Version>() else {
+                        return false;
+                    };
+                    find_matching_edge(marker.edges(), |range| range.contains(&version))
                 }
-            }
-            MarkerTreeKind::VersionString(marker) => {
-                let Ok(version) = env.get_string(marker.key()).parse::<Version>() else {
-                    return false;
-                };
-                for (range, tree) in marker.edges() {
-                    if range.contains(&version) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
+                MarkerTreeKind::In(marker) => {
+                    marker.edge(marker.value().contains(env.get_string(marker.key())))
                 }
-            }
-            MarkerTreeKind::In(marker) => {
-                return marker
-                    .edge(marker.value().contains(env.get_string(marker.key())))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
-            MarkerTreeKind::Contains(marker) => {
-                return marker
-                    .edge(env.get_string(marker.key()).contains(marker.value()))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
-            MarkerTreeKind::Extra(marker) => {
-                return marker
-                    .edge(extras.extra().contains(marker.name().extra()))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
-            MarkerTreeKind::List(marker) => {
-                let edge = match marker.pair() {
-                    CanonicalMarkerListPair::Extras(extra) => extras.extras().contains(extra),
-                    CanonicalMarkerListPair::DependencyGroup(dependency_group) => {
-                        extras.dependency_groups().contains(dependency_group)
-                    }
-                    // Invalid marker expression
-                    CanonicalMarkerListPair::Arbitrary { .. } => return false,
-                };
-
-                return marker
-                    .edge(edge)
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
+                MarkerTreeKind::Contains(marker) => {
+                    marker.edge(env.get_string(marker.key()).contains(marker.value()))
+                }
+                MarkerTreeKind::Extra(marker) => {
+                    marker.edge(extras.extra().contains(marker.name().extra()))
+                }
+                MarkerTreeKind::List(marker) => {
+                    let edge = match marker.pair() {
+                        CanonicalMarkerListPair::Extras(extra) => extras.extras().contains(extra),
+                        CanonicalMarkerListPair::DependencyGroup(dependency_group) => {
+                            extras.dependency_groups().contains(dependency_group)
+                        }
+                        // Invalid marker expression
+                        CanonicalMarkerListPair::Arbitrary { .. } => return false,
+                    };
+                    marker.edge(edge)
+                }
+            };
         }
-
-        false
     }
 
     /// Checks if the requirement should be activated with the given set of active extras without evaluating
@@ -1149,64 +1139,8 @@ impl MarkerTree {
 
     /// Returns true if this marker simplifies to true if the given set of extras is activated.
     pub fn evaluate_only_extras(self, extras: &[ExtraName]) -> bool {
-        match self.kind() {
-            MarkerTreeKind::True => true,
-            MarkerTreeKind::False => false,
-            MarkerTreeKind::Version(marker) => marker
-                .edges()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::VersionString(marker) => marker
-                .edges()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::String(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::In(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::Contains(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::List(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::Extra(marker) => marker
-                .edge(extras.contains(marker.name().extra()))
-                .evaluate_only_extras(extras),
-        }
-    }
-
-    /// Find a top level `extra == "..."` expression.
-    ///
-    /// ASSUMPTION: There is one `extra = "..."`, and it's either the only marker or part of the
-    /// main conjunction.
-    fn top_level_extra(self) -> Option<MarkerExpression> {
-        let mut extra_expression = None;
-        for conjunction in self.to_dnf() {
-            let found = conjunction.iter().find(|expression| {
-                matches!(
-                    expression,
-                    MarkerExpression::Extra {
-                        operator: ExtraOperator::Equal,
-                        ..
-                    }
-                )
-            })?;
-
-            // Because the marker tree is in DNF form, we must verify that the extra expression is part
-            // of all solutions to this marker.
-            if let Some(ref extra_expression) = extra_expression {
-                if *extra_expression != *found {
-                    return None;
-                }
-
-                continue;
-            }
-
-            extra_expression = Some(found.clone());
-        }
-
-        extra_expression
+        // With extras fixed, the marker is always true if its negation cannot be true in any environment.
+        !self.negate().evaluate_extras(extras)
     }
 
     /// Find a top level `extra == "..."` name.
@@ -1222,12 +1156,23 @@ impl MarkerTree {
             return Some(Cow::Borrowed(extra));
         }
 
-        let extra_expression = self.top_level_extra()?;
-
-        match extra_expression {
-            MarkerExpression::Extra { name, .. } => name.into_extra().map(Cow::Owned),
-            _ => unreachable!(),
+        let mut extras = self.to_dnf().into_iter().map(|conjunction| {
+            conjunction
+                .into_iter()
+                .find_map(|expression| match expression {
+                    MarkerExpression::Extra {
+                        name,
+                        operator: ExtraOperator::Equal,
+                    } => Some(name),
+                    _ => None,
+                })
+        });
+        let extra = extras.next()??;
+        // In DNF, the extra expression must be part of every solution to the marker.
+        if extras.any(|candidate| candidate.as_ref() != Some(&extra)) {
+            return None;
         }
+        extra.into_extra().map(Cow::Owned)
     }
 
     /// Simplify this marker by *assuming* that the Python version range
@@ -1388,24 +1333,28 @@ impl MarkerTree {
     /// The operator provided to the function is guaranteed to be
     /// `MarkerOperator::Equal` or `MarkerOperator::NotEqual`.
     pub fn visit_extras(self, mut f: impl FnMut(MarkerOperator, &ExtraName)) {
+        fn visit_distinct<T>(
+            edges: impl Iterator<Item = (T, MarkerTree)>,
+            f: &mut impl FnMut(MarkerOperator, &ExtraName),
+        ) {
+            let mut seen = FxHashSet::default();
+            for (_, tree) in edges {
+                // Terminal nodes contain no extras and do not need deduplication.
+                if tree.is_true() || tree.is_false() {
+                    continue;
+                }
+                if seen.insert(tree) {
+                    imp(tree, f);
+                }
+            }
+        }
+
         fn imp(tree: MarkerTree, f: &mut impl FnMut(MarkerOperator, &ExtraName)) {
             match tree.kind() {
                 MarkerTreeKind::True | MarkerTreeKind::False => {}
-                MarkerTreeKind::Version(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.edges()) {
-                        imp(tree, f);
-                    }
-                }
-                MarkerTreeKind::VersionString(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.edges()) {
-                        imp(tree, f);
-                    }
-                }
-                MarkerTreeKind::String(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.children()) {
-                        imp(tree, f);
-                    }
-                }
+                MarkerTreeKind::Version(kind) => visit_distinct(kind.edges(), f),
+                MarkerTreeKind::VersionString(kind) => visit_distinct(kind.edges(), f),
+                MarkerTreeKind::String(kind) => visit_distinct(kind.children(), f),
                 MarkerTreeKind::In(kind) => {
                     for (_, tree) in kind.children() {
                         imp(tree, f);
@@ -1695,7 +1644,7 @@ impl ListMarkerTree<'_> {
 
     /// The value (LHS) for this expression.
     pub fn value(&self) -> String {
-        self.pair.value()
+        self.pair.value().to_owned()
     }
 
     /// The edges of this node, corresponding to the boolean evaluation of the expression.
@@ -3523,6 +3472,27 @@ mod test {
             ),
             m("python_full_version >= '3.12'"),
         );
+    }
+
+    #[test]
+    fn combine_bounded_python_versions_with_gaps() {
+        let supported = m("python_full_version < '3.9' or python_full_version > '3.10'")
+            .complexify_python_versions(
+                Bound::Included(&Version::new([3, 8])),
+                Bound::Excluded(&Version::new([3, 12])),
+            );
+        let requested = m("python_full_version <= '3.8' or \
+             (python_full_version >= '3.9' and python_full_version <= '3.10') or \
+             python_full_version >= '3.11'");
+
+        assert_eq!(
+            supported.and(requested),
+            m("python_full_version == '3.8' or \
+               (python_full_version >= '3.11' and python_full_version < '3.12')"),
+        );
+        assert!(supported.is_disjoint(m(
+            "python_full_version >= '3.9' and python_full_version <= '3.10'"
+        )));
     }
 
     #[test]

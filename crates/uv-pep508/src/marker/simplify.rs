@@ -21,201 +21,192 @@ use crate::{ExtraOperator, MarkerExpression, MarkerOperator, MarkerTree, MarkerT
 ///
 /// We choose DNF as it is easier to simplify for user-facing output.
 pub(crate) fn to_dnf(tree: MarkerTree) -> Vec<Vec<MarkerExpression>> {
-    let mut dnf = Vec::new();
-    collect_dnf(tree, &mut dnf, &mut Vec::new());
-    simplify(&mut dnf);
-    sort(&mut dnf);
-    dnf
+    let mut collector = DnfCollector::default();
+    collector.collect(tree);
+    simplify(&mut collector.dnf);
+    sort(&mut collector.dnf);
+    collector.dnf
 }
 
 /// Walk a [`MarkerTree`] recursively and construct a DNF expression.
 ///
 /// A decision diagram can be converted to DNF form by performing a depth-first traversal of
 /// the tree and collecting all paths to a `true` terminal node.
-///
-/// `path` is the list of marker expressions traversed on the current path.
-fn collect_dnf(
-    tree: MarkerTree,
-    dnf: &mut Vec<Vec<MarkerExpression>>,
-    path: &mut Vec<MarkerExpression>,
-) {
-    match tree.kind() {
-        // Reached a `false` node, meaning the conjunction is irrelevant for DNF.
-        MarkerTreeKind::False => {}
-        // Reached a solution, store the conjunction.
-        MarkerTreeKind::True => {
-            if !path.is_empty() {
-                dnf.push(path.clone());
-            }
-        }
-        MarkerTreeKind::Version(marker) => {
-            for (tree, range) in collect_edges(marker.edges()) {
-                // Detect whether the range for this edge can be simplified as an inequality.
-                if let Some(excluded) = range_inequality(&range) {
-                    let current = path.len();
-                    for version in excluded {
-                        path.push(MarkerExpression::Version {
-                            key: marker.key().into(),
-                            specifier: VersionSpecifier::not_equals_version(version.clone()),
-                        });
-                    }
+#[derive(Default)]
+struct DnfCollector {
+    dnf: Vec<Vec<MarkerExpression>>,
+    path: Vec<MarkerExpression>,
+}
 
-                    collect_dnf(tree, dnf, path);
-                    path.truncate(current);
-                    continue;
-                }
-
-                // Detect whether the range for this edge can be simplified as a star specifier.
-                if let Some(specifier) = star_range_specifier(&range) {
-                    path.push(MarkerExpression::Version {
-                        key: marker.key().into(),
-                        specifier,
-                    });
-
-                    collect_dnf(tree, dnf, path);
-                    path.pop();
-                    continue;
-                }
-
-                for bounds in range.iter() {
-                    let current = path.len();
-                    for specifier in VersionSpecifier::from_release_only_bounds(bounds) {
-                        path.push(MarkerExpression::Version {
-                            key: marker.key().into(),
-                            specifier,
-                        });
-                    }
-
-                    collect_dnf(tree, dnf, path);
-                    path.truncate(current);
+impl DnfCollector {
+    fn collect(&mut self, tree: MarkerTree) {
+        match tree.kind() {
+            // Reached a `false` node, meaning the conjunction is irrelevant for DNF.
+            MarkerTreeKind::False => {}
+            // Reached a solution, store the conjunction.
+            MarkerTreeKind::True => {
+                if !self.path.is_empty() {
+                    self.dnf.push(self.path.clone());
                 }
             }
-        }
-        MarkerTreeKind::VersionString(marker) => {
-            for (tree, range) in collect_edges(marker.edges()) {
-                for (lower, upper) in range.iter() {
-                    let current = path.len();
-                    let lower = lower.map(|version| ArcStr::from(version.to_string()));
-                    let upper = upper.map(|version| ArcStr::from(version.to_string()));
-                    for (operator, value) in
-                        MarkerOperator::from_bounds((lower.as_ref(), upper.as_ref()))
-                    {
-                        path.push(MarkerExpression::String {
-                            key: marker.key().into(),
-                            operator,
-                            value,
-                        });
+            MarkerTreeKind::Version(marker) => {
+                for (tree, range) in collect_edges(marker.edges()) {
+                    // Detect whether the range for this edge can be simplified as an inequality.
+                    if let Some(excluded) = range_inequality(&range) {
+                        self.collect_branch(
+                            tree,
+                            excluded
+                                .into_iter()
+                                .map(|version| MarkerExpression::Version {
+                                    key: marker.key().into(),
+                                    specifier: VersionSpecifier::not_equals_version(
+                                        version.clone(),
+                                    ),
+                                }),
+                        );
+                        continue;
                     }
-                    collect_dnf(tree, dnf, path);
-                    path.truncate(current);
+
+                    // Detect whether the range for this edge can be simplified as a star specifier.
+                    if let Some(specifier) = star_range_specifier(&range) {
+                        self.collect_branch(
+                            tree,
+                            [MarkerExpression::Version {
+                                key: marker.key().into(),
+                                specifier,
+                            }],
+                        );
+                        continue;
+                    }
+
+                    for bounds in range.iter() {
+                        self.collect_branch(
+                            tree,
+                            VersionSpecifier::from_release_only_bounds(bounds).map(|specifier| {
+                                MarkerExpression::Version {
+                                    key: marker.key().into(),
+                                    specifier,
+                                }
+                            }),
+                        );
+                    }
                 }
             }
-        }
-        MarkerTreeKind::String(marker) => {
-            for (tree, range) in collect_edges(marker.children()) {
-                // Detect whether the range for this edge can be simplified as an inequality.
-                if let Some(excluded) = range_inequality(&range) {
-                    let current = path.len();
-                    for value in excluded {
-                        path.push(MarkerExpression::String {
-                            key: marker.key().into(),
-                            operator: MarkerOperator::NotEqual,
-                            value: value.clone(),
-                        });
+            MarkerTreeKind::VersionString(marker) => {
+                for (tree, range) in collect_edges(marker.edges()) {
+                    for (lower, upper) in range.iter() {
+                        let lower = lower.map(|version| ArcStr::from(version.to_string()));
+                        let upper = upper.map(|version| ArcStr::from(version.to_string()));
+                        self.collect_branch(
+                            tree,
+                            MarkerOperator::from_bounds((lower.as_ref(), upper.as_ref())).map(
+                                |(operator, value)| MarkerExpression::String {
+                                    key: marker.key().into(),
+                                    operator,
+                                    value,
+                                },
+                            ),
+                        );
                     }
-
-                    collect_dnf(tree, dnf, path);
-                    path.truncate(current);
-                    continue;
-                }
-
-                for bounds in range.iter() {
-                    let current = path.len();
-                    for (operator, value) in MarkerOperator::from_bounds(bounds) {
-                        path.push(MarkerExpression::String {
-                            key: marker.key().into(),
-                            operator,
-                            value: value.clone(),
-                        });
-                    }
-
-                    collect_dnf(tree, dnf, path);
-                    path.truncate(current);
                 }
             }
-        }
-        MarkerTreeKind::In(marker) => {
-            for (value, tree) in marker.children() {
-                let operator = if value {
-                    MarkerOperator::In
-                } else {
-                    MarkerOperator::NotIn
-                };
+            MarkerTreeKind::String(marker) => {
+                for (tree, range) in collect_edges(marker.children()) {
+                    // Detect whether the range for this edge can be simplified as an inequality.
+                    if let Some(excluded) = range_inequality(&range) {
+                        self.collect_branch(
+                            tree,
+                            excluded.into_iter().map(|value| MarkerExpression::String {
+                                key: marker.key().into(),
+                                operator: MarkerOperator::NotEqual,
+                                value: value.clone(),
+                            }),
+                        );
+                        continue;
+                    }
 
-                let expr = MarkerExpression::String {
+                    for bounds in range.iter() {
+                        self.collect_branch(
+                            tree,
+                            MarkerOperator::from_bounds(bounds).map(|(operator, value)| {
+                                MarkerExpression::String {
+                                    key: marker.key().into(),
+                                    operator,
+                                    value,
+                                }
+                            }),
+                        );
+                    }
+                }
+            }
+            MarkerTreeKind::In(marker) => {
+                self.collect_boolean_edges(marker.children(), |value| MarkerExpression::String {
                     key: marker.key().into(),
                     value: ArcStr::from(marker.value()),
-                    operator,
-                };
-
-                path.push(expr);
-                collect_dnf(tree, dnf, path);
-                path.pop();
+                    operator: if value {
+                        MarkerOperator::In
+                    } else {
+                        MarkerOperator::NotIn
+                    },
+                });
             }
-        }
-        MarkerTreeKind::Contains(marker) => {
-            for (value, tree) in marker.children() {
-                let operator = if value {
-                    MarkerOperator::Contains
-                } else {
-                    MarkerOperator::NotContains
-                };
-
-                let expr = MarkerExpression::String {
+            MarkerTreeKind::Contains(marker) => {
+                self.collect_boolean_edges(marker.children(), |value| MarkerExpression::String {
                     key: marker.key().into(),
                     value: ArcStr::from(marker.value()),
-                    operator,
-                };
-
-                path.push(expr);
-                collect_dnf(tree, dnf, path);
-                path.pop();
+                    operator: if value {
+                        MarkerOperator::Contains
+                    } else {
+                        MarkerOperator::NotContains
+                    },
+                });
             }
-        }
-        MarkerTreeKind::List(marker) => {
-            for (is_high, tree) in marker.children() {
-                let expr = MarkerExpression::List {
+            MarkerTreeKind::List(marker) => {
+                self.collect_boolean_edges(marker.children(), |value| MarkerExpression::List {
                     pair: marker.pair().clone(),
-                    operator: if is_high {
+                    operator: if value {
                         ContainerOperator::In
                     } else {
                         ContainerOperator::NotIn
                     },
-                };
-
-                path.push(expr);
-                collect_dnf(tree, dnf, path);
-                path.pop();
+                });
             }
-        }
-        MarkerTreeKind::Extra(marker) => {
-            for (value, tree) in marker.children() {
-                let operator = if value {
-                    ExtraOperator::Equal
-                } else {
-                    ExtraOperator::NotEqual
-                };
-
-                let expr = MarkerExpression::Extra {
+            MarkerTreeKind::Extra(marker) => {
+                self.collect_boolean_edges(marker.children(), |value| MarkerExpression::Extra {
                     name: marker.name().clone().into(),
-                    operator,
-                };
-
-                path.push(expr);
-                collect_dnf(tree, dnf, path);
-                path.pop();
+                    operator: if value {
+                        ExtraOperator::Equal
+                    } else {
+                        ExtraOperator::NotEqual
+                    },
+                });
             }
         }
+    }
+
+    /// Collect each satisfiable Boolean edge using its corresponding expression.
+    fn collect_boolean_edges(
+        &mut self,
+        edges: impl Iterator<Item = (bool, MarkerTree)>,
+        expression: impl Fn(bool) -> MarkerExpression,
+    ) {
+        for (value, tree) in edges {
+            if !tree.is_false() {
+                self.collect_branch(tree, [expression(value)]);
+            }
+        }
+    }
+
+    /// Add an edge's expressions only for the traversal of its subtree.
+    fn collect_branch(
+        &mut self,
+        tree: MarkerTree,
+        expressions: impl IntoIterator<Item = MarkerExpression>,
+    ) {
+        let depth = self.path.len();
+        self.path.extend(expressions);
+        self.collect(tree);
+        self.path.truncate(depth);
     }
 }
 
@@ -238,11 +229,16 @@ fn collect_dnf(
 /// Note: This function has quadratic time complexity. However, it is not applied on every marker
 /// operation, only to user facing output, which are typically very simple.
 fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
+    // A redundant term or clause requires another clause to imply it.
+    if dnf.len() < 2 {
+        return;
+    }
+
+    let mut redundant_indices = Vec::new();
     for i in 0..dnf.len() {
         let clause = &dnf[i];
 
         // Find redundant terms in this clause.
-        let mut redundant_terms = Vec::new();
         'term: for (skipped, skipped_term) in clause.iter().enumerate() {
             for (j, other_clause) in dnf.iter().enumerate() {
                 if i == j {
@@ -272,31 +268,28 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
                         .position(|x| x == term)
                         // If the term was already removed from this one, we cannot
                         // depend on it for further simplification.
-                        .is_some_and(|i| !redundant_terms.contains(&i))
+                        .is_some_and(|i| redundant_indices.binary_search(&i).is_err())
                 }) {
-                    redundant_terms.push(skipped);
+                    redundant_indices.push(skipped);
                     continue 'term;
                 }
             }
         }
 
         // Eliminate any redundant terms.
-        redundant_terms.sort_by(|a, b| b.cmp(a));
-        for term in redundant_terms {
-            dnf[i].remove(term);
-        }
+        remove_sorted_indices(&mut dnf[i], &redundant_indices);
+        redundant_indices.clear();
     }
 
     // Once we have eliminated redundant terms, there may also be redundant clauses.
     // For example, `(A and B) or (not A and B)` would have been simplified above to
     // `(A and B) or B` and can now be further simplified to just `B`.
-    let mut redundant_clauses = Vec::new();
     'clause: for i in 0..dnf.len() {
         let clause = &dnf[i];
 
         for (j, other_clause) in dnf.iter().enumerate() {
             // Ignore clauses that are going to be eliminated.
-            if i == j || redundant_clauses.contains(&j) {
+            if i == j || redundant_indices.binary_search(&j).is_ok() {
                 continue;
             }
 
@@ -306,16 +299,30 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
                 // from a linear search to an integer `HashSet` lookup
                 clause.contains(term)
             }) {
-                redundant_clauses.push(i);
+                redundant_indices.push(i);
                 continue 'clause;
             }
         }
     }
 
     // Eliminate any redundant clauses.
-    for i in redundant_clauses.into_iter().rev() {
-        dnf.remove(i);
-    }
+    remove_sorted_indices(dnf, &redundant_indices);
+}
+
+/// Remove strictly increasing indices in one pass over the affected span.
+fn remove_sorted_indices<T>(values: &mut Vec<T>, indices: &[usize]) {
+    let Some((&first, &last)) = indices.first().zip(indices.last()) else {
+        return;
+    };
+    let mut indices = indices.iter().copied().peekable();
+    let mut current = first;
+    values
+        .extract_if(first..=last, |_| {
+            let remove = indices.next_if_eq(&current).is_some();
+            current += 1;
+            remove
+        })
+        .for_each(drop);
 }
 
 /// Sort the clauses in a DNF expression, for backwards compatibility. The goal is to avoid
@@ -334,8 +341,8 @@ fn sort(dnf: &mut [Vec<MarkerExpression>]) {
     });
 }
 
-/// Merge any edges that lead to identical subtrees into a single range.
-pub(crate) fn collect_edges<'a, T>(
+/// Merge edges that lead to identical subtrees into a single range, omitting false terminals.
+fn collect_edges<'a, T>(
     map: impl ExactSizeIterator<Item = (&'a Ranges<T>, MarkerTree)>,
 ) -> IndexMap<MarkerTree, Ranges<T>, FxBuildHasher>
 where
@@ -343,6 +350,9 @@ where
 {
     let mut paths: IndexMap<_, Ranges<_>, FxBuildHasher> = IndexMap::default();
     for (range, tree) in map {
+        if tree.is_false() {
+            continue;
+        }
         // OK because all ranges are guaranteed to be non-empty.
         let (start, end) = range.bounding_range().unwrap();
         // Combine the ranges.
@@ -350,7 +360,7 @@ where
         paths
             .entry(tree)
             .and_modify(|union| *union = union.union(&range))
-            .or_insert_with(|| range.clone());
+            .or_insert(range);
     }
 
     paths
@@ -387,9 +397,6 @@ where
 /// For negative ranges like `python_full_version < '3.8' or python_full_version >= '3.9'`,
 /// returns `!= '3.8.*'`.
 fn star_range_specifier(range: &Ranges<Version>) -> Option<VersionSpecifier> {
-    if range.iter().count() != 2 {
-        return None;
-    }
     // Check for negative star range: two segments [(Unbounded, Excluded(v1)), (Included(v2), Unbounded)]
     let (b1, b2) = range.iter().collect_tuple()?;
     if let ((Bound::Unbounded, Bound::Excluded(v1)), (Bound::Included(v2), Bound::Unbounded)) =

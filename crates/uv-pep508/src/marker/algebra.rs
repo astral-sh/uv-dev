@@ -129,35 +129,26 @@ pub(crate) struct InternerGuard<'a> {
 impl InternerGuard<'_> {
     /// Creates a decision node with the given variable and children.
     fn create_node(&mut self, var: Variable, children: Edges) -> NodeId {
-        let mut node = Node { var, children };
-        let mut first = node.children.nodes().next().unwrap();
+        let first = children.nodes().next().unwrap();
+
+        // Reduction: If all children refer to the same node, we eliminate the parent node
+        // and just return the child.
+        if children.nodes().all(|node| node == first) {
+            return first;
+        }
 
         // With a complemented edge representation, there are two ways to represent the same node:
         // complementing the root and all children edges results in the same node. To ensure markers
         // are canonical, the first child edge is never complemented.
-        let mut flipped = false;
-        if first.is_complement() {
-            node = node.not();
-            first = first.not();
-            flipped = true;
-        }
+        let flipped = first.is_complement();
+        let node = Node { var, children };
+        let node = if flipped { node.not() } else { node };
 
-        // Reduction: If all children refer to the same node, we eliminate the parent node
-        // and just return the child.
-        if node.children.nodes().all(|node| node == first) {
-            return if flipped { first.not() } else { first };
-        }
-
-        // Insert the node.
-        // Probing before inserting keeps the clone off the common path where an isomorphic node
-        // has already been interned. Cloning a [`Node`] copies every outgoing edge range.
-        let id = if let Some(&id) = self.state.unique.get(&node) {
-            id
-        } else {
-            let id = NodeId::new(self.shared.nodes.push(node.clone()), false);
-            self.state.unique.insert(node, id);
-            id
-        };
+        // Cloning a node copies every outgoing edge range, so only clone newly interned nodes.
+        let id =
+            *self.state.unique.entry(node).or_insert_with_key(|node| {
+                NodeId::new(self.shared.nodes.push(node.clone()), false)
+            });
 
         if flipped { id.not() } else { id }
     }
@@ -480,51 +471,23 @@ impl InternerGuard<'_> {
             return self.and(xi, yi).is_false();
         }
 
-        // Perform Shannon Expansion of the higher order variable.
-        match x.var.cmp(&y.var) {
-            // X is higher order than Y, Y must be disjoint with every child of X.
-            Ordering::Less => x
-                .children
-                .nodes()
-                .all(|x| self.disjointness(x.negate(xi), yi)),
-            // Y is higher order than X, X must be disjoint with every child of Y.
-            Ordering::Greater => y
-                .children
-                .nodes()
-                .all(|y| self.disjointness(y.negate(yi), xi)),
-            // X and Y represent the same variable, their merged edges must be unsatisfiable.
-            Ordering::Equal => x.children.is_disjoint(xi, &y.children, yi, self),
-        }
+        self.disjoint_children(xi, x, yi, y)
     }
 
-    /// Returns `true` if there is no environment in which both marker trees can apply,
-    /// i.e., their conjunction is always `false`.
+    /// Check disjointness without applying mutually incompatible marker rules.
+    ///
+    /// `and` uses this check while applying those rules, so checking them again would recurse.
     fn disjointness(&mut self, xi: NodeId, yi: NodeId) -> bool {
-        // NOTE(charlie): This is equivalent to `is_disjoint`, with the exception that it doesn't
-        // perform the mutually-incompatible marker check. If it did, we'd create an infinite loop,
-        // since `is_disjoint` calls `and` (when relevant variables are present) which then calls
-        // `disjointness`.
-
-        // `false` is disjoint with any marker.
-        if xi.is_false() || yi.is_false() {
-            return true;
-        }
-        // `true` is not disjoint with any marker except `false`.
-        if xi.is_true() || yi.is_true() {
-            return false;
-        }
-        // `X` and `X` are not disjoint.
-        if xi == yi {
-            return false;
-        }
-        // `X` and `not X` are disjoint by definition.
-        if xi.not() == yi {
-            return true;
+        if let Some(result) = xi.is_disjoint_trivial(yi) {
+            return result;
         }
 
         let (x, y) = (self.shared.node(xi), self.shared.node(yi));
+        self.disjoint_children(xi, x, yi, y)
+    }
 
-        // Perform Shannon Expansion of the higher order variable.
+    /// Perform Shannon expansion of the higher-order variable for a nontrivial disjointness check.
+    fn disjoint_children(&mut self, xi: NodeId, x: &Node, yi: NodeId, y: &Node) -> bool {
         match x.var.cmp(&y.var) {
             // X is higher order than Y, Y must be disjoint with every child of X.
             Ordering::Less => x
@@ -625,24 +588,17 @@ impl InternerGuard<'_> {
                 // Split both trees into matching ranges. Replace any ranges that are unreachable
                 // under the assumption with the first reachable child, simplifying them out of the
                 // resulting marker.
-                let mut fallback = None;
-                value_node.children.apply(
-                    value,
-                    &assumption_node.children,
-                    assumption,
-                    |value, assumption| {
-                        if assumption.is_false() {
-                            NodeId::FALSE
-                        } else {
-                            let result = self.restrict_cached(value, assumption, cache);
-                            fallback.get_or_insert(result);
-                            result
-                        }
-                    },
-                );
-                let Some(fallback) = fallback else {
+                let Some((fallback_value, fallback_assumption)) =
+                    value_node.children.find_intersecting(
+                        value,
+                        &assumption_node.children,
+                        assumption,
+                        |_, assumption| !assumption.is_false(),
+                    )
+                else {
                     return NodeId::FALSE;
                 };
+                let fallback = self.restrict_cached(fallback_value, fallback_assumption, cache);
                 let children = value_node.children.apply(
                     value,
                     &assumption_node.children,
@@ -790,7 +746,7 @@ impl InternerGuard<'_> {
             if overlap.is_empty() {
                 continue;
             }
-            new.push((overlap.clone(), node));
+            new.push((overlap, node));
         }
 
         // Now that we know the only ranges left are those that
@@ -801,15 +757,11 @@ impl InternerGuard<'_> {
         // This has the effect of producing a marker that is only
         // applicable in a context where the Python lower/upper bounds
         // are known to be satisfied.
-        let &(ref first_range, first_node_id) = new.first().unwrap();
-        let first_upper = first_range.bounding_range().unwrap().1;
-        let clipped = Ranges::from_range_bounds((Bound::Unbounded, first_upper.cloned()));
-        *new.first_mut().unwrap() = (clipped, first_node_id);
+        let (first_range, _) = new.first_mut().unwrap();
+        replace_lower_bound(first_range, Bound::Unbounded);
 
-        let &(ref last_range, last_node_id) = new.last().unwrap();
-        let last_lower = last_range.bounding_range().unwrap().0;
-        let clipped = Ranges::from_range_bounds((last_lower.cloned(), Bound::Unbounded));
-        *new.last_mut().unwrap() = (clipped, last_node_id);
+        let (last_range, _) = new.last_mut().unwrap();
+        replace_upper_bound(last_range, Bound::Unbounded);
 
         self.create_node(node.var.clone(), Edges::Version { edges: new })
             .negate(i)
@@ -871,7 +823,7 @@ impl InternerGuard<'_> {
         // outside of our bounds by always mapping them to false.
         let mut new: SmallVec<_> = edges
             .iter()
-            .filter(|(range, _)| !py_range.intersection(range).is_empty())
+            .filter(|(range, _)| !py_range.is_disjoint(range))
             .cloned()
             .collect();
         // Below, we assume `new` has at least one element. It's
@@ -887,38 +839,32 @@ impl InternerGuard<'_> {
         // parent is negated.
         let exclude_node_id = NodeId::FALSE.negate(i);
         if !matches!(py_lower, Bound::Unbounded) {
-            let &(ref first_range, first_node_id) = new.first().unwrap();
-            let first_upper = first_range.bounding_range().unwrap().1;
+            let (first_range, first_node_id) = new.first_mut().unwrap();
             // When the first range is always false, then we can just
             // "expand" it out to negative infinity to reflect that
             // anything less than our lower bound should evaluate to
             // false. If we don't do this, then we could have two
             // adjacent ranges map to the same node, which would not be
             // a canonical representation.
-            if exclude_node_id == first_node_id {
-                let clipped = Ranges::from_range_bounds((Bound::Unbounded, first_upper.cloned()));
-                *new.first_mut().unwrap() = (clipped, first_node_id);
+            if exclude_node_id == *first_node_id {
+                replace_lower_bound(first_range, Bound::Unbounded);
             } else {
-                let clipped = Ranges::from_range_bounds((py_lower.cloned(), first_upper.cloned()));
-                *new.first_mut().unwrap() = (clipped, first_node_id);
+                replace_lower_bound(first_range, py_lower.cloned());
 
                 let py_range_lower =
                     Ranges::from_range_bounds((py_lower.cloned(), Bound::Unbounded));
-                new.insert(0, (py_range_lower.complement(), NodeId::FALSE.negate(i)));
+                new.insert(0, (py_range_lower.complement(), exclude_node_id));
             }
         }
         if !matches!(py_upper, Bound::Unbounded) {
-            let &(ref last_range, last_node_id) = new.last().unwrap();
-            let last_lower = last_range.bounding_range().unwrap().0;
+            let (last_range, last_node_id) = new.last_mut().unwrap();
             // See lower bound case above for why we do this. The
             // same reasoning applies here: to maintain a canonical
             // representation.
-            if exclude_node_id == last_node_id {
-                let clipped = Ranges::from_range_bounds((last_lower.cloned(), Bound::Unbounded));
-                *new.last_mut().unwrap() = (clipped, last_node_id);
+            if exclude_node_id == *last_node_id {
+                replace_upper_bound(last_range, Bound::Unbounded);
             } else {
-                let clipped = Ranges::from_range_bounds((last_lower.cloned(), py_upper.cloned()));
-                *new.last_mut().unwrap() = (clipped, last_node_id);
+                replace_upper_bound(last_range, py_upper.cloned());
 
                 let py_range_upper =
                     Ranges::from_range_bounds((Bound::Unbounded, py_upper.cloned()));
@@ -1024,10 +970,6 @@ impl InternerGuard<'_> {
         if let Some(exclusions) = self.state.exclusions {
             return exclusions;
         }
-        let mut tree = NodeId::FALSE;
-        // These operations omit known-incompatibility checks, so their results must not be reused
-        // by regular marker operations.
-        let mut cache = FxHashMap::default();
 
         // Create all nodes upfront.
         let os_name_nt = self.expression(MarkerExpression::String {
@@ -1119,7 +1061,7 @@ impl InternerGuard<'_> {
         // Pairs of `os_name` and `sys_platform` that are known to be incompatible.
         //
         // For example: `os_name == 'nt' and sys_platform == 'darwin'`
-        let mut pairs = vec![
+        let os_name_pairs = [
             (os_name_nt, sys_platform_linux),
             (os_name_nt, sys_platform_darwin),
             (os_name_nt, sys_platform_ios),
@@ -1129,40 +1071,43 @@ impl InternerGuard<'_> {
         // Pairs of `platform_system` and `sys_platform` that are known to be incompatible.
         //
         // For example: `platform_system == 'FreeBSD' and sys_platform == 'aix'`
-        for platform_system in [
+        let platform_system_pairs = [
             platform_system_freebsd,
             platform_system_netbsd,
             platform_system_openbsd,
             platform_system_sunos,
             platform_system_ios,
             platform_system_ipados,
-        ] {
-            for sys_platform in [
-                sys_platform_aix,
-                sys_platform_android,
-                sys_platform_emscripten,
-                sys_platform_ios,
-                sys_platform_linux,
-                sys_platform_darwin,
-                sys_platform_win32,
-                sys_platform_cygwin,
-                sys_platform_wasi,
-            ] {
-                // Some of the above pairs are actually compatible.
-                if sys_platform == sys_platform_ios
-                    && (platform_system == platform_system_ios
-                        || platform_system == platform_system_ipados)
-                {
-                    continue;
-                }
-                pairs.push((platform_system, sys_platform));
-            }
-        }
+        ]
+        .into_iter()
+        .cartesian_product([
+            sys_platform_aix,
+            sys_platform_android,
+            sys_platform_emscripten,
+            sys_platform_ios,
+            sys_platform_linux,
+            sys_platform_darwin,
+            sys_platform_win32,
+            sys_platform_cygwin,
+            sys_platform_wasi,
+        ])
+        .filter(|&(platform_system, sys_platform)| {
+            // iOS and iPadOS are compatible with the `ios` platform.
+            !(sys_platform == sys_platform_ios
+                && (platform_system == platform_system_ios
+                    || platform_system == platform_system_ipados))
+        });
 
-        for (a, b) in pairs {
-            let a_and_b = conjunction(self, &mut cache, a, b);
-            tree = disjunction(self, &mut cache, tree, a_and_b);
-        }
+        // These operations omit known-incompatibility checks, so their results must not be reused
+        // by regular marker operations.
+        let mut cache = FxHashMap::default();
+        let tree = os_name_pairs.into_iter().chain(platform_system_pairs).fold(
+            NodeId::FALSE,
+            |tree, (a, b)| {
+                let a_and_b = conjunction(self, &mut cache, a, b);
+                disjunction(self, &mut cache, tree, a_and_b)
+            },
+        );
 
         self.state.exclusions = Some(tree);
         tree
@@ -1345,31 +1290,27 @@ impl NodeId {
 /// ranges in-between.
 type SmallVec<T> = smallvec::SmallVec<[T; 5]>;
 
+/// A decision-node edge covering one interval.
+type RangeEdge<T> = (Ranges<T>, NodeId);
+
 /// The edges of a decision node.
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) enum Edges {
     // The edges of a version variable, representing a disjoint set of ranges that cover
     // the output space.
     //
-    // Invariant: All ranges are simple, meaning they can be represented by a bounded
-    // interval without gaps. Additionally, there are at least two edges in the set.
-    Version {
-        edges: SmallVec<(Ranges<Version>, NodeId)>,
-    },
+    // Invariant: Each range is a nonempty interval, the ranges are ordered, and there are at least
+    // two edges in the set.
+    Version { edges: SmallVec<RangeEdge<Version>> },
     // The edges of a string variable, representing a disjoint set of ranges that cover
     // the output space.
     //
-    // Invariant: All ranges are simple, meaning they can be represented by a bounded
-    // interval without gaps. Additionally, there are at least two edges in the set.
-    String {
-        edges: SmallVec<(Ranges<ArcStr>, NodeId)>,
-    },
+    // Invariant: Each range is a nonempty interval, the ranges are ordered, and there are at least
+    // two edges in the set.
+    String { edges: SmallVec<RangeEdge<ArcStr>> },
     // The edges of a boolean variable, representing the values `true` (the `high` child)
     // and `false` (the `low` child).
-    Boolean {
-        high: NodeId,
-        low: NodeId,
-    },
+    Boolean { high: NodeId, low: NodeId },
 }
 
 impl Edges {
@@ -1492,29 +1433,27 @@ impl Edges {
     }
 
     /// Returns an [`Edges`] where values in the given range are `true`.
-    fn from_range<T>(range: &Ranges<T>) -> SmallVec<(Ranges<T>, NodeId)>
+    fn from_range<T>(range: &Ranges<T>) -> SmallVec<RangeEdge<T>>
     where
         T: Ord + Clone,
     {
-        let mut edges = SmallVec::new();
+        let true_edges = range.iter().map(|(start, end)| {
+            (
+                Ranges::from_range_bounds((start.cloned(), end.cloned())),
+                NodeId::TRUE,
+            )
+        });
+        let false_edges = range
+            .complement()
+            .into_iter()
+            .map(|bounds| (Ranges::from_range_bounds(bounds), NodeId::FALSE));
 
-        // Add the `true` edges.
-        for (start, end) in range.iter() {
-            let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
-            edges.push((range, NodeId::TRUE));
+        // A range and its complement partition the domain into alternating intervals.
+        if matches!(range.bounding_range(), Some((Bound::Unbounded, _))) {
+            true_edges.interleave(false_edges).collect()
+        } else {
+            false_edges.interleave(true_edges).collect()
         }
-
-        // Add the `false` edges.
-        for (start, end) in range.complement().iter() {
-            let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
-            edges.push((range, NodeId::FALSE));
-        }
-
-        // Sort the ranges.
-        //
-        // The ranges are disjoint so we don't care about equality.
-        edges.sort_by(|(range1, _), (range2, _)| compare_disjoint_range_start(range1, range2));
-        edges
     }
 
     /// Merge two [`Edges`], applying the given operation (e.g., `AND` or `OR`) to all intersecting edges.
@@ -1586,44 +1525,34 @@ impl Edges {
     /// In that case, we drop any ranges that do not exist in the domain of both edges. Note that
     /// this should not occur in practice because `requires-python` bounds are global.
     fn apply_ranges<T>(
-        left_edges: &SmallVec<(Ranges<T>, NodeId)>,
+        left_edges: &SmallVec<RangeEdge<T>>,
         left_parent: NodeId,
-        right_edges: &SmallVec<(Ranges<T>, NodeId)>,
+        right_edges: &SmallVec<RangeEdge<T>>,
         right_parent: NodeId,
         mut apply: impl FnMut(NodeId, NodeId) -> NodeId,
-    ) -> SmallVec<(Ranges<T>, NodeId)>
+    ) -> SmallVec<RangeEdge<T>>
     where
         T: Clone + Ord,
     {
         let mut combined = SmallVec::new();
-        for (left_range, left_child) in left_edges {
-            // Split the two maps into a set of disjoint and overlapping ranges, merging the
-            // intersections.
-            //
-            // Note that restrict ranges (see `restrict_versions`) makes finding intersections
-            // a bit more complicated despite the ranges being sorted. We cannot simply zip both
-            // sets, as they may contain arbitrary gaps. Instead, we use a quadratic search for
-            // simplicity as the set of ranges for a given variable is typically very small.
-            for (right_range, right_child) in right_edges {
-                let intersection = right_range.intersection(left_range);
-                if intersection.is_empty() {
-                    // TODO(ibraheem): take advantage of the sorted ranges to `break` early
-                    continue;
-                }
+        for ((left_range, left_child), (right_range, right_child)) in
+            ordered_range_pairs(left_edges, right_edges)
+        {
+            let intersection = right_range.intersection(left_range);
+            if intersection.is_empty() {
+                continue;
+            }
 
-                // Merge the intersection.
-                let node = apply(
-                    left_child.negate(left_parent),
-                    right_child.negate(right_parent),
-                );
+            let node = apply(
+                left_child.negate(left_parent),
+                right_child.negate(right_parent),
+            );
 
-                match combined.last_mut() {
-                    // Combine ranges if possible.
-                    Some((range, prev)) if *prev == node && can_conjoin(range, &intersection) => {
-                        *range = range.union(&intersection);
-                    }
-                    _ => combined.push((intersection, node)),
+            match combined.last_mut() {
+                Some((range, prev)) if *prev == node && can_conjoin(range, &intersection) => {
+                    *range = range.union(&intersection);
                 }
+                _ => combined.push((intersection, node)),
             }
         }
 
@@ -1638,59 +1567,67 @@ impl Edges {
         right_parent: NodeId,
         interner: &mut InternerGuard<'_>,
     ) -> bool {
+        self.find_intersecting(parent, right_edges, right_parent, |left, right| {
+            !interner.disjointness(left, right)
+        })
+        .is_none()
+    }
+
+    /// Find the first pair of intersecting child nodes that satisfies `predicate`, in the same
+    /// order as [`Self::apply`].
+    fn find_intersecting(
+        &self,
+        parent: NodeId,
+        right_edges: &Self,
+        right_parent: NodeId,
+        mut predicate: impl FnMut(NodeId, NodeId) -> bool,
+    ) -> Option<(NodeId, NodeId)> {
         match (self, right_edges) {
-            // For version or string variables, we have to split and check the overlapping ranges.
             (Self::Version { edges }, Self::Version { edges: right_edges }) => {
-                Self::is_disjoint_ranges(edges, parent, right_edges, right_parent, interner)
+                Self::find_intersecting_ranges(edges, parent, right_edges, right_parent, predicate)
             }
             (Self::String { edges }, Self::String { edges: right_edges }) => {
-                Self::is_disjoint_ranges(edges, parent, right_edges, right_parent, interner)
+                Self::find_intersecting_ranges(edges, parent, right_edges, right_parent, predicate)
             }
-            // For boolean variables, we simply check the low and high edges.
             (
                 Self::Boolean { high, low },
                 Self::Boolean {
                     high: right_high,
                     low: right_low,
                 },
-            ) => {
-                interner.disjointness(high.negate(parent), right_high.negate(right_parent))
-                    && interner.disjointness(low.negate(parent), right_low.negate(right_parent))
-            }
+            ) => [(high, right_high), (low, right_low)]
+                .into_iter()
+                .map(|(&left, &right)| (left.negate(parent), right.negate(right_parent)))
+                .find(|&(left, right)| predicate(left, right)),
             _ => unreachable!("cannot merge two `Edges` of different types"),
         }
     }
 
-    // Returns `true` if all intersecting ranges in two range maps are disjoint.
-    fn is_disjoint_ranges<T>(
-        left_edges: &SmallVec<(Ranges<T>, NodeId)>,
+    fn find_intersecting_ranges<T>(
+        left_edges: &SmallVec<RangeEdge<T>>,
         left_parent: NodeId,
-        right_edges: &SmallVec<(Ranges<T>, NodeId)>,
+        right_edges: &SmallVec<RangeEdge<T>>,
         right_parent: NodeId,
-        interner: &mut InternerGuard<'_>,
-    ) -> bool
+        mut predicate: impl FnMut(NodeId, NodeId) -> bool,
+    ) -> Option<(NodeId, NodeId)>
     where
         T: Clone + Ord,
     {
-        // This is similar to the routine in `apply_ranges` except we only care about disjointness,
-        // not the resulting edges.
-        for (left_range, left_child) in left_edges {
-            for (right_range, right_child) in right_edges {
-                if right_range.is_disjoint(left_range) {
-                    continue;
-                }
+        for ((left_range, left_child), (right_range, right_child)) in
+            ordered_range_pairs(left_edges, right_edges)
+        {
+            if right_range.is_disjoint(left_range) {
+                continue;
+            }
 
-                // Ensure the intersection is disjoint.
-                if !interner.disjointness(
-                    left_child.negate(left_parent),
-                    right_child.negate(right_parent),
-                ) {
-                    return false;
-                }
+            let left = left_child.negate(left_parent);
+            let right = right_child.negate(right_parent);
+            if predicate(left, right) {
+                return Some((left, right));
             }
         }
 
-        true
+        None
     }
 
     // Apply the given function to all direct children of this node.
@@ -1731,25 +1668,61 @@ impl Edges {
     }
 
     // Returns the complement of this [`Edges`].
-    fn not(self) -> Self {
-        match self {
-            Self::Version { edges: map } => Self::Version {
-                edges: map
-                    .into_iter()
-                    .map(|(range, node)| (range, node.not()))
-                    .collect(),
-            },
-            Self::String { edges: map } => Self::String {
-                edges: map
-                    .into_iter()
-                    .map(|(range, node)| (range, node.not()))
-                    .collect(),
-            },
-            Self::Boolean { high, low } => Self::Boolean {
-                high: high.not(),
-                low: low.not(),
-            },
+    fn not(mut self) -> Self {
+        fn complement_range_edges<T>(edges: &mut [(T, NodeId)]) {
+            for (_, node) in edges {
+                *node = node.not();
+            }
         }
+
+        match &mut self {
+            Self::Version { edges } => complement_range_edges(edges),
+            Self::String { edges } => complement_range_edges(edges),
+            Self::Boolean { high, low } => {
+                *high = high.not();
+                *low = low.not();
+            }
+        }
+        self
+    }
+}
+
+/// Visit every potentially overlapping pair of ordered, disjoint, nonempty range edges.
+/// Advancing the edge that ends first handles gaps in either input while preserving overlap order.
+fn ordered_range_pairs<'a, T: Ord>(
+    mut left_edges: &'a [RangeEdge<T>],
+    mut right_edges: &'a [RangeEdge<T>],
+) -> impl Iterator<Item = (&'a RangeEdge<T>, &'a RangeEdge<T>)> {
+    std::iter::from_fn(move || {
+        let (left, left_rest) = left_edges.split_first()?;
+        let (right, right_rest) = right_edges.split_first()?;
+        let (_, left_end) = left
+            .0
+            .bounding_range()
+            .expect("marker edge range is nonempty");
+        let (_, right_end) = right
+            .0
+            .bounding_range()
+            .expect("marker edge range is nonempty");
+        if upper_bound_le(left_end, right_end) {
+            left_edges = left_rest;
+        } else {
+            right_edges = right_rest;
+        }
+        Some((left, right))
+    })
+}
+
+/// Compare interval ends, where excluding an endpoint ends before including it.
+fn upper_bound_le<T: Ord>(left: Bound<&T>, right: Bound<&T>) -> bool {
+    match (left, right) {
+        (_, Bound::Unbounded) => true,
+        (Bound::Unbounded, _) => false,
+        (Bound::Included(left), Bound::Excluded(right)) => left < right,
+        (
+            Bound::Included(left) | Bound::Excluded(left),
+            Bound::Included(right) | Bound::Excluded(right),
+        ) => left <= right,
     }
 }
 
@@ -1889,24 +1862,16 @@ fn python_version_to_full_version(specifier: VersionSpecifier) -> Result<Version
     }
 }
 
-/// Compares the start of two ranges that are known to be disjoint.
-fn compare_disjoint_range_start<T>(range1: &Ranges<T>, range2: &Ranges<T>) -> Ordering
-where
-    T: Ord,
-{
-    let (upper1, _) = range1.bounding_range().unwrap();
-    let (upper2, _) = range2.bounding_range().unwrap();
+/// Replaces the lower bound of a non-empty interval.
+fn replace_lower_bound(range: &mut Ranges<Version>, lower: Bound<Version>) {
+    let upper = range.bounding_range().unwrap().1.cloned();
+    *range = Ranges::from_range_bounds((lower, upper));
+}
 
-    match (upper1, upper2) {
-        (Bound::Unbounded, _) => Ordering::Less,
-        (_, Bound::Unbounded) => Ordering::Greater,
-        (Bound::Included(v1), Bound::Excluded(v2)) if v1 == v2 => Ordering::Less,
-        (Bound::Excluded(v1), Bound::Included(v2)) if v1 == v2 => Ordering::Greater,
-        // Note that the ranges are disjoint, so their lower bounds cannot be equal.
-        (Bound::Included(v1) | Bound::Excluded(v1), Bound::Included(v2) | Bound::Excluded(v2)) => {
-            v1.cmp(v2)
-        }
-    }
+/// Replaces the upper bound of a non-empty interval.
+fn replace_upper_bound(range: &mut Ranges<Version>, upper: Bound<Version>) {
+    let lower = range.bounding_range().unwrap().0.cloned();
+    *range = Ranges::from_range_bounds((lower, upper));
 }
 
 /// Returns `true` if two disjoint ranges can be conjoined seamlessly without introducing a gap.
