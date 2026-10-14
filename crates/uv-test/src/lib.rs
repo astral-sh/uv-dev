@@ -11,6 +11,7 @@ pub mod packse;
 mod path;
 pub mod pypi_proxy;
 mod snapshot;
+pub mod subdirectory_archive;
 mod vendor;
 
 pub use download::download_to_disk;
