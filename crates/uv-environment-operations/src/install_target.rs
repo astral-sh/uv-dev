@@ -746,18 +746,17 @@ impl<'lock> InstallTarget<'lock> {
         match self.package_selection() {
             Some(PackageSelection::Projects(_)) => {
                 let lock = self.lock();
-                let roots = self.roots().collect::<FxHashSet<_>>();
 
                 // Workspace traversal uses the last locked fork for each package name.
                 let package_for_name = |name: &PackageName| lock.packages_for_name(name).last();
 
                 // Include all specified projects.
-                let mut required_members = roots.iter().copied().collect::<BTreeSet<_>>();
+                let mut required_members = self.roots().collect::<BTreeSet<_>>();
 
                 // Find all workspace member dependencies recursively for all specified packages
                 let mut queue = PackageQueue::default();
 
-                for (name, root_kind) in roots
+                for (name, root_kind) in required_members
                     .iter()
                     .copied()
                     .map(|name| (name, InstallableRootKind::Production))
