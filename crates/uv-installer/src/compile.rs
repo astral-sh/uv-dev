@@ -66,18 +66,13 @@ pub enum CompileError {
 
 fn compile_timeout() -> Result<Option<Duration>, CompileError> {
     let timeout = match env::var(EnvVars::UV_COMPILE_BYTECODE_TIMEOUT) {
-        Ok(value) => match value.as_str() {
-            "0" => None,
-            _ => match value.parse::<u64>().map(Duration::from_secs) {
-                Ok(duration) => Some(duration),
-                Err(_) => {
-                    return Err(CompileError::EnvironmentError {
-                        var: EnvVars::UV_COMPILE_BYTECODE_TIMEOUT,
-                        message: format!("Expected an integer number of seconds, got \"{value}\""),
-                    });
-                }
-            },
-        },
+        Ok(value) if value == "0" => None,
+        Ok(value) => Some(value.parse::<u64>().map(Duration::from_secs).map_err(|_| {
+            CompileError::EnvironmentError {
+                var: EnvVars::UV_COMPILE_BYTECODE_TIMEOUT,
+                message: format!("Expected an integer number of seconds, got \"{value}\""),
+            }
+        })?),
         Err(_) => Some(DEFAULT_COMPILE_TIMEOUT),
     };
     if let Some(duration) = timeout {
