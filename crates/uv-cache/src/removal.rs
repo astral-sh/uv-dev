@@ -2,7 +2,7 @@
 //! Cargo is dual-licensed under either Apache 2.0 or MIT, at the user's choice.
 //! Source: <https://github.com/rust-lang/cargo/blob/e1ebce1035f9b53bb46a55bd4b0ecf51e24c6458/src/cargo/ops/cargo_clean.rs#L324>
 
-use std::fs::Metadata;
+use std::fs::{FileType, Metadata};
 use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -72,6 +72,19 @@ fn file_size(metadata: &Metadata) -> u64 {
 #[cfg(not(unix))]
 fn file_size(metadata: &Metadata) -> u64 {
     metadata.len()
+}
+
+/// Windows directory symlinks must be removed as directories.
+#[cfg(windows)]
+fn is_directory_symlink(file_type: FileType) -> bool {
+    use std::os::windows::fs::FileTypeExt;
+
+    file_type.is_symlink() && file_type.is_symlink_dir()
+}
+
+#[cfg(not(windows))]
+fn is_directory_symlink(_file_type: FileType) -> bool {
+    false
 }
 
 /// A removal operation with statistics on the number of files and directories removed.
@@ -149,21 +162,8 @@ impl Removal {
 
             // Remove the file.
             self.add_file(&path, &metadata);
-            if metadata.is_symlink() {
-                cfg_select! {
-                    windows => {
-                        use std::os::windows::fs::FileTypeExt;
-
-                        if metadata.file_type().is_symlink_dir() {
-                            remove_dir(&path)?;
-                        } else {
-                            remove_file(&path)?;
-                        }
-                    },
-                    _ => {
-                        remove_file(&path)?;
-                    },
-                }
+            if is_directory_symlink(metadata.file_type()) {
+                remove_dir(&path)?;
             } else {
                 remove_file(&path)?;
             }
@@ -202,17 +202,7 @@ impl Removal {
                 continue;
             }
 
-            if entry.file_type().is_symlink() && {
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::FileTypeExt;
-                    entry.file_type().is_symlink_dir()
-                }
-                #[cfg(not(windows))]
-                {
-                    false
-                }
-            } {
+            if is_directory_symlink(entry.file_type()) {
                 self.num_files += 1;
                 remove_dir(entry.path())?;
             } else if entry.file_type().is_dir() {
