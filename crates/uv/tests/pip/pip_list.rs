@@ -359,7 +359,7 @@ fn list_outdated_freeze() {
 }
 
 #[test]
-#[cfg(feature = "test-git")]
+#[cfg(all(feature = "test-git", feature = "test-pypi"))]
 fn list_outdated_git() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
