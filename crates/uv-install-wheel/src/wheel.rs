@@ -175,23 +175,22 @@ fn quote_executable_for_encoded_script(executable: &Path) -> String {
     format!("\"$(printf %b {octal}){}\"", "\n".repeat(trailing_newlines))
 }
 
-/// Returns a [`PathBuf`] to `python[w].exe` for script execution.
+/// Return the interpreter to use for script execution.
 ///
 /// <https://github.com/pypa/pip/blob/76e82a43f8fb04695e834810df64f2d9a2ff6020/src/pip/_vendor/distlib/scripts.py#L121-L126>
-fn get_script_executable(python_executable: &Path, is_gui: bool) -> PathBuf {
+fn get_script_executable(python_executable: &Path, is_gui: bool) -> Cow<'_, Path> {
     // Only check for `pythonw.exe` on Windows.
-    if cfg!(windows) && is_gui {
-        python_executable
-            .file_name()
-            .map(|name| {
-                let new_name = name.to_string_lossy().replace("python", "pythonw");
-                python_executable.with_file_name(new_name)
-            })
-            .filter(|path| path.is_file())
-            .unwrap_or_else(|| python_executable.to_path_buf())
-    } else {
-        python_executable.to_path_buf()
+    if cfg!(windows)
+        && is_gui
+        && let Some(name) = python_executable.file_name()
+    {
+        let pythonw =
+            python_executable.with_file_name(name.to_string_lossy().replace("python", "pythonw"));
+        if pythonw.is_file() {
+            return Cow::Owned(pythonw);
+        }
     }
+    Cow::Borrowed(python_executable)
 }
 
 const RESERVED_SCRIPT_NAMES_ERROR: &[&str; 7] = &[
@@ -943,15 +942,15 @@ pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Se
 ///
 /// Returns `sys.executable` if the wheel is not relocatable; otherwise, returns a path relative
 /// to the scripts directory.
-fn get_relocatable_executable(
-    executable: PathBuf,
+fn get_relocatable_executable<'a>(
+    executable: Cow<'a, Path>,
     layout: &Layout,
     relocatable: bool,
-) -> Result<PathBuf, Error> {
+) -> Result<Cow<'a, Path>, Error> {
     if !relocatable {
         return Ok(executable);
     }
-    relative_install_path(&executable, &layout.scheme.scripts)
+    relative_install_path(executable.as_ref(), &layout.scheme.scripts).map(Cow::Owned)
 }
 
 /// Reads the record file
