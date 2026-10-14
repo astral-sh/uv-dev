@@ -36,9 +36,9 @@ impl From<CachedEnvironment> for PythonEnvironment {
 }
 
 #[derive(Debug, Clone, Hash)]
-struct CachedEnvironmentDist {
-    dist: ResolvedDist,
-    hashes: uv_pypi_types::HashDigests,
+struct CachedEnvironmentDist<'a> {
+    dist: &'a ResolvedDist,
+    hashes: &'a uv_pypi_types::HashDigests,
     cache_info: Option<CacheInfo>,
 }
 
@@ -204,8 +204,8 @@ impl CachedEnvironment {
                 })
                 .map(|(dist, hashes)| {
                     Ok(CachedEnvironmentDist {
-                        dist: dist.clone(),
-                        hashes: hashes.clone(),
+                        dist,
+                        hashes,
                         cache_info: Self::cache_info(dist).map_err(EnvironmentError::from)?,
                     })
                 })
