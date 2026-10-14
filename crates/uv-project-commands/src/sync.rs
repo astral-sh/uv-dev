@@ -21,9 +21,8 @@ use uv_distribution_types::NameRequirementSpecification;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
-    EnvironmentError, EnvironmentUpdate, LinkErrorReporting, ProjectEnvironment,
-    ProjectEnvironmentTarget, ScriptEnvironment, detect_conflicts, sync_from_lock,
-    update_environment,
+    EnvironmentError, LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentTarget,
+    ScriptEnvironment, detect_conflicts, sync_from_lock, update_environment,
 };
 use uv_fs::{PortablePathBuf, Simplified};
 use uv_install_operations::Changelog;
@@ -210,9 +209,31 @@ pub async fn sync(
     }
 
     // Discover or create the virtual environment.
+    let init_project_environment = async |project_target, install_target| {
+        ProjectEnvironment::get_or_init(
+            project_target,
+            install_target,
+            &groups,
+            python.as_deref().map(PythonRequest::parse),
+            &install_mirrors,
+            &client_builder,
+            python_preference,
+            python_arch,
+            python_downloads,
+            false,
+            config_discovery,
+            active,
+            cache,
+            dry_run,
+            LinkErrorReporting::User,
+            printer,
+        )
+        .await
+        .map(SyncEnvironment::Project)
+    };
     let environment = match &target {
-        SyncTarget::Manifest(SyncManifest::Project(project)) => SyncEnvironment::Project(
-            ProjectEnvironment::get_or_init(
+        SyncTarget::Manifest(SyncManifest::Project(project)) => {
+            init_project_environment(
                 ProjectEnvironmentTarget::from(project.workspace()),
                 frozen_lock
                     .as_ref()
@@ -220,25 +241,11 @@ pub async fn sync(
                     .map(|lock| {
                         identify_installation_target(&target, lock, all_packages, &package)
                     }),
-                &groups,
-                python.as_deref().map(PythonRequest::parse),
-                &install_mirrors,
-                &client_builder,
-                python_preference,
-                python_arch,
-                python_downloads,
-                false,
-                config_discovery,
-                active,
-                cache,
-                dry_run,
-                LinkErrorReporting::User,
-                printer,
             )
-            .await?,
-        ),
-        SyncTarget::Lockfile { workspace, .. } => SyncEnvironment::Project(
-            ProjectEnvironment::get_or_init(
+            .await?
+        }
+        SyncTarget::Lockfile { workspace, .. } => {
+            init_project_environment(
                 ProjectEnvironmentTarget::Lockfile {
                     root: workspace.root(),
                     lock: workspace.lock(),
@@ -249,23 +256,9 @@ pub async fn sync(
                     all_packages,
                     &package,
                 )),
-                &groups,
-                python.as_deref().map(PythonRequest::parse),
-                &install_mirrors,
-                &client_builder,
-                python_preference,
-                python_arch,
-                python_downloads,
-                false,
-                config_discovery,
-                active,
-                cache,
-                dry_run,
-                LinkErrorReporting::User,
-                printer,
             )
-            .await?,
-        ),
+            .await?
+        }
         SyncTarget::Manifest(SyncManifest::Script(script)) => SyncEnvironment::Script(
             ScriptEnvironment::get_or_init(
                 script.into(),
@@ -362,7 +355,7 @@ pub async fn sync(
                     )
                 });
 
-            match update_environment(
+            let result = update_environment(
                 environment.clone(),
                 spec,
                 modifications,
@@ -384,36 +377,17 @@ pub async fn sync(
                 preview,
             )
             .await
-            {
-                Ok(EnvironmentUpdate { changelog, .. }) => {
-                    write_sync_report(
-                        &target,
-                        &environment,
-                        &changelog,
-                        None,
-                        dry_run,
-                        output_format,
-                        printer,
-                    )?;
-                    return Ok(ExitStatus::Success);
-                }
-                Err(EnvironmentError::Install(error)) => {
-                    let error = *error;
-                    if let Some(changelog) = error.outdated_environment() {
-                        write_sync_report(
-                            &target,
-                            &environment,
-                            changelog,
-                            None,
-                            dry_run,
-                            output_format,
-                            printer,
-                        )?;
-                    }
-                    return Err(UvError::from(error).into());
-                }
-                Err(err) => return Err(UvError::from(err).into()),
-            }
+            .map(|update| update.changelog);
+            report_sync_result(
+                &target,
+                &environment,
+                result,
+                None,
+                dry_run,
+                output_format,
+                printer,
+            )?;
+            return Ok(ExitStatus::Success);
         }
     }
 
@@ -519,7 +493,7 @@ pub async fn sync(
     let state = state.fork();
 
     // Perform the sync operation.
-    let changelog = match sync_from_lock(
+    let result = sync_from_lock(
         sync_target,
         &environment,
         &extras,
@@ -541,31 +515,12 @@ pub async fn sync(
         preview,
         MalwareCheckContext::from(&malware_settings),
     )
-    .await
-    {
-        Ok(changelog) => changelog,
-        Err(EnvironmentError::Install(error)) => {
-            let error = *error;
-            if let Some(changelog) = error.outdated_environment() {
-                write_sync_report(
-                    &target,
-                    &environment,
-                    changelog,
-                    Some(lock_report),
-                    dry_run,
-                    output_format,
-                    printer,
-                )?;
-            }
-            return Err(UvError::from(error).into());
-        }
-        Err(err) => return Err(UvError::from(err).into()),
-    };
+    .await;
 
-    write_sync_report(
+    report_sync_result(
         &target,
         &environment,
-        &changelog,
+        result,
         Some(lock_report),
         dry_run,
         output_format,
@@ -596,10 +551,7 @@ impl Outcome<'_> {
     /// Return the [`Lock`] associated with this outcome.
     fn lock(&self) -> &Lock {
         match self {
-            Self::Success(lock) => match lock {
-                LockResult::Changed(_, lock) => lock,
-                LockResult::Unchanged(lock) => lock,
-            },
+            Self::Success(result) => result.lock(),
             Self::Frozen(lock) => lock,
             Self::LockMismatch(_prev, cur, _lock_source) => cur,
         }
@@ -668,37 +620,6 @@ impl SyncTarget<'_> {
         match self {
             Self::Manifest(SyncManifest::Project(project)) => Some(project),
             Self::Manifest(SyncManifest::Script(_)) | Self::Lockfile { .. } => None,
-        }
-    }
-
-    fn script(&self) -> Option<&Pep723Script> {
-        match self {
-            Self::Manifest(SyncManifest::Project(_)) | Self::Lockfile { .. } => None,
-            Self::Manifest(SyncManifest::Script(script)) => Some(script),
-        }
-    }
-
-    /// Report the selected member's path, or the workspace root if no member is selected.
-    fn project_report(&self) -> Option<ProjectReport> {
-        match self {
-            Self::Manifest(SyncManifest::Project(project)) => Some(ProjectReport::from(project)),
-            Self::Lockfile {
-                workspace,
-                project_name,
-                ..
-            } => {
-                let root = workspace.root();
-                let path = workspace
-                    .lock()
-                    .workspace_member_paths()
-                    .find(|(name, _)| Some(*name) == project_name.as_ref())
-                    .map_or_else(|| root.to_path_buf(), |(_, path)| root.join(path));
-                Some(ProjectReport {
-                    path: uv_fs::normalize_path(&path).as_ref().into(),
-                    workspace: WorkspaceReport { path: root.into() },
-                })
-            }
-            Self::Manifest(SyncManifest::Script(_)) => None,
         }
     }
 }
@@ -794,13 +715,8 @@ struct Report {
     /// The schema of this report.
     schema: SchemaReport,
     /// The target of the sync operation, either a project or a script.
-    target: TargetName,
-    /// The report for a [`TargetName::Project`], if applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    project: Option<ProjectReport>,
-    /// The report for a [`TargetName::Script`], if applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    script: Option<ScriptReport>,
+    #[serde(flatten)]
+    target: TargetReport,
     /// The report for the sync operation.
     sync: SyncReport,
     /// The report for the lock operation.
@@ -809,9 +725,46 @@ struct Report {
     dry_run: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(tag = "target", rename_all = "snake_case")]
+enum TargetReport {
+    Project { project: ProjectReport },
+    Script { script: ScriptReport },
+}
+
+impl From<&SyncTarget<'_>> for TargetReport {
+    fn from(target: &SyncTarget<'_>) -> Self {
+        match target {
+            SyncTarget::Manifest(SyncManifest::Project(project)) => Self::Project {
+                project: ProjectReport::from(project),
+            },
+            SyncTarget::Manifest(SyncManifest::Script(script)) => Self::Script {
+                script: ScriptReport::from(script),
+            },
+            SyncTarget::Lockfile {
+                workspace,
+                project_name,
+                ..
+            } => {
+                // Report the selected member's path, or the workspace root if no member is selected.
+                let root = workspace.root();
+                let path = project_name
+                    .as_ref()
+                    .and_then(|name| workspace.lock().workspace_member_path(name))
+                    .map_or_else(|| root.to_path_buf(), |path| root.join(path));
+                Self::Project {
+                    project: ProjectReport {
+                        path: uv_fs::normalize_path(&path).as_ref().into(),
+                        workspace: WorkspaceReport { path: root.into() },
+                    },
+                }
+            }
+        }
+    }
+}
+
 /// The kind of target
-#[derive(Debug, Serialize, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy)]
 enum TargetName {
     Project,
     Script,
@@ -842,17 +795,19 @@ enum SyncAction {
 
 impl From<&SyncEnvironment> for SyncAction {
     fn from(env: &SyncEnvironment) -> Self {
-        match &env {
-            SyncEnvironment::Project(ProjectEnvironment::Existing(..)) => Self::Check,
-            SyncEnvironment::Project(ProjectEnvironment::Created(..)) => Self::Create,
-            SyncEnvironment::Project(ProjectEnvironment::WouldCreate(..)) => Self::Create,
-            SyncEnvironment::Project(ProjectEnvironment::WouldReplace(..)) => Self::Replace,
-            SyncEnvironment::Project(ProjectEnvironment::Replaced(..)) => Self::Update,
-            SyncEnvironment::Script(ScriptEnvironment::Existing(..)) => Self::Check,
-            SyncEnvironment::Script(ScriptEnvironment::Created(..)) => Self::Create,
-            SyncEnvironment::Script(ScriptEnvironment::WouldCreate(..)) => Self::Create,
-            SyncEnvironment::Script(ScriptEnvironment::WouldReplace(..)) => Self::Replace,
-            SyncEnvironment::Script(ScriptEnvironment::Replaced(..)) => Self::Update,
+        match env {
+            SyncEnvironment::Project(ProjectEnvironment::Existing(..))
+            | SyncEnvironment::Script(ScriptEnvironment::Existing(..)) => Self::Check,
+            SyncEnvironment::Project(
+                ProjectEnvironment::Created(..) | ProjectEnvironment::WouldCreate(..),
+            )
+            | SyncEnvironment::Script(
+                ScriptEnvironment::Created(..) | ScriptEnvironment::WouldCreate(..),
+            ) => Self::Create,
+            SyncEnvironment::Project(ProjectEnvironment::WouldReplace(..))
+            | SyncEnvironment::Script(ScriptEnvironment::WouldReplace(..)) => Self::Replace,
+            SyncEnvironment::Project(ProjectEnvironment::Replaced(..))
+            | SyncEnvironment::Script(ScriptEnvironment::Replaced(..)) => Self::Update,
         }
     }
 }
@@ -895,22 +850,6 @@ enum LockAction {
     Update,
     /// A new lockfile was created.
     Create,
-}
-
-impl LockAction {
-    fn message(&self, dry_run: bool) -> Option<&'static str> {
-        let message = if dry_run {
-            match self {
-                Self::Use => return None,
-                Self::Check => "Found up-to-date",
-                Self::Update => "Would update",
-                Self::Create => "Would create",
-            }
-        } else {
-            return None;
-        };
-        Some(message)
-    }
 }
 
 #[derive(Serialize, Debug)]
@@ -1026,19 +965,15 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome<'_>)> for LockReport {
         Self {
             path: target.lock_path().deref().into(),
             action: match outcome {
-                Outcome::Success(result) => {
-                    match result {
-                        LockResult::Unchanged(..) => match mode {
-                            // When `--frozen` is used, we don't check the lockfile.
-                            LockMode::Frozen(_) => LockAction::Use,
-                            LockMode::DryRun(_) | LockMode::Locked(_, _) | LockMode::Write(_) => {
-                                LockAction::Check
-                            }
-                        },
-                        LockResult::Changed(None, ..) => LockAction::Create,
-                        LockResult::Changed(Some(_), ..) => LockAction::Update,
+                Outcome::Success(LockResult::Unchanged(..)) => match mode {
+                    // When `--frozen` is used, we don't check the lockfile.
+                    LockMode::Frozen(_) => LockAction::Use,
+                    LockMode::DryRun(_) | LockMode::Locked(_, _) | LockMode::Write(_) => {
+                        LockAction::Check
                     }
-                }
+                },
+                Outcome::Success(LockResult::Changed(None, ..)) => LockAction::Create,
+                Outcome::Success(LockResult::Changed(Some(_), ..)) => LockAction::Update,
                 Outcome::Frozen(_) => LockAction::Use,
                 // TODO(zanieb): We don't have a way to report the outcome of the lock yet
                 Outcome::LockMismatch(..) => LockAction::Check,
@@ -1057,23 +992,23 @@ impl LockReport {
     }
 
     fn to_human_readable_string(&self) -> Option<String> {
-        let Self {
-            path,
-            action,
-            dry_run,
-        } = self;
-
-        let action = action.message(*dry_run)?;
-
-        let message = format!(
-            "{action} lockfile at: {path}",
-            path = path.user_display().cyan(),
-        );
-        if *dry_run {
-            return Some(message.dimmed().to_string());
+        if !self.dry_run {
+            return None;
         }
-
-        Some(message)
+        let action = match self.action {
+            LockAction::Use => return None,
+            LockAction::Check => "Found up-to-date",
+            LockAction::Update => "Would update",
+            LockAction::Create => "Would create",
+        };
+        Some(
+            format!(
+                "{action} lockfile at: {path}",
+                path = self.path.user_display().cyan(),
+            )
+            .dimmed()
+            .to_string(),
+        )
     }
 }
 
@@ -1086,34 +1021,46 @@ impl Report {
     }
 }
 
-fn write_sync_report(
+/// Report package changes even when an outdated environment fails a sync check.
+fn report_sync_result(
     target: &SyncTarget<'_>,
     environment: &SyncEnvironment,
-    changelog: &Changelog,
+    result: Result<Changelog, EnvironmentError>,
     lock: Option<LockReport>,
     dry_run: DryRun,
     output_format: SyncFormat,
     printer: Printer,
 ) -> Result<()> {
-    let report = Report {
-        schema: SchemaReport::default(),
-        target: TargetName::from(target),
-        project: target.project_report(),
-        script: target.script().map(ScriptReport::from),
-        sync: SyncReport {
-            environment: EnvironmentReport::from(environment),
-            action: SyncAction::from(environment),
-            changes: PackageChangesReport::from_changelog(changelog),
-            dry_run: dry_run.enabled(),
-            target: TargetName::from(target),
-        },
-        lock,
-        dry_run: dry_run.enabled(),
+    let installation = match result {
+        Ok(changelog) => Ok(changelog),
+        Err(EnvironmentError::Install(error)) => Err(*error),
+        Err(error) => return Err(UvError::from(error).into()),
     };
+    let changelog = match &installation {
+        Ok(changelog) => Some(changelog),
+        Err(error) => error.outdated_environment(),
+    };
+    if let Some(changelog) = changelog {
+        let report = Report {
+            schema: SchemaReport::default(),
+            target: TargetReport::from(target),
+            sync: SyncReport {
+                environment: EnvironmentReport::from(environment),
+                action: SyncAction::from(environment),
+                changes: PackageChangesReport::from_changelog(changelog),
+                dry_run: dry_run.enabled(),
+                target: TargetName::from(target),
+            },
+            lock,
+            dry_run: dry_run.enabled(),
+        };
 
-    if let Some(output) = report.format(output_format) {
-        writeln!(printer.stdout_important(), "{output}")?;
+        if let Some(output) = report.format(output_format) {
+            writeln!(printer.stdout_important(), "{output}")?;
+        }
     }
 
-    Ok(())
+    installation
+        .map(|_| ())
+        .map_err(|error| UvError::from(error).into())
 }

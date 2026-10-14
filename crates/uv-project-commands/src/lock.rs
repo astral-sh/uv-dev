@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 
+use itertools::Itertools;
 use owo_colors::OwoColorize;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
@@ -187,15 +188,15 @@ pub async fn lock(
             if dry_run.enabled() {
                 // In `--dry-run` mode, show all changes.
                 if let LockResult::Changed(previous, lock) = &lock {
-                    let mut changed = false;
-                    for event in LockEvent::detect_changes(previous.as_ref(), lock, dry_run) {
-                        changed = true;
-                        writeln!(printer.stderr(), "{event}")?;
-                    }
-
-                    // If we didn't report any version changes, but the lockfile changed, report back.
-                    if !changed {
+                    let mut events =
+                        LockEvent::detect_changes(previous.as_ref(), lock, dry_run).peekable();
+                    if events.peek().is_none() {
+                        // The lockfile changed without any package version changes.
                         writeln!(printer.stderr(), "{}", "Lockfile changes detected".bold())?;
+                    } else {
+                        for event in events {
+                            writeln!(printer.stderr(), "{event}")?;
+                        }
                     }
                 } else {
                     writeln!(
@@ -255,76 +256,64 @@ impl std::fmt::Display for LockEventVersion<'_> {
 pub(super) enum LockEvent<'lock> {
     Update(
         DryRun,
-        PackageName,
+        &'lock PackageName,
         BTreeSet<LockEventVersion<'lock>>,
         BTreeSet<LockEventVersion<'lock>>,
     ),
-    Add(DryRun, PackageName, BTreeSet<LockEventVersion<'lock>>),
-    Remove(DryRun, PackageName, BTreeSet<LockEventVersion<'lock>>),
+    Add(
+        DryRun,
+        &'lock PackageName,
+        BTreeSet<LockEventVersion<'lock>>,
+    ),
+    Remove(
+        DryRun,
+        &'lock PackageName,
+        BTreeSet<LockEventVersion<'lock>>,
+    ),
 }
 
 impl<'lock> LockEvent<'lock> {
-    /// Detect the change events between an (optional) existing and updated lockfile.
+    fn package_versions(
+        lock: &'lock Lock,
+    ) -> FxHashMap<&'lock PackageName, BTreeSet<LockEventVersion<'lock>>> {
+        let mut versions: FxHashMap<_, BTreeSet<_>> =
+            FxHashMap::with_capacity_and_hasher(lock.packages().len(), FxBuildHasher);
+        for package in lock.packages() {
+            versions
+                .entry(package.name())
+                .or_default()
+                .insert(LockEventVersion::from(package));
+        }
+        versions
+    }
+
+    /// Detect change events between an optional existing and updated lockfile, ordered by package name.
     pub(super) fn detect_changes(
         existing_lock: Option<&'lock Lock>,
         new_lock: &'lock Lock,
         dry_run: DryRun,
     ) -> impl Iterator<Item = Self> {
-        // Identify the package-versions in the existing lockfile.
-        let mut existing_packages: FxHashMap<&PackageName, BTreeSet<LockEventVersion>> =
-            if let Some(existing_lock) = existing_lock {
-                existing_lock.packages().iter().fold(
-                    FxHashMap::with_capacity_and_hasher(
-                        existing_lock.packages().len(),
-                        FxBuildHasher,
-                    ),
-                    |mut acc, package| {
-                        acc.entry(package.name())
-                            .or_default()
-                            .insert(LockEventVersion::from(package));
-                        acc
-                    },
-                )
-            } else {
-                FxHashMap::default()
+        let existing_packages = existing_lock
+            .map(Self::package_versions)
+            .unwrap_or_default();
+        let mut new_packages = Self::package_versions(new_lock);
+
+        let mut events = Vec::new();
+        for (name, existing_versions) in existing_packages {
+            let event = match new_packages.remove(name) {
+                Some(new_versions) if existing_versions == new_versions => continue,
+                Some(new_versions) => Self::Update(dry_run, name, existing_versions, new_versions),
+                None => Self::Remove(dry_run, name, existing_versions),
             };
-
-        // Identify the package-versions in the updated lockfile.
-        let mut new_packages: FxHashMap<&PackageName, BTreeSet<LockEventVersion>> =
-            new_lock.packages().iter().fold(
-                FxHashMap::with_capacity_and_hasher(new_lock.packages().len(), FxBuildHasher),
-                |mut acc, package| {
-                    acc.entry(package.name())
-                        .or_default()
-                        .insert(LockEventVersion::from(package));
-                    acc
-                },
-            );
-
-        let names = existing_packages
-            .keys()
-            .chain(new_packages.keys())
-            .map(|name| (*name).clone())
-            .collect::<BTreeSet<_>>();
-
-        names.into_iter().filter_map(move |name| {
-            match (existing_packages.remove(&name), new_packages.remove(&name)) {
-                (Some(existing_versions), Some(new_versions)) => {
-                    if existing_versions != new_versions {
-                        Some(Self::Update(dry_run, name, existing_versions, new_versions))
-                    } else {
-                        None
-                    }
-                }
-                (Some(existing_versions), None) => {
-                    Some(Self::Remove(dry_run, name, existing_versions))
-                }
-                (None, Some(new_versions)) => Some(Self::Add(dry_run, name, new_versions)),
-                (None, None) => {
-                    unreachable!("The key `{name}` should exist in at least one of the maps");
-                }
-            }
-        })
+            events.push(event);
+        }
+        events.extend(
+            new_packages
+                .into_iter()
+                .map(|(name, versions)| Self::Add(dry_run, name, versions)),
+        );
+        events.sort_unstable_by(|left, right| left.package().cmp(right.package()));
+        events.into_iter()
     }
 
     pub(super) fn package(&self) -> &PackageName {
@@ -340,16 +329,8 @@ impl std::fmt::Display for LockEvent<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Update(dry_run, name, existing_versions, new_versions) => {
-                let existing_versions = existing_versions
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let new_versions = new_versions
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let existing_versions = existing_versions.iter().format(", ");
+                let new_versions = new_versions.iter().format(", ");
 
                 write!(
                     f,
@@ -364,11 +345,7 @@ impl std::fmt::Display for LockEvent<'_> {
                 )
             }
             Self::Add(dry_run, name, new_versions) => {
-                let new_versions = new_versions
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let new_versions = new_versions.iter().format(", ");
 
                 write!(
                     f,
@@ -379,11 +356,7 @@ impl std::fmt::Display for LockEvent<'_> {
                 )
             }
             Self::Remove(dry_run, name, existing_versions) => {
-                let existing_versions = existing_versions
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let existing_versions = existing_versions.iter().format(", ");
 
                 write!(
                     f,

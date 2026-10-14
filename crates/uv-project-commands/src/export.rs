@@ -327,18 +327,8 @@ pub async fn export(
             };
 
             // Determine the lock mode.
-            let mode = if let Some(frozen_source) = frozen {
-                LockMode::Frozen(frozen_source.into())
-            } else if let LockCheck::Enabled(lock_check) = lock_check {
-                LockMode::Locked(interpreter.as_ref().unwrap(), lock_check)
-            } else if let ExportTarget::Script(script) = target
-                && !LockTarget::Script(script).lock_path().is_file()
-            {
-                // If we're locking a script, avoid creating a lockfile if it doesn't already exist.
-                LockMode::DryRun(interpreter.as_ref().unwrap())
-            } else {
-                LockMode::Write(interpreter.as_ref().unwrap())
-            };
+            let lock_target = LockTarget::from(*target);
+            let mode = LockMode::for_read(lock_target, interpreter.as_ref(), frozen, lock_check);
 
             // Initialize any shared state.
             let state = UniversalState::default();
@@ -356,7 +346,7 @@ pub async fn export(
                     printer,
                     preview,
                 )
-                .execute((*target).into()),
+                .execute(lock_target),
             )
             .await
             .map_err(UvError::from)?

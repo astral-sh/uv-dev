@@ -104,10 +104,8 @@ pub async fn sync_from_lock(
         } => {
             let member = project_name
                 .filter(|_| !extra_build_dependencies.is_empty())
-                .and_then(|name| {
-                    lock.workspace_member_paths()
-                        .find_map(|(member, path)| (member == name).then(|| root.join(path)))
-                })
+                .and_then(|name| lock.workspace_member_path(name))
+                .map(|path| root.join(path))
                 .filter(|path| path.join("pyproject.toml").is_file());
             if let Some(member) = member {
                 let workspace = Workspace::discover(

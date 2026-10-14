@@ -213,16 +213,7 @@ pub async fn tree(
     let lock = match source {
         TreeSource::Lockfile(workspace) => workspace.lock(),
         TreeSource::Manifest(target) => {
-            let mode = if let Some(frozen_source) = frozen {
-                LockMode::Frozen(frozen_source.into())
-            } else if let LockCheck::Enabled(lock_check) = lock_check {
-                LockMode::Locked(interpreter.as_ref().unwrap(), lock_check)
-            } else if matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file() {
-                // If we're locking a script, avoid creating a lockfile if it doesn't already exist.
-                LockMode::DryRun(interpreter.as_ref().unwrap())
-            } else {
-                LockMode::Write(interpreter.as_ref().unwrap())
-            };
+            let mode = LockMode::for_read(target, interpreter.as_ref(), frozen, lock_check);
             let state = UniversalState::default();
             resolved_lock = Box::pin(
                 LockOperation::new(
