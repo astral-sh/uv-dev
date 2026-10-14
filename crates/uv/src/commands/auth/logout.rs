@@ -5,9 +5,9 @@ use owo_colors::OwoColorize;
 
 use uv_auth::{AuthBackend, Credentials, Service, TextCredentialStore, Username};
 use uv_command_support::{ExitStatus, Printer};
-use uv_distribution_types::IndexUrl;
-use uv_pep508::VerbatimUrl;
 use uv_preview::Preview;
+
+use super::TOKEN_USERNAME;
 
 /// Logout from a service.
 ///
@@ -20,42 +20,26 @@ pub(crate) async fn logout(
 ) -> Result<ExitStatus> {
     let backend = AuthBackend::from_settings(preview).await?;
 
-    // TODO(zanieb): Use a shared abstraction across `login` and `logout`?
-    let url = service.url().clone();
-    let (service, url) = match IndexUrl::from(VerbatimUrl::from_url(url.clone())).root() {
-        Some(root) => (Service::try_from(root.clone())?, root),
-        None => (service, url),
-    };
+    let service = super::service_root(service)?;
+    let url = service.url();
 
     // Extract credentials from URL if present
-    let url_credentials = Credentials::from_url(&url)?;
+    let url_credentials = Credentials::from_url(url)?;
     let url_username = url_credentials.as_ref().and_then(|c| c.username());
 
-    let username = match (username, url_username) {
-        (Some(cli), Some(url)) => {
-            bail!(
-                "Cannot specify a username both via the URL and CLI; found `--username {cli}` and `{url}`"
-            );
-        }
-        (Some(cli), None) => cli,
-        (None, Some(url)) => url.to_string(),
-        (None, None) => "__token__".to_string(),
-    };
+    let username = super::resolve_username(username, url_username)?
+        .unwrap_or_else(|| TOKEN_USERNAME.to_owned());
     if username.is_empty() {
         bail!("Username cannot be empty");
     }
 
-    let display_url = if username == "__token__" {
-        url.without_credentials().to_string()
-    } else {
-        format!("{username}@{}", url.without_credentials())
-    };
+    let display_url = super::display_service(&service, &username);
 
     // TODO(zanieb): Consider exhaustively logging out from all backends
     match backend {
         AuthBackend::System(provider) => {
             provider
-                .remove(&url, &username)
+                .remove(url, &username)
                 .await
                 .with_context(|| format!("Unable to remove credentials for `{display_url}`"))?;
         }

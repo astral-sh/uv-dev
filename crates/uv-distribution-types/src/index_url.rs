@@ -50,11 +50,12 @@ impl IndexUrl {
     ///
     /// For indexes with a `/simple` endpoint, this is simply the URL with the final segment
     /// removed. This is useful, e.g., for credential propagation to other endpoints on the index.
-    pub fn root(&self) -> Option<DisplaySafeUrl> {
+    pub(crate) fn root(&self) -> Option<DisplaySafeUrl> {
         Self::root_from_url(self.url())
     }
 
-    fn root_from_url(url: &DisplaySafeUrl) -> Option<DisplaySafeUrl> {
+    /// Return the index root for a URL, using the same endpoint rules as [`Self::root`].
+    pub fn root_from_url(url: &DisplaySafeUrl) -> Option<DisplaySafeUrl> {
         let mut segments = url.path_segments()?;
         let last = match segments.next_back()? {
             // If the last segment is empty due to a trailing `/`, skip it (as in `pop_if_empty`)

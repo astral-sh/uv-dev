@@ -5,6 +5,8 @@ use uv_auth::{AuthBackend, Credentials, Service};
 use uv_command_support::{ExitStatus, Printer};
 use uv_preview::Preview;
 
+use super::TOKEN_USERNAME;
+
 /// Show the token that will be used for a service.
 pub(crate) async fn token(
     service: Service,
@@ -19,41 +21,23 @@ pub(crate) async fn token(
     let url_credentials = Credentials::from_url(url)?;
     let url_username = url_credentials.as_ref().and_then(|c| c.username());
 
-    let username = match (username, url_username) {
-        (Some(cli), Some(url)) => {
-            bail!(
-                "Cannot specify a username both via the URL and CLI; found `--username {cli}` and `{url}`"
-            );
-        }
-        (Some(cli), None) => cli,
-        (None, Some(url)) => url.to_string(),
-        (None, None) => "__token__".to_string(),
-    };
+    let username = super::resolve_username(username, url_username)?
+        .unwrap_or_else(|| TOKEN_USERNAME.to_owned());
     if username.is_empty() {
         bail!("Username cannot be empty");
     }
 
-    let display_url = if username == "__token__" {
-        url.without_credentials().to_string()
-    } else {
-        format!("{username}@{}", url.without_credentials())
-    };
+    let display_url = super::display_service(&service, &username);
 
-    let credentials = match &backend {
-        AuthBackend::System(provider) => provider
-            .fetch(url, Some(&username))
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for `{display_url}`"))?,
-        AuthBackend::TextStore(store, _lock) => store
-            .get_credentials(url, Some(&username))?
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for `{display_url}`"))?,
-    };
+    let credentials = backend
+        .get_credentials(url, Some(&username))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for `{display_url}`"))?;
 
     let Some(password) = credentials.password() else {
         bail!(
             "No {} found for `{display_url}`",
-            if username != "__token__" {
+            if username != TOKEN_USERNAME {
                 "password"
             } else {
                 "token"
