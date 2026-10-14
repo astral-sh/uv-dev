@@ -2037,51 +2037,19 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
             // Fetch distribution metadata from the distribution database.
             Request::Dist(dist) => {
-                if let Some(version) = dist.version() {
-                    if let Some(index) = dist.index() {
-                        // Check the implicit indexes for pre-provided metadata.
-                        let versions_response = self.index.implicit().get(dist.name());
-                        if let Some(VersionsResponse::Found(version_maps)) =
-                            versions_response.as_deref()
-                        {
-                            for version_map in version_maps {
-                                if version_map.index() == Some(index) {
-                                    let Some(metadata) = version_map.get_metadata(version) else {
-                                        continue;
-                                    };
-                                    debug!("Found registry-provided metadata for: {dist}");
-                                    return Ok(Some(Response::Dist {
-                                        dist,
-                                        metadata: MetadataResponse::Found(
-                                            ArchiveMetadata::from_metadata23(metadata),
-                                        ),
-                                    }));
-                                }
-                            }
-                        }
-
-                        // Check the explicit indexes for pre-provided metadata.
-                        let versions_response = self
-                            .index
-                            .explicit()
-                            .get(&(dist.name().clone(), index.clone()));
-                        if let Some(VersionsResponse::Found(version_maps)) =
-                            versions_response.as_deref()
-                        {
-                            for version_map in version_maps {
-                                let Some(metadata) = version_map.get_metadata(version) else {
-                                    continue;
-                                };
-                                debug!("Found registry-provided metadata for: {dist}");
-                                return Ok(Some(Response::Dist {
-                                    dist,
-                                    metadata: MetadataResponse::Found(
-                                        ArchiveMetadata::from_metadata23(metadata),
-                                    ),
-                                }));
-                            }
-                        }
-                    }
+                if let Some(version) = dist.version()
+                    && let Some(index) = dist.index()
+                    && let Some(metadata) =
+                        self.index
+                            .get_registry_metadata(dist.name(), version, index)
+                {
+                    debug!("Found registry-provided metadata for: {dist}");
+                    return Ok(Some(Response::Dist {
+                        dist,
+                        metadata: MetadataResponse::Found(ArchiveMetadata::from_metadata23(
+                            metadata,
+                        )),
+                    }));
                 }
 
                 let metadata = provider
