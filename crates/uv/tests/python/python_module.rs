@@ -420,6 +420,7 @@ fn find_uv_bin_py38() -> anyhow::Result<()> {
     find_uv_bin_in_venv("3.8")
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn find_uv_bin_py39() -> anyhow::Result<()> {
     find_uv_bin_in_venv("3.9")
