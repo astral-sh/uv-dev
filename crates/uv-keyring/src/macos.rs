@@ -249,12 +249,6 @@ impl CredentialBuilderApi for MacCredentialBuilder {
             user,
         )?))
     }
-
-    /// Return the underlying builder object with an `Any` type so that it can
-    /// be downgraded to a [`MacCredentialBuilder`] for platform-specific processing.
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

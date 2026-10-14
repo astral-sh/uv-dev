@@ -377,12 +377,6 @@ impl CredentialBuilderApi for SsCredentialBuilder {
             target, service, user,
         )?))
     }
-
-    /// Return the underlying builder object with an `Any` type so that it can
-    /// be downgraded to an [`SsCredentialBuilder`] for platform-specific processing.
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 //
