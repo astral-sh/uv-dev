@@ -8176,7 +8176,6 @@ dependencies = [
  "uv-tool",
  "uv-torch",
  "uv-types",
- "uv-virtualenv",
  "uv-warnings",
  "uv-workspace",
 ]
