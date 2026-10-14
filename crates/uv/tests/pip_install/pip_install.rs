@@ -1303,18 +1303,13 @@ fn install_requirements_txt() -> Result<()> {
 
 /// Install a package from a `requirements.txt` passed via `-r -` into a virtual environment.
 #[test]
-#[expect(clippy::disallowed_types)]
-fn install_from_stdin() -> Result<()> {
+fn install_from_stdin() {
     let context = uv_test::test_context!("3.12");
 
-    // Install Flask.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("Flask")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("-")
-        .arg("--strict").stdin(std::fs::File::open(requirements_txt)?), @"
+        .arg("--strict"), input="Flask", @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
@@ -1331,25 +1326,18 @@ fn install_from_stdin() -> Result<()> {
     );
 
     context.assert_command("import flask").success();
-
-    Ok(())
 }
 
 /// Install a package from a `requirements.txt` passed via `-r /dev/stdin` into a virtual environment.
 #[test]
-#[cfg(not(windows))]
-#[expect(clippy::disallowed_types)]
-fn install_from_dev_stdin() -> Result<()> {
+#[cfg(unix)]
+fn install_from_dev_stdin() {
     let context = uv_test::test_context!("3.12");
 
-    // Install Flask.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("Flask")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("/dev/stdin")
-        .arg("--strict").stdin(std::fs::File::open(requirements_txt)?), @"
+        .arg("--strict"), input="Flask", @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
@@ -1366,8 +1354,6 @@ fn install_from_dev_stdin() -> Result<()> {
     );
 
     context.assert_command("import flask").success();
-
-    Ok(())
 }
 
 /// Warn (but don't fail) when unsupported flags are set in the `requirements.txt`.
@@ -4834,23 +4820,18 @@ fn install_constraints_txt() -> Result<()> {
     Ok(())
 }
 
-/// Install a package from a `requirements.txt` file, with a `constraints.txt` file.
+/// Apply constraints piped through stdin to requirements from a file.
 #[test]
-#[expect(clippy::disallowed_types)]
 fn install_constraints_txt_from_stdin() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
-    let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("idna<3.4")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
             .arg("-r")
             .arg("requirements.txt")
             .arg("--constraint")
-            .arg("-")
-            .stdin(std::fs::File::open(constraints_txt)?), @"
+            .arg("-"), input="idna<3.4", @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -9855,18 +9836,13 @@ fn require_hashes_override() -> Result<()> {
 
 /// Install with overrides from stdin.
 #[test]
-#[expect(clippy::disallowed_types)]
-fn install_with_overrides_from_stdin() -> Result<()> {
+fn install_with_overrides_from_stdin() {
     let context = uv_test::test_context!("3.12");
 
-    let overrides_txt = context.temp_dir.child("overrides.txt");
-    overrides_txt.write_str("anyio==4.0.0")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio==4.0.1")
         .arg("--override")
-        .arg("-")
-        .stdin(std::fs::File::open(overrides_txt)?), @"
+        .arg("-"), input="anyio==4.0.0", @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -9877,31 +9853,22 @@ fn install_with_overrides_from_stdin() -> Result<()> {
      + sniffio==1.3.1
     "
     );
-
-    Ok(())
 }
 
 /// Install with a direct exclusion from stdin.
 #[test]
-#[expect(clippy::disallowed_types)]
-fn install_with_excludes_from_stdin() -> Result<()> {
+fn install_with_excludes_from_stdin() {
     let context = uv_test::test_context!("3.12");
 
-    let excludes_txt = context.temp_dir.child("excludes.txt");
-    excludes_txt.write_str("anyio")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio==4.0.1")
         .arg("--exclude")
-        .arg("-")
-        .stdin(std::fs::File::open(excludes_txt)?), @"
+        .arg("-"), input="anyio", @"
     exit_code: 0 (success)
     ----- stderr -----
     Checked 1 package in [TIME]
     "
     );
-
-    Ok(())
 }
 
 /// Provide valid hashes for all dependencies with `--require-hashes` with accompanying markers.
@@ -11271,18 +11238,13 @@ fn incompatible_build_constraint() -> Result<()> {
 
 /// Include a `build_constraints.txt` file with an incompatible constraint from stdin.
 #[test]
-#[expect(clippy::disallowed_types)]
-fn incompatible_build_constraint_from_stdin() -> Result<()> {
+fn incompatible_build_constraint_from_stdin() {
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
 
-    let constraints_txt = context.temp_dir.child("build_constraints.txt");
-    constraints_txt.write_str("setuptools==1")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("requests==1.2")
         .arg("--build-constraint")
-        .arg("-")
-        .stdin(std::fs::File::open(constraints_txt)?), @"
+        .arg("-"), input="setuptools==1", @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `requests==1.2.0`
@@ -11291,8 +11253,6 @@ fn incompatible_build_constraint_from_stdin() -> Result<()> {
       cause: Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
     "
     );
-
-    Ok(())
 }
 
 /// Include a `build_constraints.txt` file with a compatible constraint.
