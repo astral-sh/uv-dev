@@ -40,4 +40,6 @@ mod update_shell;
 
 mod upgrade;
 
+#[cfg(feature = "test-python")]
 mod version;
+mod version_read_only;
