@@ -514,23 +514,23 @@ fn python_list_downloads_installed() {
         .with_managed_python_dirs()
         .with_filtered_latest_python_versions();
 
-    // We do not test showing all interpreters - as it differs per platform
-    // Instead, we choose a Python version where our available distributions are stable
+    // Keep a second CPython minor uninstalled so unrelated downloads remain visible without
+    // depending on PyPy or GraalPy availability for the host platform.
+    let request = "cpython->=3.10,<3.12";
 
     // First, the download is shown as available
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
+    cpython-3.11.[LATEST]-[PLATFORM]    <download available>
     cpython-3.10.[LATEST]-[PLATFORM]    <download available>
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
     ");
 
     // TODO(zanieb): It'd be nice to test `--show-urls` here too but we need special filtering for
     // the URL
 
     // But not if `--only-installed` is used
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--only-installed").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).arg("--only-installed").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ");
 
@@ -538,35 +538,32 @@ fn python_list_downloads_installed() {
     context.python_install().arg("3.10").assert().success();
 
     // Then, it should be listed as installed instead of available
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
+    cpython-3.11.[LATEST]-[PLATFORM]    <download available>
     cpython-3.10.[LATEST]-[PLATFORM]    managed/cpython-3.10-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
     ");
 
     // But, the display should be reverted if `--only-downloads` is used
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--only-downloads").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).arg("--only-downloads").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
+    cpython-3.11.[LATEST]-[PLATFORM]    <download available>
     cpython-3.10.[LATEST]-[PLATFORM]    <download available>
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
     ");
 
     // And should not be shown if `--no-managed-python` is used
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--no-managed-python").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).arg("--no-managed-python").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ");
 
     // When `--managed-python` is used, managed installations should still be shown
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--managed-python").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).arg("--managed-python").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
+    cpython-3.11.[LATEST]-[PLATFORM]    <download available>
     cpython-3.10.[LATEST]-[PLATFORM]    managed/cpython-3.10-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
     ");
 }
 
