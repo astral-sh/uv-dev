@@ -81,7 +81,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         }
     }
 
-    // Parse `RECORD` and entry points and validate script destinations before linking wheel files.
+    // Check reserved script paths before linking wheel files.
     let validated_wheel = ValidatedWheel::new(layout, wheel, &dist_info_prefix)?;
     trace!(?name, "Extracting wheel files");
     link_wheel_files(link_mode, site_packages, &validated_wheel, state, filename)?;
