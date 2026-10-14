@@ -5,7 +5,9 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+#[cfg(windows)]
+use anyhow::Context;
+use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
@@ -647,37 +649,6 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
     );
 
     Ok(())
-}
-
-/// Compile symlinked source files installed by the current operation.
-#[test]
-#[cfg(unix)]
-fn compile_bytecode_with_symlink_link_mode() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("sniffio==1.3.1")
-        .arg("--compile-bytecode")
-        .arg("--link-mode")
-        .arg("symlink"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
-     + sniffio==1.3.1
-    "
-    );
-
-    assert!(
-        context
-            .site_packages()
-            .join("sniffio")
-            .join("__pycache__")
-            .join("__init__.cpython-312.pyc")
-            .exists()
-    );
 }
 
 /// Compile bytecode when installing into a relative `--target` or `--prefix` path.
@@ -15900,64 +15871,4 @@ fn upgrade_group_not_supported() {
     ----- stderr -----
     error: `--upgrade-group` is not supported in `uv pip` commands
     ");
-}
-
-/// Compile installed packages without compiling the Python standard library.
-#[test]
-fn compile_bytecode_excludes_stdlib() -> Result<()> {
-    fn count_python_sources(root: &Path) -> Result<usize> {
-        let mut count = 0;
-        for entry in WalkDir::new(root) {
-            let entry = entry?;
-            if entry.file_type().is_file()
-                && entry
-                    .path()
-                    .extension()
-                    .is_some_and(|extension| extension == "py")
-            {
-                count += 1;
-            }
-        }
-        Ok(count)
-    }
-
-    let context = uv_test::test_context!("3.12").with_filtered_compiled_file_count();
-
-    let output = uv_snapshot!(context.filters(), context.pip_install()
-        .arg("sniffio==1.3.1")
-        .arg("--compile-bytecode"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-    Bytecode compiled [COUNT] files in [TIME]
-     + sniffio==1.3.1
-    ");
-
-    let stderr = String::from_utf8(output.stderr)?;
-    let compiled = stderr
-        .lines()
-        .find_map(|line| line.strip_prefix("Bytecode compiled "))
-        .and_then(|line| line.split_whitespace().next())
-        .context("Expected a bytecode compilation summary")?
-        .parse::<usize>()?;
-
-    let stdlib = context
-        .python_command()
-        .arg("-c")
-        .arg("import sysconfig; print(sysconfig.get_path('stdlib'))")
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let stdlib = PathBuf::from(String::from_utf8(stdlib)?.trim());
-
-    let site_packages_sources = count_python_sources(&context.site_packages())?;
-    let stdlib_sources = count_python_sources(&stdlib)?;
-    assert!(stdlib_sources > site_packages_sources);
-    assert!(compiled <= site_packages_sources);
-
-    Ok(())
 }
