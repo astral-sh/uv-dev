@@ -71,6 +71,19 @@ pub struct Pep508Error<T: Pep508Url = VerbatimUrl> {
     pub input: String,
 }
 
+impl<T: Pep508Url> Pep508Error<T> {
+    fn unnamed_requirement(cursor: &Cursor, start: usize, example: &str) -> Self {
+        Self {
+            message: Pep508ErrorSource::UnsupportedRequirement(format!(
+                "URL requirement must be preceded by a package name. Add the name of the package before the URL (e.g., `package_name @ {example}`)."
+            )),
+            start,
+            len: cursor.pos() - start,
+            input: cursor.to_string(),
+        }
+    }
+}
+
 /// Either we have an error string from our parser or an upstream error from `url`
 #[derive(Debug, Error)]
 pub enum Pep508ErrorSource<T: Pep508Url = VerbatimUrl> {
@@ -470,12 +483,11 @@ fn parse_name<T: Pep508Url>(cursor: &mut Cursor) -> Result<PackageName, Pep508Er
             // in `requirements.txt`, but it doesn't adhere to the PEP 508 grammar.
             let mut clone = cursor.clone().at(start);
             return if looks_like_unnamed_requirement(&mut clone) {
-                Err(Pep508Error {
-                    message: Pep508ErrorSource::UnsupportedRequirement("URL requirement must be preceded by a package name. Add the name of the package before the URL (e.g., `package_name @ /path/to/file`).".to_string()),
+                Err(Pep508Error::unnamed_requirement(
+                    &clone,
                     start,
-                    len: clone.pos() - start,
-                    input: clone.to_string(),
-                })
+                    "/path/to/file",
+                ))
             } else {
                 Err(Pep508Error {
                     message: Pep508ErrorSource::String(format!(
@@ -952,12 +964,11 @@ fn parse_pep508_requirement<T: Pep508Url>(
             // the PEP 508 grammar.
             let mut clone = cursor.clone().at(start);
             return if looks_like_unnamed_requirement(&mut clone) {
-                Err(Pep508Error {
-                    message: Pep508ErrorSource::UnsupportedRequirement("URL requirement must be preceded by a package name. Add the name of the package before the URL (e.g., `package_name @ https://...`).".to_string()),
+                Err(Pep508Error::unnamed_requirement(
+                    &clone,
                     start,
-                    len: clone.pos() - start,
-                    input: clone.to_string(),
-                })
+                    "https://...",
+                ))
             } else {
                 Err(Pep508Error {
                     message: Pep508ErrorSource::String(format!(
@@ -979,12 +990,11 @@ fn parse_pep508_requirement<T: Pep508Url>(
     if requirement_kind.is_none() {
         if looks_like_archive(cursor.slice(name_start, name_end - name_start)) {
             let clone = cursor.clone().at(start);
-            return Err(Pep508Error {
-                message: Pep508ErrorSource::UnsupportedRequirement("URL requirement must be preceded by a package name. Add the name of the package before the URL (e.g., `package_name @ https://...`).".to_string()),
+            return Err(Pep508Error::unnamed_requirement(
+                &clone,
                 start,
-                len: clone.pos() - start,
-                input: clone.to_string(),
-            });
+                "https://...",
+            ));
         }
     }
 
