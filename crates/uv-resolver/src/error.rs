@@ -1880,43 +1880,26 @@ fn simplify_range(
         }
     }
 
-    // Check if pre-releases are allowed
-    let prereleases_not_allowed = candidate_selector
+    // Include prereleases when allowed by the selection policy or mentioned in the range bounds.
+    let include_prereleases = candidate_selector
         .prerelease_strategy()
         .selection(name, resolver_environment)
-        == PrereleaseSelection::Disallow;
-
-    let any_prerelease = range.iter().any(|(start, end)| {
-        let is_pre1 = match start {
-            Bound::Included(version) => version.any_prerelease(),
-            Bound::Excluded(version) => version.any_prerelease(),
-            Bound::Unbounded => false,
-        };
-        let is_pre2 = match end {
-            Bound::Included(version) => version.any_prerelease(),
-            Bound::Excluded(version) => version.any_prerelease(),
-            Bound::Unbounded => false,
-        };
-        is_pre1 || is_pre2
-    });
+        != PrereleaseSelection::Disallow
+        || range
+            .iter()
+            .flat_map(|(start, end)| [start, end])
+            .any(|bound| {
+                matches!(bound, Bound::Included(version) | Bound::Excluded(version) if version.any_prerelease())
+            });
 
     // Simplify the range, as implemented in PubGrub
-    Some(Range::from_versions(range.simplify(
-        versions.iter().filter(|version| {
-            // If there are pre-releases in the range segments, we need to include pre-releases
-            if any_prerelease {
-                return true;
-            }
-
-            // If pre-releases are not allowed, filter out pre-releases
-            if prereleases_not_allowed && version.any_prerelease() {
-                return false;
-            }
-
-            // Otherwise, include the version
-            true
-        }),
-    )))
+    Some(Range::from_versions(
+        range.simplify(
+            versions
+                .iter()
+                .filter(|version| include_prereleases || !version.any_prerelease()),
+        ),
+    ))
 }
 
 #[cfg(test)]
