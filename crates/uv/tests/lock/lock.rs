@@ -1,4 +1,5 @@
 #[cfg(feature = "test-universal")]
+use std::path::Path;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use std::process::Command;
 
@@ -37,6 +38,21 @@ use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
+
+#[cfg(feature = "test-universal")]
+fn assert_cache_missing_files(cache: &Path, filenames: &[&str]) -> Result<()> {
+    for entry in WalkDir::new(cache) {
+        let entry = entry?;
+        assert!(
+            !filenames
+                .iter()
+                .any(|filename| entry.file_name() == *filename),
+            "rejected artifact was retained in the cache at {}",
+            entry.path().display()
+        );
+    }
+    Ok(())
+}
 
 #[cfg(feature = "test-universal")]
 fn locked_package(lock: &str, name: &str) -> Result<toml::Value> {
@@ -3411,19 +3427,7 @@ async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
         "the replaced build backend was executed"
     );
     assert_eq!(context.read("uv.lock"), locked);
-    for entry in WalkDir::new(context.cache_dir.path()) {
-        let entry = entry?;
-        assert_ne!(
-            entry.file_name(),
-            "backend.py",
-            "the rejected archive was retained in the cache"
-        );
-        assert_ne!(
-            entry.file_name(),
-            "revision.http",
-            "the rejected archive was persisted to the cache"
-        );
-    }
+    assert_cache_missing_files(context.cache_dir.path(), &["backend.py", "revision.http"])?;
 
     // Malformed replacements fail immediately during extraction, before cache persistence.
     server.serve(filename, malformed_archive, None).await;
@@ -3446,19 +3450,7 @@ async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
         "the replaced build backend was executed"
     );
     assert_eq!(context.read("uv.lock"), locked);
-    for entry in WalkDir::new(context.cache_dir.path()) {
-        let entry = entry?;
-        assert_ne!(
-            entry.file_name(),
-            "backend.py",
-            "the rejected archive was retained in the cache"
-        );
-        assert_ne!(
-            entry.file_name(),
-            "revision.http",
-            "the rejected archive was persisted to the cache"
-        );
-    }
+    assert_cache_missing_files(context.cache_dir.path(), &["backend.py", "revision.http"])?;
 
     Ok(())
 }
@@ -3671,13 +3663,7 @@ fn lock_sdist_path_rejected_archive_not_cached() -> Result<()> {
         "the replacement build backend was executed"
     );
     assert_eq!(context.read("uv.lock"), locked);
-    for entry in WalkDir::new(context.cache_dir.path()) {
-        assert_ne!(
-            entry?.file_name(),
-            "backend.py",
-            "the rejected archive was retained in the cache"
-        );
-    }
+    assert_cache_missing_files(context.cache_dir.path(), &["backend.py"])?;
     Ok(())
 }
 
@@ -3750,13 +3736,7 @@ async fn lock_sdist_url_cache_heal_hash_mismatch() -> Result<()> {
         !sentinel.exists(),
         "the replacement build backend was executed"
     );
-    for entry in WalkDir::new(context.cache_dir.path()) {
-        assert_ne!(
-            entry?.file_name(),
-            "backend.py",
-            "cache repair retained the replacement"
-        );
-    }
+    assert_cache_missing_files(context.cache_dir.path(), &["backend.py"])?;
     Ok(())
 }
 
