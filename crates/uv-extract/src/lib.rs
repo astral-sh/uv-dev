@@ -30,6 +30,28 @@ impl ExtractionDirectories {
     }
 }
 
+/// Validate the empty payload declared by a ZIP directory entry.
+pub(crate) fn validate_zip_directory_entry(
+    entry: &async_zip::ZipEntry,
+    path: &Path,
+) -> Result<(), Error> {
+    if entry.crc32() != 0 {
+        return Err(Error::BadCrc32 {
+            path: path.to_path_buf(),
+            computed: 0,
+            expected: entry.crc32(),
+        });
+    }
+    if entry.uncompressed_size() != 0 {
+        return Err(Error::BadUncompressedSize {
+            path: path.to_path_buf(),
+            computed: 0,
+            expected: entry.uncompressed_size(),
+        });
+    }
+    Ok(())
+}
+
 /// Set executable permissions according to pip's wheel extraction behavior.
 #[cfg(unix)]
 pub(crate) fn set_executable_bits(path: &Path) -> Result<(), Error> {
