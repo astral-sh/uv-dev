@@ -2412,13 +2412,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 // we represent the state of the resolver at the time of failure.
                 continue;
             }
-            let versions_response = if let Some(index) = fork_indexes.get(name) {
-                self.index
-                    .explicit()
-                    .get(&(name.clone(), index.url().clone()))
-            } else {
-                self.index.implicit().get(name)
-            };
+            let versions_response = self.index.get_versions(name, fork_indexes.get(name));
             if let Some(response) = versions_response {
                 if let VersionsResponse::Found(ref version_maps) = *response {
                     // Track included and available versions, across all indexes.
@@ -2569,13 +2563,7 @@ impl KnownVersions {
             return None;
         };
         if !self.0.contains_key(name) {
-            let response = if let Some(index_metadata) = index_metadata {
-                index
-                    .explicit()
-                    .get(&(name.clone(), index_metadata.url().clone()))?
-            } else {
-                index.implicit().get(name)?
-            };
+            let response = index.get_versions(name, index_metadata)?;
             let VersionsResponse::Found(ref version_maps) = *response else {
                 return None;
             };

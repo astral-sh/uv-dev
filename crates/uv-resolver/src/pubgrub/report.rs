@@ -15,9 +15,7 @@ use reqwest::StatusCode;
 use rustc_hash::FxHashMap;
 
 use uv_configuration::{IndexStrategy, NoBinary, NoBuild};
-use uv_distribution_types::{
-    Index, IndexCapabilities, IndexLocations, IndexMetadata, IndexUrl, RequiresPython,
-};
+use uv_distribution_types::{Index, IndexCapabilities, IndexLocations, IndexUrl, RequiresPython};
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueVersion};
@@ -1045,11 +1043,7 @@ impl PubGrubReportFormatter<'_> {
                 .cloned()
         })?;
 
-        let response = if let Some(url) = fork_indexes.get(name).map(IndexMetadata::url) {
-            index.explicit().get(&(name.clone(), url.clone()))
-        } else {
-            index.implicit().get(name)
-        }?;
+        let response = index.get_versions(name, fork_indexes.get(name))?;
 
         let VersionsResponse::Found(version_maps) = &*response else {
             return None;
@@ -1094,11 +1088,7 @@ impl PubGrubReportFormatter<'_> {
         env: &ResolverEnvironment,
         tags: Option<&Tags>,
     ) -> Option<PubGrubHint> {
-        let response = if let Some(url) = fork_indexes.get(name).map(IndexMetadata::url) {
-            index.explicit().get(&(name.clone(), url.clone()))
-        } else {
-            index.implicit().get(name)
-        }?;
+        let response = index.get_versions(name, fork_indexes.get(name))?;
 
         let VersionsResponse::Found(version_maps) = &*response else {
             return None;
