@@ -1,11 +1,10 @@
-use std::fmt::{self, Display};
 use std::io;
 use std::str::FromStr;
 
 use crate::{ARCHIVE_VERSION, ArchiveId};
 
 /// A file-based reference to an archive in the cache.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct Link {
     /// The unique ID of the entry in the archive bucket.
     pub(super) id: ArchiveId,
@@ -14,17 +13,9 @@ pub(super) struct Link {
 }
 
 impl Link {
-    pub(super) fn new(id: ArchiveId) -> Self {
-        Self {
-            id,
-            version: ARCHIVE_VERSION,
-        }
-    }
-}
-
-impl Display for Link {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "archive-v{}/{}", self.version, self.id)
+    /// Encode a reference to an archive in the current bucket.
+    pub(super) fn serialize(id: &ArchiveId) -> String {
+        format!("archive-v{ARCHIVE_VERSION}/{id}")
     }
 }
 
@@ -70,16 +61,15 @@ mod tests {
     use std::str::FromStr;
 
     use super::Link;
-    use crate::ArchiveId;
+    use crate::{ARCHIVE_VERSION, ArchiveId};
 
     #[test]
     fn round_trip() {
         let id = ArchiveId::new();
-        let link = Link::new(id);
-        let s = link.to_string();
-        let parsed = Link::from_str(&s).unwrap();
-        assert_eq!(link.id, parsed.id);
-        assert_eq!(link.version, parsed.version);
+        let serialized = Link::serialize(&id);
+        let parsed = Link::from_str(&serialized).unwrap();
+        assert_eq!(id, parsed.id);
+        assert_eq!(ARCHIVE_VERSION, parsed.version);
     }
 
     #[test]

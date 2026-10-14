@@ -839,8 +839,7 @@ impl Cache {
     #[expect(clippy::unused_self)]
     fn create_link(&self, id: &ArchiveId, dst: impl AsRef<Path>) -> io::Result<()> {
         // Serialize the link.
-        let link = Link::new(id.clone());
-        let contents = link.to_string();
+        let contents = Link::serialize(id);
 
         // First, attempt to create a file at the location, but fail if it already exists.
         match fs_err::OpenOptions::new()
