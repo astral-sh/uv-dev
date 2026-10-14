@@ -1161,7 +1161,7 @@ pub(crate) fn parse_scripts(
 }
 
 /// Rename a file with a fallback to copy that switches over on the first failure.
-#[derive(Default, Copy, Clone)]
+#[derive(Default)]
 enum RenameOrCopy {
     #[default]
     Rename,
@@ -1173,17 +1173,18 @@ impl RenameOrCopy {
     ///
     /// Usually, source and target are on the same device, so we can rename, but if that fails, we
     /// have to copy. If renaming failed once, we switch to copy permanently.
-    fn rename_or_copy(&mut self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
-        if matches!(self, Self::Rename) {
-            match fs_err::rename(from.as_ref(), to.as_ref()) {
+    fn rename_or_copy(&mut self, from: &Path, to: &Path) -> io::Result<()> {
+        match self {
+            Self::Rename => match fs_err::rename(from, to) {
                 Ok(()) => return Ok(()),
                 Err(err) => {
                     *self = Self::Copy;
                     debug!("Failed to rename, falling back to copy: {err}");
                 }
-            }
+            },
+            Self::Copy => {}
         }
-        fs_err::copy(from.as_ref(), to.as_ref())?;
+        fs_err::copy(from, to)?;
         Ok(())
     }
 }
