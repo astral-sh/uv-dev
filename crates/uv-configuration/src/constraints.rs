@@ -7,7 +7,8 @@ use uv_distribution_types::{
     NameRequirementSpecification, Requirement, RequirementSource, ResolutionRecorder,
 };
 use uv_normalize::PackageName;
-use uv_pep508::MarkerTree;
+
+use crate::dependency_modifier::apply_extra_marker;
 
 /// A set of constraints for a set of requirements.
 #[derive(Debug, Default, Clone)]
@@ -82,45 +83,17 @@ impl Constraints {
     }
 
     /// Apply the constraints to a set of requirements.
-    ///
-    /// NB: Change this method together with `Overrides::apply_for_package`.
     pub fn apply<'a>(
         &'a self,
         requirements: impl IntoIterator<Item = Cow<'a, Requirement>>,
     ) -> impl Iterator<Item = Cow<'a, Requirement>> {
         requirements.into_iter().flat_map(|requirement| {
             let Some(constraints) = self.get(&requirement.name) else {
-                // Case 1: No constraint(s).
                 return Either::Left(std::iter::once(requirement));
             };
 
-            // Constraints must retain the requirement's full extra condition, including
-            // alternatives and negative conditions. A false marker has no extras to retain.
-            let extra_marker = if requirement.marker.is_false() {
-                MarkerTree::TRUE
-            } else {
-                requirement.marker.only_extras()
-            };
-            if extra_marker.is_true() {
-                // Case 2: A non-optional dependency with constraint(s).
-                return Either::Right(Either::Right(
-                    std::iter::once(requirement).chain(constraints.iter().map(Cow::Borrowed)),
-                ));
-            }
-
-            // Case 3: An optional dependency with constraint(s).
-            //
-            // When the original requirement is an optional dependency, the constraint(s) need to
-            // have the same extra condition, otherwise we activate extras that should be inactive.
-            Either::Right(Either::Left(std::iter::once(requirement).chain(
-                constraints.iter().cloned().map(move |constraint| {
-                    let joint_marker = extra_marker.and(constraint.marker);
-                    Cow::Owned(Requirement {
-                        marker: joint_marker,
-                        ..constraint
-                    })
-                }),
-            )))
+            let constraints = apply_extra_marker(requirement.marker, constraints);
+            Either::Right(std::iter::once(requirement).chain(constraints))
         })
     }
 }

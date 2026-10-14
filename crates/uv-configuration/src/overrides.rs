@@ -10,7 +10,8 @@ use serde::{Deserialize, Deserializer};
 use uv_distribution_types::{Requirement, RequirementSource, ResolutionRecorder};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_pep508::MarkerTree;
+
+use crate::dependency_modifier::apply_extra_marker;
 
 /// An override that applies to the dependencies of a specific package version.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
@@ -306,8 +307,6 @@ impl Overrides {
     }
 
     /// Apply overrides with optional package-version context.
-    ///
-    /// NB: Change this method together with [`Constraints::apply`](crate::Constraints::apply).
     pub(crate) fn apply_for_package<'a, I>(
         &'a self,
         package: Option<(&PackageName, &Version)>,
@@ -358,31 +357,9 @@ impl Overrides {
             .and_then(|scoped| scoped.overrides.get(&requirement.name))
             .or_else(|| self.get(&requirement.name));
         let Some(overrides) = overrides else {
-            // Case 1: No override(s).
             return Either::Left(std::iter::once(Cow::Borrowed(requirement)));
         };
 
-        // Overrides replace environmental conditions, but optional dependencies must retain
-        // their extra conditions. Project away the environment rather than extracting one extra:
-        // valid metadata can contain alternatives and negative extra conditions.
-        // A false marker has no extra conditions left to retain; overrides can replace it too.
-        let extra_marker = if requirement.marker.is_false() {
-            MarkerTree::TRUE
-        } else {
-            requirement.marker.only_extras()
-        };
-        if extra_marker.is_true() {
-            return Either::Right(Either::Right(overrides.iter().map(Cow::Borrowed)));
-        }
-
-        Either::Right(Either::Left(overrides.iter().map(
-            move |override_requirement| {
-                let joint_marker = extra_marker.and(override_requirement.marker);
-                Cow::Owned(Requirement {
-                    marker: joint_marker,
-                    ..override_requirement.clone()
-                })
-            },
-        )))
+        Either::Right(apply_extra_marker(requirement.marker, overrides))
     }
 }
