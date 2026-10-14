@@ -4,52 +4,21 @@ use uv_pypi_types::{ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl, Verbatim
 use uv_redacted::DisplaySafeUrl;
 
 /// Map a URL to a precise URL, if possible.
-pub(crate) fn url_to_precise(url: VerbatimParsedUrl, git: &GitResolver) -> VerbatimParsedUrl {
-    match &url.parsed_url {
-        ParsedUrl::GitDirectory(ParsedGitDirectoryUrl {
-            url: git_url,
-            subdirectory,
-        }) => {
-            let Some(new_git_url) = git.precise(git_url.clone()) else {
-                debug_assert!(false, "Unresolved Git URL: {}, {git_url:?}", url.verbatim);
-                return url;
-            };
+pub(crate) fn url_to_precise(mut url: VerbatimParsedUrl, git: &GitResolver) -> VerbatimParsedUrl {
+    let git_url = match &mut url.parsed_url {
+        ParsedUrl::GitDirectory(ParsedGitDirectoryUrl { url, .. })
+        | ParsedUrl::GitPath(ParsedGitPathUrl { url, .. }) => url,
+        _ => return url,
+    };
+    let Some(precise) = git.precise(git_url.clone()) else {
+        debug_assert!(false, "Unresolved Git URL: {}, {git_url:?}", url.verbatim);
+        return url;
+    };
+    *git_url = precise;
 
-            let new_parsed_url = ParsedGitDirectoryUrl {
-                url: new_git_url,
-                subdirectory: subdirectory.clone(),
-            };
-            let new_url = DisplaySafeUrl::from(new_parsed_url.clone());
-            let new_verbatim_url = apply_redirect(&url.verbatim, new_url);
-            VerbatimParsedUrl {
-                parsed_url: ParsedUrl::GitDirectory(new_parsed_url),
-                verbatim: new_verbatim_url,
-            }
-        }
-        ParsedUrl::GitPath(ParsedGitPathUrl {
-            url: git_url,
-            install_path,
-            ext,
-        }) => {
-            let Some(new_git_url) = git.precise(git_url.clone()) else {
-                debug_assert!(false, "Unresolved Git URL: {}, {git_url:?}", url.verbatim);
-                return url;
-            };
-
-            let new_parsed_url = ParsedGitPathUrl {
-                url: new_git_url,
-                install_path: install_path.clone(),
-                ext: *ext,
-            };
-            let new_url = DisplaySafeUrl::from(new_parsed_url.clone());
-            let new_verbatim_url = apply_redirect(&url.verbatim, new_url);
-            VerbatimParsedUrl {
-                parsed_url: ParsedUrl::GitPath(new_parsed_url),
-                verbatim: new_verbatim_url,
-            }
-        }
-        _ => url,
-    }
+    let redirect = DisplaySafeUrl::from(url.parsed_url.clone());
+    url.verbatim = apply_redirect(&url.verbatim, redirect);
+    url
 }
 
 /// Given a [`VerbatimUrl`] and a redirect, apply the redirect to the URL while preserving as much
