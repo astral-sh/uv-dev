@@ -1,5 +1,5 @@
 use console::{Key, Term, measure_text_width, style};
-use std::{cmp::Ordering, fmt, iter};
+use std::{cmp::Ordering, fmt};
 
 /// Prompt the user for confirmation in the given [`Term`].
 ///
@@ -152,12 +152,11 @@ pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
                     term.clear_chars(1)?;
                 }
 
-                let tail: String = chars[position..].iter().collect();
-
-                if !tail.is_empty() {
+                if position < chars.len() {
+                    let tail: String = chars[position..].iter().collect();
                     term.write_str(&tail)?;
 
-                    let total = position + prompt_len + tail.chars().count();
+                    let total = prompt_len + chars.len();
                     let total_line = total / line_size;
                     let line_cursor = (position + prompt_len) / line_size;
                     term.move_cursor_up(total_line - line_cursor)?;
@@ -170,10 +169,10 @@ pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
             }
             Key::Char(chr) if !chr.is_ascii_control() => {
                 chars.insert(position, chr);
+                let tail: String = chars[position..].iter().collect();
                 position += 1;
-                let tail: String = iter::once(&chr).chain(chars[position..].iter()).collect();
                 term.write_str(&tail)?;
-                term.move_cursor_left(tail.chars().count() - 1)?;
+                term.move_cursor_left(chars.len() - position)?;
                 term.flush()?;
             }
             Key::ArrowLeft if position > 0 => {
