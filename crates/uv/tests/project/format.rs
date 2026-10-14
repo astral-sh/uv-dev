@@ -160,8 +160,7 @@ fn format_missing_pyproject_toml() -> Result<()> {
 fn format_missing_project_in_pyproject_toml() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
 
-    // Create an empty pyproject.toml with no [project] section
-    context.temp_dir.child("pyproject.toml");
+    context.temp_dir.child("pyproject.toml").touch()?;
 
     // Create an unformatted Python file
     let main_py = context.temp_dir.child("main.py");
