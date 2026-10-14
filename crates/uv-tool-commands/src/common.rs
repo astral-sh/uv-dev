@@ -872,7 +872,7 @@ pub(super) fn finalize_tool_install(
         #[cfg(windows)]
         let itself = std::env::current_exe().ok();
 
-        let mut names = BTreeSet::new();
+        let first_entrypoint = installed_entrypoints.len();
         for (name, src, target) in target_entrypoints {
             debug!("Installing executable: {name}");
 
@@ -888,11 +888,13 @@ pub(super) fn finalize_tool_install(
                 fs_err::copy(src, &target).context("Failed to install entrypoint")?;
             }
 
-            let tool_entry = ToolEntrypoint::new(name, target, package.to_string());
-            names.insert(tool_entry.name.clone());
-            installed_entrypoints.push(tool_entry);
+            installed_entrypoints.push(ToolEntrypoint::new(name, target, package.to_string()));
         }
 
+        let names = installed_entrypoints[first_entrypoint..]
+            .iter()
+            .map(|entrypoint| entrypoint.name.as_str())
+            .collect::<BTreeSet<_>>();
         let s = if names.len() == 1 { "" } else { "s" };
         let from_pkg = if name == package {
             String::new()
