@@ -442,19 +442,23 @@ fn python_pin_compatible_with_requires_python() -> Result<()> {
     ----- stderr -----
     error: The requested Python version `3.10` is incompatible with the project `requires-python` value of `>=3.11`.
     ");
+    let version_file = context.temp_dir.child(PYTHON_VERSION_FILENAME);
+    assert_path_missing(&version_file);
 
-    // Request a implementation version that is incompatible
+    // Rejecting an incompatible implementation request must also preserve an existing pin.
+    version_file.write_str("3.11\n")?;
     uv_snapshot!(context.filters(), context.python_pin().arg("cpython@3.10"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: The requested Python version `cpython@3.10` is incompatible with the project `requires-python` value of `>=3.11`.
     ");
+    assert_eq!(context.read(&version_file), "3.11\n");
 
     // Request an incompatible version with project discovery turned off
     uv_snapshot!(context.filters(), context.python_pin().arg("cpython@3.10").arg("--no-project"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Pinned `.python-version` to `cpython@3.10`
+    Updated `.python-version` from `3.11` -> `cpython@3.10`
     ");
 
     // And, as an alias, workspace discovery
