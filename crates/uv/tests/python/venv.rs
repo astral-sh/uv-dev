@@ -17,7 +17,7 @@ use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
-use uv_test::{assert_link_target, site_packages_path, uv_snapshot};
+use uv_test::{assert_link_target, assert_path_missing, site_packages_path, uv_snapshot};
 
 #[test]
 fn create_venv() {
@@ -110,8 +110,8 @@ fn create_venv_skips_distutils_patch_on_py310() {
 
     context.venv.assert(predicates::path::is_dir());
     let site_packages = site_packages_path(context.venv.path(), "python3.10");
-    assert!(!site_packages.join("_virtualenv.py").exists());
-    assert!(!site_packages.join("_virtualenv.pth").exists());
+    assert_path_missing(site_packages.join("_virtualenv.py"));
+    assert_path_missing(site_packages.join("_virtualenv.pth"));
 }
 
 #[test]
@@ -155,8 +155,8 @@ fn create_venv_with_removed_distutils_patch_preview() {
     ");
 
     let site_packages = site_packages_path(context.venv.path(), "python3.10");
-    assert!(!site_packages.join("_virtualenv.py").exists());
-    assert!(!site_packages.join("_virtualenv.pth").exists());
+    assert_path_missing(site_packages.join("_virtualenv.py"));
+    assert_path_missing(site_packages.join("_virtualenv.pth"));
 }
 
 #[test]
@@ -187,8 +187,8 @@ fn create_venv_preserves_existing_distutils_patch() -> Result<()> {
         .arg("3.10")
         .assert()
         .success();
-    assert!(!site_packages.join("_virtualenv.py").exists());
-    assert!(!site_packages.join("_virtualenv.pth").exists());
+    assert_path_missing(site_packages.join("_virtualenv.py"));
+    assert_path_missing(site_packages.join("_virtualenv.pth"));
     Ok(())
 }
 
@@ -572,7 +572,7 @@ fn create_centralized_project_environment() -> Result<()> {
         .success();
 
     assert_link_target(&environment, &target);
-    assert!(!local_marker.exists());
+    assert_path_missing(&local_marker);
     assert!(cache_marker.is_file());
 
     // A plain invocation recreates the centralized environment without prompting.
@@ -587,7 +587,7 @@ fn create_centralized_project_environment() -> Result<()> {
     "#);
 
     assert_link_target(&environment, &target);
-    assert!(!cache_marker.exists());
+    assert_path_missing(&cache_marker);
     Ok(())
 }
 
@@ -1347,8 +1347,8 @@ fn seed() {
 
     context.venv.assert(predicates::path::is_dir());
     let site_packages = site_packages_path(context.venv.path(), "python3.12");
-    assert!(!site_packages.join("_virtualenv.py").exists());
-    assert!(!site_packages.join("_virtualenv.pth").exists());
+    assert_path_missing(site_packages.join("_virtualenv.py"));
+    assert_path_missing(site_packages.join("_virtualenv.pth"));
 }
 
 #[test]
@@ -1394,8 +1394,8 @@ fn seed_skips_distutils_patch_on_py310() {
     ");
 
     let site_packages = site_packages_path(context.venv.path(), "python3.10");
-    assert!(!site_packages.join("_virtualenv.py").exists());
-    assert!(!site_packages.join("_virtualenv.pth").exists());
+    assert_path_missing(site_packages.join("_virtualenv.py"));
+    assert_path_missing(site_packages.join("_virtualenv.pth"));
 }
 
 #[test]
@@ -1586,7 +1586,7 @@ fn non_utf8_path() {
     "
     );
 
-    assert!(!context.temp_dir.join(path).exists());
+    assert_path_missing(context.temp_dir.join(path));
 }
 
 #[test]

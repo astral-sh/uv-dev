@@ -21,7 +21,7 @@ use uv_fs::Simplified;
 use uv_static::EnvVars;
 
 use uv_test::packse::{PackseServer, WheelBuilder, scenario::Scenario};
-use uv_test::{copy_dir_ignore, uv_snapshot};
+use uv_test::{assert_path_missing, copy_dir_ignore, uv_snapshot};
 
 #[cfg(feature = "test-git")]
 fn tool_install_git_path(bin_dir: &ChildPath) -> OsString {
@@ -2635,10 +2635,10 @@ fn tool_install_force() {
     ");
 
     // We should delete the virtual environment
-    assert!(!tool_dir.child("black").exists());
+    assert_path_missing(tool_dir.child("black"));
 
     // We should not write a tools entry
-    assert!(!tool_dir.join("black").join("uv-receipt.toml").exists());
+    assert_path_missing(tool_dir.join("black").join("uv-receipt.toml"));
 
     insta::with_settings!({
         filters => context.filters(),
@@ -2669,10 +2669,10 @@ fn tool_install_force() {
     ");
 
     // We should not create a virtual environment
-    assert!(!tool_dir.child("black").exists());
+    assert_path_missing(tool_dir.child("black"));
 
     // We should not write a tools entry
-    assert!(!tool_dir.join("tools.toml").exists());
+    assert_path_missing(tool_dir.join("tools.toml"));
 
     insta::with_settings!({
         filters => context.filters(),

@@ -8,12 +8,12 @@ use insta::allow_duplicates;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
-use uv_test::{TestContext, uv_snapshot};
+use uv_test::{TestContext, assert_path_missing, uv_snapshot};
 
 fn assert_project_unchanged(context: &TestContext, expected: &str) {
     assert_eq!(context.read("pyproject.toml"), expected);
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
 }
 
 /// Write a project where `foo==1` resolves two versions of `bar` in platform forks.
@@ -180,8 +180,8 @@ dependencies = ["anyio>=2,!=2.1,<5 ; python_full_version >= '3.12'"]
 exclude-newer = "2024-03-25T00:00:00Z"
 "#
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -399,8 +399,8 @@ fn upgrade_expands_constraint_for_multiple_fork_versions() -> Result<()> {
         context.read("pyproject.toml"),
         pyproject_toml.replace("bar<2", "bar<3")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -454,8 +454,8 @@ fn upgrade_expands_compatible_constraint_for_multiple_fork_versions() -> Result<
         context.read("pyproject.toml"),
         pyproject_toml.replace("a~=3.0", "a~=4.3")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -600,7 +600,7 @@ fn upgrade_reports_no_version_change_without_mutation() -> Result<()> {
 
     assert_eq!(context.read_bytes("pyproject.toml"), pyproject);
     assert_eq!(context.read_bytes("uv.lock"), lock);
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -753,8 +753,8 @@ fn upgrade_updates_multiple_marked_production_dependencies() -> Result<()> {
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -824,8 +824,8 @@ fn upgrade_updates_multiple_named_packages_together() -> Result<()> {
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -891,8 +891,8 @@ fn upgrade_without_package_selects_all_production_dependencies() -> Result<()> {
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1101,8 +1101,8 @@ fn upgrade_exclude_leaves_dependency_as_hard_constraint() -> Result<()> {
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1197,8 +1197,8 @@ fn upgrade_updates_safe_declarations_and_warns_for_blocked_declarations() -> Res
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1258,8 +1258,8 @@ fn upgrade_updates_requirement_constrained_by_conflicting_groups() -> Result<()>
         context.read("pyproject.toml"),
         pyproject_toml.replace("baz<2", "baz<3")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1306,8 +1306,8 @@ fn upgrade_succeeds_when_all_selected_declarations_are_blocked() -> Result<()> {
     );
 
     assert_project_unchanged(&context, &pyproject_toml);
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1357,8 +1357,8 @@ fn upgrade_rejects_mixed_updates_after_unrepresentable_blocker() -> Result<()> {
     );
 
     assert_project_unchanged(&context, &pyproject_toml);
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1416,8 +1416,8 @@ fn upgrade_preserves_hard_constraint_no_solution_failure() -> Result<()> {
     );
 
     assert_project_unchanged(&context, &pyproject_toml);
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1502,8 +1502,8 @@ fn upgrade_ignores_unrelated_path_package_when_attributing_versions() -> Result<
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1725,8 +1725,8 @@ fn upgrade_allows_registry_source() -> Result<()> {
         context.read("pyproject.toml"),
         pyproject_toml.replace("idna>=2,<3", "idna>=2,<4")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1824,8 +1824,8 @@ fn upgrade_ignores_inapplicable_non_registry_source() -> Result<()> {
             "anyio>=2,<5 ; python_full_version >= '3.12'"
         )
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1886,8 +1886,8 @@ fn upgrade_ignores_inapplicable_non_registry_source_without_requires_python() ->
         context.read("pyproject.toml"),
         pyproject_toml.replace("baz<2", "baz<3")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1946,8 +1946,8 @@ fn upgrade_skips_excluded_declarations_and_updates_applicable_requirement() -> R
         context.read("pyproject.toml"),
         pyproject_toml.replacen("bar<2\",", "bar<3\",", 1)
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -1996,8 +1996,8 @@ fn upgrade_rejects_workspace_root_non_registry_source() -> Result<()> {
         context.read("project/pyproject.toml"),
         project_pyproject_toml
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
     Ok(())
 }
 
@@ -2049,10 +2049,10 @@ fn upgrade_updates_nested_workspace_member_only() -> Result<()> {
         context.read("project/pyproject.toml"),
         project_pyproject_toml.replace("anyio<=2", "anyio<=4.3.0")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
-    assert!(!project.child("uv.lock").exists());
-    assert!(!project.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
+    assert_path_missing(project.child("uv.lock"));
+    assert_path_missing(project.child(".venv"));
     Ok(())
 }
 
@@ -2070,8 +2070,8 @@ fn upgrade_requires_current_project() {
     "
     );
 
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(context.temp_dir.child(".venv"));
 }
 
 #[test]

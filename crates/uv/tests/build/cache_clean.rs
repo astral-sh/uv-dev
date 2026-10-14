@@ -516,11 +516,11 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
     assert!(victim_dir.child("payload.txt").is_file());
     assert_path_missing(package_entry);
     assert_path_missing(archive_entry);
-    assert!(!shard.child("orphan").exists());
-    assert!(!shard.child("nested").exists());
+    assert_path_missing(shard.child("orphan"));
+    assert_path_missing(shard.child("nested"));
     assert!(fs_err::symlink_metadata(files.child("escape"))?.is_symlink());
     assert!(fs_err::symlink_metadata(shard.child("escape"))?.is_symlink());
-    assert!(!flat_shard.child("orphan").exists());
+    assert_path_missing(flat_shard.child("orphan"));
     assert!(retained.is_file());
     assert!(flat_shard.child("retained").is_file());
     assert!(fs_err::symlink_metadata(flat_shard.child("escape"))?.is_symlink());
@@ -539,7 +539,7 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
     ");
 
     assert!(cache_link.path().is_symlink());
-    assert!(!files.exists());
+    assert_path_missing(&files);
     assert!(victim_dir.child("payload.txt").is_file());
 
     Ok(())
@@ -560,7 +560,7 @@ fn clean_package_empty_shard_without_search_permission() -> Result<()> {
     Removed 1 directory (0B)
     ");
 
-    assert!(!shard.exists());
+    assert_path_missing(&shard);
 
     Ok(())
 }

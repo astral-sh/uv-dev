@@ -5,7 +5,7 @@ use indoc::indoc;
 
 use uv_static::EnvVars;
 
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 
 /// `cache prune` should be a no-op if there's nothing out-of-date in the cache.
 #[test]
@@ -601,7 +601,7 @@ fn prune_temporary_build_environment() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    assert!(!builds.exists());
+    assert_path_missing(&builds);
 
     Ok(())
 }
