@@ -8,6 +8,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
 
+use uv_client::{BaseClient, BaseClientBuilder};
 use uv_configuration::TrustedHost;
 use uv_fs::Simplified;
 use uv_static::EnvVars;
@@ -26,15 +27,7 @@ pub async fn download_to_disk(url: &str, path: &Path) {
 }
 
 async fn download_to_disk_async(url: &str, path: &Path) -> Result<()> {
-    let trusted_hosts = env::var(EnvVars::UV_INSECURE_HOST)
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(TrustedHost::from_str)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let client = uv_client::BaseClientBuilder::default()
-        .allow_insecure_host(trusted_hosts)
-        .build()?;
+    let client = fixture_client()?;
     let url = url.parse()?;
     let response = client
         .for_host(&url)
@@ -50,6 +43,19 @@ async fn download_to_disk_async(url: &str, path: &Path) -> Result<()> {
     }
     file.sync_all().await?;
     Ok(())
+}
+
+/// Create an HTTP client for test fixture downloads.
+pub(crate) fn fixture_client() -> Result<BaseClient> {
+    let trusted_hosts = env::var(EnvVars::UV_INSECURE_HOST)
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(TrustedHost::from_str)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(BaseClientBuilder::default()
+        .allow_insecure_host(trusted_hosts)
+        .build()?)
 }
 
 #[cfg(test)]
