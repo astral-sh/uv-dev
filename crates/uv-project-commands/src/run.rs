@@ -1745,57 +1745,17 @@ impl RunCommand {
                 process
             }
             Self::PythonGuiScript(target, args) => {
-                let python_executable = interpreter.sys_executable();
-
-                // Use `pythonw.exe` if it exists, otherwise fall back to `python.exe`.
-                // See `install-wheel-rs::get_script_executable`.gd
-                let pythonw_executable = python_executable
-                    .file_name()
-                    .map(|name| {
-                        let new_name = name.to_string_lossy().replace("python", "pythonw");
-                        python_executable.with_file_name(new_name)
-                    })
-                    .filter(|path| path.is_file())
-                    .unwrap_or_else(|| python_executable.to_path_buf());
-
-                let mut process = Command::new(&pythonw_executable);
+                let mut process = Self::python_gui_command(interpreter);
                 process.arg(target);
                 process.args(args);
                 process
             }
-            Self::PythonStdin(script, args) => {
-                let mut process = Command::new(interpreter.sys_executable());
-                process.arg("-c");
-
-                cfg_select! {
-                    unix => {
-                        process.arg(OsString::from_vec(script.clone()));
-                    },
-                    _ => {
-                        let script =
-                            String::from_utf8(script.clone()).expect("script is valid UTF-8");
-                        process.arg(script);
-                    },
-                }
-                process.args(args);
-
-                process
-            }
-            Self::PythonGuiStdin(script, args) => {
-                let python_executable = interpreter.sys_executable();
-
-                // Use `pythonw.exe` if it exists, otherwise fall back to `python.exe`.
-                // See `install-wheel-rs::get_script_executable`.gd
-                let pythonw_executable = python_executable
-                    .file_name()
-                    .map(|name| {
-                        let new_name = name.to_string_lossy().replace("python", "pythonw");
-                        python_executable.with_file_name(new_name)
-                    })
-                    .filter(|path| path.is_file())
-                    .unwrap_or_else(|| python_executable.to_path_buf());
-
-                let mut process = Command::new(&pythonw_executable);
+            Self::PythonStdin(script, args) | Self::PythonGuiStdin(script, args) => {
+                let mut process = if matches!(self, Self::PythonGuiStdin(..)) {
+                    Self::python_gui_command(interpreter)
+                } else {
+                    Command::new(interpreter.sys_executable())
+                };
                 process.arg("-c");
 
                 cfg_select! {
@@ -1823,6 +1783,19 @@ impl RunCommand {
             }
             Self::Empty => Command::new(interpreter.sys_executable()),
         }
+    }
+
+    /// Use `pythonw` if it exists, otherwise fall back to the interpreter's executable.
+    fn python_gui_command(interpreter: &Interpreter) -> Command {
+        let python_executable = interpreter.sys_executable();
+        let pythonw_executable = python_executable
+            .file_name()
+            .map(|name| {
+                let new_name = name.to_string_lossy().replace("python", "pythonw");
+                python_executable.with_file_name(new_name)
+            })
+            .filter(|path| path.is_file());
+        Command::new(pythonw_executable.as_deref().unwrap_or(python_executable))
     }
 
     /// Return the directory containing the script, if any.
