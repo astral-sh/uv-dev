@@ -707,17 +707,8 @@ impl VersionMapLazy {
             return SourceDistCompatibility::Incompatible(IncompatibleSource::NoBuild);
         }
 
-        // Check if yanked
-        if let Some(yanked) = yanked {
-            if yanked.is_yanked()
-                && !self
-                    .allowed_yanks
-                    .contains(&filename.name, &filename.version)
-            {
-                return SourceDistCompatibility::Incompatible(IncompatibleSource::Yanked(
-                    yanked.clone(),
-                ));
-            }
+        if let Some(yanked) = self.disallowed_yank(&filename.name, &filename.version, yanked) {
+            return SourceDistCompatibility::Incompatible(IncompatibleSource::Yanked(yanked));
         }
 
         // Check if the filename is PEP 625-compliant.
@@ -753,15 +744,8 @@ impl VersionMapLazy {
             return WheelCompatibility::Incompatible(IncompatibleWheel::NoBinary);
         }
 
-        // Check if yanked
-        if let Some(yanked) = yanked {
-            if yanked.is_yanked()
-                && !self
-                    .allowed_yanks
-                    .contains(&filename.name, &filename.version)
-            {
-                return WheelCompatibility::Incompatible(IncompatibleWheel::Yanked(yanked.clone()));
-            }
+        if let Some(yanked) = self.disallowed_yank(&filename.name, &filename.version, yanked) {
+            return WheelCompatibility::Incompatible(IncompatibleWheel::Yanked(yanked));
         }
 
         // Variant wheels cannot be selected, including during universal resolution.
@@ -797,6 +781,18 @@ impl VersionMapLazy {
         let build_tag = filename.build_tag().cloned();
 
         WheelCompatibility::Compatible(hash, priority, build_tag)
+    }
+
+    /// Return a file's yank metadata if its version is not explicitly allowed.
+    fn disallowed_yank(
+        &self,
+        name: &PackageName,
+        version: &Version,
+        yanked: Option<&Yanked>,
+    ) -> Option<Yanked> {
+        yanked
+            .filter(|yanked| yanked.is_yanked() && !self.allowed_yanks.contains(name, version))
+            .cloned()
     }
 
     /// Compare registry archive hashes against the expected digests, if any.
