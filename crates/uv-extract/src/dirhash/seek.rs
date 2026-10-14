@@ -313,7 +313,7 @@ where
     )?;
     #[cfg(unix)]
     if executable {
-        set_executable_bits(path)?;
+        crate::set_executable_bits(path)?;
     }
 
     Ok(ExtractedEntry::File {
@@ -363,22 +363,6 @@ fn validate_file_entry(
     }
 
     Ok(())
-}
-
-#[cfg(unix)]
-/// Set executable permissions according to pip's wheel extraction behavior.
-fn set_executable_bits(path: &Path) -> Result<(), Error> {
-    use std::fs::Permissions;
-    use std::os::unix::fs::PermissionsExt;
-
-    // https://github.com/pypa/pip/blob/3898741e29b7279e7bffe044ecfbe20f6a438b1e/src/pip/_internal/utils/unpacking.py#L88-L100
-    let permissions = fs_err::metadata(path).map_err(Error::Io)?.permissions();
-    if permissions.mode() & 0o111 == 0o111 {
-        return Ok(());
-    }
-
-    fs_err::set_permissions(path, Permissions::from_mode(permissions.mode() | 0o111))
-        .map_err(Error::Io)
 }
 
 /// Return an error for a poisoned directory memoization lock.
