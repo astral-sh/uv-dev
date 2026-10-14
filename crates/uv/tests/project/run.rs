@@ -514,6 +514,9 @@ fn run_pep723_script_ignores_project_group() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     script ran
+
+    ----- stderr -----
+    warning: `--group foo` is not supported for Python scripts with inline metadata
     ");
     context
         .temp_dir
