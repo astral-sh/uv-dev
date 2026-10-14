@@ -178,11 +178,11 @@ fn install_source_archive_symlink() -> Result<()> {
         assert_link_target(link, "README.md");
     }
 
-    uv_snapshot!(context.pip_uninstall().arg("linked"), @"
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("linked"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 1 package in [TIME]
-     - linked==1.0.0
+     - linked==1.0.0 (from file://[TEMP_DIR]/linked-1.0.0.tar.gz)
     ");
     context.assert_not_installed("linked");
     Ok(())
