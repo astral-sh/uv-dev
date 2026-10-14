@@ -12,7 +12,7 @@ use http::{HeaderMap, StatusCode};
 use itertools::Either;
 use reqwest::{Proxy, Response};
 use rustc_hash::FxHashMap;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tracing::{Instrument, Span, debug, info_span, instrument, trace, warn};
 use url::Url;
 
@@ -158,12 +158,8 @@ impl<'a> RegistryClientBuilder<'a> {
                         .map(ToString::to_string)
                         .unwrap_or_else(|| index.url.to_string())
                 );
-                if let Some(root_url) = index.root_url() {
-                    self.base_client_builder
-                        .store_credentials(&root_url, credentials.clone());
-                }
                 self.base_client_builder
-                    .store_credentials(index.raw_url(), credentials);
+                    .store_index_credentials(index, credentials);
             }
         }
         Ok(())
@@ -362,11 +358,10 @@ impl RegistryClient {
             Either::Right(self.index_urls_for(package_name))
         };
 
-        let mut results = Vec::new();
-
-        match self.index_strategy_for(package_name) {
+        let results = match self.index_strategy_for(package_name) {
             // If we're searching for the first index that contains the package, fetch serially.
             IndexStrategy::FirstIndex => {
+                let mut results = Vec::new();
                 for index in indexes {
                     let _permit = download_concurrency.acquire().await;
                     match index.format {
@@ -407,11 +402,12 @@ impl RegistryClient {
                         }
                     }
                 }
+                results
             }
 
             // Otherwise, fetch concurrently.
             IndexStrategy::UnsafeBestMatch | IndexStrategy::UnsafeFirstMatch => {
-                results = futures::stream::iter(indexes)
+                futures::stream::iter(indexes)
                     .map(async |index| {
                         let _permit = download_concurrency.acquire().await;
                         match index.format {
@@ -441,15 +437,13 @@ impl RegistryClient {
                         }
                     })
                     .buffered(8)
-                    .filter_map(async |result: Result<_, Error>| match result {
-                        Ok((index, Some(metadata))) => Some(Ok((index, metadata))),
-                        Ok((_, None)) => None,
-                        Err(err) => Some(Err(err)),
+                    .try_filter_map(async |(index, metadata)| {
+                        Ok::<_, Error>(metadata.map(|metadata| (index, metadata)))
                     })
                     .try_collect::<Vec<_>>()
-                    .await?;
+                    .await?
             }
-        }
+        };
 
         if results.is_empty() {
             return match self.connectivity {
@@ -470,17 +464,17 @@ impl RegistryClient {
         package_name: &PackageName,
         download_concurrency: &Semaphore,
     ) -> Result<Vec<FlatIndexEntry>, Error> {
-        Ok(futures::stream::iter(self.indexes.flat_indexes())
+        futures::stream::iter(self.indexes.flat_indexes())
             .map(async |index| {
                 let _permit = download_concurrency.acquire().await;
                 self.flat_single_index(package_name, index.url()).await
             })
             .buffered(8)
-            .try_collect::<Vec<_>>()
-            .await?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>())
+            .try_fold(Vec::new(), |mut combined, entries| async move {
+                combined.extend(entries);
+                Ok(combined)
+            })
+            .await
     }
 
     /// Fetch the [`FlatIndexEntry`] entries for a given package from a single `--find-links` index.
@@ -495,39 +489,27 @@ impl RegistryClient {
             let mut cache = self.flat_indexes.lock().await;
             cache.get_or_insert(index.clone())
         };
-        let mut flat_index = flat_index_slot.lock().await;
+        let entries = flat_index_slot
+            .get_or_try_init(|| async {
+                let client =
+                    FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache);
+                let (entries, _) = client
+                    .fetch_index(index)
+                    .await
+                    .map_err(ErrorKind::Flat)?
+                    .into_parts();
 
-        if let Some(entries) = flat_index.as_ref() {
-            return Ok(entries.get(package_name).cloned().unwrap_or_default());
-        }
-
-        let client = FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache);
-
-        // Fetch the entries for the index.
-        let (entries, _) = client
-            .fetch_index(index)
-            .await
-            .map_err(ErrorKind::Flat)?
-            .into_parts();
-
-        // Index by package name.
-        let mut entries_by_package: FxHashMap<PackageName, Vec<FlatIndexEntry>> =
-            FxHashMap::default();
-        for entry in entries {
-            entries_by_package
-                .entry(entry.filename().name().clone())
-                .or_default()
-                .push(entry);
-        }
-        let package_entries = entries_by_package
-            .get(package_name)
-            .cloned()
-            .unwrap_or_default();
-
-        // Write to the cache.
-        *flat_index = Some(entries_by_package);
-
-        Ok(package_entries)
+                let mut entries_by_package = FlatIndexEntriesByPackage::default();
+                for entry in entries {
+                    entries_by_package
+                        .entry(entry.filename().name().clone())
+                        .or_default()
+                        .push(entry);
+                }
+                Ok::<_, Error>(entries_by_package)
+            })
+            .await?;
+        Ok(entries.get(package_name).cloned().unwrap_or_default())
     }
 
     /// Fetch the [`SimpleDetailMetadata`] from a single index for a given package.
@@ -1377,13 +1359,13 @@ impl FlatIndexCache {
     fn get_or_insert(&mut self, index: IndexUrl) -> FlatIndexSlot {
         self.0
             .entry(index)
-            .or_insert_with(|| Arc::new(Mutex::new(None)))
+            .or_insert_with(|| Arc::new(OnceCell::new()))
             .clone()
     }
 }
 
 type FlatIndexEntriesByPackage = FxHashMap<PackageName, Vec<FlatIndexEntry>>;
-type FlatIndexSlot = Arc<Mutex<Option<FlatIndexEntriesByPackage>>>;
+type FlatIndexSlot = Arc<OnceCell<FlatIndexEntriesByPackage>>;
 
 #[derive(Default, Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
@@ -1674,16 +1656,10 @@ impl SimpleDetailMetadata {
                     continue;
                 }
             };
-            match version_map.entry(filename.version().clone()) {
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().push(&filename, file);
-                }
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    let mut files = VersionFiles::default();
-                    files.push(&filename, file);
-                    entry.insert(files);
-                }
-            }
+            version_map
+                .entry(filename.version().clone())
+                .or_default()
+                .push(&filename, file);
         }
 
         // Keep file ordering deterministic without sorting the complete Simple API response.

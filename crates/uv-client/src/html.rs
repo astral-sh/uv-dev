@@ -88,12 +88,7 @@ impl SimpleDetailHTML {
         let mut files: Vec<PypiFile> = dom
             .elements()
             .filter(|link| link.is("a"))
-            .map(|link| Self::parse_anchor(&link, &mut interner))
-            .filter_map(|result| match result {
-                Ok(None) => None,
-                Ok(Some(file)) => Some(Ok(file)),
-                Err(err) => Some(Err(err)),
-            })
+            .filter_map(|link| Self::parse_anchor(&link, &mut interner).transpose())
             .collect::<Result<Vec<_>, _>>()?;
         // While it has not been positively observed, we sort the files
         // to ensure we have a defined ordering. Otherwise, if we rely on
@@ -127,32 +122,21 @@ impl SimpleDetailHTML {
             // are optional, but if present should be well-formed.
             match name {
                 "pypi:project-status" => {
-                    status = {
-                        let status = attribute(&tag, "content").and_then(Status::new)?;
-                        Some(status)
-                    };
+                    status = Some(attribute(&tag, "content").and_then(Status::new)?);
                 }
                 "pypi:project-status-reason" => {
-                    reason = {
-                        let Some(content) = attribute(&tag, "content").map(SmallString::from)
-                        else {
-                            // TODO: Make this a hard error instead?
-                            warn!("Invalid project status reason (missing)");
-                            return None;
-                        };
-                        Some(content)
-                    }
+                    let Some(content) = attribute(&tag, "content") else {
+                        // TODO: Make this a hard error instead?
+                        warn!("Invalid project status reason (missing)");
+                        return None;
+                    };
+                    reason = Some(SmallString::from(content));
                 }
                 _ => {}
             }
         }
 
-        if let Some(status) = status {
-            let status = ProjectStatus { status, reason };
-            Some(status)
-        } else {
-            None
-        }
+        status.map(|status| ProjectStatus { status, reason })
     }
 
     /// Parse the `href` from a `<base>` tag.
@@ -216,15 +200,13 @@ impl SimpleDetailHTML {
             (href, Hashes::default())
         };
 
-        // Extract the filename from the body text, which MUST match that of
-        // the final path component of the URL.
-        let filename = path
-            .split('/')
-            .next_back()
-            .ok_or_else(|| Error::MissingFilename(href.to_string()))?;
+        // Extract the filename from the final path component of the URL.
+        let filename = path.rsplit_once('/').map_or(path, |(_, filename)| filename);
 
         // Strip any query string from the filename.
-        let filename = filename.split('?').next().unwrap_or(filename);
+        let filename = filename
+            .split_once('?')
+            .map_or(filename, |(filename, _)| filename);
 
         // Unquote the filename.
         let filename = percent_encoding::percent_decode_str(filename)
@@ -259,15 +241,13 @@ impl SimpleDetailHTML {
 
         // Extract the `yanked` field, which should be set on the `data-yanked`
         // attribute.
-        let yanked = if link.has_attribute("data-yanked") {
-            if let Some(yanked) = attribute(link, "data-yanked") {
-                Some(Box::new(Yanked::Reason(yanked.into())))
+        let yanked = link.attribute("data-yanked").map(|attribute| {
+            Box::new(if attribute.raw_value().is_some() {
+                Yanked::Reason(attribute.value().into())
             } else {
-                Some(Box::new(Yanked::Bool(true)))
-            }
-        } else {
-            None
-        };
+                Yanked::Bool(true)
+            })
+        });
 
         // Extract the `size` field, which should be set on the `data-size` attribute. This isn't
         // included in PEP 700, which omits the HTML API, but we respect it anyway. Since this
@@ -351,23 +331,11 @@ pub enum Error {
     #[error(transparent)]
     HtmlParse(#[from] astral_html::Error),
 
-    #[error("Missing href attribute on anchor link: `{0}`")]
-    MissingHref(String),
-
-    #[error("Expected distribution filename as last path component of URL: {0}")]
-    MissingFilename(String),
-
     #[error("Expected distribution filename to be UTF-8: {0}")]
     UnsupportedFilename(String),
 
-    #[error("Missing hash attribute on URL: {0}")]
-    MissingHash(String),
-
     #[error(transparent)]
     FragmentParse(#[from] HashError),
-
-    #[error("Invalid `requires-python` specifier: {0}")]
-    Pep440(#[source] uv_pep440::VersionSpecifiersParseError),
 }
 
 #[cfg(test)]

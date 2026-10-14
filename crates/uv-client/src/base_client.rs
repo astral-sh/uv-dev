@@ -9,7 +9,7 @@ use http::header::{
     AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, LOCATION,
     PROXY_AUTHORIZATION, REFERER, TRANSFER_ENCODING, WWW_AUTHENTICATE,
 };
-use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use http::{HeaderName, HeaderValue, Method, StatusCode};
 use reqwest::{
     Certificate, Client, ClientBuilder, IntoUrl, NoProxy, Proxy, Request, Response, multipart,
 };
@@ -26,7 +26,7 @@ use uv_auth::{
 };
 use uv_configuration::ProxyUrlKind;
 use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, TrustedHost};
-use uv_distribution_types::IndexCredentialsError;
+use uv_distribution_types::{Index, IndexCredentialsError};
 use uv_git::GitHttpSettings;
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
@@ -447,8 +447,16 @@ impl<'a> BaseClientBuilder<'a> {
     }
 
     /// See [`CredentialsCache::store_credentials`].
-    pub fn store_credentials(&self, url: &DisplaySafeUrl, credentials: Credentials) {
+    fn store_credentials(&self, url: &DisplaySafeUrl, credentials: Credentials) {
         self.credentials_cache.store_credentials(url, credentials);
+    }
+
+    /// Cache index credentials for both the index URL and its root, when available.
+    pub fn store_index_credentials(&self, index: &Index, credentials: Credentials) {
+        if let Some(root_url) = index.root_url() {
+            self.store_credentials(&root_url, credentials.clone());
+        }
+        self.store_credentials(index.raw_url(), credentials);
     }
 
     pub fn is_offline(&self) -> bool {
@@ -953,7 +961,6 @@ fn request_into_redirect(
     res: &Response,
     cross_origin_credentials_policy: CrossOriginCredentialsPolicy,
 ) -> reqwest_middleware::Result<Option<Request>> {
-    let original_req_url = DisplaySafeUrl::from_url(req.url().clone());
     let status = res.status();
     let should_redirect = match status {
         StatusCode::MOVED_PERMANENTLY
@@ -990,6 +997,7 @@ fn request_into_redirect(
         return Ok(None);
     }
 
+    let original_req_url = DisplaySafeUrl::from_url(req.url().clone());
     let location = res
         .headers()
         .get(LOCATION)
@@ -1035,8 +1043,7 @@ fn request_into_redirect(
         )));
     }
 
-    let mut headers = HeaderMap::new();
-    std::mem::swap(req.headers_mut(), &mut headers);
+    let headers = req.headers_mut();
 
     let cross_realm = RealmRef::from(&*redirect_url) != RealmRef::from(&*original_req_url);
     if cross_realm {
@@ -1072,7 +1079,6 @@ fn request_into_redirect(
         }
     }
 
-    std::mem::swap(req.headers_mut(), &mut headers);
     *req.url_mut() = Url::from(redirect_url);
     debug!(
         "Received HTTP {status}. Redirecting to `{}`",

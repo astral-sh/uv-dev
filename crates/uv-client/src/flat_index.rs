@@ -360,6 +360,13 @@ impl<'a> FlatIndexClient<'a> {
                 );
                 continue;
             };
+            let Some(parsed_filename) = DistFilename::try_from_normalized_filename(filename) else {
+                debug!(
+                    "Ignoring `--find-links` entry (expected a wheel or source distribution filename): {}",
+                    entry.path().display()
+                );
+                continue;
+            };
 
             // SAFETY: The index path is itself constructed from a URL.
             let url = DisplaySafeUrl::from_file_path(entry.path()).unwrap();
@@ -375,15 +382,8 @@ impl<'a> FlatIndexClient<'a> {
                 yanked: None,
             };
 
-            let Some(filename) = DistFilename::try_from_normalized_filename(filename) else {
-                debug!(
-                    "Ignoring `--find-links` entry (expected a wheel or source distribution filename): {}",
-                    entry.path().display()
-                );
-                continue;
-            };
             dists.push(FlatIndexEntry {
-                filename,
+                filename: parsed_filename,
                 file,
                 index: flat_index.clone(),
             });
