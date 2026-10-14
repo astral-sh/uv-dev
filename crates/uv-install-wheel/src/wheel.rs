@@ -94,26 +94,21 @@ if __name__ == "__main__":
     )
 }
 
-/// Shamelessly stolen (and updated for recent sha2)
-/// <https://github.com/richo/hashing-copy/blob/d8dd2fdb63c6faf198de0c9e5713d6249cbb5323/src/lib.rs#L10-L52>
-/// which in turn got it from std
-/// <https://doc.rust-lang.org/1.58.0/src/std/io/copy.rs.html#128-156>
-fn copy_and_hash(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<(u64, String)> {
-    // TODO: Do we need to support anything besides sha256?
+/// Copy a script into its destination and compute its size and SHA-256 hash for `RECORD`.
+fn copy_and_hash(mut reader: impl BufRead, writer: &mut impl Write) -> io::Result<(u64, String)> {
     let mut hasher = Sha256::new();
-    // Same buf size as std. Note that this number is important for performance
-    let mut buf = vec![0; 8 * 1024];
-
     let mut written = 0;
     loop {
-        let len = match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(len) => len,
+        let bytes = match reader.fill_buf() {
+            Ok([]) => break,
+            Ok(bytes) => bytes,
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         };
-        hasher.update(&buf[..len]);
-        writer.write_all(&buf[..len])?;
+        hasher.update(bytes);
+        writer.write_all(bytes)?;
+        let len = bytes.len();
+        reader.consume(len);
         written += len as u64;
     }
     Ok((written, encode_sha256(&hasher.finalize())))
@@ -630,19 +625,19 @@ fn install_script(
             let executable = quote_executable_for_encoded_script(&executable);
             let shebang = format_shell_shebang(&executable, relocatable);
             let (shebang, launcher) = shebang.split_at(SHELL_SHEBANG.len());
-            let mut contents = shebang
+            let contents = shebang
                 .as_bytes()
                 .chain(b"# coding: ".as_slice())
-                .chain(encoding_source.take(encoding.end - encoding.start))
+                .chain(BufReader::new(encoding_source).take(encoding.end - encoding.start))
                 .chain(b"\n".as_slice())
                 .chain(launcher.as_bytes())
                 .chain(b"\n".as_slice())
                 .chain(script);
-            copy_and_hash(&mut contents, &mut target)?
+            copy_and_hash(contents, &mut target)?
         } else {
             // Use appropriate line ending for the platform.
             shebang.push_str(if layout.os_name == "nt" { "\r\n" } else { "\n" });
-            copy_and_hash(&mut shebang.as_bytes().chain(script), &mut target)?
+            copy_and_hash(shebang.as_bytes().chain(script), &mut target)?
         };
 
         persist_with_retry_sync(target, &script_absolute)?;
