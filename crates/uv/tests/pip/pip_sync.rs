@@ -14,7 +14,7 @@ use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::PackseServer;
-use uv_test::{copy_dir_ignore, download_to_disk, site_packages_path, uv_snapshot};
+use uv_test::{copy_dir_ignore, download_to_disk, site_packages_path, uv_snapshot, venv_bin_path};
 
 #[test]
 fn missing_requirements_txt() {
@@ -3188,43 +3188,60 @@ fn set_read_permissions() -> Result<()> {
     Ok(())
 }
 
-/// Test special case to generate versioned pip launchers.
-/// <https://github.com/pypa/pip/blob/3898741e29b7279e7bffe044ecfbe20f6a438b1e/src/pip/_internal/operations/install/wheel.py#L283>
-/// <https://github.com/astral-sh/uv/issues/1593>
+/// Generate the versioned pip launcher for the target interpreter. See astral-sh/uv#1593.
 #[test]
 fn pip_entrypoints() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("pip==24.0")?;
 
-    for pip_requirement in [
-        // Test compatibility with launchers in 24.0
-        // https://inspector.pypi.io/project/pip/24.0/packages/8a/6a/19e9fe04fca059ccf770861c7d5721ab4c2aebc539889e97c7977528a53b/pip-24.0-py3-none-any.whl/pip-24.0.dist-info/entry_points.txt
-        "pip==24.0",
-        // Test compatibility with launcher changes from https://github.com/pypa/pip/pull/12536 released in 24.1b1
-        // See https://github.com/astral-sh/uv/pull/1982
-        "pip==24.1b1",
-    ] {
-        let requirements_txt = context.temp_dir.child("requirements.txt");
-        requirements_txt.write_str(pip_requirement)?;
+    uv_snapshot!(context.pip_sync().arg("requirements.txt").arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + pip==24.0
+    ");
 
-        context
-            .pip_sync()
-            .arg("requirements.txt")
-            .arg("--strict")
-            .output()
-            .expect("Failed to install pip");
+    let bin_dir = ChildPath::new(venv_bin_path(&context.venv));
+    bin_dir
+        .child(format!("pip3.10{EXE_SUFFIX}"))
+        .assert(predicates::path::missing());
+    bin_dir
+        .child(format!("pip3.12{EXE_SUFFIX}"))
+        .assert(predicates::path::is_file());
 
-        let bin_dir = context.venv.join(if cfg!(unix) {
-            "bin"
-        } else if cfg!(windows) {
-            "Scripts"
-        } else {
-            unimplemented!("Only Windows and Unix are supported")
-        });
-        ChildPath::new(bin_dir.join(format!("pip3.10{EXE_SUFFIX}")))
-            .assert(predicates::path::missing());
-        ChildPath::new(bin_dir.join(format!("pip3.12{EXE_SUFFIX}")))
-            .assert(predicates::path::exists());
-    }
+    Ok(())
+}
+
+/// pip changed its launcher entry points in 24.1b1. See astral-sh/uv#1982.
+#[test]
+fn pip_entrypoints_24_1() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("pip==24.1b1")?;
+
+    uv_snapshot!(context.pip_sync().arg("requirements.txt").arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + pip==24.1b1
+    ");
+
+    let bin_dir = ChildPath::new(venv_bin_path(&context.venv));
+    bin_dir
+        .child(format!("pip3.10{EXE_SUFFIX}"))
+        .assert(predicates::path::missing());
+    bin_dir
+        .child(format!("pip3.12{EXE_SUFFIX}"))
+        .assert(predicates::path::is_file());
 
     Ok(())
 }
