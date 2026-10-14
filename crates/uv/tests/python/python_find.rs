@@ -670,10 +670,7 @@ fn assert_venv_python(command: &mut Command, environment: &Path) -> Result<()> {
 fn python_find_venv() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
-    // Create a virtual environment
-    uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.12").arg("-q"), @"
-    exit_code: 0 (success)
-    ");
+    context.venv().args(["--python", "3.12"]).assert().success();
 
     // We should find it first.
     assert_venv_python(&mut context.python_find(), context.venv.path())?;
@@ -714,9 +711,12 @@ fn python_find_venv() -> Result<()> {
     )?;
 
     // A virtual environment in the child directory takes precedence over the parent
-    uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.11").arg("-q").current_dir(&child_dir), @"
-    exit_code: 0 (success)
-    ");
+    context
+        .venv()
+        .args(["--python", "3.11"])
+        .current_dir(&child_dir)
+        .assert()
+        .success();
 
     let child_venv = child_dir.child(".venv");
     assert_venv_python(
