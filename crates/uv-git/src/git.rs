@@ -762,41 +762,23 @@ fn fetch(
             offline,
         ),
         RefspecStrategy::First => {
-            // Try each refspec
-            let mut errors = refspecs
-                .iter()
-                .map_while(|refspec| {
-                    let fetch_result = fetch_with_cli(
-                        repo,
-                        remote_url,
-                        std::slice::from_ref(refspec),
-                        tags,
-                        disable_ssl,
-                        offline,
-                    );
-
-                    // Stop after the first success and log failures
-                    match fetch_result {
-                        Err(ref err) => {
-                            debug!("Failed to fetch refspec `{refspec}`: {err}");
-                            Some(fetch_result)
-                        }
-                        Ok(()) => None,
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            if errors.len() == refspecs.len() {
-                if let Some(result) = errors.pop() {
-                    // Use the last error for the message
-                    result
+            let mut result = Ok(());
+            for refspec in &refspecs {
+                result = fetch_with_cli(
+                    repo,
+                    remote_url,
+                    std::slice::from_ref(refspec),
+                    tags,
+                    disable_ssl,
+                    offline,
+                );
+                if let Err(err) = &result {
+                    debug!("Failed to fetch refspec `{refspec}`: {err}");
                 } else {
-                    // Can only occur if there were no refspecs to fetch
-                    Ok(())
+                    break;
                 }
-            } else {
-                Ok(())
             }
+            result
         }
     };
     match reference {
