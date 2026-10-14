@@ -10,7 +10,6 @@ use http::StatusCode;
 use http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use http_body_util::BodyExt;
 use indoc::{formatdoc, indoc};
-use insta::allow_duplicates;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use wiremock::matchers::{any, method};
@@ -1090,52 +1089,22 @@ fn assert_build_tag_installed(context: &TestContext) {
     );
 }
 
-fn assert_wheel_download_timeout(
-    range_response: RangeResponse,
-    retries: usize,
-    full_requests: usize,
-    resumed_requests: usize,
-) {
-    let context = uv_test::test_context!("3.12");
-    let server = wheel_server(&context, range_response, retries);
-
-    allow_duplicates! {
-        uv_snapshot!(context.filters(), context
-            .pip_install()
-            .arg(format!("build-tag @ {}", server.url))
-            .env(EnvVars::UV_HTTP_RETRIES, retries.to_string())
-            .env(EnvVars::UV_HTTP_TIMEOUT, "1")
-            .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
-            .env(EnvVars::RUST_LOG, "warn"), @"
-        exit_code: 2 (failure)
-        ----- stderr -----
-        Resolved 1 package in [TIME]
-        WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
-        error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
-          cause: Failed to write to the distribution cache
-          cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
-        ");
-    }
-    assert_eq!(server.requests.full.load(Ordering::Relaxed), full_requests);
-    assert_eq!(
-        server.requests.resumed.load(Ordering::Relaxed),
-        resumed_requests
-    );
-}
-
 /// Metadata errors from HTTP range requests must redact URL passwords and `sig` query values.
 #[cfg(feature = "test-python")]
 #[test]
 fn remote_wheel_metadata_error_redacts_url() {
     let context = uv_test::test_context!("3.12");
-    let (server, _guard, _, _) = wheel_server(&context, RangeResponse::Supported, 0);
-    let server = server.replacen("http://", "http://user:password@", 1);
+    let server = wheel_server(&context, RangeResponse::Supported, 0);
+    let url = server
+        .url
+        .replace(BUILD_TAG_WHEEL, "tqdm-1.0.0-py3-none-any.whl")
+        .replacen("http://", "http://user:password@", 1);
 
     // The served wheel contains `build_tag` metadata, which does not match the requested name.
     uv_snapshot!(context.filters(), context
         .pip_install()
         .arg("--no-index")
-        .arg(format!("tqdm @ {server}/tqdm-1.0.0-py3-none-any.whl?sig=signature&keep=value")), @"
+        .arg(format!("tqdm @ {url}?sig=signature&keep=value")), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `tqdm @ http://user:****@[LOCALHOST]/tqdm-1.0.0-py3-none-any.whl?sig=****&keep=value`
@@ -1339,7 +1308,26 @@ fn direct_url_unsatisfiable_range_retries_in_full() -> Result<()> {
 
 #[test]
 fn direct_url_unsatisfiable_range_does_not_bypass_retry() {
-    assert_wheel_download_timeout(RangeResponse::Unsatisfiable, 1, 3, 1);
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Unsatisfiable, 1);
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg(format!("build-tag @ {}", server.url))
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
+      cause: Failed to write to the distribution cache
+      cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 1);
 }
 
 /// An invalid continuation response does not bypass regular retry handling.
@@ -1395,15 +1383,72 @@ fn direct_url_range_size_mismatch() {
 
 #[test]
 fn direct_url_range_resume_disabled() {
-    assert_wheel_download_timeout(RangeResponse::Supported, 0, 2, 0);
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Supported, 0);
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg(format!("build-tag @ {}", server.url))
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
+      cause: Failed to write to the distribution cache
+      cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 2);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 0);
 }
 
 #[test]
 fn direct_url_range_resume_retry_limit() {
-    assert_wheel_download_timeout(RangeResponse::Interrupted, 2, 4, 2);
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Interrupted, 2);
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg(format!("build-tag @ {}", server.url))
+        .env(EnvVars::UV_HTTP_RETRIES, "2")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
+      cause: Failed to write to the distribution cache
+      cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 4);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 2);
 }
 
 #[test]
 fn direct_url_range_resume_success_does_not_reset_retries() {
-    assert_wheel_download_timeout(RangeResponse::LimitedThenInterrupted, 1, 3, 2);
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::LimitedThenInterrupted, 1);
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg(format!("build-tag @ {}", server.url))
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
+      cause: Failed to write to the distribution cache
+      cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 2);
 }
