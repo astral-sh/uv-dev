@@ -8009,12 +8009,9 @@ fn remove_last_dep_script() -> Result<()> {
         # ]
         # ///
 
-        import requests
-        from rich.pretty import pprint
+        from pathlib import Path
 
-        resp = requests.get("https://peps.python.org/api/peps.json")
-        data = resp.json()
-        pprint([(k, v["title"]) for k, v in data.items()][:10])
+        Path(__file__).with_suffix(".executed").write_text("rich")
     "#})?;
 
     uv_snapshot!(context.filters(), context.remove().arg("rich").arg("--script").arg("script.py"), @"
@@ -8035,15 +8032,16 @@ fn remove_last_dep_script() -> Result<()> {
         # dependencies = []
         # ///
 
-        import requests
-        from rich.pretty import pprint
+        from pathlib import Path
 
-        resp = requests.get("https://peps.python.org/api/peps.json")
-        data = resp.json()
-        pprint([(k, v["title"]) for k, v in data.items()][:10])
+        Path(__file__).with_suffix(".executed").write_text("rich")
         "#
         );
     });
+    context
+        .temp_dir
+        .child("script.executed")
+        .assert(predicate::path::missing());
     Ok(())
 }
 
