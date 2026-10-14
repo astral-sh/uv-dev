@@ -401,19 +401,7 @@ impl ConflictMarker {
 
     /// Creates a new conflict marker from the declared conflicts provided.
     pub fn from_conflicts(conflicts: &Conflicts) -> Self {
-        if conflicts.is_empty() {
-            return Self::TRUE;
-        }
-        let mut marker = Self::TRUE;
-        for set in conflicts.iter() {
-            for (item1, item2) in set.iter().tuple_combinations() {
-                let pair = Self::from_conflict_item(item1)
-                    .negate()
-                    .or(Self::from_conflict_item(item2).negate());
-                marker = marker.and(pair);
-            }
-        }
-        marker
+        Self::from_filtered_conflicts(conflicts, |_| true)
     }
 
     /// Construct only conflict constraints observable in the provided markers.
@@ -431,13 +419,19 @@ impl ConflictMarker {
             });
         }
 
+        Self::from_filtered_conflicts(conflicts, |item| {
+            referenced.contains(&encode_conflict_item(item))
+        })
+    }
+
+    /// Require at most one included item from each conflict set to be active.
+    fn from_filtered_conflicts(
+        conflicts: &Conflicts,
+        include: impl Fn(&ConflictItem) -> bool,
+    ) -> Self {
         let mut marker = Self::TRUE;
         for set in conflicts.iter() {
-            for (first, second) in set
-                .iter()
-                .filter(|item| referenced.contains(&encode_conflict_item(item)))
-                .tuple_combinations()
-            {
+            for (first, second) in set.iter().filter(|item| include(item)).tuple_combinations() {
                 let pair = Self::from_conflict_item(first)
                     .negate()
                     .or(Self::from_conflict_item(second).negate());
