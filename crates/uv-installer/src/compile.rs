@@ -24,10 +24,9 @@ const DEFAULT_COMPILE_TIMEOUT: Duration = Duration::from_mins(1);
 
 type WorkerHandle = oneshot::Receiver<Result<(), CompileError>>;
 
-/// Bytecode workers and the resources needed until they exit.
+/// Bytecode workers and their input queue.
 struct BytecodeWorkers {
     handles: Vec<WorkerHandle>,
-    _script_directory: TempDir,
     sender: Sender<PathBuf>,
     source_files: usize,
 }
@@ -40,26 +39,34 @@ struct BytecodeWorkerContext {
     timeout: Option<Duration>,
 }
 
-/// A shared compiler script that must be fully written before any interpreter reads it.
+/// A compiler script shared by bytecode workers.
+///
+/// Its path is published after the script is fully written, and its directory remains alive until
+/// all workers exit.
 struct BytecodeScript {
-    path: PathBuf,
-    initialized: OnceCell<()>,
+    directory: TempDir,
+    path: OnceCell<PathBuf>,
 }
 
 impl BytecodeScript {
-    fn new(path: PathBuf) -> Self {
+    fn new(directory: TempDir) -> Self {
         Self {
-            path,
-            initialized: OnceCell::new(),
+            directory,
+            path: OnceCell::new(),
         }
     }
 
     async fn initialize(&self) -> Result<&Path, CompileError> {
-        self.initialized
-            .get_or_try_init(|| fs_err::tokio::write(&self.path, COMPILEALL_SCRIPT))
+        self.path
+            .get_or_try_init(|| async {
+                let path = self.directory.path().join("pip_compileall.py");
+                fs_err::tokio::write(&path, COMPILEALL_SCRIPT)
+                    .await
+                    .map(|()| path)
+            })
             .await
-            .map_err(CompileError::TempFile)?;
-        Ok(&self.path)
+            .map(PathBuf::as_path)
+            .map_err(CompileError::TempFile)
     }
 }
 
@@ -142,8 +149,7 @@ fn spawn_workers(
     let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
 
     // Running Python with an actual file will produce better error messages.
-    let script_directory = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let script = BytecodeScript::new(script_directory.path().join("pip_compileall.py"));
+    let script = BytecodeScript::new(tempdir_in(cache).map_err(CompileError::TempFile)?);
     let timeout = compile_timeout()?;
     let context = Arc::new(BytecodeWorkerContext {
         directory: dir.to_path_buf(),
@@ -175,7 +181,6 @@ fn spawn_workers(
     drop(receiver);
     Ok(BytecodeWorkers {
         handles: worker_handles,
-        _script_directory: script_directory,
         sender,
         source_files: 0,
     })
@@ -216,7 +221,6 @@ impl BytecodeWorkers {
     ) -> Result<usize, CompileError> {
         let Self {
             handles,
-            _script_directory,
             sender,
             source_files,
         } = self;
@@ -556,8 +560,7 @@ mod tests {
     /// Once an interpreter can read the compiler script, later workers must not rewrite it.
     #[tokio::test]
     async fn bytecode_workers_reuse_initialized_script() -> anyhow::Result<()> {
-        let directory = tempfile::tempdir()?;
-        let script = BytecodeScript::new(directory.path().join("compile.py"));
+        let script = BytecodeScript::new(tempfile::tempdir()?);
         let path = script.initialize().await?;
         fs_err::OpenOptions::new()
             .append(true)
