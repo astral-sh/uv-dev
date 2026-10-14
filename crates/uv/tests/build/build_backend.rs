@@ -45,8 +45,6 @@ fn unpack_tar_gz(source_dist_path: &Path, target: &Path) -> Result<()> {
 #[test]
 #[cfg(feature = "test-pypi")]
 fn built_by_uv_direct_wheel() -> Result<()> {
-    use std::process::Command;
-
     use uv_test::venv_bin_path;
 
     let context = uv_test::test_context!("3.12");
@@ -83,8 +81,9 @@ fn built_by_uv_direct_wheel() -> Result<()> {
     Area of a circle with r=2: 12.56636
     ");
 
-    uv_snapshot!(Command::new("say-hi")
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+    let launcher =
+        venv_bin_path(&context.venv).join(format!("say-hi{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.external_command(launcher), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hi from a script!
@@ -210,7 +209,6 @@ fn built_by_uv_editable() -> Result<()> {
 fn preserve_executable_bit() -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
 
     use uv_test::venv_bin_path;
 
@@ -241,6 +239,7 @@ fn preserve_executable_bit() -> Result<()> {
     fs_err::write(
         &script,
         indoc! {r#"
+        #!/bin/sh
         echo "Hi from the shell"
     "#},
     )?;
@@ -289,8 +288,7 @@ fn preserve_executable_bit() -> Result<()> {
         .join("preserve_executable_bit-0.1.0-py3-none-any.whl");
     context.pip_install().arg(wheel).assert().success();
 
-    uv_snapshot!(Command::new("greet.sh")
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+    uv_snapshot!(context.external_command(venv_bin_path(&context.venv).join("greet.sh")), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hi from the shell
