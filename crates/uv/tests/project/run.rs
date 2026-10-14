@@ -3810,9 +3810,10 @@ fn virtual_empty() -> Result<()> {
     Ok(())
 }
 
+/// An incompatible pin is rejected even when a compatible interpreter is available.
 #[test]
 fn run_isolated_incompatible_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.11"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -3829,7 +3830,7 @@ fn run_isolated_incompatible_python() -> Result<()> {
     })?;
 
     let python_version = context.temp_dir.child(PYTHON_VERSION_FILENAME);
-    python_version.write_str("3.9")?;
+    python_version.write_str("3.11")?;
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -3840,20 +3841,18 @@ fn run_isolated_incompatible_python() -> Result<()> {
        "#
     })?;
 
-    // We should reject Python 3.9...
     uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The Python request from `.python-version` resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    error: The Python request from `.python-version` resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
     ");
 
-    // ...even if `--isolated` is provided.
     uv_snapshot!(context.filters(), context.run().arg("--isolated").arg("main.py"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: The Python request from `.python-version` resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
+    error: The Python request from `.python-version` resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
     ");
 
