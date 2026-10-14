@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
@@ -18,6 +18,17 @@ use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
 use uv_test::{assert_link_target, assert_path_missing, site_packages_path, uv_snapshot};
+
+#[track_caller]
+fn assert_no_distutils_patch(site_packages: &Path) {
+    assert!(
+        site_packages.is_dir(),
+        "missing site-packages directory: {}",
+        site_packages.display()
+    );
+    assert_path_missing(site_packages.join("_virtualenv.py"));
+    assert_path_missing(site_packages.join("_virtualenv.pth"));
+}
 
 #[test]
 fn create_venv() {
@@ -108,10 +119,7 @@ fn create_venv_skips_distutils_patch_on_py310() {
     "
     );
 
-    context.venv.assert(predicates::path::is_dir());
-    let site_packages = site_packages_path(context.venv.path(), "python3.10");
-    assert_path_missing(site_packages.join("_virtualenv.py"));
-    assert_path_missing(site_packages.join("_virtualenv.pth"));
+    assert_no_distutils_patch(&site_packages_path(context.venv.path(), "python3.10"));
 }
 
 #[test]
@@ -154,9 +162,7 @@ fn create_venv_with_removed_distutils_patch_preview() {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    let site_packages = site_packages_path(context.venv.path(), "python3.10");
-    assert_path_missing(site_packages.join("_virtualenv.py"));
-    assert_path_missing(site_packages.join("_virtualenv.pth"));
+    assert_no_distutils_patch(&site_packages_path(context.venv.path(), "python3.10"));
 }
 
 #[test]
@@ -196,8 +202,7 @@ fn create_venv_preserves_existing_distutils_patch() -> Result<()> {
         .arg("3.10")
         .assert()
         .success();
-    assert_path_missing(site_packages.join("_virtualenv.py"));
-    assert_path_missing(site_packages.join("_virtualenv.pth"));
+    assert_no_distutils_patch(&site_packages);
     Ok(())
 }
 
@@ -1379,9 +1384,7 @@ fn seed() {
     );
 
     assert_seed_packages(&context, &["pip"]);
-    let site_packages = site_packages_path(context.venv.path(), "python3.12");
-    assert_path_missing(site_packages.join("_virtualenv.py"));
-    assert_path_missing(site_packages.join("_virtualenv.pth"));
+    assert_no_distutils_patch(&site_packages_path(context.venv.path(), "python3.12"));
 }
 
 #[test]
@@ -1426,9 +1429,7 @@ fn seed_skips_distutils_patch_on_py310() {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    let site_packages = site_packages_path(context.venv.path(), "python3.10");
-    assert_path_missing(site_packages.join("_virtualenv.py"));
-    assert_path_missing(site_packages.join("_virtualenv.pth"));
+    assert_no_distutils_patch(&site_packages_path(context.venv.path(), "python3.10"));
 }
 
 #[test]
