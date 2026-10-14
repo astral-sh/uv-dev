@@ -470,17 +470,17 @@ impl RegistryClient {
         package_name: &PackageName,
         download_concurrency: &Semaphore,
     ) -> Result<Vec<FlatIndexEntry>, Error> {
-        Ok(futures::stream::iter(self.indexes.flat_indexes())
+        futures::stream::iter(self.indexes.flat_indexes())
             .map(async |index| {
                 let _permit = download_concurrency.acquire().await;
                 self.flat_single_index(package_name, index.url()).await
             })
             .buffered(8)
-            .try_collect::<Vec<_>>()
-            .await?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>())
+            .try_fold(Vec::new(), |mut combined, entries| async move {
+                combined.extend(entries);
+                Ok(combined)
+            })
+            .await
     }
 
     /// Fetch the [`FlatIndexEntry`] entries for a given package from a single `--find-links` index.
