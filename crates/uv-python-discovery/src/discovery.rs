@@ -1303,7 +1303,7 @@ pub(crate) async fn find_best_python_installation(
     environments: EnvironmentPreference,
     preference: PythonPreference,
     arch: Option<PythonArchitecture>,
-    downloads_enabled: bool,
+    mut allow_downloads: bool,
     client_builder: &BaseClientBuilder<'_>,
     cache: &Cache,
     reporter: Option<&dyn uv_python_managed::downloads::Reporter>,
@@ -1313,7 +1313,6 @@ pub(crate) async fn find_best_python_installation(
     debug!("Starting Python discovery for {request}");
     let original_request = request;
 
-    let mut previous_fetch_failed = false;
     let mut download_state = None;
 
     let request_without_patch = match request {
@@ -1356,8 +1355,7 @@ pub(crate) async fn find_best_python_installation(
         };
 
         // Attempt to download the version if downloads are enabled
-        if downloads_enabled
-            && !previous_fetch_failed
+        if allow_downloads
             && let Some(download_request) = PythonDownloadRequest::from_request(request)
         {
             let (client, retry_policy, download_list) =
@@ -1379,7 +1377,6 @@ pub(crate) async fn find_best_python_installation(
                 };
 
             let download = download_request
-                .clone()
                 .with_default_arch(arch.map(PythonArchitecture::into_inner))
                 .fill()
                 .map(|request| download_list.find(&request));
@@ -1416,7 +1413,7 @@ pub(crate) async fn find_best_python_installation(
                             ))
                             .as_ref()
                     );
-                    previous_fetch_failed = true;
+                    allow_downloads = false;
                 }
             }
         }
