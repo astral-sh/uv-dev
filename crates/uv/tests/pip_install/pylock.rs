@@ -5,7 +5,6 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use fs_err as fs;
 use indoc::{formatdoc, indoc};
-use insta::allow_duplicates;
 
 use uv_test::packse::PackseServer;
 use uv_test::{download_to_disk, uv_snapshot};
@@ -757,44 +756,94 @@ fn pep_751_install_path_sdist() -> Result<()> {
 }
 
 #[test]
-fn pep_751_empty_hashes() -> Result<()> {
+fn pep_751_empty_archive_hashes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let pylock_toml = context.temp_dir.child("pylock.toml");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
 
-    allow_duplicates! {
-        for (table, filename) in [
-            ("[packages.archive]", "iniconfig-2.0.0.tar.gz"),
-            ("[packages.sdist]", "iniconfig-2.0.0.tar.gz"),
-            ("[[packages.wheels]]", "iniconfig-2.0.0-py3-none-any.whl"),
-        ] {
-            pylock_toml.write_str(&formatdoc! {r#"
-                lock-version = "1.0"
-                created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        [packages.archive]
+        url = "https://example.com/iniconfig-2.0.0.tar.gz"
+        hashes = {}
+    "#})?;
 
-                [[packages]]
-                name = "iniconfig"
-                version = "2.0.0"
-                {table}
-                url = "https://example.com/{filename}"
-                hashes = {{}}
-            "#})?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview")
+        .arg("--offline")
+        .arg("--dry-run")
+        .arg("--require-hashes")
+        .arg("-r")
+        .arg("pylock.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: Empty hash tables in `pylock.toml` will be rejected in a future uv version. Rerun the original `uv export` or `uv pip compile` command to regenerate the file.
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig
+    ");
 
-            // Requiring hashes should still reject artifacts with empty hash tables.
-            uv_snapshot!(context.filters(), context.pip_install()
-                .arg("--preview")
-                .arg("--offline")
-                .arg("--dry-run")
-                .arg("--require-hashes")
-                .arg("-r")
-                .arg("pylock.toml"), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            warning: Empty hash tables in `pylock.toml` will be rejected in a future uv version. Rerun the original `uv export` or `uv pip compile` command to regenerate the file.
-            error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig
-            ");
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
+    Ok(())
+}
+
+#[test]
+fn pep_751_empty_sdist_hashes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        [packages.sdist]
+        url = "https://example.com/iniconfig-2.0.0.tar.gz"
+        hashes = {}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview")
+        .arg("--offline")
+        .arg("--dry-run")
+        .arg("--require-hashes")
+        .arg("-r")
+        .arg("pylock.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: Empty hash tables in `pylock.toml` will be rejected in a future uv version. Rerun the original `uv export` or `uv pip compile` command to regenerate the file.
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn pep_751_empty_wheel_hashes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        [[packages.wheels]]
+        url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl"
+        hashes = {}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview")
+        .arg("--offline")
+        .arg("--dry-run")
+        .arg("--require-hashes")
+        .arg("-r")
+        .arg("pylock.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: Empty hash tables in `pylock.toml` will be rejected in a future uv version. Rerun the original `uv export` or `uv pip compile` command to regenerate the file.
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig
+    ");
 
     Ok(())
 }
