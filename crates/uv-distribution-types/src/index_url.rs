@@ -51,7 +51,11 @@ impl IndexUrl {
     /// For indexes with a `/simple` endpoint, this is simply the URL with the final segment
     /// removed. This is useful, e.g., for credential propagation to other endpoints on the index.
     pub fn root(&self) -> Option<DisplaySafeUrl> {
-        let mut segments = self.url().path_segments()?;
+        Self::root_from_url(self.url())
+    }
+
+    fn root_from_url(url: &DisplaySafeUrl) -> Option<DisplaySafeUrl> {
+        let mut segments = url.path_segments()?;
         let last = match segments.next_back()? {
             // If the last segment is empty due to a trailing `/`, skip it (as in `pop_if_empty`)
             "" => segments.next_back()?,
@@ -63,7 +67,7 @@ impl IndexUrl {
             return None;
         }
 
-        let mut url = self.url().clone();
+        let mut url = url.clone();
         url.path_segments_mut().ok()?.pop_if_empty().pop();
         Some(url)
     }
@@ -522,12 +526,8 @@ impl<'a> IndexLocations {
 impl From<&IndexLocations> for uv_auth::Indexes {
     fn from(index_locations: &IndexLocations) -> Self {
         Self::from_indexes(index_locations.allowed_indexes().into_iter().map(|index| {
-            let mut url = index.url().url().clone();
-            url.set_username("").ok();
-            url.set_password(None).ok();
-            let mut root_url = index.url().root().unwrap_or_else(|| url.clone());
-            root_url.set_username("").ok();
-            root_url.set_password(None).ok();
+            let url = index.url().without_credentials().into_owned();
+            let root_url = IndexUrl::root_from_url(&url).unwrap_or_else(|| url.clone());
             uv_auth::Index {
                 url,
                 root_url,
