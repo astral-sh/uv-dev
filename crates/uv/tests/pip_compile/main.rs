@@ -15,6 +15,7 @@ mod git_checkout;
 mod hash_preservation;
 #[cfg(feature = "test-python")]
 mod index_inputs;
+mod input_validation;
 #[cfg(feature = "test-python")]
 mod marker_expression;
 #[cfg(feature = "test-python")]
