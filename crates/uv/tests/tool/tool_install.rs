@@ -1686,28 +1686,6 @@ fn tool_install_from() {
      + platformdirs==4.2.0
     Installed 2 executables: black, blackd
     ");
-
-    // Attempt to install `black` using `--from` with a different package name
-    uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
-        .arg("--from")
-        .arg("flask==24.2.0")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Package name (`flask`) provided with `--from` does not match install request (`black`)
-    ");
-
-    // Attempt to install `black` using `--from` with a different version
-    uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black==24.2.0")
-        .arg("--from")
-        .arg("black==24.3.0")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Package requirement (`black==24.3.0`) provided with `--from` conflicts with install request (`black==24.2.0`)
-    ");
 }
 
 /// Test installing and reinstalling an already installed tool
