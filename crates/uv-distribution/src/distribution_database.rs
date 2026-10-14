@@ -1820,11 +1820,12 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        let filled = buf.filled().len();
         Pin::new(&mut self.as_mut().reader)
             .poll_read(cx, buf)
             .map_ok(|()| {
                 self.reporter
-                    .on_download_progress(self.index, buf.filled().len() as u64);
+                    .on_download_progress(self.index, (buf.filled().len() - filled) as u64);
             })
     }
 }
@@ -1911,5 +1912,62 @@ impl PathArchivePointer {
     /// Return the [`BuildInfo`] from the pointer.
     pub fn to_build_info(&self) -> Option<BuildInfo> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::task::{Context, Poll, Waker};
+
+    use tokio::io::{AsyncRead, ReadBuf};
+    use uv_distribution_types::BuildableSource;
+    use uv_normalize::PackageName;
+    use uv_redacted::DisplaySafeUrl;
+
+    use super::ProgressReader;
+    use crate::Reporter;
+
+    struct ProgressReporter(AtomicU64);
+
+    impl Reporter for ProgressReporter {
+        fn on_build_start(&self, _: &BuildableSource<'_>) -> usize {
+            0
+        }
+
+        fn on_build_complete(&self, _: &BuildableSource<'_>, _: usize) {}
+
+        fn on_checkout_start(&self, _: &DisplaySafeUrl, _: &str) -> usize {
+            0
+        }
+
+        fn on_checkout_complete(&self, _: &DisplaySafeUrl, _: &str, _: usize) {}
+
+        fn on_download_start(&self, _: &PackageName, _: Option<u64>) -> usize {
+            0
+        }
+
+        fn on_download_progress(&self, _: usize, increment: u64) {
+            self.0.fetch_add(increment, Ordering::Relaxed);
+        }
+
+        fn on_download_complete(&self, _: &PackageName, _: usize) {}
+    }
+
+    #[test]
+    fn progress_reader_counts_only_newly_read_bytes() {
+        let reporter = ProgressReporter(AtomicU64::new(0));
+        let mut reader = ProgressReader::new(b"new".as_slice(), 0, &reporter);
+        let mut bytes = [0; 8];
+        let mut buffer = ReadBuf::new(&mut bytes);
+        buffer.put_slice(b"old");
+
+        let mut context = Context::from_waker(Waker::noop());
+        let result = Pin::new(&mut reader).poll_read(&mut context, &mut buffer);
+
+        assert!(matches!(result, Poll::Ready(Ok(()))));
+        assert_eq!(buffer.filled(), b"oldnew");
+        assert_eq!(reporter.0.load(Ordering::Relaxed), 3);
     }
 }
