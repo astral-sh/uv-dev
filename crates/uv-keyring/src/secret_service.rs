@@ -113,9 +113,8 @@ impl CredentialApi for SsCredential {
     /// attribute.
     async fn set_secret(&self, secret: &[u8]) -> Result<()> {
         // first try to find a unique, existing, matching item and set its password
-        let secret_vec = secret.to_vec();
         match self
-            .with_unique_item(async move |item| set_item_secret(item, &secret_vec).await)
+            .with_unique_item(async move |item| set_item_secret(item, secret).await)
             .await
         {
             Ok(()) => return Ok(()),
@@ -165,20 +164,8 @@ impl CredentialApi for SsCredential {
 
     /// Update attributes on a unique matching item, if it exists
     async fn update_attributes(&self, attributes: &HashMap<&str, &str>) -> Result<()> {
-        // Convert to owned data to avoid lifetime issues
-        let attributes_owned: HashMap<String, String> = attributes
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect();
-
-        self.with_unique_item(async move |item| {
-            let attrs_ref: HashMap<&str, &str> = attributes_owned
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
-            update_item_attributes(item, &attrs_ref).await
-        })
-        .await
+        self.with_unique_item(async move |item| update_item_attributes(item, attributes).await)
+            .await
     }
 
     /// Deletes the unique matching item, if it exists.
@@ -282,7 +269,7 @@ impl SsCredential {
     /// The item is unlocked before the function is applied.
     async fn with_unique_item<F, T>(&self, f: F) -> Result<T>
     where
-        F: AsyncFn(&Item<'_>) -> Result<T>,
+        F: AsyncFnOnce(&Item<'_>) -> Result<T>,
     {
         let ss = SecretService::connect(EncryptionType::Dh)
             .await
@@ -327,7 +314,7 @@ impl SsCredential {
     /// the secret service for the collection search.
     async fn with_unique_legacy_item<F, T>(&self, ss: &SecretService<'_>, f: F) -> Result<T>
     where
-        F: AsyncFn(&Item<'_>) -> Result<T>,
+        F: AsyncFnOnce(&Item<'_>) -> Result<T>,
     {
         let collection = ss.get_default_collection().await.map_err(decode_error)?;
         let attributes = self.search_attributes(true);
