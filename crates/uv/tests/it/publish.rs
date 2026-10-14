@@ -1,17 +1,16 @@
-use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
-use fs_err::OpenOptions;
-use indoc::{formatdoc, indoc};
+use indoc::indoc;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::env::current_dir;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use uv_static::EnvVars;
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::uv_snapshot;
 use wiremock::matchers::{basic_auth, body_json, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+const UNUSED_PUBLISH_URL: &str = "https://registry.invalid/legacy/";
 
 fn test_link(filename: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -84,9 +83,10 @@ fn github_actions_without_oidc(mut command: Command) -> Command {
     command
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn username_password_no_longer_supported() {
-    let context = uv_test::test_context!("3.12")
+    let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_sizes()
         .with_filtered_http_retries();
 
@@ -112,9 +112,10 @@ fn username_password_no_longer_supported() {
     );
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn invalid_token() {
-    let context = uv_test::test_context!("3.12")
+    let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_sizes()
         .with_filtered_http_retries();
 
@@ -140,10 +141,10 @@ fn invalid_token() {
     );
 }
 
-/// Emulate a missing `permission` `id-token: write` situation.
+/// Reject explicit credentials when trusted publishing is required.
 #[test]
 fn mixed_credentials() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("--username")
@@ -151,7 +152,7 @@ fn mixed_credentials() {
         .arg("--password")
         .arg("ZmVycmlz")
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
+        .arg(UNUSED_PUBLISH_URL)
         .arg("--trusted-publishing")
         .arg("always")
         .arg(dummy_wheel())
@@ -159,7 +160,7 @@ fn mixed_credentials() {
         .env(EnvVars::GITHUB_ACTIONS, "true"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/
+    Publishing 1 file to https://registry.invalid/legacy/
     error: a username and a password are not allowed when using trusted publishing
     "
     );
@@ -168,7 +169,7 @@ fn mixed_credentials() {
 /// Emulate a missing `permission` `id-token: write` situation.
 #[tokio::test]
 async fn missing_trusted_publishing_permission() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let server = MockServer::start().await;
     mock_trusted_publishing_audience(&server, 1).await;
 
@@ -449,12 +450,12 @@ async fn trusted_publishing_failure_after_successful_upload() {
 /// Hint people that it's not `--skip-existing` but `--check-url`.
 #[test]
 fn skip_existing_redirect() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("--skip-existing")
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/"), @"
+        .arg(UNUSED_PUBLISH_URL), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: `uv publish` does not support `--skip-existing` because there is not a reliable way to identify when an upload fails due to an existing distribution. Instead, use `--check-url` to provide the URL to the simple API for your index. uv will check the index for existing distributions before attempting uploads.
@@ -464,7 +465,7 @@ fn skip_existing_redirect() {
 
 #[test]
 fn dubious_filenames() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     context.temp_dir.child("not-a-wheel.whl").touch().unwrap();
     context.temp_dir.child("data.tar.gz").touch().unwrap();
@@ -481,7 +482,7 @@ fn dubious_filenames() {
         .arg("-p")
         .arg("dummy")
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
+        .arg(UNUSED_PUBLISH_URL)
         .arg(context.temp_dir.join("*")), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -495,7 +496,7 @@ fn dubious_filenames() {
 
 #[tokio::test]
 async fn publish_wheels_before_sdist_in_filename_order() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
     let server = MockServer::start().await;
     let expected_uploads = [
         basic_app_wheel(),
@@ -550,8 +551,12 @@ async fn publish_wheels_before_sdist_in_filename_order() {
 }
 
 /// Check that we (don't) use the keyring and warn for missing keyring behaviors correctly.
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 #[test]
 fn check_keyring_behaviours() {
+    use assert_cmd::assert::OutputAssertExt;
+    use uv_test::venv_bin_path;
+
     let context = uv_test::test_context!("3.12")
         .with_filtered_sizes()
         .with_filtered_http_retries();
@@ -673,7 +678,7 @@ fn check_keyring_behaviours() {
 
 #[test]
 fn invalid_index() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let pyproject_toml = indoc! {r#"
         [project]
@@ -733,8 +738,15 @@ fn invalid_index() {
 /// Ensure that we read index credentials from the environment when publishing.
 ///
 /// <https://github.com/astral-sh/uv/issues/11836#issuecomment-3022735011>
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 #[tokio::test]
 async fn read_index_credential_env_vars_for_check_url() {
+    use std::io::Write;
+
+    use assert_cmd::assert::OutputAssertExt;
+    use fs_err::OpenOptions;
+    use indoc::formatdoc;
+
     let context = uv_test::test_context!("3.12")
         .with_filtered_sizes()
         .with_filtered_http_retries();
@@ -904,7 +916,7 @@ async fn index_username_used_for_keyring() {
 
 #[tokio::test]
 async fn check_url_missing_package_ignores_content_type() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
 
     let server = MockServer::start().await;
 
@@ -944,7 +956,7 @@ async fn check_url_missing_package_ignores_content_type() {
 
 #[tokio::test]
 async fn check_url_missing_package_follows_redirect() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
 
     let gitlab_server = MockServer::start().await;
     let pypi_server = MockServer::start().await;
@@ -996,7 +1008,7 @@ async fn check_url_missing_package_follows_redirect() {
 /// Native GitLab CI trusted publishing using `PYPI_ID_TOKEN` revokes the token after all uploads.
 #[tokio::test]
 async fn gitlab_trusted_publishing_pypi_id_token() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
 
     let server = MockServer::start().await;
 
@@ -1074,7 +1086,7 @@ async fn gitlab_trusted_publishing_pypi_id_token() {
 /// Native GitLab CI trusted publishing using `TESTPYPI_ID_TOKEN`
 #[tokio::test]
 async fn gitlab_trusted_publishing_testpypi_id_token() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
 
     let server = MockServer::start().await;
 
@@ -1135,7 +1147,7 @@ async fn gitlab_trusted_publishing_testpypi_id_token() {
 /// Failure to revoke a token must not change the outcome of publishing.
 #[tokio::test]
 async fn trusted_publishing_burn_failure() {
-    let context = uv_test::test_context!("3.12")
+    let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_sizes()
         .with_filtered_http_retries();
     let server = MockServer::start().await;
@@ -1218,7 +1230,7 @@ async fn trusted_publishing_burn_failure() {
 /// A token is revoked even if reading distribution metadata fails before the upload.
 #[tokio::test]
 async fn trusted_publishing_burn_after_prepare_failure() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
     let server = MockServer::start().await;
     let wheel = context.temp_dir.child("a-1.0.0-py3-none-any.whl");
     wheel.touch().expect("Failed to create wheel");
@@ -1317,7 +1329,7 @@ async fn trusted_publishing_burn_after_prepare_failure() {
 /// Both successful and failed dry runs finalize the session without uploading.
 #[tokio::test]
 async fn trusted_publishing_dry_run() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
     let server = MockServer::start().await;
 
     mock_trusted_publishing(&server, 2).await;
@@ -1389,7 +1401,7 @@ async fn trusted_publishing_dry_run() {
 /// Skipped files are not prepared, and the session still invalidates its token.
 #[tokio::test]
 async fn trusted_publishing_all_skipped() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
     let server = MockServer::start().await;
     let non_normalized = context.temp_dir.child("ok-1.01.0-py3-none-any.whl");
     non_normalized.touch().expect("Failed to create wheel");
@@ -1468,7 +1480,7 @@ async fn trusted_publishing_all_skipped() {
 /// Explicit credentials are not revoked, even in a trusted publishing environment.
 #[tokio::test]
 async fn trusted_publishing_does_not_burn_explicit_token() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -1505,7 +1517,7 @@ async fn trusted_publishing_does_not_burn_explicit_token() {
 /// PyPI returns `application/json` errors with a `code` field.
 #[tokio::test]
 async fn upload_error_pypi_json() {
-    let context = uv_test::test_context!("3.12")
+    let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_sizes()
         .with_filtered_http_retries();
     let server = MockServer::start().await;
@@ -1541,7 +1553,7 @@ async fn upload_error_pypi_json() {
 /// Handle `application/problem+json` errors with RFC 9457 Problem Details.
 #[tokio::test]
 async fn upload_error_problem_details() {
-    let context = uv_test::test_context!("3.12")
+    let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_sizes()
         .with_filtered_http_retries();
     let server = MockServer::start().await;
@@ -1577,7 +1589,7 @@ async fn upload_error_problem_details() {
 /// A dry run checks valid distribution metadata without uploading the file.
 #[tokio::test]
 async fn dry_run_does_not_upload() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -1605,7 +1617,7 @@ async fn dry_run_does_not_upload() {
 /// stopping at the first failure.
 #[test]
 fn dry_run_reports_all_errors() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
 
     // Create two fake wheel files that will fail metadata reading.
     let wheel_a = context.temp_dir.child("a-1.0.0-py3-none-any.whl");
@@ -1616,14 +1628,14 @@ fn dry_run_reports_all_errors() {
     uv_snapshot!(context.filters(), context.publish()
         .arg("--dry-run")
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
+        .arg(UNUSED_PUBLISH_URL)
         .arg("--token")
         .arg("dummy")
         .arg(wheel_a.path())
         .arg(wheel_b.path()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Checking 2 files against https://test.pypi.org/legacy/
+    Checking 2 files against https://registry.invalid/legacy/
     Checking a-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish: a-1.0.0-py3-none-any.whl
       cause: Failed to read metadata
@@ -1642,7 +1654,7 @@ fn dry_run_reports_all_errors() {
 /// Preparation validates attestations, including during dry runs, unless they are disabled.
 #[tokio::test]
 async fn publish_invalid_attestations() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
     let server = MockServer::start().await;
     let app_attestation = context
         .temp_dir
@@ -1753,7 +1765,7 @@ async fn publish_invalid_attestations() {
 /// Skip distributions with non-normalized filenames (e.g., leading zeros in version).
 #[test]
 fn non_normalized_filename_skip() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     // Create wheel and source distribution files with non-normalized versions.
     let wheel = context.temp_dir.child("ok-1.01.0-py3-none-any.whl");
@@ -1767,12 +1779,12 @@ fn non_normalized_filename_skip() {
         .arg("-p")
         .arg("dummy")
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
+        .arg(UNUSED_PUBLISH_URL)
         .arg(wheel.path())
         .arg(source_dist.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Publishing 2 files to https://test.pypi.org/legacy/
+    Publishing 2 files to https://registry.invalid/legacy/
     warning: `ok-1.01.0-py3-none-any.whl` has a non-normalized filename (expected `ok-1.1.0-py3-none-any.whl`), skipping
     warning: `ok-1.01.0.tar.gz` has a non-normalized filename (expected `ok-1.1.0.tar.gz`), skipping
     "

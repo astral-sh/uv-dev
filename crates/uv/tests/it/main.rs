@@ -18,7 +18,6 @@ mod help;
 
 mod network;
 
-#[cfg(feature = "test-pypi")]
 mod publish;
 
 mod requirements;
