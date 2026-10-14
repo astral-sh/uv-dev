@@ -1347,10 +1347,19 @@ fn assert_managed_minor_launchers(
         } else {
             format!("bin/python{minor}")
         });
-    assert!(expected.is_file(), "interpreter missing: {expected:?}");
+    assert!(
+        expected.is_file(),
+        "interpreter missing: {}",
+        expected.display()
+    );
     let expected = expected.simplified_display().to_string();
     for launcher in launchers {
-        assert_eq!(read_link(launcher), expected, "launcher: {launcher:?}");
+        assert_eq!(
+            read_link(launcher),
+            expected,
+            "launcher: {}",
+            launcher.display()
+        );
     }
     Ok(())
 }
