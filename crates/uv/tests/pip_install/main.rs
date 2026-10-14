@@ -9,6 +9,8 @@ mod direct_url_hashes;
 mod json;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_install;
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+mod pylock;
 
 #[cfg(feature = "test-python")]
 mod wheel_variant_compatibility;
