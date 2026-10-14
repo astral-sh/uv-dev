@@ -1126,7 +1126,7 @@ fn parse_email_message_file(
 pub(crate) fn find_dist_info(path: impl AsRef<Path>) -> Result<String, Error> {
     // Iterate over `path` to find the `.dist-info` directory. It should be at the top-level,
     // and wheels must contain exactly one.
-    let mut dist_info = fs::read_dir(path.as_ref())?
+    let dist_info = fs::read_dir(path.as_ref())?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let file_type = entry.file_type().ok()?;
@@ -1138,29 +1138,21 @@ pub(crate) fn find_dist_info(path: impl AsRef<Path>) -> Result<String, Error> {
             }
             None
         })
-        .collect::<Vec<_>>();
-    dist_info.sort();
-
-    let dist_info = match dist_info.as_slice() {
-        [] => {
-            return Err(Error::InvalidWheel(
-                "Missing .dist-info directory".to_string(),
-            ));
-        }
-        [dist_info] => dist_info,
-        _ => {
-            return Err(Error::InvalidWheel(format!(
+        .at_most_one()
+        .map_err(|dist_info| {
+            let mut dist_info = dist_info.collect::<Vec<_>>();
+            dist_info.sort();
+            Error::InvalidWheel(format!(
                 "Multiple .dist-info directories found: {}",
                 dist_info
                     .iter()
                     .filter_map(|path| path.file_stem())
                     .map(|prefix| prefix.to_string_lossy())
                     .join(", ")
-            )));
-        }
-    };
+            ))
+        })?;
 
-    let Some(dist_info_prefix) = dist_info.file_stem() else {
+    let Some(dist_info_prefix) = dist_info.as_deref().and_then(Path::file_stem) else {
         return Err(Error::InvalidWheel(
             "Missing .dist-info directory".to_string(),
         ));
