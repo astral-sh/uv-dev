@@ -731,72 +731,91 @@ fn python_list_with_mirrors() -> Result<()> {
         .with_filtered_latest_python_versions()
         // Normalize build-specific archive paths while preserving the mirror host and artifact family.
         .with_filter((
-            r"/[^/\s]+/(cpython|graalpy|xbuildenv)-[^/\s]+\.(?:tar\.[a-z0-9]+|zip)\b",
+            r"/[^/\s]+/(cpython|graalpy)-[^/\s]+\.(?:tar\.[a-z0-9]+|zip)\b",
             "/[RELEASE]/$1-[ARCHIVE]",
         ))
         .with_filter((r"/pypy[^/\s]+\.(?:tar\.[a-z0-9]+|zip)\b", "/pypy[ARCHIVE]"));
 
     // All three implementations have downloads for this target regardless of the host platform.
-    let all_implementations = "any-3.10-windows-x86_64-none";
+    let windows_implementations = "any-3.10-windows-x86_64-none";
 
-    // Test with UV_PYTHON_INSTALL_MIRROR environment variable - verify mirror URL is used
     uv_snapshot!(context.filters(), context.python_list()
-        .arg("cpython-3.10.19-windows-x86_64-none")
+        .arg(windows_implementations)
         .arg("--show-urls")
-        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://mirror.example.com")
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.19-windows-x86_64-none https://mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
+    cpython-3.10.[LATEST]-windows-x86_64-none https://releases.astral.sh/github/python-build-standalone/releases/download/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-windows-x86_64-none https://downloads.python.org/pypy/pypy[ARCHIVE]
+    graalpy-3.10.0-windows-x86_64-none https://github.com/oracle/graalpython/releases/download/[RELEASE]/graalpy-[ARCHIVE]
     ");
 
-    // Test with UV_PYPY_INSTALL_MIRROR environment variable - verify PyPy mirror URL is used
+    // Environment variables route each implementation to its own mirror.
     uv_snapshot!(context.filters(), context.python_list()
-        .arg("pypy-3.10-windows-x86_64-none")
-        .arg("--show-urls")
-        .env(EnvVars::UV_PYPY_INSTALL_MIRROR, "https://pypy-mirror.example.com")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    pypy-3.10.16-windows-x86_64-none https://pypy-mirror.example.com/pypy[ARCHIVE]
-    ");
-
-    // Test with UV_GRAALPY_INSTALL_MIRROR environment variable.
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg("graalpy-3.10-windows-x86_64-none")
-        .arg("--show-urls")
-        .env(EnvVars::UV_GRAALPY_INSTALL_MIRROR, "https://graalpy-mirror.example.com")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    graalpy-3.10.0-windows-x86_64-none https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
-    ");
-
-    // Test with UV_PYODIDE_INSTALL_MIRROR environment variable.
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg("pyodide@3.13")
-        .arg("--show-urls")
-        .env(EnvVars::UV_PYODIDE_INSTALL_MIRROR, "https://pyodide-mirror.example.com")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[RELEASE]/xbuildenv-[ARCHIVE]
-    ");
-
-    // Test with all mirror environment variables set.
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg(all_implementations)
+        .arg(windows_implementations)
         .arg("--show-urls")
         .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://python-mirror.example.com")
         .env(EnvVars::UV_PYPY_INSTALL_MIRROR, "https://pypy-mirror.example.com")
         .env(EnvVars::UV_GRAALPY_INSTALL_MIRROR, "https://graalpy-mirror.example.com")
-        .env(EnvVars::UV_PYODIDE_INSTALL_MIRROR, "https://pyodide-mirror.example.com")
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.10.[LATEST]-windows-x86_64-none https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
     pypy-3.10.16-windows-x86_64-none https://pypy-mirror.example.com/pypy[ARCHIVE]
     graalpy-3.10.0-windows-x86_64-none https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
+    ");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        python-install-mirror = "https://python-mirror.example.com"
+        pypy-install-mirror = "https://pypy-mirror.example.com"
+        graalpy-install-mirror = "https://graalpy-mirror.example.com"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg(windows_implementations)
+        .arg("--show-urls")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.10.[LATEST]-windows-x86_64-none https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-windows-x86_64-none https://pypy-mirror.example.com/pypy[ARCHIVE]
+    graalpy-3.10.0-windows-x86_64-none https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
+    ");
+
+    // An environment override affects only its corresponding configured mirror.
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg(windows_implementations)
+        .arg("--show-urls")
+        .env(EnvVars::UV_PYPY_INSTALL_MIRROR, "https://mirror.example.com")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.10.[LATEST]-windows-x86_64-none https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-windows-x86_64-none https://mirror.example.com/pypy[ARCHIVE]
+    graalpy-3.10.0-windows-x86_64-none https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn python_list_pyodide_mirror() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_collapsed_whitespace()
+        .with_filter((
+            r"/[^/\s]+/xbuildenv-[^/\s]+\.(?:tar\.[a-z0-9]+|zip)\b",
+            "/[RELEASE]/xbuildenv-[ARCHIVE]",
+        ));
+
+    // The CPython mirror does not change the default Pyodide URL.
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("pyodide@3.13")
+        .arg("--show-urls")
+        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://python-mirror.example.com")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    pyodide-3.13.2-emscripten-wasm32-musl https://github.com/pyodide/pyodide/releases/download/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
     // Pyodide uses its own mirror when the CPython mirror is also set.
@@ -811,46 +830,10 @@ fn python_list_with_mirrors() -> Result<()> {
     pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
-    // Test without mirrors - verify the default Astral mirror URL is used for CPython
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg(all_implementations)
-        .arg("--show-urls")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.10.[LATEST]-windows-x86_64-none https://releases.astral.sh/github/python-build-standalone/releases/download/[RELEASE]/cpython-[ARCHIVE]
-    pypy-3.10.16-windows-x86_64-none https://downloads.python.org/pypy/pypy[ARCHIVE]
-    graalpy-3.10.0-windows-x86_64-none https://github.com/oracle/graalpython/releases/download/[RELEASE]/graalpy-[ARCHIVE]
-    ");
-
-    // The CPython mirror does not change the default Pyodide URL.
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg("pyodide@3.13")
-        .arg("--show-urls")
-        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://python-mirror.example.com")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://github.com/pyodide/pyodide/releases/download/[RELEASE]/xbuildenv-[ARCHIVE]
-    ");
-
     context.temp_dir.child("uv.toml").write_str(indoc! {r#"
         python-install-mirror = "https://python-mirror.example.com"
-        pypy-install-mirror = "https://pypy-mirror.example.com"
-        graalpy-install-mirror = "https://graalpy-mirror.example.com"
         pyodide-install-mirror = "https://pyodide-mirror.example.com"
     "#})?;
-
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg(all_implementations)
-        .arg("--show-urls")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.10.[LATEST]-windows-x86_64-none https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
-    pypy-3.10.16-windows-x86_64-none https://pypy-mirror.example.com/pypy[ARCHIVE]
-    graalpy-3.10.0-windows-x86_64-none https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
-    ");
 
     uv_snapshot!(context.filters(), context.python_list()
         .arg("pyodide@3.13")
@@ -859,19 +842,6 @@ fn python_list_with_mirrors() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[RELEASE]/xbuildenv-[ARCHIVE]
-    ");
-
-    // Each environment variable overrides only its corresponding configured mirror.
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg(all_implementations)
-        .arg("--show-urls")
-        .env(EnvVars::UV_PYPY_INSTALL_MIRROR, "https://mirror.example.com")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.10.[LATEST]-windows-x86_64-none https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
-    pypy-3.10.16-windows-x86_64-none https://mirror.example.com/pypy[ARCHIVE]
-    graalpy-3.10.0-windows-x86_64-none https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
     ");
 
     uv_snapshot!(context.filters(), context.python_list()
