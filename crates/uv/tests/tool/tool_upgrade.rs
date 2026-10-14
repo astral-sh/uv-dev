@@ -176,16 +176,14 @@ fn tool_upgrade_preserves_workspace_member_non_editability() -> Result<()> {
     Ok(())
 }
 
-fn assert_mixed_workspace_upgrade(
-    install_args: &[&str],
-    expected_child_message: &str,
-) -> Result<()> {
+#[test]
+fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
     let fixture = MixedWorkspace::new(&context)?;
 
     context
         .tool_install()
-        .args(install_args)
+        .arg("--with-editable")
         .arg(fixture.other_workspace.path())
         .arg(fixture.tool_root.path())
         .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
@@ -205,18 +203,40 @@ fn assert_mixed_workspace_upgrade(
     fixture
         .child_module
         .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
-    fixture.assert_tool_output(&context, &format!("0.1.1 {expected_child_message}"));
+    fixture.assert_tool_output(&context, "0.1.1 POST-UPGRADE");
     Ok(())
 }
 
 #[test]
-fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
-    assert_mixed_workspace_upgrade(&["--with-editable"], "POST-UPGRADE")
-}
-
-#[test]
 fn tool_upgrade_preserves_mixed_workspace_member_non_editability() -> Result<()> {
-    assert_mixed_workspace_upgrade(&["--editable", "--with"], "OK")
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let fixture = MixedWorkspace::new(&context)?;
+
+    context
+        .tool_install()
+        .arg("--editable")
+        .arg("--with")
+        .arg(fixture.other_workspace.path())
+        .arg(fixture.tool_root.path())
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
+        .assert()
+        .success();
+    fixture.assert_tool_output(&context, "0.1.0 OK");
+
+    fixture.set_tool_version("0.1.1")?;
+    context
+        .tool_upgrade()
+        .arg("tool-root")
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
+        .assert()
+        .success();
+    fixture.assert_tool_output(&context, "0.1.1 OK");
+
+    fixture
+        .child_module
+        .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
+    fixture.assert_tool_output(&context, "0.1.1 OK");
+    Ok(())
 }
 
 #[test]
