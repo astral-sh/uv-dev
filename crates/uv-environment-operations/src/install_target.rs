@@ -668,77 +668,24 @@ impl<'lock> InstallTarget<'lock> {
         self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<(), EnvironmentError> {
-        // If no groups were specified, short-circuit.
-        if groups.explicit_names().next().is_none() {
+        let mut requested_groups = groups.explicit_names().peekable();
+        let Some(first_group) = requested_groups.peek().copied() else {
             return Ok(());
-        }
+        };
 
-        match self {
-            Self::Lockfile {
-                lock, selection, ..
-            } => {
-                // Only a single selected project inherits groups from the workspace root.
-                let workspace_root = self
-                    .selected_project()
-                    .and_then(|_| lock.root())
-                    .map(Package::name);
-                let roots = self.roots().chain(workspace_root).collect::<FxHashSet<_>>();
-                let known_groups = lock
-                    .packages()
-                    .iter()
-                    .filter(|package| roots.contains(package.name()))
-                    .flat_map(|package| {
-                        package
-                            .dependency_groups()
-                            .keys()
-                            .chain(package.resolved_dependency_groups().keys())
-                    })
+        let missing_group = match self {
+            Self::Lockfile { lock, .. } => {
+                let known_groups = self
+                    .locked_member_groups()
                     .chain(lock.dependency_groups().keys())
                     .collect::<FxHashSet<_>>();
-                for group in groups.explicit_names() {
-                    if !known_groups.contains(group) {
-                        return match selection {
-                            PackageSelection::Projects([_]) => {
-                                Err(EnvironmentError::MissingGroupProject(group.clone()))
-                            }
-                            PackageSelection::Projects(_)
-                            | PackageSelection::Workspace
-                            | PackageSelection::NonProjectWorkspace => {
-                                Err(EnvironmentError::MissingGroupProjects(group.clone()))
-                            }
-                        };
-                    }
-                }
+                requested_groups.find(|group| !known_groups.contains(*group))
             }
-            Self::Project {
-                lock, workspace, ..
-            }
-            | Self::Projects {
-                lock, workspace, ..
-            }
-            | Self::Workspace {
-                lock, workspace, ..
-            }
-            | Self::NonProjectWorkspace { lock, workspace } => {
-                // Validate inherited root groups even when `--no-group` excludes them from
-                // installation and therefore omits the root from the selected group roots.
-                let workspace_root = matches!(self, Self::Project { .. })
-                    .then(|| lock.root())
-                    .flatten()
-                    .map(Package::name);
-                let roots = self.roots().chain(workspace_root).collect::<FxHashSet<_>>();
-                let member_groups = lock
-                    .packages()
-                    .iter()
-                    .filter(|package| roots.contains(package.name()))
-                    .flat_map(|package| {
-                        // Reject groups added to the workspace after the lock was written.
-                        package
-                            .dependency_groups()
-                            .keys()
-                            .chain(package.resolved_dependency_groups().keys())
-                            .map(Cow::Borrowed)
-                    });
+            Self::Project { workspace, .. }
+            | Self::Projects { workspace, .. }
+            | Self::Workspace { workspace, .. }
+            | Self::NonProjectWorkspace { workspace, .. } => {
+                let member_groups = self.locked_member_groups().map(Cow::Borrowed);
 
                 // Groups defined directly on a non-project workspace root are not members.
                 let workspace_groups = workspace
@@ -752,25 +699,40 @@ impl<'lock> InstallTarget<'lock> {
                     .chain(workspace_groups)
                     .collect::<FxHashSet<_>>();
 
-                for group in groups.explicit_names() {
-                    if !known_groups.contains(group) {
-                        return match self {
-                            Self::Project { .. } => {
-                                Err(EnvironmentError::MissingGroupProject(group.clone()))
-                            }
-                            _ => Err(EnvironmentError::MissingGroupProjects(group.clone())),
-                        };
-                    }
-                }
+                requested_groups.find(|group| !known_groups.contains(*group))
             }
             Self::Script { .. } => {
-                if let Some(group) = groups.explicit_names().next() {
-                    return Err(EnvironmentError::MissingGroupScript(group.clone()));
-                }
+                return Err(EnvironmentError::MissingGroupScript(first_group.clone()));
             }
-        }
+        };
 
-        Ok(())
+        match missing_group {
+            None => Ok(()),
+            Some(group) if self.selected_project().is_some() => {
+                Err(EnvironmentError::MissingGroupProject(group.clone()))
+            }
+            Some(group) => Err(EnvironmentError::MissingGroupProjects(group.clone())),
+        }
+    }
+
+    /// Return groups declared in locked members selected for group validation.
+    fn locked_member_groups(&self) -> impl Iterator<Item = &GroupName> {
+        let lock = self.lock();
+        // Validate inherited root groups even when `--no-group` excludes them from installation.
+        let workspace_root = self
+            .selected_project()
+            .and_then(|_| lock.root())
+            .map(Package::name);
+        let roots = self.roots().chain(workspace_root).collect::<FxHashSet<_>>();
+        lock.packages()
+            .iter()
+            .filter(move |package| roots.contains(package.name()))
+            .flat_map(|package| {
+                package
+                    .dependency_groups()
+                    .keys()
+                    .chain(package.resolved_dependency_groups().keys())
+            })
     }
 
     /// Returns the names of all packages in the workspace that will be installed.
