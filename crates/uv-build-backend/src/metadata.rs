@@ -543,66 +543,10 @@ impl PyProjectToml {
             }
         }
 
-        let author = self
-            .project
-            .authors
-            .as_ref()
-            .map(|authors| {
-                authors
-                    .iter()
-                    .filter_map(|author| match author {
-                        Contact::Name { name } => Some(name),
-                        Contact::Email { .. } => None,
-                        Contact::NameEmail { name, .. } => Some(name),
-                    })
-                    .join(", ")
-            })
-            .filter(|author| !author.is_empty());
-        let author_email = self
-            .project
-            .authors
-            .as_ref()
-            .map(|authors| {
-                authors
-                    .iter()
-                    .filter_map(|author| match author {
-                        Contact::Name { .. } => None,
-                        Contact::Email { email } => Some(email.clone()),
-                        Contact::NameEmail { name, email } => Some(format!("{name} <{email}>")),
-                    })
-                    .join(", ")
-            })
-            .filter(|author_email| !author_email.is_empty());
-        let maintainer = self
-            .project
-            .maintainers
-            .as_ref()
-            .map(|maintainers| {
-                maintainers
-                    .iter()
-                    .filter_map(|maintainer| match maintainer {
-                        Contact::Name { name } => Some(name),
-                        Contact::Email { .. } => None,
-                        Contact::NameEmail { name, .. } => Some(name),
-                    })
-                    .join(", ")
-            })
-            .filter(|maintainer| !maintainer.is_empty());
-        let maintainer_email = self
-            .project
-            .maintainers
-            .as_ref()
-            .map(|maintainers| {
-                maintainers
-                    .iter()
-                    .filter_map(|maintainer| match maintainer {
-                        Contact::Name { .. } => None,
-                        Contact::Email { email } => Some(email.clone()),
-                        Contact::NameEmail { name, email } => Some(format!("{name} <{email}>")),
-                    })
-                    .join(", ")
-            })
-            .filter(|maintainer_email| !maintainer_email.is_empty());
+        let (author, author_email) =
+            format_contacts(self.project.authors.as_deref().unwrap_or_default());
+        let (maintainer, maintainer_email) =
+            format_contacts(self.project.maintainers.as_deref().unwrap_or_default());
 
         // Using PEP 639 bumps the METADATA version
         let uses_pep639 = self.project.license_files.is_some()
@@ -1155,6 +1099,30 @@ pub(crate) enum Contact {
     Name { name: String },
     /// TODO(konsti): RFC 822 validation.
     Email { email: String },
+}
+
+/// Format the name and email fields for authors or maintainers.
+fn format_contacts(contacts: &[Contact]) -> (Option<String>, Option<String>) {
+    let names = contacts
+        .iter()
+        .filter_map(|contact| match contact {
+            Contact::Name { name } => Some(name),
+            Contact::Email { .. } => None,
+            Contact::NameEmail { name, .. } => Some(name),
+        })
+        .join(", ");
+    let emails = contacts
+        .iter()
+        .filter_map(|contact| match contact {
+            Contact::Name { .. } => None,
+            Contact::Email { email } => Some(email.clone()),
+            Contact::NameEmail { name, email } => Some(format!("{name} <{email}>")),
+        })
+        .join(", ");
+    (
+        (!names.is_empty()).then_some(names),
+        (!emails.is_empty()).then_some(emails),
+    )
 }
 
 impl<'de> Deserialize<'de> for Contact {
