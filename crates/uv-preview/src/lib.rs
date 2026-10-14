@@ -424,10 +424,15 @@ pub enum PreviewFeature {
     /// can share a cache entry, reducing duplication when the same wheel contents are encountered
     /// more than once.
     ContentAddressedCache,
-    /// Fetches Git trees and blobs lazily when checking out source repositories.
+    /// Fetches commits first, then downloads the trees and blobs needed to check out the requested
+    /// revision. This can reduce transfer sizes for repositories with long histories. Build tools
+    /// that inspect other revisions may fetch additional objects. When offline, Git cannot fetch
+    /// missing objects from network remotes.
     ///
-    /// Git sources are cached separately from normal fetches. Switching modes can require
+    /// Partial Git fetches use a separate cache from full fetches. Switching modes can require
     /// downloading a repository again, even when its revision is cached in the other mode.
+    ///
+    /// Repositories using URL credentials or `--allow-insecure-host` use full fetches.
     GitPartialFetches,
     /// uv omits `exclude-newer-package` entries from the lockfile when the corresponding packages
     /// are absent from the resolved dependencies. This keeps cutoffs for unrelated packages out of

@@ -54,8 +54,23 @@ impl GitSource {
     pub(crate) fn fetch(self) -> Result<Fetch> {
         let lfs_requested = self.git.lfs().enabled();
 
+        let remote = if let Some(credentials) = GIT_STORE.get(self.git.repository()) {
+            Cow::Owned(credentials.apply(self.git.url().clone()))
+        } else {
+            Cow::Borrowed(self.git.url())
+        };
+        let has_credentials = match remote.without_credentials() {
+            Cow::Borrowed(_) => false,
+            Cow::Owned(_) => true,
+        };
+        // Build backends cannot use uv's transient credentials or TLS exceptions for lazy fetches.
+        // Keep these repositories complete so build tools can inspect history locally.
+        let settings = self.settings.with_partial_fetches(
+            self.settings.partial_fetches && !has_credentials && !self.settings.disable_ssl,
+        );
+
         // Older cache readers require complete repositories, including historical trees.
-        let cache = if self.settings.partial_fetches {
+        let cache = if settings.partial_fetches {
             self.cache.join("partial")
         } else {
             self.cache
@@ -64,13 +79,6 @@ impl GitSource {
         // The path to the repo, within the Git database.
         let ident = cache_digest(self.git.repository());
         let db_path = cache.join("db").join(&ident);
-
-        // Authenticate the URL, if necessary.
-        let remote = if let Some(credentials) = GIT_STORE.get(self.git.repository()) {
-            Cow::Owned(credentials.apply(self.git.url().clone()))
-        } else {
-            Cow::Borrowed(self.git.url())
-        };
 
         // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes
         // it easier to short-circuit this in the cases where we do have the commit.
@@ -109,7 +117,7 @@ impl GitSource {
                 maybe_db,
                 self.git.reference(),
                 self.git.precise(),
-                self.settings,
+                settings,
                 lfs_requested,
             )?;
 
@@ -137,7 +145,7 @@ impl GitSource {
         // Check out `actual_rev` from the database to a scoped location on the
         // filesystem. This will use hard links and such to ideally make the
         // checkout operation here pretty fast.
-        let checkout = db.copy_to(actual_rev, &checkout_path, self.settings)?;
+        let checkout = db.copy_to(actual_rev, &checkout_path, settings)?;
 
         // Report the checkout operation to the reporter.
         if let Some(task) = maybe_task {
