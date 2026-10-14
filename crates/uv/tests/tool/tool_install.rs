@@ -1125,9 +1125,8 @@ fn tool_install_reinstall_converts_workspace_members_to_non_editable() -> Result
 
     let child_src = child.child("src").child("child");
     child_src.create_dir_all()?;
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
+    let child_module = child_src.child("__init__.py");
+    child_module.write_str("MESSAGE = 'OK'\n")?;
 
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("--editable")
@@ -1149,23 +1148,27 @@ fn tool_install_reinstall_converts_workspace_members_to_non_editable() -> Result
     OK
     ");
 
-    let status = context
+    child_module.write_str("MESSAGE = 'PRE-REINSTALL'\n")?;
+    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    PRE-REINSTALL
+    ");
+
+    context
         .tool_install()
         .arg("--reinstall")
         .arg(context.temp_dir.path())
         .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool install --reinstall");
-    assert!(status.success());
+        .assert()
+        .success();
 
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'CHANGED'\n")?;
+    child_module.write_str("MESSAGE = 'POST-REINSTALL'\n")?;
 
     uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    OK
+    PRE-REINSTALL
     ");
 
     Ok(())
