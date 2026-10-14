@@ -706,11 +706,11 @@ pub async fn install(
                 && settings.reinstall.is_none()
                 && settings.resolver.upgrade.is_none()
             {
-                let Some(existing_tool_receipt) = existing_tool_receipt.as_ref() else {
+                let Some(existing_tool_receipt) = existing_tool_receipt else {
                     bail!("Expected an existing tool receipt");
                 };
                 let python = if explicit_python_request {
-                    python_request.clone()
+                    python_request
                 } else {
                     existing_tool_receipt.python().clone()
                 };
@@ -718,14 +718,14 @@ pub async fn install(
                 installed_tools.add_tool_receipt(
                     package_name,
                     Tool::new(
-                        requirements.clone(),
-                        receipt_constraints.clone(),
-                        receipt_overrides.clone(),
-                        receipt_excludes.clone(),
-                        receipt_build_constraints.clone(),
+                        requirements,
+                        receipt_constraints,
+                        receipt_overrides,
+                        receipt_excludes,
+                        receipt_build_constraints,
                         python,
-                        existing_tool_receipt.entrypoints().iter().cloned(),
-                        options.clone(),
+                        existing_tool_receipt.into_entrypoints(),
+                        options,
                     ),
                 )?;
                 writeln!(

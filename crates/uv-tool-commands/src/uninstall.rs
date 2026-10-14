@@ -90,9 +90,9 @@ async fn do_uninstall(
         uninstall_tool(&name, &receipt, installed_tools).await?;
         executable_names.extend(
             receipt
-                .entrypoints()
-                .iter()
-                .map(|entrypoint| entrypoint.name.clone()),
+                .into_entrypoints()
+                .into_iter()
+                .map(|entrypoint| entrypoint.name),
         );
     }
     executable_names.sort_unstable();

@@ -278,6 +278,11 @@ impl Tool {
         &self.entrypoints
     }
 
+    /// Consume the tool and return its entrypoints.
+    pub fn into_entrypoints(self) -> Vec<ToolEntrypoint> {
+        self.entrypoints
+    }
+
     pub fn requirements(&self) -> &[Requirement] {
         &self.requirements
     }
