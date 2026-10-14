@@ -141,6 +141,7 @@ async fn setup_mock_update(
             }],
             "prerelease": false,
         })))
+        .expect(1..)
         .mount(&server)
         .await;
 
