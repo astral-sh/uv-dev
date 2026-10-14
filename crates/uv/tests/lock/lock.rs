@@ -5521,6 +5521,8 @@ fn lock_conditional_dependency_extra() -> Result<()> {
         );
     });
 
+    // TODO(charlie): Checking `--locked` before sync was nondeterministic after
+    // https://github.com/astral-sh/uv/pull/6065; the nondeterminism is itself a bug.
     // Install from the lockfile.
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 0 (success)
@@ -12844,7 +12846,8 @@ fn lock_invalid_hash() -> Result<()> {
     Ok(())
 }
 
-/// Reinstall a cached wheel after an index changes the advertised hash algorithm.
+/// Reinstall a cached wheel after an index switches its advertised hash from SHA256 to SHA512,
+/// without clearing the cache.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_mixed_hashes() -> Result<()> {
@@ -41790,7 +41793,8 @@ fn lock_path_dependency_no_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
-    // The active interpreter is outside the child's marker range.
+    // Python 3.11 does not satisfy the child's `requires-python`, but the dependency is gated
+    // behind `python_version >= '3.12'` and should still resolve.
     let context = uv_test::test_context!("3.11");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
