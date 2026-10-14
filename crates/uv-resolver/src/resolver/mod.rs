@@ -3070,6 +3070,15 @@ impl<'index> ForkState<'index> {
             .sum();
         let mut edges: Vec<ResolutionDependencyEdge> = Vec::with_capacity(edge_count);
         for (package, self_version) in &solution {
+            let (self_name, self_kind) = match &*self.pubgrub.package_store[*package] {
+                PubGrubPackageInner::Package { name, kind, .. } => (Some(name), kind),
+                PubGrubPackageInner::Root(_) => (None, &PackageNodeKind::Base),
+                PubGrubPackageInner::Python(_)
+                | PubGrubPackageInner::System(_)
+                | PubGrubPackageInner::Extra { .. }
+                | PubGrubPackageInner::Group { .. }
+                | PubGrubPackageInner::Marker { .. } => continue,
+            };
             for id in &self.pubgrub.incompatibilities[package] {
                 let incompatibility = &self.pubgrub.incompatibility_store[*id];
                 let pubgrub::Kind::FromDependencyOf(self_package, dependency_package) =
@@ -3096,21 +3105,7 @@ impl<'index> ForkState<'index> {
                     continue;
                 }
 
-                let self_package = &self.pubgrub.package_store[self_package];
                 let dependency_package = &self.pubgrub.package_store[dependency_package];
-
-                let (self_name, self_kind) = match &**self_package {
-                    PubGrubPackageInner::Package {
-                        name: self_name,
-                        kind: self_kind,
-                        marker: _,
-                    } => (Some(self_name), self_kind),
-
-                    PubGrubPackageInner::Root(_) => (None, &PackageNodeKind::Base),
-
-                    _ => continue,
-                };
-
                 let (name, kind, marker) = match &**dependency_package {
                     PubGrubPackageInner::Package { name, kind, marker } => {
                         debug_assert!(kind.is_base(), "Packages should depend on a variant proxy");
