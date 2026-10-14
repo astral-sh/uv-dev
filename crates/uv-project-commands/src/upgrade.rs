@@ -698,16 +698,21 @@ fn validate_requirements(
     requirements: &[UpgradableRequirement],
     packages: &[PackageName],
 ) -> Result<()> {
-    for package in packages {
-        if requirements.iter().any(|selected| {
-            selected.package == *package
-                && matches!(
-                    selected.requirement.version_or_url,
-                    Some(VersionOrUrl::Url(_))
-                )
-        }) {
-            bail!("Dependency `{package}` is a direct URL requirement and cannot be upgraded");
-        }
+    let direct_url_packages: FxHashSet<_> = requirements
+        .iter()
+        .filter(|selected| {
+            matches!(
+                selected.requirement.version_or_url,
+                Some(VersionOrUrl::Url(_))
+            )
+        })
+        .map(|selected| &selected.package)
+        .collect();
+    if let Some(package) = packages
+        .iter()
+        .find(|package| direct_url_packages.contains(*package))
+    {
+        bail!("Dependency `{package}` is a direct URL requirement and cannot be upgraded");
     }
 
     for package in packages {
