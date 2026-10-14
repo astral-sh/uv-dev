@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fmt::Write;
 use std::hash::Hash;
 
 use owo_colors::OwoColorize;
@@ -213,16 +214,13 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
             // Display the node itself.
             let mut line = node
                 .to_requirements_txt(&self.resolution.requires_python, self.include_markers)
-                .to_string();
+                .into_owned();
 
             // Display the distribution hashes, if any.
-            let mut has_hashes = false;
-            if self.show_hashes {
+            let has_hashes = self.show_hashes && !node.hashes.is_empty();
+            if has_hashes {
                 for hash in node.hashes {
-                    has_hashes = true;
-                    line.push_str(" \\\n");
-                    line.push_str("    --hash=");
-                    line.push_str(&hash.to_string());
+                    write!(line, " \\\n    --hash={hash}")?;
                 }
             }
 
