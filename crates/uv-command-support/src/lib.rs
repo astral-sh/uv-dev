@@ -184,28 +184,22 @@ impl std::io::Write for OutputWriter<'_> {
 }
 
 /// Given a list of names, return a conjunction of the names (e.g., "Alice, Bob, and Charlie").
-pub fn conjunction(names: Vec<String>) -> String {
+pub fn conjunction(names: impl IntoIterator<Item = String>) -> String {
     let mut names = names.into_iter();
-    let first = names.next();
-    let last = names.next_back();
-    match (first, last) {
-        (Some(first), Some(last)) => {
-            let mut result = first;
-            let mut comma = false;
-            for name in names {
-                result.push_str(", ");
-                result.push_str(&name);
-                comma = true;
-            }
-            if comma {
-                result.push_str(", and ");
-            } else {
-                result.push_str(" and ");
-            }
-            result.push_str(&last);
-            result
-        }
-        (Some(first), None) => first,
-        _ => String::new(),
+    let Some(mut result) = names.next() else {
+        return String::new();
+    };
+    let Some(mut last) = names.next() else {
+        return result;
+    };
+    let mut separator = " and ";
+    for name in names {
+        result.push_str(", ");
+        result.push_str(&last);
+        last = name;
+        separator = ", and ";
     }
+    result.push_str(separator);
+    result.push_str(&last);
+    result
 }
