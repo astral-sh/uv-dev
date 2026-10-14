@@ -1450,10 +1450,9 @@ impl PendingRemoteRunCommand {
         self,
         client_builder: &BaseClientBuilder<'_>,
     ) -> anyhow::Result<(DisplaySafeUrl, tempfile::NamedTempFile, Vec<OsString>)> {
-        let url = self.url.clone();
         let downloaded_script =
             ParsedRunCommand::download_remote_script(&self.url, client_builder).await?;
-        Ok((url, downloaded_script, self.args))
+        Ok((self.url, downloaded_script, self.args))
     }
 }
 
