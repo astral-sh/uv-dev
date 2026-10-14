@@ -737,21 +737,6 @@ fn json_output_projected_members_respect_depth() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     setup_json_output(&context)?;
 
-    let member_names = |stdout: &[u8]| -> Result<Vec<String>> {
-        let report: serde_json::Value = serde_json::from_slice(stdout)?;
-        report["members"]
-            .as_array()
-            .context("workspace members should be an array")?
-            .iter()
-            .map(|member| {
-                member["name"]
-                    .as_str()
-                    .context("workspace member should have a name")
-                    .map(ToOwned::to_owned)
-            })
-            .collect()
-    };
-
     let mut tree = context.tree();
     tree.args([
         "--preview-features",
@@ -764,14 +749,19 @@ fn json_output_projected_members_respect_depth() -> Result<()> {
         "package-b",
     ]);
     let unrestricted = tree.assert().success();
-    assert_json_snapshot!(member_names(&unrestricted.get_output().stdout)?, @r#"
-    [
-      "project"
-    ]
-    "#);
+    let unrestricted: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&unrestricted.get_output().stdout)?;
+    let members = unrestricted
+        .get("members")
+        .and_then(serde_json::Value::as_array)
+        .context("unrestricted graph should list workspace members")?;
+    assert_eq!(members.len(), 1, "{members:?}");
+    assert_eq!(members[0]["name"].as_str(), Some("project"));
 
     let depth_limited = tree.args(["--depth", "1"]).assert().success();
-    assert_json_snapshot!(member_names(&depth_limited.get_output().stdout)?, @r#"[]"#);
+    let depth_limited: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&depth_limited.get_output().stdout)?;
+    assert_eq!(depth_limited.get("members"), None);
 
     Ok(())
 }
