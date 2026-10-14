@@ -1,5 +1,6 @@
 //! Shared project, script, and tool environment workflows.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::io;
@@ -1471,8 +1472,8 @@ pub async fn resolve_environment(
     // a preference source.
     let reinstall = Reinstall::default();
     let upgrade = match resolution_scope {
-        EnvironmentResolution::Specific => Upgrade::default(),
-        EnvironmentResolution::Universal => upgrade.clone(),
+        EnvironmentResolution::Specific => Cow::Owned(Upgrade::default()),
+        EnvironmentResolution::Universal => Cow::Borrowed(upgrade),
     };
 
     let preferences = match spec.preferences {
