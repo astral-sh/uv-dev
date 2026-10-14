@@ -2920,22 +2920,29 @@ fn find_links_wheel_cache() -> Result<()> {
     Ok(())
 }
 
-/// Sync using `--find-links` with a local directory. Ensure that cached source distributions are
-/// reused.
+/// Reuse a wheel built from a local `--find-links` source distribution when builds are disabled.
 #[test]
 fn find_links_source_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let build_index = PackseServer::empty();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let sdist = "tqdm-999.0.0.tar.gz";
+    fs::copy(
+        context.workspace_root.join("test/links").join(sdist),
+        links.child(sdist),
+    )?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        tqdm==999.0.0
-    "})?;
+    requirements_txt.write_str("tqdm==999.0.0")?;
 
-    // Install `tqdm`.
+    // Build and cache the source distribution's wheel.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
+        .arg(links.path())
+        .arg("--index-url")
+        .arg(build_index.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -2945,19 +2952,20 @@ fn find_links_source_cache() -> Result<()> {
     "
     );
 
-    // Reinstall `tqdm` with `--reinstall`. Ensure that the wheel is reused.
+    context.pip_uninstall().arg("tqdm").assert().success();
+
+    // Only the source archive is available in `links`, so installation requires the cached wheel.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
-        .arg("--reinstall")
+        .arg("--no-build")
+        .arg("--no-index")
         .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
+        .arg(links.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     ~ tqdm==999.0.0
+     + tqdm==999.0.0
     "
     );
 
