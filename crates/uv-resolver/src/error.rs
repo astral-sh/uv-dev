@@ -567,6 +567,10 @@ impl NoSolutionError {
                 }
             },
             |mut metadata, cause1, cause2| {
+                let (cause1, cause2) = match (cause1, cause2) {
+                    (Some(cause1), Some(cause2)) => (cause1, cause2),
+                    (cause, None) | (None, cause) => return cause,
+                };
                 metadata.terms = metadata
                     .terms
                     .into_iter()
@@ -583,11 +587,7 @@ impl NoSolutionError {
                     })
                     .collect();
 
-                match (cause1, cause2) {
-                    (Some(cause1), Some(cause2)) => Some(derived_tree(metadata, cause1, cause2)),
-                    (Some(cause), None) | (None, Some(cause)) => Some(cause),
-                    (None, None) => None,
-                }
+                Some(derived_tree(metadata, cause1, cause2))
             },
         )
         .expect("derivation tree should contain at least one term")
