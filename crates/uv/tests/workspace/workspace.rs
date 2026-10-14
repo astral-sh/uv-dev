@@ -663,7 +663,7 @@ fn test_uv_run_isolate() -> Result<()> {
     Ok(())
 }
 
-/// Locking from a root workspace or either member resolves to the same lockfile.
+/// Locking from a root workspace or either member resolves to the same lockfile from a cold cache.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn workspace_lock_idempotence_root_workspace() -> Result<()> {
@@ -677,12 +677,18 @@ fn workspace_lock_idempotence_root_workspace() -> Result<()> {
     )?;
     let lockfile = workspace.child("uv.lock");
 
-    context.lock().current_dir(&workspace).assert().success();
+    context
+        .lock()
+        .arg("--no-cache")
+        .current_dir(&workspace)
+        .assert()
+        .success();
     let baseline = context.read(&lockfile);
 
     fs_err::remove_file(&lockfile)?;
     context
         .lock()
+        .arg("--no-cache")
         .current_dir(workspace.child("packages/bird-feeder"))
         .assert()
         .success();
@@ -691,6 +697,7 @@ fn workspace_lock_idempotence_root_workspace() -> Result<()> {
     fs_err::remove_file(&lockfile)?;
     context
         .lock()
+        .arg("--no-cache")
         .current_dir(workspace.child("packages/seeds"))
         .assert()
         .success();
@@ -699,7 +706,7 @@ fn workspace_lock_idempotence_root_workspace() -> Result<()> {
     Ok(())
 }
 
-/// Locking from a virtual workspace or any member resolves to the same lockfile.
+/// Locking from a virtual workspace or any member resolves to the same lockfile from a cold cache.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn workspace_lock_idempotence_virtual_workspace() -> Result<()> {
@@ -713,12 +720,18 @@ fn workspace_lock_idempotence_virtual_workspace() -> Result<()> {
     )?;
     let lockfile = workspace.child("uv.lock");
 
-    context.lock().current_dir(&workspace).assert().success();
+    context
+        .lock()
+        .arg("--no-cache")
+        .current_dir(&workspace)
+        .assert()
+        .success();
     let baseline = context.read(&lockfile);
 
     fs_err::remove_file(&lockfile)?;
     context
         .lock()
+        .arg("--no-cache")
         .current_dir(workspace.child("packages/albatross"))
         .assert()
         .success();
@@ -727,6 +740,7 @@ fn workspace_lock_idempotence_virtual_workspace() -> Result<()> {
     fs_err::remove_file(&lockfile)?;
     context
         .lock()
+        .arg("--no-cache")
         .current_dir(workspace.child("packages/bird-feeder"))
         .assert()
         .success();
@@ -735,6 +749,7 @@ fn workspace_lock_idempotence_virtual_workspace() -> Result<()> {
     fs_err::remove_file(&lockfile)?;
     context
         .lock()
+        .arg("--no-cache")
         .current_dir(workspace.child("packages/seeds"))
         .assert()
         .success();
