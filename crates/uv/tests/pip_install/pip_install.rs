@@ -7169,6 +7169,9 @@ fn already_installed_local_path_dependent() {
              And because only second-local==0.1.0 is available and you require second-local, we can conclude that your requirements are unsatisfiable.
     "
     );
+    context
+        .assert_command("import first_local; import second_local")
+        .success();
 
     // Request reinstallation of the first package
     // We include it in the install command with a full path so we succeed
@@ -7188,8 +7191,7 @@ fn already_installed_local_path_dependent() {
     "
     );
 
-    // Request upgrade of the first package
-    // It's not available on an index and the user has not specified the path so we fail
+    // Upgrade keeps the installed transitive dependency when no index candidate is available.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(root_path.join("second_local"))
         .arg("--upgrade-package")
@@ -7207,6 +7209,9 @@ fn already_installed_local_path_dependent() {
      ~ second-local==0.1.0 (from file://[WORKSPACE]/test/packages/dependent_locals/second_local)
     "
     );
+    context
+        .assert_command("import first_local; import second_local")
+        .success();
 
     // Request upgrade of the first package
     // A full path is specified and there's nothing to upgrade, but because it was passed
