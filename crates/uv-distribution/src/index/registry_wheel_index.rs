@@ -358,28 +358,31 @@ impl<'a> RegistryWheelIndex<'a> {
                             continue;
                         }
 
-                        if let Some(wheel) = ResolvedWheel::from_built_source(wheel_dir, cache) {
-                            if wheel.filename.compatibility(tags).is_compatible() {
-                                // Enforce hash-checking based on the source distribution.
-                                if revision.satisfies(hasher.archive_policy_for_package(
-                                    &wheel.filename.name,
-                                    &wheel.filename.version,
-                                )) {
-                                    let wheel = CachedWheel::from_entry(
-                                        wheel,
-                                        revision.hashes().into(),
-                                        CacheInfo::default(),
-                                        build_info.clone(),
-                                    );
-                                    entries.push(IndexEntry {
-                                        size: revision.size(),
-                                        dist: wheel.into_registry_dist(),
-                                        index,
-                                        built: true,
-                                    });
-                                }
-                            }
+                        let Some(wheel) = ResolvedWheel::from_built_source(wheel_dir, cache) else {
+                            continue;
+                        };
+                        if !wheel.filename.compatibility(tags).is_compatible() {
+                            continue;
                         }
+                        // Enforce hash-checking based on the source distribution.
+                        if !revision.satisfies(hasher.archive_policy_for_package(
+                            &wheel.filename.name,
+                            &wheel.filename.version,
+                        )) {
+                            continue;
+                        }
+                        let wheel = CachedWheel::from_entry(
+                            wheel,
+                            revision.hashes().into(),
+                            CacheInfo::default(),
+                            build_info.clone(),
+                        );
+                        entries.push(IndexEntry {
+                            size: revision.size(),
+                            dist: wheel.into_registry_dist(),
+                            index,
+                            built: true,
+                        });
                     }
                 }
             }
