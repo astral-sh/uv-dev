@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 use tracing::trace;
 
@@ -338,7 +338,7 @@ fn normcase(s: &str) -> Cow<'_, str> {
     }
 }
 
-static EASY_INSTALL_PTH: LazyLock<Mutex<i32>> = LazyLock::new(Mutex::default);
+static EASY_INSTALL_PTH: Mutex<()> = Mutex::new(());
 
 /// Uninstall the legacy editable represented by the `.egg-link` file.
 ///
@@ -350,10 +350,8 @@ pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
     let contents = fs_err::read_to_string(egg_link)?;
     let target_line = contents
         .lines()
-        .find_map(|line| {
-            let line = line.trim();
-            if line.is_empty() { None } else { Some(line) }
-        })
+        .map(str::trim)
+        .find(|line| !line.is_empty())
         .ok_or_else(|| Error::InvalidEggLink(egg_link.to_path_buf()))?;
 
     // This comes from `pkg_resources.normalize_path`
