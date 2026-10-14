@@ -9,7 +9,7 @@ use indoc::{formatdoc, indoc};
 
 use uv_static::EnvVars;
 #[cfg(feature = "test-python")]
-use uv_test::packse::PackseServer;
+use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::uv_snapshot;
 
 #[test]
@@ -225,17 +225,25 @@ fn list_single_no_editable() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
-fn list_outdated_columns() -> Result<()> {
+#[cfg(feature = "test-python")]
+fn list_outdated_formats() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==3.0.0")?;
-
+    let scenario = toml::from_str::<Scenario>(indoc::indoc! {r#"
+        name = "outdated-list-formats"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.anyio.versions."3.0.0"]
+        requires = ["idna==3.6", "sniffio==1.3.1"]
+        [packages.anyio.versions."4.3.0"]
+        [packages.idna.versions."3.6"]
+        [packages.sniffio.versions."1.3.1"]
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let index_url = index.index_url();
     uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
+        .args(["anyio==3.0.0", "--strict", "--default-index"])
+        .arg(&index_url), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -244,50 +252,28 @@ fn list_outdated_columns() -> Result<()> {
      + anyio==3.0.0
      + idna==3.6
      + sniffio==1.3.1
-    "
-    );
+    ");
 
-    uv_snapshot!(context.pip_list().arg("--outdated"), @"
+    let list = || {
+        let mut command = context.pip_list();
+        command
+            .args(["--outdated", "--default-index"])
+            .arg(&index_url);
+        command
+    };
+    uv_snapshot!(list(), @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version Latest Type
     ------- ------- ------ -----
     anyio   3.0.0   4.3.0  wheel
-    "
-    );
+    ");
 
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn list_outdated_json() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==3.0.0")?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.0.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    uv_snapshot!(context.pip_list().arg("--outdated").arg("--format").arg("json"), @r#"
+    uv_snapshot!(list().args(["--format", "json"]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     [{"name":"anyio","version":"3.0.0","latest_version":"4.3.0","latest_filetype":"wheel"}]
-    "#
-    );
+    "#);
 
     Ok(())
 }
