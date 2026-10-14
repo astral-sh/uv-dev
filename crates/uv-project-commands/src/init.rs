@@ -30,7 +30,7 @@ use uv_python_discovery::PythonVersionFile;
 use uv_python_discovery::VersionFileDiscoveryOptions;
 use uv_python_discovery::find_requires_python;
 use uv_python_discovery::init_script_python_requirement;
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
     PythonVariant, VersionRequest,
@@ -549,11 +549,7 @@ async fn determine_requires_python(
                 let python_pin = if pin_python {
                     let interpreter = find_interpreter(Some(python_request)).await?;
 
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                        interpreter.python_major(),
-                        interpreter.python_minor(),
-                        *variant,
-                    )))
+                    Some(python_minor_pin(&interpreter, *variant))
                 } else {
                     None
                 };
@@ -566,15 +562,8 @@ async fn determine_requires_python(
                 let requires_python =
                     RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
-                let python_pin = if pin_python {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                        interpreter.python_major(),
-                        interpreter.python_minor(),
-                        PythonVariant::Default,
-                    )))
-                } else {
-                    None
-                };
+                let python_pin =
+                    pin_python.then(|| python_minor_pin(&interpreter, PythonVariant::Default));
 
                 (requires_python, python_pin)
             }
@@ -590,16 +579,7 @@ async fn determine_requires_python(
         let requires_python =
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
-        // Pin to the minor version.
-        let python_pin = if pin_python {
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                interpreter.python_major(),
-                interpreter.python_minor(),
-                PythonVariant::Default,
-            )))
-        } else {
-            None
-        };
+        let python_pin = pin_python.then(|| python_minor_pin(&interpreter, PythonVariant::Default));
 
         debug!(
             "Using Python version `{requires_python}` from existing virtual environment in project"
@@ -616,15 +596,10 @@ async fn determine_requires_python(
         let python_request = PythonRequest::from_specifiers(requires_python.specifiers())
             .unwrap_or(PythonRequest::Default);
 
-        // Pin to the minor version.
         let python_pin = if pin_python {
             let interpreter = find_interpreter(Some(&python_request)).await?;
 
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                interpreter.python_major(),
-                interpreter.python_minor(),
-                PythonVariant::Default,
-            )))
+            Some(python_minor_pin(&interpreter, PythonVariant::Default))
         } else {
             None
         };
@@ -639,21 +614,21 @@ async fn determine_requires_python(
         let requires_python =
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
-        // Pin to the minor version.
-        let python_pin = if pin_python {
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                interpreter.python_major(),
-                interpreter.python_minor(),
-                PythonVariant::Default,
-            )))
-        } else {
-            None
-        };
+        let python_pin = pin_python.then(|| python_minor_pin(&interpreter, PythonVariant::Default));
 
         debug!("Using Python version `{requires_python}` from default interpreter");
 
         Ok((requires_python, python_pin))
     }
+}
+
+/// Pin to the interpreter's minor version with the specified Python variant.
+fn python_minor_pin(interpreter: &Interpreter, variant: PythonVariant) -> PythonRequest {
+    PythonRequest::Version(VersionRequest::MajorMinor(
+        interpreter.python_major(),
+        interpreter.python_minor(),
+        variant,
+    ))
 }
 
 /// Initialize this project kind at the target path.
