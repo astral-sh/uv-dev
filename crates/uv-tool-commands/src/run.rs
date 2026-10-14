@@ -50,7 +50,7 @@ use uv_command_support::{
 
 use crate::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::error::ToolError;
-use crate::requirements::{registry_requirement, resolve_latest, resolve_names};
+use crate::requirements::{registry_requirement, resolve_latest};
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
@@ -836,6 +836,24 @@ async fn get_or_create_environment(
         operations::read_constraints(build_constraints, client_builder).await?,
     );
 
+    let resolve_names = async |requirements| {
+        crate::requirements::resolve_names(
+            requirements,
+            &interpreter,
+            &settings.resolver,
+            &build_constraints,
+            client_builder,
+            &state,
+            concurrency,
+            cache,
+            workspace_cache,
+            printer,
+            preview,
+            lfs,
+        )
+        .await
+    };
+
     let from = match request {
         ToolRequest::Python {
             executable: request_executable,
@@ -871,23 +889,7 @@ async fn get_or_create_environment(
                         UnresolvedRequirement::Unnamed(..) => None,
                     };
 
-                    let requirement = resolve_names(
-                        vec![spec],
-                        &interpreter,
-                        &settings.resolver,
-                        &build_constraints,
-                        client_builder,
-                        &state,
-                        concurrency,
-                        cache,
-                        workspace_cache,
-                        printer,
-                        preview,
-                        lfs,
-                    )
-                    .await?
-                    .pop()
-                    .unwrap();
+                    let requirement = resolve_names(vec![spec]).await?.pop().unwrap();
 
                     // Prefer, in order:
                     // 1. The verbatim executable provided by the user, independent of the requirement (as in: `uvx --from package executable`).
@@ -960,23 +962,7 @@ async fn get_or_create_environment(
             ToolRequirement::Python { .. } => {}
             ToolRequirement::Package { requirement, .. } => requirements.push(requirement.clone()),
         }
-        requirements.extend(
-            resolve_names(
-                spec.requirements.clone(),
-                &interpreter,
-                &settings.resolver,
-                &build_constraints,
-                client_builder,
-                &state,
-                concurrency,
-                cache,
-                workspace_cache,
-                printer,
-                preview,
-                lfs,
-            )
-            .await?,
-        );
+        requirements.extend(resolve_names(spec.requirements.clone()).await?);
         requirements
     };
 
@@ -989,21 +975,7 @@ async fn get_or_create_environment(
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    let overrides = resolve_names(
-        spec.overrides.clone(),
-        &interpreter,
-        &settings.resolver,
-        &build_constraints,
-        client_builder,
-        &state,
-        concurrency,
-        cache,
-        workspace_cache,
-        printer,
-        preview,
-        lfs,
-    )
-    .await?;
+    let overrides = resolve_names(spec.overrides.clone()).await?;
 
     // Check if the tool is already installed in a compatible environment.
     if !isolated && !request.is_latest() {
