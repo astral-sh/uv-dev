@@ -113,7 +113,7 @@ pub fn run_and_format_silent<T: AsRef<str>>(
         .to_string();
 
     // Support profiling test run commands with traces.
-    if let Ok(root) = env::var(EnvVars::TRACING_DURATIONS_TEST_ROOT) {
+    if let Some(root) = env::var_os(EnvVars::TRACING_DURATIONS_TEST_ROOT) {
         // We only want to fail if the variable is set at runtime.
         #[expect(clippy::assertions_on_constants)]
         {
