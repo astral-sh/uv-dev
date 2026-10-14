@@ -76,7 +76,7 @@ impl KeyringProvider {
     /// Store credentials for the given [`DisplaySafeUrl`] to the keyring.
     ///
     /// Only the native keyring provider is supported at this time.
-    #[instrument(skip_all, fields(url = % url.to_string(), username))]
+    #[instrument(skip_all, fields(%url, username))]
     pub async fn store(
         &self,
         url: &DisplaySafeUrl,
@@ -121,7 +121,7 @@ impl KeyringProvider {
     /// Remove credentials for the given [`DisplaySafeUrl`] and username from the keyring.
     ///
     /// Only the native keyring provider is supported at this time.
-    #[instrument(skip_all, fields(url = % url.to_string(), username))]
+    #[instrument(skip_all, fields(%url, username))]
     pub async fn remove(&self, url: &DisplaySafeUrl, username: &str) -> Result<(), Error> {
         let target = Self::service_name(url);
 
@@ -176,7 +176,7 @@ impl KeyringProvider {
     ///
     /// Returns [`None`] if no password was found for the username or if any errors
     /// are encountered in the keyring backend.
-    #[instrument(skip_all, fields(url = % url.to_string(), username))]
+    #[instrument(skip_all, fields(%url, username))]
     pub async fn fetch(&self, url: &DisplaySafeUrl, username: Option<&str>) -> Option<Credentials> {
         // Validate the request
         debug_assert!(
