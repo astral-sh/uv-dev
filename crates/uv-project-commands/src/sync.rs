@@ -622,36 +622,6 @@ impl SyncTarget<'_> {
             Self::Manifest(SyncManifest::Script(_)) | Self::Lockfile { .. } => None,
         }
     }
-
-    fn script(&self) -> Option<&Pep723Script> {
-        match self {
-            Self::Manifest(SyncManifest::Project(_)) | Self::Lockfile { .. } => None,
-            Self::Manifest(SyncManifest::Script(script)) => Some(script),
-        }
-    }
-
-    /// Report the selected member's path, or the workspace root if no member is selected.
-    fn project_report(&self) -> Option<ProjectReport> {
-        match self {
-            Self::Manifest(SyncManifest::Project(project)) => Some(ProjectReport::from(project)),
-            Self::Lockfile {
-                workspace,
-                project_name,
-                ..
-            } => {
-                let root = workspace.root();
-                let path = project_name
-                    .as_ref()
-                    .and_then(|name| workspace.lock().workspace_member_path(name))
-                    .map_or_else(|| root.to_path_buf(), |path| root.join(path));
-                Some(ProjectReport {
-                    path: uv_fs::normalize_path(&path).as_ref().into(),
-                    workspace: WorkspaceReport { path: root.into() },
-                })
-            }
-            Self::Manifest(SyncManifest::Script(_)) => None,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -745,13 +715,8 @@ struct Report {
     /// The schema of this report.
     schema: SchemaReport,
     /// The target of the sync operation, either a project or a script.
-    target: TargetName,
-    /// The report for a [`TargetName::Project`], if applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    project: Option<ProjectReport>,
-    /// The report for a [`TargetName::Script`], if applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    script: Option<ScriptReport>,
+    #[serde(flatten)]
+    target: TargetReport,
     /// The report for the sync operation.
     sync: SyncReport,
     /// The report for the lock operation.
@@ -760,9 +725,46 @@ struct Report {
     dry_run: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(tag = "target", rename_all = "snake_case")]
+enum TargetReport {
+    Project { project: ProjectReport },
+    Script { script: ScriptReport },
+}
+
+impl From<&SyncTarget<'_>> for TargetReport {
+    fn from(target: &SyncTarget<'_>) -> Self {
+        match target {
+            SyncTarget::Manifest(SyncManifest::Project(project)) => Self::Project {
+                project: ProjectReport::from(project),
+            },
+            SyncTarget::Manifest(SyncManifest::Script(script)) => Self::Script {
+                script: ScriptReport::from(script),
+            },
+            SyncTarget::Lockfile {
+                workspace,
+                project_name,
+                ..
+            } => {
+                // Report the selected member's path, or the workspace root if no member is selected.
+                let root = workspace.root();
+                let path = project_name
+                    .as_ref()
+                    .and_then(|name| workspace.lock().workspace_member_path(name))
+                    .map_or_else(|| root.to_path_buf(), |path| root.join(path));
+                Self::Project {
+                    project: ProjectReport {
+                        path: uv_fs::normalize_path(&path).as_ref().into(),
+                        workspace: WorkspaceReport { path: root.into() },
+                    },
+                }
+            }
+        }
+    }
+}
+
 /// The kind of target
-#[derive(Debug, Serialize, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy)]
 enum TargetName {
     Project,
     Script,
@@ -1045,9 +1047,7 @@ fn report_sync_result(
     if let Some(changelog) = changelog {
         let report = Report {
             schema: SchemaReport::default(),
-            target: TargetName::from(target),
-            project: target.project_report(),
-            script: target.script().map(ScriptReport::from),
+            target: TargetReport::from(target),
             sync: SyncReport {
                 environment: EnvironmentReport::from(environment),
                 action: SyncAction::from(environment),
