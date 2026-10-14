@@ -1393,12 +1393,13 @@ impl Refresh {
             | (Self::None(_), Self::Packages(packages, paths, _)) => {
                 Self::Packages(packages, paths, timestamp)
             }
-            (Self::Packages(packages1, paths1, _), Self::Packages(packages2, paths2, _)) => {
-                Self::Packages(
-                    packages1.into_iter().chain(packages2).collect(),
-                    paths1.into_iter().chain(paths2).collect(),
-                    timestamp,
-                )
+            (
+                Self::Packages(mut packages, mut paths, _),
+                Self::Packages(other_packages, other_paths, _),
+            ) => {
+                packages.extend(other_packages);
+                paths.extend(other_paths);
+                Self::Packages(packages, paths, timestamp)
             }
         }
     }
