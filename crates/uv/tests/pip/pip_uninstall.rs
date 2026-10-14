@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use std::path::{Component, Prefix};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
@@ -370,8 +370,8 @@ fn uninstall_legacy_editable() -> Result<()> {
     let site_packages = ChildPath::new(context.site_packages());
 
     let target = context.temp_dir.child("zstandard_project");
-    target.child("zstd").create_dir_all()?;
-    target.child("zstd").child("__init__.py").write_str("")?;
+    let source = target.child("zstd").child("__init__.py");
+    source.write_str("MARKER = 1\n")?;
 
     target.child("zstandard.egg-info").create_dir_all()?;
     target
@@ -384,13 +384,14 @@ Version: 0.22.0
 ",
         )?;
 
+    let target_path = target.path().to_str().context("non-UTF-8 editable path")?;
     site_packages
         .child("zstandard.egg-link")
-        .write_str(target.path().to_str().unwrap())?;
+        .write_str(target_path)?;
 
     site_packages.child("easy-install.pth").write_str(&format!(
         "something\n{}\nanother thing\n",
-        normcase(target.path().to_str().unwrap())
+        normcase(target_path)
     ))?;
 
     // Run `pip uninstall`.
@@ -402,16 +403,16 @@ Version: 0.22.0
      - zstandard==0.22.0
     ");
 
-    // The entry in `easy-install.pth` should be removed.
-    assert_eq!(
-        context.read(site_packages.child("easy-install.pth")),
-        "something\nanother thing\n",
-        "easy-install.pth should not contain the path to the uninstalled package"
-    );
-    // The `.egg-link` file should be removed.
-    assert!(!site_packages.child("zstandard.egg-link").exists());
-    // The `.egg-info` directory should still exist.
-    assert!(target.child("zstandard.egg-info").exists());
+    site_packages
+        .child("easy-install.pth")
+        .assert("something\nanother thing\n");
+    site_packages
+        .child("zstandard.egg-link")
+        .assert(predicates::path::missing());
+    target
+        .child("zstandard.egg-info")
+        .assert(predicates::path::is_dir());
+    source.assert("MARKER = 1\n");
 
     Ok(())
 }
