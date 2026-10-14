@@ -315,18 +315,18 @@ impl LockedFile {
             }
         }
 
+        let path = path.as_ref();
+        let mut options = fs_err::OpenOptions::new();
+        options.read(true).write(true);
+
         // If path already exists, return it.
-        if let Ok(file) = fs_err::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path.as_ref())
-        {
+        if let Ok(file) = options.open(path) {
             return Ok(file);
         }
 
         // Otherwise, create a temporary file with 666 permissions. We must set
         // permissions _after_ creating the file, to override the `umask`.
-        let file = if let Some(parent) = path.as_ref().parent() {
+        let file = if let Some(parent) = path.parent() {
             NamedTempFile::new_in(parent)
         } else {
             NamedTempFile::new()
@@ -335,15 +335,11 @@ impl LockedFile {
         try_set_permissions(file.as_file(), file.path());
 
         // Try to move the file to path, but if path exists now, just open path
-        match file.persist_noclobber(path.as_ref()) {
-            Ok(file) => Ok(fs_err::File::from_parts(file, path.as_ref())),
+        match file.persist_noclobber(path) {
+            Ok(file) => Ok(fs_err::File::from_parts(file, path)),
             Err(err) => {
                 if err.error.kind() == std::io::ErrorKind::AlreadyExists {
-                    fs_err::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .open(path.as_ref())
-                        .map_err(Into::into)
+                    options.open(path).map_err(Into::into)
                 } else if matches!(
                     Errno::from_io_error(&err.error),
                     Some(Errno::NOTSUP | Errno::INVAL)
@@ -361,11 +357,7 @@ impl LockedFile {
                     // are locking two different files. Also, since `persist_noclobber` is more
                     // likely to not be supported on special filesystems which don't have permission
                     // bits, it's less likely to ever matter.
-                    let file = fs_err::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .create(true)
-                        .open(path.as_ref())?;
+                    let file = options.create(true).open(path)?;
 
                     // We don't want to `try_set_permissions` in cases where another user's process
                     // has already created the lockfile and changed its permissions because we might
@@ -375,7 +367,7 @@ impl LockedFile {
                         .metadata()
                         .is_ok_and(|metadata| metadata.permissions().mode() != DESIRED_MODE)
                     {
-                        try_set_permissions(file.file(), path.as_ref());
+                        try_set_permissions(file.file(), path);
                     }
                     Ok(file)
                 } else {
