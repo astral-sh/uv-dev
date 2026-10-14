@@ -291,25 +291,32 @@ pub(super) struct ToolLock {
 
 /// A tool lock validated against the current resolution inputs.
 pub(super) struct ValidatedToolLock {
-    lock: ToolLock,
-    satisfied: bool,
-    usable: bool,
+    root: PathBuf,
+    lock: ValidatedLock,
 }
 
 impl ValidatedToolLock {
     /// Return whether the existing lock satisfies the current resolution inputs.
     pub(super) fn is_satisfied(&self) -> bool {
-        self.satisfied
+        self.lock.is_satisfied()
     }
 
     /// Return the lock as a resolver preference if its versions remain usable.
-    pub(super) fn preference(&self) -> Option<&ToolLock> {
-        self.usable.then_some(&self.lock)
+    fn preference(&self) -> Option<PreferenceLocation<'_>> {
+        self.lock
+            .usable_lock()
+            .map(|lock| PreferenceLocation::Lock {
+                lock,
+                install_path: &self.root,
+            })
     }
 
     /// Return the validated lock.
     pub(super) fn into_lock(self) -> ToolLock {
-        self.lock
+        ToolLock {
+            root: self.root,
+            lock: self.lock.into_lock(),
+        }
     }
 }
 
@@ -549,16 +556,9 @@ impl ToolLock {
             printer,
         )
         .await?;
-        let satisfied = validated.is_satisfied();
-        let usable = validated.is_usable();
-
         Ok(ValidatedToolLock {
-            lock: Self {
-                root,
-                lock: validated.into_lock(),
-            },
-            satisfied,
-            usable,
+            root,
+            lock: validated,
         })
     }
 
@@ -614,15 +614,12 @@ impl ToolLock {
 /// available, then falling back to the installed environment.
 pub(super) fn tool_environment_spec<'a>(
     requirements: RequirementsSpecification,
-    lock: Option<&'a ToolLock>,
+    lock: Option<&'a ValidatedToolLock>,
     site_packages: Option<&'a SitePackages>,
 ) -> EnvironmentSpecification<'a> {
     let specification = EnvironmentSpecification::from(requirements);
     let preference = lock
-        .map(|lock| PreferenceLocation::Lock {
-            lock: &lock.lock,
-            install_path: &lock.root,
-        })
+        .and_then(ValidatedToolLock::preference)
         .or_else(|| site_packages.map(PreferenceLocation::Installed));
     match preference {
         Some(preference) => specification.with_preferences(preference),
