@@ -402,10 +402,9 @@ impl PythonInstallation {
             .is_ok_and(|installations| installations.contains(&self.interpreter))
     }
 
-    /// Whether this is a CPython installation.
-    ///
-    /// Returns false if it is an alternative implementation, e.g., PyPy.
-    pub(crate) fn is_alternative_implementation(&self) -> bool {
+    /// Whether selecting this installation requires opting in to alternative implementations.
+    /// This includes CPython installations targeting Emscripten.
+    pub(crate) fn requires_alternative_implementation_opt_in(&self) -> bool {
         !matches!(
             self.implementation(),
             LenientImplementationName::Known(ImplementationName::CPython)

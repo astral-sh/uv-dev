@@ -1180,11 +1180,9 @@ pub(crate) fn find_python_installation(
             continue;
         }
 
-        // If it's an alternative implementation and alternative implementations aren't allowed,
-        // skip it. Note we avoid querying these interpreters at all if they're on the search path
-        // and are not requested, but other sources such as the managed installations can include
-        // them.
-        if installation.is_alternative_implementation()
+        // Unrequested alternative implementations on the search path are filtered before querying,
+        // but other sources, such as managed installations, can still yield them.
+        if installation.requires_alternative_implementation_opt_in()
             && !request.allows_alternative_implementations()
             && !installation.source.allows_alternative_implementations()
             && !has_default_executable_name
