@@ -7,7 +7,7 @@ use owo_colors::OwoColorize;
 use uv_cache::Cache;
 use uv_configuration::TargetTriple;
 use uv_distribution_types::{DependencyMetadata, Diagnostic, InstalledDist};
-use uv_installer::{SitePackages, SitePackagesDiagnostic};
+use uv_installer::SitePackages;
 use uv_python_discovery::find_environment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonPreference, PythonRequest, PythonVersion,
@@ -63,10 +63,7 @@ pub fn pip_check(
     let tags = resolution_tags(python_version, python_platform, environment.interpreter())?;
 
     // Run the diagnostics.
-    let diagnostics: Vec<SitePackagesDiagnostic> = site_packages
-        .diagnostics(&markers, &tags, dependency_metadata)?
-        .into_iter()
-        .collect();
+    let diagnostics = site_packages.diagnostics(&markers, &tags, dependency_metadata);
 
     if diagnostics.is_empty() {
         writeln!(

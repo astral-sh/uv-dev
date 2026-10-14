@@ -222,12 +222,14 @@ impl SitePackages {
     }
 
     /// Validate the installed packages in the virtual environment.
+    ///
+    /// Unreadable distribution metadata and wheel tags are reported as diagnostics.
     pub fn diagnostics(
         &self,
         markers: &ResolverMarkerEnvironment,
         tags: &Tags,
         dependency_metadata: &DependencyMetadata,
-    ) -> Result<Vec<SitePackagesDiagnostic>> {
+    ) -> Vec<SitePackagesDiagnostic> {
         let mut diagnostics = Vec::new();
         let python_requirement =
             RequiresPython::greater_than_equal_version(markers.python_full_version());
@@ -331,7 +333,7 @@ impl SitePackages {
             }
         }
 
-        Ok(diagnostics)
+        diagnostics
     }
 
     /// Resolve unnamed requirements using the installed distribution for their URL.
