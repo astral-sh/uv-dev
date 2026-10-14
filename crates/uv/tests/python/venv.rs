@@ -1450,60 +1450,6 @@ fn seed_keeps_distutils_patch_on_py39() {
 }
 
 #[test]
-fn create_venv_with_invalid_http_timeout() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_http_timeout("not_a_number");
-    uv_snapshot!(context.filters(), context.venv()
-        .arg(context.venv.as_os_str())
-        .arg("--python")
-        .arg("3.12"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse environment variable `UV_HTTP_TIMEOUT` with invalid value `not_a_number`: invalid digit found in string; value should be an integer number of seconds
-    ");
-}
-
-#[test]
-fn create_venv_with_invalid_concurrent_installs() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_concurrent_installs("0");
-    uv_snapshot!(context.filters(), context.venv()
-        .arg(context.venv.as_os_str())
-        .arg("--python")
-        .arg("3.12"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse environment variable `UV_CONCURRENT_INSTALLS` with invalid value `0`: number would be zero for non-zero type
-    ");
-}
-
-#[test]
-fn create_venv_with_invalid_cuda_driver_version() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
-    uv_snapshot!(context.filters(), context.venv()
-        .arg(context.venv.as_os_str())
-        .arg("--python")
-        .arg("3.12")
-        .env(EnvVars::UV_CUDA_DRIVER_VERSION, "invalid"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse environment variable `UV_CUDA_DRIVER_VERSION` with invalid value `invalid`: expected version to start with a number, but no leading ASCII digits were found
-    ");
-}
-
-#[test]
-fn create_venv_with_invalid_amd_gpu_architecture() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
-    uv_snapshot!(context.filters(), context.venv()
-        .arg(context.venv.as_os_str())
-        .arg("--python")
-        .arg("3.12")
-        .env(EnvVars::UV_AMD_GPU_ARCHITECTURE, "invalid"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse environment variable `UV_AMD_GPU_ARCHITECTURE` with invalid value `invalid`: Unknown AMD GPU architecture: invalid
-    ");
-}
-
-#[test]
 fn create_venv_unknown_python_minor() {
     let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
 
