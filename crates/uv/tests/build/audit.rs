@@ -7,6 +7,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::audit::CleanAuditService;
 use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
@@ -738,15 +739,7 @@ async fn audit_no_dev() {
 
     context.lock().assert().success();
 
-    let server = MockServer::start().await;
-
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
-        .mount(&server)
-        .await;
+    let server = CleanAuditService::start().await;
 
     // With --no-dev, only "iniconfig" should be audited (not "typing-extensions").
     uv_snapshot!(context.filters(), context
@@ -774,6 +767,13 @@ async fn audit_no_dev() {
     Resolved 3 packages in [TIME]
     Found no known vulnerabilities and no adverse project statuses in 2 packages
     ");
+
+    server
+        .assert_queries(&[
+            &[("iniconfig", "2.0.0")],
+            &[("iniconfig", "2.0.0"), ("typing-extensions", "4.10.0")],
+        ])
+        .await;
 }
 
 /// Extras are included in the audit by default, and can be excluded.
@@ -797,15 +797,7 @@ async fn audit_extras() {
 
     context.lock().assert().success();
 
-    let server = MockServer::start().await;
-
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
-        .mount(&server)
-        .await;
+    let server = CleanAuditService::start().await;
 
     // By default, extras are included: both iniconfig and typing-extensions are audited.
     uv_snapshot!(context.filters(), context
@@ -834,6 +826,13 @@ async fn audit_extras() {
     Resolved 3 packages in [TIME]
     Found no known vulnerabilities and no adverse project statuses in 1 package
     ");
+
+    server
+        .assert_queries(&[
+            &[("iniconfig", "2.0.0"), ("typing-extensions", "4.10.0")],
+            &[("iniconfig", "2.0.0")],
+        ])
+        .await;
 }
 
 /// Dependency group filters limit the groups included in an audit.
@@ -859,15 +858,7 @@ async fn audit_dependency_groups() {
 
     context.lock().assert().success();
 
-    let server = MockServer::start().await;
-
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
-        .mount(&server)
-        .await;
+    let server = CleanAuditService::start().await;
 
     // Default: all groups are included (iniconfig + typing-extensions + sniffio = 3).
     uv_snapshot!(context.filters(), context
@@ -925,6 +916,19 @@ async fn audit_dependency_groups() {
     Resolved 4 packages in [TIME]
     Found no known vulnerabilities and no adverse project statuses in 1 package
     ");
+
+    server
+        .assert_queries(&[
+            &[
+                ("iniconfig", "2.0.0"),
+                ("sniffio", "1.3.1"),
+                ("typing-extensions", "4.10.0"),
+            ],
+            &[("iniconfig", "2.0.0"), ("sniffio", "1.3.1")],
+            &[("iniconfig", "2.0.0"), ("typing-extensions", "4.10.0")],
+            &[("sniffio", "1.3.1")],
+        ])
+        .await;
 }
 
 /// `--no-default-groups` disables all implicit dependency groups in an audit.
@@ -952,15 +956,7 @@ async fn audit_no_default_groups() {
 
     context.lock().assert().success();
 
-    let server = MockServer::start().await;
-
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
-        .mount(&server)
-        .await;
+    let server = CleanAuditService::start().await;
 
     // All groups are audited by default, including lint, which is not in default-groups.
     uv_snapshot!(context.filters(), context
@@ -988,6 +984,17 @@ async fn audit_no_default_groups() {
     Resolved 4 packages in [TIME]
     Found no known vulnerabilities and no adverse project statuses in 1 package
     ");
+
+    server
+        .assert_queries(&[
+            &[
+                ("iniconfig", "2.0.0"),
+                ("sniffio", "1.3.1"),
+                ("typing-extensions", "4.10.0"),
+            ],
+            &[("iniconfig", "2.0.0")],
+        ])
+        .await;
 }
 
 /// `--ignore` excludes a vulnerability by its primary ID.
