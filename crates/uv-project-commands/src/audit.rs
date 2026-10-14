@@ -100,11 +100,7 @@ pub async fn audit(
     let groups = groups.with_defaults(default_groups);
 
     // Determine the extras to include.
-    let default_extras = match &target {
-        LockTarget::Workspace(_) => DefaultExtras::All,
-        LockTarget::Script(_) => DefaultExtras::All,
-    };
-    let extras = extras.with_defaults(default_extras);
+    let extras = extras.with_defaults(DefaultExtras::All);
 
     // Determine whether we're performing a universal audit.
     let universal = python_version.is_none() && python_platform.is_none();
