@@ -1,6 +1,7 @@
 pub use crate::github::GitHubRepository;
 pub use crate::oid::{GitOid, OidParseError};
 pub use crate::reference::GitReference;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::sync::LazyLock;
 
@@ -303,16 +304,14 @@ impl From<GitUrl> for DisplaySafeUrl {
     fn from(git: GitUrl) -> Self {
         let precise = git.precise();
         let mut url = git.url;
-
-        // If we have a precise commit, add `@` and the commit hash to the URL.
-        if let Some(precise) = precise {
-            let path = format!("{}@{}", url.path(), precise);
-            url.set_path(&path);
-        } else if let Some(rev) = git.reference.as_url_rev() {
-            let path = format!("{}@{}", url.path(), rev);
+        let revision = precise
+            .as_ref()
+            .map(|precise| Cow::Borrowed(precise.as_str()))
+            .or_else(|| git.reference.as_url_rev());
+        if let Some(revision) = revision {
+            let path = format!("{}@{revision}", url.path());
             url.set_path(&path);
         }
-
         url
     }
 }
