@@ -1509,15 +1509,15 @@ impl ParsedRunCommand {
             )));
         } else if script {
             return Ok(Self::Ready(RunCommand::PythonScript(target.into(), args)));
+        } else if target.eq_ignore_ascii_case("python") {
+            return Ok(Self::Ready(RunCommand::Python(args)));
         }
 
         let metadata = target_path.metadata();
         let is_file = metadata.as_ref().is_ok_and(std::fs::Metadata::is_file);
         let is_dir = metadata.as_ref().is_ok_and(std::fs::Metadata::is_dir);
 
-        if target.eq_ignore_ascii_case("python") {
-            Ok(Self::Ready(RunCommand::Python(args)))
-        } else if target_path
+        if target_path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("py") || ext.eq_ignore_ascii_case("pyc"))
             && is_file
