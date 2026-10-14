@@ -993,7 +993,7 @@ impl TestContext {
         let venv_python = python_versions.first().cloned();
         let site_packages = venv_python
             .as_ref()
-            .map(|(version, _)| site_packages_path(&venv, &format!("python{version}")));
+            .map(|(version, _)| site_packages_path_for_version(&venv, "python", version));
 
         // Construct directories for each Python executable on Unix where the executable names
         // need to be normalized
@@ -1995,7 +1995,7 @@ impl TestContext {
             .venv_python
             .as_ref()
             .expect("A Python version must be provided to retrieve the test site packages path");
-        site_packages_path(&self.venv, &format!("{}{version}", self.python_kind()))
+        site_packages_path_for_version(&self.venv, self.python_kind(), version)
     }
 
     /// Reset the virtual environment in the test context.
@@ -2142,6 +2142,11 @@ pub fn site_packages_path(venv: &Path, python: &str) -> PathBuf {
     } else {
         unimplemented!("Only Windows and Unix are supported")
     }
+}
+
+/// Construct a site-packages path using the Python library directory's major and minor version.
+fn site_packages_path_for_version(venv: &Path, kind: &str, version: &PythonVersion) -> PathBuf {
+    site_packages_path(venv, &format!("{kind}{}", version.python_version()))
 }
 
 pub fn venv_bin_path(venv: impl AsRef<Path>) -> PathBuf {
@@ -2373,6 +2378,23 @@ mod command_environment_tests {
             command.get_envs().any(|(name, value)| {
                 name == offline && value.is_some_and(|value| value == "1")
             })
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod site_packages_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::site_packages_path_for_version;
+
+    #[test]
+    fn patch_version_does_not_appear_in_library_directory() {
+        let version = "3.12.9".parse().expect("valid Python version");
+
+        assert_eq!(
+            site_packages_path_for_version(Path::new(".venv"), "python", &version),
+            PathBuf::from(".venv/lib/python3.12/site-packages")
         );
     }
 }
