@@ -12,7 +12,7 @@ use reqsign::azure::DefaultSigner as AzureDefaultSigner;
 use reqsign::google::DefaultSigner as GcsDefaultSigner;
 use reqwest::Request;
 use reqwest::header::{HeaderValue, InvalidHeaderValue};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use url::Url;
 
@@ -44,14 +44,14 @@ pub enum CredentialsFromUrlError {
     InvalidPasswordUtf8(#[source] Utf8Error),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Serialize)]
 #[serde(transparent)]
 pub struct Username(Option<String>);
 
 impl Username {
     /// Create a new username.
     ///
-    /// Unlike `reqwest`, empty usernames are be encoded as `None` instead of an empty string.
+    /// Unlike `reqwest`, empty usernames are encoded as `None` instead of an empty string.
     pub(crate) fn new(value: Option<String>) -> Self {
         // Ensure empty strings are `None`
         Self(value.filter(|s| !s.is_empty()))
@@ -71,6 +71,12 @@ impl Username {
 
     pub(crate) fn as_deref(&self) -> Option<&str> {
         self.0.as_deref()
+    }
+}
+
+impl<'de> Deserialize<'de> for Username {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<String>::deserialize(deserializer).map(Self::new)
     }
 }
 

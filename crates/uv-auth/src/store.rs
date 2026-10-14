@@ -447,6 +447,15 @@ mod tests {
     }
 
     #[test]
+    fn empty_basic_username_is_rejected() {
+        let error = toml::from_str::<TomlCredentials<TomlCredential>>(
+            "[[credential]]\nservice = 'https://example.com'\nusername = ''\n",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("`username` is required"));
+    }
+
+    #[test]
     fn test_credential_store_operations() {
         let mut store = TextCredentialStore::default();
         let credentials = Credentials::basic(Some("user".to_string()), Some("pass".to_string()));
