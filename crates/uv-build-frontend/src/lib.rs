@@ -513,20 +513,14 @@ impl SourceBuild {
                     )
                     .await
                     .map_err(|err| {
-                        Error::RequirementsResolve(
-                            dependency_sources,
-                            AnyErrorBuild::from(err),
-                        )
+                        Error::RequirementsResolve(dependency_sources, AnyErrorBuild::from(err))
                     })?;
 
                 build_context
                     .install(&resolution, &build.venv, build_stack)
                     .await
                     .map_err(|err| {
-                        Error::RequirementsInstall(
-                            dependency_sources,
-                            AnyErrorBuild::from(err),
-                        )
+                        Error::RequirementsInstall(dependency_sources, AnyErrorBuild::from(err))
                     })?;
             }
         }
