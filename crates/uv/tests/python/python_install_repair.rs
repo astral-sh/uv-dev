@@ -7,7 +7,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir};
 use indoc::indoc;
-use uv_test::TestContext;
+use uv_test::{TestContext, assert_link_target};
 
 // Repair still resolves the installation's download key, so use an entry independent of the host.
 const INSTALLATION_KEY: &str = "cpython-3.12.9-linux-x86_64-gnu";
@@ -111,9 +111,10 @@ fn python_install_pkgconfig() -> anyhow::Result<()> {
     let ignored = pkgconfigs.child("ignored.txt");
     ignored.write_str("prefix=/install\n")?;
     pkgconfigs.child("directory.pc").create_dir_all()?;
-    let linked = installation.child("linked.pc");
-    linked.write_str("prefix=/install\n")?;
-    fs_err::os::unix::fs::symlink(linked.path(), pkgconfigs.child("linked.pc").path())?;
+    let linked_target = installation.child("linked.pc");
+    linked_target.write_str("prefix=/install\n")?;
+    let linked_pkgconfig = pkgconfigs.child("linked.pc");
+    fs_err::os::unix::fs::symlink(linked_target.path(), linked_pkgconfig.path())?;
 
     context
         .python_install()
@@ -135,7 +136,8 @@ fn python_install_pkgconfig() -> anyhow::Result<()> {
         0o640
     );
     assert_eq!(context.read(ignored.path()), "prefix=/install\n");
-    assert_eq!(context.read(linked.path()), "prefix=/install\n");
+    assert_link_target(&linked_pkgconfig, &linked_target);
+    assert_eq!(context.read(linked_target.path()), "prefix=/install\n");
 
     Ok(())
 }
