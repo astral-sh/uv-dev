@@ -26,17 +26,17 @@ pub(crate) fn zip_entry_buffer_capacity(uncompressed_size: u64) -> Option<usize>
         .map(|size| size.min(1024 * 1024))
 }
 
-/// Track directories whose creation has been attempted during archive extraction.
+/// Track directories whose creation succeeded during archive extraction.
 #[derive(Default)]
 pub(crate) struct ExtractionDirectories {
-    attempted: FxHashSet<PathBuf>,
+    created: FxHashSet<PathBuf>,
 }
 
 impl ExtractionDirectories {
     pub(crate) fn create(&mut self, path: &Path) -> Result<(), Error> {
-        if !self.attempted.contains(path) {
-            self.attempted.insert(path.to_path_buf());
+        if !self.created.contains(path) {
             fs_err::create_dir_all(path).map_err(Error::Io)?;
+            self.created.insert(path.to_path_buf());
         }
         Ok(())
     }
@@ -133,20 +133,29 @@ pub(crate) fn validate_archive_member_name(name: &str) -> Result<(), Error> {
 /// Returns `true` if ZIP validation is disabled.
 pub fn insecure_no_validate() -> bool {
     // TODO(charlie) Parse this in `EnvironmentOptions`.
-    let Some(value) = std::env::var_os(EnvVars::UV_INSECURE_NO_ZIP_VALIDATION) else {
-        return false;
-    };
-    let Some(value) = value.to_str() else {
-        return false;
-    };
     matches!(
-        value.to_lowercase().as_str(),
-        "y" | "yes" | "t" | "true" | "on" | "1"
+        uv_static::parse_boolish_environment_variable(EnvVars::UV_INSECURE_NO_ZIP_VALIDATION),
+        Ok(Some(true))
     )
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_extraction_directory_retries_after_failed_creation() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let blocker = temp.path().join("parent");
+        let directory = blocker.join("child");
+        fs_err::write(&blocker, b"")?;
+
+        let mut directories = super::ExtractionDirectories::default();
+        assert!(directories.create(&directory).is_err());
+        fs_err::remove_file(&blocker)?;
+        directories.create(&directory)?;
+        assert!(directory.is_dir());
+        Ok(())
+    }
+
     #[test]
     fn test_validate_archive_member_name() {
         for (testcase, ok) in &[

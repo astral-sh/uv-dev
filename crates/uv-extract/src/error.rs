@@ -24,11 +24,9 @@ pub enum Error {
     ),
     #[error(transparent)]
     DirectoryHash(#[from] crate::dirhash::DirhashError),
-    #[error(
-        "The top-level of the archive must only contain a list directory, but it contains: {0:?}"
-    )]
+    #[error("Expected a single top-level directory in the archive, but found: {0:?}")]
     NonSingularArchive(Vec<OsString>),
-    #[error("The top-level of the archive must only contain a list directory, but it's empty")]
+    #[error("Expected a single top-level directory in the archive, but the archive is empty")]
     EmptyArchive,
     #[error("ZIP local header filename at offset {offset} does not use UTF-8 encoding")]
     LocalHeaderNotUtf8 { offset: u64 },
@@ -58,7 +56,7 @@ pub enum Error {
     DuplicateOutputPath { path: PathBuf },
     #[error("ZIP file contains a local file header without a corresponding central-directory record entry for: {} ({offset})", path.display())]
     MissingCentralDirectoryEntry { path: PathBuf, offset: u64 },
-    #[error("ZIP file contains an end-of-central-directory record entry, but no local file header for: {} ({offset}", path.display())]
+    #[error("ZIP file contains a central-directory record entry without a corresponding local file header for: {} ({offset})", path.display())]
     MissingLocalFileHeader { path: PathBuf, offset: u64 },
     #[error("ZIP file uses conflicting paths for the local file header at {} (got `{}`, expected `{}`)", offset, local_path.display(), central_directory_path.display())]
     ConflictingPaths {
@@ -103,7 +101,7 @@ pub enum Error {
     ZipInZip,
     #[error("ZIP64 end-of-central-directory record contains unsupported extensible data")]
     ExtensibleData,
-    #[error("ZIP file end-of-central-directory record contains multiple entries with the same path, but conflicting modes: {}", path.display())]
+    #[error("ZIP file central directory contains multiple entries with the same path, but conflicting modes: {}", path.display())]
     DuplicateExecutableFileHeader { path: PathBuf },
     #[error("Archive contains a file with an empty filename")]
     EmptyFilename,
@@ -132,38 +130,29 @@ impl From<async_zip::error::ZipError> for Error {
 }
 
 impl Error {
-    /// When reading from a ZIP archive, the error can either be an I/O error from the underlying
-    /// operating system, or an error with the archive. Both get wrapped into an I/O error through
-    /// e.g., `io::copy`. This method extracts ZIP errors to distinguish them from invalid archives.
+    /// Recover a ZIP error wrapped by an I/O operation.
     pub(crate) fn io_or_zip(err: std::io::Error) -> Self {
-        if err.kind() != std::io::ErrorKind::Other {
-            return Self::Io(err);
-        }
-
-        let err = match err.downcast::<async_zip::error::ZipError>() {
-            Ok(zip_err) => return Self::from(zip_err),
-            Err(err) => err,
-        };
-        Self::Io(err)
+        Self::io_or_archive::<async_zip::error::ZipError>(err)
     }
 
-    /// When reading a tar archive, the error can either be an I/O error from the underlying
-    /// reader or an error with the archive. Both get wrapped into an I/O error through operations
-    /// such as `io::copy`. This method extracts tar errors to distinguish them from I/O errors.
+    /// Recover a tar error wrapped by an I/O operation.
     pub(crate) fn io_or_tar(err: std::io::Error) -> Self {
+        Self::io_or_archive::<tokio_tar::TarError>(err)
+    }
+
+    /// I/O operations such as `io::copy` wrap both reader errors and archive errors as I/O
+    /// errors. Recover the format-specific error so callers can distinguish the two.
+    fn io_or_archive<E>(err: std::io::Error) -> Self
+    where
+        E: std::error::Error + Send + Sync + Into<Self> + 'static,
+    {
         if err.kind() != std::io::ErrorKind::Other {
             return Self::Io(err);
         }
-
-        match err.downcast::<tokio_tar::TarError>() {
-            Ok(tar_err) => Self::Tar(tar_err),
-            Err(err) => Self::Io(err),
-        }
+        err.downcast::<E>().map_or_else(Self::Io, Into::into)
     }
 
-    /// Returns `true` if the error is due to the server not supporting HTTP streaming. Most
-    /// commonly, this is due to serving ZIP files with features that are incompatible with
-    /// streaming, like data descriptors.
+    /// Returns `true` if the ZIP reader encountered an unsupported archive feature.
     pub fn is_http_streaming_unsupported(&self) -> bool {
         matches!(
             self,
@@ -171,29 +160,32 @@ impl Error {
         )
     }
 
-    /// Returns `true` if the error is due to HTTP streaming request failed.
+    /// Returns `true` for an upstream ZIP read failure or an HTTP client error in the error chain.
     pub fn is_http_streaming_failed(&self) -> bool {
-        fn contains_reqwest_error(error: &(dyn std::error::Error + 'static)) -> bool {
-            if error.downcast_ref::<reqwest::Error>().is_some() {
-                return true;
-            }
-            // `std::io::Error::source` forwards to the source of its custom error and can skip the
-            // custom error itself, so inspect `get_ref` before following the standard chain.
-            if let Some(error) = error.downcast_ref::<std::io::Error>()
-                && let Some(inner) = error.get_ref()
-                && contains_reqwest_error(inner)
-            {
-                return true;
-            }
-            error.source().is_some_and(contains_reqwest_error)
-        }
-
         if matches!(
             self,
             Self::AsyncZip(async_zip::error::ZipError::UpstreamReadError(_))
         ) {
             return true;
         }
-        contains_reqwest_error(self)
+
+        let mut error: &(dyn std::error::Error + 'static) = self;
+        loop {
+            if error.is::<reqwest::Error>() {
+                return true;
+            }
+            // `std::io::Error::source` forwards to the source of its custom error and can skip
+            // the custom error itself, so follow `get_ref` instead.
+            if let Some(inner) = error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+            {
+                error = inner;
+            } else if let Some(source) = error.source() {
+                error = source;
+            } else {
+                return false;
+            }
+        }
     }
 }

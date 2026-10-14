@@ -1,17 +1,19 @@
 use std::io;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
+use std::path::Path;
 
-use async_zip::base::read::cd::Entry;
+use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
+use async_zip::base::read::cd::{CentralDirectoryEntry, Entry};
 use async_zip::error::ZipError;
 use futures::executor::block_on;
 use futures::io::AllowStdIo;
 use futures::{AsyncReadExt, StreamExt};
 use rustc_hash::{FxHashMap, FxHashSet};
+#[cfg(windows)]
+use tar_codec::Member;
 use tar_codec::extract::{ExtractPolicy, LinkPolicy, SymlinkPolicy};
 use tar_codec::{
-    Archive, DecodeError, DecodePolicy, ExtractError, Member, PaxDecodePolicy,
-    PaxVendorExtensionPolicy, TarArchive,
+    Archive, DecodeError, DecodePolicy, ExtractError, PaxDecodePolicy, PaxVendorExtensionPolicy,
+    TarArchive,
 };
 use tempfile::TempDir;
 use tokio::io::{AsyncRead, AsyncReadExt as TokioAsyncReadExt, AsyncWriteExt};
@@ -41,7 +43,7 @@ struct LocalHeaderEntry {
     is_dir: bool,
     /// The computed CRC32 checksum of the entry.
     crc32: u32,
-    /// The computed compressed size of the entry.
+    /// The compressed size declared in the local file header.
     compressed_size: u64,
     /// The computed uncompressed size of the entry.
     uncompressed_size: u64,
@@ -49,6 +51,55 @@ struct LocalHeaderEntry {
     data_descriptor: bool,
     /// The digest of the extracted file contents.
     digest: Option<blake3::Hash>,
+}
+
+impl LocalHeaderEntry {
+    /// Validate the fields shared by a local file header and its central-directory entry.
+    fn validate_central_directory_entry(
+        &self,
+        entry: &CentralDirectoryEntry,
+        relpath: &SanitizedArchivePath,
+        is_dir: bool,
+    ) -> Result<(), Error> {
+        if &self.relpath != relpath {
+            return Err(Error::ConflictingPaths {
+                offset: entry.file_offset(),
+                local_path: self.relpath.to_path_buf(),
+                central_directory_path: relpath.to_path_buf(),
+            });
+        }
+        if self.is_dir != is_dir {
+            return Err(Error::ConflictingEntryTypes {
+                path: relpath.to_path_buf(),
+                offset: entry.file_offset(),
+            });
+        }
+        if self.crc32 != entry.crc32() {
+            return Err(Error::ConflictingChecksums {
+                path: relpath.to_path_buf(),
+                offset: entry.file_offset(),
+                local_crc32: self.crc32,
+                central_directory_crc32: entry.crc32(),
+            });
+        }
+        if self.uncompressed_size != entry.uncompressed_size() {
+            return Err(Error::ConflictingUncompressedSizes {
+                path: relpath.to_path_buf(),
+                offset: entry.file_offset(),
+                local_uncompressed_size: self.uncompressed_size,
+                central_directory_uncompressed_size: entry.uncompressed_size(),
+            });
+        }
+        if !self.data_descriptor && self.compressed_size != entry.compressed_size() {
+            return Err(Error::ConflictingCompressedSizes {
+                path: relpath.to_path_buf(),
+                offset: entry.file_offset(),
+                local_compressed_size: self.compressed_size,
+                central_directory_compressed_size: entry.compressed_size(),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,12 +334,10 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                         .map_err(Error::io_or_zip)?;
 
                     // Verify that the existing file contents match the expected contents.
-                    if existing_contents != expected_contents {
-                        if !skip_validation {
-                            return Err(Error::DuplicateLocalFileHeader {
-                                path: relpath.to_path_buf(),
-                            });
-                        }
+                    if !skip_validation && existing_contents != expected_contents {
+                        return Err(Error::DuplicateLocalFileHeader {
+                            path: relpath.to_path_buf(),
+                        });
                     }
 
                     let digest = hash_contents.then(|| blake3::hash(&expected_contents));
@@ -297,48 +346,41 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 Err(err) => return Err(Error::Io(err)),
             };
 
-            // Validate the uncompressed size.
-            if actual_uncompressed_size != expected_uncompressed_size {
-                if !(expected_compressed_size == 0 && expected_data_descriptor) {
-                    if !skip_validation {
-                        return Err(Error::BadUncompressedSize {
-                            path: relpath.to_path_buf(),
-                            computed: actual_uncompressed_size,
-                            expected: expected_uncompressed_size,
-                        });
-                    }
-                }
+            // A zero compressed size with a data descriptor means the sizes were unknown when
+            // the local file header was written.
+            let validate_header_sizes =
+                !(skip_validation || (expected_compressed_size == 0 && expected_data_descriptor));
+            if validate_header_sizes && actual_uncompressed_size != expected_uncompressed_size {
+                return Err(Error::BadUncompressedSize {
+                    path: relpath.to_path_buf(),
+                    computed: actual_uncompressed_size,
+                    expected: expected_uncompressed_size,
+                });
             }
 
             // Validate the compressed size.
             let reader = entry.reader_mut();
             let actual_compressed_size = reader.bytes_read();
-            if actual_compressed_size != expected_compressed_size {
-                if !(expected_compressed_size == 0 && expected_data_descriptor) {
-                    if !skip_validation {
-                        return Err(Error::BadCompressedSize {
-                            path: relpath.to_path_buf(),
-                            computed: actual_compressed_size,
-                            expected: expected_compressed_size,
-                        });
-                    }
-                }
+            if validate_header_sizes && actual_compressed_size != expected_compressed_size {
+                return Err(Error::BadCompressedSize {
+                    path: relpath.to_path_buf(),
+                    computed: actual_compressed_size,
+                    expected: expected_compressed_size,
+                });
             }
 
-            // Validate the CRC of any file we unpack
-            // (It would be nice if async_zip made it harder to Not do this...)
+            // Validate the CRC32 of the unpacked file.
             let actual_crc32 = reader.compute_hash();
             let expected_crc32 = reader.entry().crc32();
-            if actual_crc32 != expected_crc32 {
-                if !(expected_crc32 == 0 && expected_data_descriptor) {
-                    if !skip_validation {
-                        return Err(Error::BadCrc32 {
-                            path: relpath.to_path_buf(),
-                            computed: actual_crc32,
-                            expected: expected_crc32,
-                        });
-                    }
-                }
+            if !skip_validation
+                && actual_crc32 != expected_crc32
+                && !(expected_crc32 == 0 && expected_data_descriptor)
+            {
+                return Err(Error::BadCrc32 {
+                    path: relpath.to_path_buf(),
+                    computed: actual_crc32,
+                    expected: expected_crc32,
+                });
             }
 
             ComputedEntry {
@@ -353,51 +395,42 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
         // https://docs.rs/async_zip/0.0.16/async_zip/base/read/stream/
         let (descriptor, next) = entry.skip().await?;
 
-        // Verify that the data descriptor field is consistent with the presence (or absence) of a
-        // data descriptor in the local file header.
-        if expected_data_descriptor && descriptor.is_none() {
-            if !skip_validation {
-                return Err(Error::MissingDataDescriptor {
-                    path: relpath.to_path_buf(),
-                });
-            }
-        }
-        if !expected_data_descriptor && descriptor.is_some() {
-            if !skip_validation {
-                return Err(Error::UnexpectedDataDescriptor {
-                    path: relpath.to_path_buf(),
-                });
-            }
-        }
-
-        // If we have a data descriptor, validate it.
-        if let Some(descriptor) = descriptor {
-            if descriptor.crc != computed.crc32 {
-                if !skip_validation {
-                    return Err(Error::BadCrc32 {
+        if !skip_validation {
+            match (expected_data_descriptor, descriptor) {
+                (true, None) => {
+                    return Err(Error::MissingDataDescriptor {
                         path: relpath.to_path_buf(),
-                        computed: computed.crc32,
-                        expected: descriptor.crc,
                     });
                 }
-            }
-            if descriptor.uncompressed_size != computed.uncompressed_size {
-                if !skip_validation {
-                    return Err(Error::BadUncompressedSize {
+                (false, Some(_)) => {
+                    return Err(Error::UnexpectedDataDescriptor {
                         path: relpath.to_path_buf(),
-                        computed: computed.uncompressed_size,
-                        expected: descriptor.uncompressed_size,
                     });
                 }
-            }
-            if descriptor.compressed_size != computed.compressed_size {
-                if !skip_validation {
-                    return Err(Error::BadCompressedSize {
-                        path: relpath.to_path_buf(),
-                        computed: computed.compressed_size,
-                        expected: descriptor.compressed_size,
-                    });
+                (true, Some(descriptor)) => {
+                    if descriptor.crc != computed.crc32 {
+                        return Err(Error::BadCrc32 {
+                            path: relpath.to_path_buf(),
+                            computed: computed.crc32,
+                            expected: descriptor.crc,
+                        });
+                    }
+                    if descriptor.uncompressed_size != computed.uncompressed_size {
+                        return Err(Error::BadUncompressedSize {
+                            path: relpath.to_path_buf(),
+                            computed: computed.uncompressed_size,
+                            expected: descriptor.uncompressed_size,
+                        });
+                    }
+                    if descriptor.compressed_size != computed.compressed_size {
+                        return Err(Error::BadCompressedSize {
+                            path: relpath.to_path_buf(),
+                            computed: computed.compressed_size,
+                            expected: descriptor.compressed_size,
+                        });
+                    }
                 }
+                (false, None) => {}
             }
         }
 
@@ -435,8 +468,9 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
 
     // Track the file modes on Unix, to ensure that they're consistent across duplicates.
     #[cfg(unix)]
-    let mut modes =
-        FxHashMap::with_capacity_and_hasher(local_headers.len(), rustc_hash::FxBuildHasher);
+    let mut modes = (!skip_validation).then(|| {
+        FxHashMap::with_capacity_and_hasher(local_headers.len(), rustc_hash::FxBuildHasher)
+    });
 
     let mut directory = async_zip::base::read::cd::CentralDirectoryReader::new(&mut reader, offset);
     loop {
@@ -470,119 +504,59 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 };
                 let is_dir = entry.dir()?;
 
-                // Validate that various fields are consistent between the local file header and the
-                // central directory entry.
-                match local_headers.remove(&entry.file_offset()) {
-                    Some(local_header) => {
-                        if local_header.relpath != relpath {
-                            if !skip_validation {
-                                return Err(Error::ConflictingPaths {
-                                    offset: entry.file_offset(),
-                                    local_path: local_header.relpath.to_path_buf(),
-                                    central_directory_path: relpath.to_path_buf(),
-                                });
-                            }
-                        }
-                        if local_header.is_dir != is_dir {
-                            if !skip_validation {
-                                return Err(Error::ConflictingEntryTypes {
-                                    path: relpath.to_path_buf(),
-                                    offset: entry.file_offset(),
-                                });
-                            }
-                        }
-                        if local_header.crc32 != entry.crc32() {
-                            if !skip_validation {
-                                return Err(Error::ConflictingChecksums {
-                                    path: relpath.to_path_buf(),
-                                    offset: entry.file_offset(),
-                                    local_crc32: local_header.crc32,
-                                    central_directory_crc32: entry.crc32(),
-                                });
-                            }
-                        }
-                        if local_header.uncompressed_size != entry.uncompressed_size() {
-                            if !skip_validation {
-                                return Err(Error::ConflictingUncompressedSizes {
-                                    path: relpath.to_path_buf(),
-                                    offset: entry.file_offset(),
-                                    local_uncompressed_size: local_header.uncompressed_size,
-                                    central_directory_uncompressed_size: entry.uncompressed_size(),
-                                });
-                            }
-                        }
-                        if local_header.compressed_size != entry.compressed_size() {
-                            if !local_header.data_descriptor {
-                                if !skip_validation {
-                                    return Err(Error::ConflictingCompressedSizes {
-                                        path: relpath.to_path_buf(),
-                                        offset: entry.file_offset(),
-                                        local_compressed_size: local_header.compressed_size,
-                                        central_directory_compressed_size: entry.compressed_size(),
-                                    });
-                                }
-                            }
-                        }
-                        if is_dir {
-                            if hash_contents {
-                                digest_directories.insert(relpath.clone());
-                            }
-                        } else if let Some(digest) = local_header.digest {
-                            hashed_files.push(HashedFile::new(
-                                relpath.clone(),
-                                local_header.uncompressed_size,
-                                digest,
-                                entry
-                                    .unix_permissions()
-                                    .is_some_and(|mode| mode & 0o111 != 0),
-                            ));
-                        } else {
-                            files.push(UnhashedFile::new(
-                                relpath.to_path_buf(),
-                                local_header.uncompressed_size,
-                            ));
-                        }
-                    }
-                    None => {
-                        if !skip_validation {
-                            return Err(Error::MissingLocalFileHeader {
-                                path: relpath.to_path_buf(),
-                                offset: entry.file_offset(),
-                            });
-                        }
-                    }
+                let local_header = local_headers.remove(&entry.file_offset());
+                if !skip_validation {
+                    let Some(local_header) = &local_header else {
+                        return Err(Error::MissingLocalFileHeader {
+                            path: relpath.to_path_buf(),
+                            offset: entry.file_offset(),
+                        });
+                    };
+                    local_header.validate_central_directory_entry(&entry, &relpath, is_dir)?;
                 }
 
+                if is_dir {
+                    if hash_contents && local_header.is_some() {
+                        digest_directories.insert(relpath);
+                    }
+                    continue;
+                }
+
+                let unix_permissions = entry.unix_permissions();
                 // On Unix, we need to set file permissions, which are stored in the central directory, at the
                 // end of the archive. The `ZipFileReader` reads until it sees a central directory signature,
                 // which indicates the first entry in the central directory. So we continue reading from there.
                 #[cfg(unix)]
-                {
-                    if is_dir {
-                        continue;
-                    }
-                    let Some(mode) = entry.unix_permissions() else {
-                        continue;
-                    };
-
+                if let Some(mode) = unix_permissions {
                     // If the file is included multiple times, ensure that the mode is consistent.
-                    match modes.entry(relpath.clone()) {
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            entry.insert(mode);
-                        }
-                        std::collections::hash_map::Entry::Occupied(entry) => {
-                            if mode != *entry.get() {
-                                if !skip_validation {
-                                    return Err(Error::DuplicateExecutableFileHeader {
-                                        path: relpath.to_path_buf(),
-                                    });
-                                }
-                            }
-                        }
+                    if let Some(modes) = &mut modes
+                        && modes
+                            .insert(relpath.clone(), mode)
+                            .is_some_and(|previous| previous != mode)
+                    {
+                        return Err(Error::DuplicateExecutableFileHeader {
+                            path: relpath.to_path_buf(),
+                        });
                     }
 
                     if mode & 0o111 != 0 {
                         crate::set_executable_bits(&target.join(relpath.as_path()))?;
+                    }
+                }
+
+                if let Some(local_header) = local_header {
+                    if let Some(digest) = local_header.digest {
+                        hashed_files.push(HashedFile::new(
+                            relpath,
+                            local_header.uncompressed_size,
+                            digest,
+                            unix_permissions.is_some_and(|mode| mode & 0o111 != 0),
+                        ));
+                    } else {
+                        files.push(UnhashedFile::new(
+                            relpath.into_path_buf(),
+                            local_header.uncompressed_size,
+                        ));
                     }
                 }
             }
@@ -591,28 +565,21 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 comment,
                 extensible,
             } => {
-                // Reject ZIP64 end-of-central-directory records with extensible data, as the safety
-                // tradeoffs don't outweigh the usefulness. We don't ever expect to encounter wheels
-                // that leverage this feature anyway.
-                if extensible {
-                    if !skip_validation {
+                if !skip_validation {
+                    // Reject ZIP64 end-of-central-directory records with extensible data, as the
+                    // safety tradeoffs don't outweigh the usefulness for wheels.
+                    if extensible {
                         return Err(Error::ExtensibleData);
                     }
-                }
 
-                // Sanitize the comment by rejecting bytes `01` to `08`. If the comment contains an
-                // embedded ZIP file, it _must_ contain one of these bytes, which are otherwise
-                // very rare (non-printing) characters.
-                if comment.as_bytes().iter().any(|&b| (1..=8).contains(&b)) {
-                    if !skip_validation {
+                    // Sanitize the comment by rejecting bytes `01` to `08`. If the comment contains
+                    // an embedded ZIP file, it must contain one of these rare non-printing bytes.
+                    if comment.as_bytes().iter().any(|&b| (1..=8).contains(&b)) {
                         return Err(Error::ZipInZip);
                     }
-                }
 
-                // Validate that the reported number of entries match what we experienced while
-                // reading the local file headers.
-                if record.num_entries() != num_entries {
-                    if !skip_validation {
+                    // Check the reported count against the entries read from the central directory.
+                    if record.num_entries() != num_entries {
                         return Err(Error::ConflictingNumberOfEntries {
                             expected: num_entries,
                             actual: record.num_entries(),
@@ -620,43 +587,19 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                     }
                 }
 
+                // The central-directory reader validates and consumes the archive suffix before
+                // returning the end record.
                 break;
             }
         }
     }
 
-    // If we didn't see the file in the central directory, it means it was not present in the
-    // archive.
-    if !skip_validation {
-        if let Some((key, value)) = local_headers.iter().next() {
-            return Err(Error::MissingCentralDirectoryEntry {
-                offset: *key,
-                path: value.relpath.to_path_buf(),
-            });
-        }
-    }
-
-    // Determine whether the reader is exhausted, but allow trailing null bytes, which some zip
-    // implementations incorrectly include.
-    if !skip_validation {
-        let mut has_trailing_bytes = false;
-        let mut buf = [0u8; 256];
-        loop {
-            let n = reader.read(&mut buf).await.map_err(Error::Io)?;
-            if n == 0 {
-                if has_trailing_bytes {
-                    warn!("Ignoring trailing null bytes in ZIP archive");
-                }
-                break;
-            }
-            for &b in &buf[..n] {
-                if b == 0 {
-                    has_trailing_bytes = true;
-                } else {
-                    return Err(Error::TrailingContents);
-                }
-            }
-        }
+    // Every local file header must have a corresponding central-directory entry.
+    if !skip_validation && let Some((key, value)) = local_headers.iter().next() {
+        return Err(Error::MissingCentralDirectoryEntry {
+            offset: *key,
+            path: value.relpath.to_path_buf(),
+        });
     }
 
     if hash_contents {
@@ -671,12 +614,10 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
 }
 
 /// Unpack the given tar archive into the destination directory.
-///
-/// Returns the list of unpacked files and their sizes.
 async fn untar_in_tar_codec<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     dst: &Path,
-) -> Result<Vec<UnhashedFile>, ExtractError<DecodeError>> {
+) -> Result<(), ExtractError<DecodeError>> {
     let decode_policy = DecodePolicy::default()
         // NOTE: Some encoders (notably CPython's `tarfile`) will pack a 32-byte uname/gname
         // directly into the member header, despite pax saying that the uname/gname should
@@ -696,30 +637,17 @@ async fn untar_in_tar_codec<R: tokio::io::AsyncRead + Unpin>(
                 .allow_non_utf8_pax_vendor_values(true),
         );
     let archive = TarArchive::new(reader).with_policy(decode_policy);
-
-    let mut files = Vec::new();
-    RecordingArchive::new(archive, &mut files)
-        .extract_in(dst, tar_extract_policy())
-        .await?;
-    Ok(files)
+    #[cfg(windows)]
+    let archive = WarnOnSkippedSymlinks(archive);
+    archive.extract_in(dst, tar_extract_policy()).await
 }
 
-/// An archive adapter that records file metadata as members are extracted.
-///
-/// Keeping this observation inside the lending archive cursor avoids a second filesystem walk and
-/// preserves the paths and declared sizes from the archive itself.
-struct RecordingArchive<'files, A> {
-    archive: A,
-    files: &'files mut Vec<UnhashedFile>,
-}
+/// Warn about symlinks that the Windows extraction policy will skip.
+#[cfg(windows)]
+struct WarnOnSkippedSymlinks<A>(A);
 
-impl<'files, A> RecordingArchive<'files, A> {
-    fn new(archive: A, files: &'files mut Vec<UnhashedFile>) -> Self {
-        Self { archive, files }
-    }
-}
-
-impl<A: Archive> Archive for RecordingArchive<'_, A> {
+#[cfg(windows)]
+impl<A: Archive> Archive for WarnOnSkippedSymlinks<A> {
     type Error = A::Error;
     type Payload<'archive>
         = A::Payload<'archive>
@@ -727,14 +655,9 @@ impl<A: Archive> Archive for RecordingArchive<'_, A> {
         Self: 'archive;
 
     async fn next_member(&mut self) -> Result<Option<Member<Self::Payload<'_>>>, Self::Error> {
-        let Self { archive, files } = self;
-        let member = archive.next_member().await?;
-        #[cfg(windows)]
+        let member = self.0.next_member().await?;
         if let Some(Member::SymbolicLink { metadata, .. }) = &member {
             warn!("Skipping symlink in tar archive: {}", metadata.path);
-        }
-        if let Some(Member::File { metadata, size, .. }) = &member {
-            files.push(UnhashedFile::new(PathBuf::from(&metadata.path), *size));
         }
         Ok(member)
     }
@@ -750,39 +673,36 @@ fn tar_extract_policy() -> ExtractPolicy {
     // On Windows, we additionally skip i.e. ignore symbolic link members since Windows lacks
     // an unprivileged symbolic linking mechanism.
     let link_policy = LinkPolicy::default().allow_hard_links(true);
-    if cfg!(windows) {
-        ExtractPolicy::default().link_policy(link_policy.symlink_policy(SymlinkPolicy::Skip))
+    let link_policy = if cfg!(windows) {
+        link_policy.symlink_policy(SymlinkPolicy::Skip)
     } else {
-        ExtractPolicy::default().link_policy(link_policy)
-    }
+        link_policy
+    };
+    ExtractPolicy::default().link_policy(link_policy)
 }
 
 /// Unpack the given tar archive into the destination directory with `astral-tokio-tar`.
 ///
 /// This is equivalent to `archive.unpack_in(dst)`, but it also preserves the executable bit.
-///
-/// Returns the list of unpacked files and their sizes.
 async fn untar_in_tokio_tar(
     mut archive: tokio_tar::Archive<&'_ mut (dyn tokio::io::AsyncRead + Unpin)>,
     dst: &Path,
-) -> std::io::Result<Vec<UnhashedFile>> {
+) -> std::io::Result<()> {
     // Like `tokio-tar`, canonicalize the destination prior to unpacking.
     let dst = fs_err::tokio::canonicalize(dst).await?;
 
     // Memoize filesystem calls to canonicalize paths.
     let mut memo = FxHashSet::default();
 
-    let mut files = Vec::new();
-
     let mut entries = archive.entries()?;
-    let mut pinned = Pin::new(&mut entries);
-    while let Some(entry) = pinned.next().await {
+    while let Some(entry) = entries.next().await {
         // Unpack the file into the destination directory.
         let mut file = entry?;
+        let entry_type = file.header().entry_type();
 
         // On Windows, skip symlink entries, as they're not supported. pip recursively copies the
         // symlink target instead.
-        if cfg!(windows) && file.header().entry_type().is_symlink() {
+        if cfg!(windows) && entry_type.is_symlink() {
             warn!(
                 "Skipping symlink in tar archive: {}",
                 file.path()?.display()
@@ -790,44 +710,32 @@ async fn untar_in_tokio_tar(
             continue;
         }
 
-        let entry_type = file.header().entry_type();
-
         // Unpack the file into the destination directory.
-        let unpacked_at = file.unpack_in_raw(&dst, &mut memo).await?;
-
-        // Collect file paths (excluding directories) that were unpacked successfully.
-        if unpacked_at.is_some() && (entry_type.is_file() || entry_type.is_hard_link()) {
-            let relpath = file.path()?.into_owned();
-            let size = file.effective_size();
-            files.push(UnhashedFile::new(relpath, size));
-        }
+        let _unpacked_at = file.unpack_in_raw(&dst, &mut memo).await?;
 
         // Preserve the executable bit.
         #[cfg(unix)]
-        {
+        if entry_type.is_file() || entry_type.is_hard_link() {
             use std::fs::Permissions;
             use std::os::unix::fs::PermissionsExt;
 
-            if entry_type.is_file() || entry_type.is_hard_link() {
-                let mode = file.header().mode()?;
-                let has_any_executable_bit = mode & 0o111;
-                if has_any_executable_bit != 0 {
-                    if let Some(path) = unpacked_at.as_deref() {
-                        let permissions = fs_err::tokio::metadata(&path).await?.permissions();
-                        if permissions.mode() & 0o111 != 0o111 {
-                            fs_err::tokio::set_permissions(
-                                &path,
-                                Permissions::from_mode(permissions.mode() | 0o111),
-                            )
-                            .await?;
-                        }
-                    }
+            let mode = file.header().mode()?;
+            if mode & 0o111 != 0
+                && let Some(path) = _unpacked_at.as_deref()
+            {
+                let permissions = fs_err::tokio::metadata(path).await?.permissions();
+                if permissions.mode() & 0o111 != 0o111 {
+                    fs_err::tokio::set_permissions(
+                        path,
+                        Permissions::from_mode(permissions.mode() | 0o111),
+                    )
+                    .await?;
                 }
             }
         }
     }
 
-    Ok(files)
+    Ok(())
 }
 
 /// Select the tar implementation and unpack the archive into the destination directory.
@@ -835,7 +743,7 @@ async fn untar_in<R: tokio::io::AsyncRead + Unpin>(
     mut reader: R,
     dst: &Path,
     tar_backend: TarBackend,
-) -> Result<Vec<UnhashedFile>, Error> {
+) -> Result<(), Error> {
     match tar_backend {
         TarBackend::TarCodec => untar_in_tar_codec(reader, dst).await.map_err(Error::from),
         TarBackend::TokioTar => {
@@ -853,54 +761,21 @@ async fn untar_in<R: tokio::io::AsyncRead + Unpin>(
     }
 }
 
-/// Unpack a `.tar.gz` archive into the target directory, without requiring `Seek`.
-///
-/// This is useful for unpacking files as they're being downloaded.
-///
-/// Returns the list of unpacked files and their sizes.
-async fn untar_gz<R: tokio::io::AsyncRead + Unpin>(
+/// Buffer, decode, and unpack a tar archive without requiring `Seek`.
+async fn untar<R: AsyncRead + Unpin, D: AsyncRead + Unpin>(
     reader: R,
-    target: impl AsRef<Path>,
+    target: &Path,
     tar_backend: TarBackend,
-) -> Result<Vec<UnhashedFile>, Error> {
+    decode: impl FnOnce(tokio::io::BufReader<R>) -> D,
+) -> Result<(), Error> {
     let reader = tokio::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
-    let decompressed_bytes = async_compression::tokio::bufread::GzipDecoder::new(reader);
-    untar_in(decompressed_bytes, target.as_ref(), tar_backend).await
-}
-
-/// Unpack a `.tar.zst` archive into the target directory, without requiring `Seek`.
-///
-/// This is useful for unpacking files as they're being downloaded.
-///
-/// Returns the list of unpacked files and their sizes.
-async fn untar_zst<R: tokio::io::AsyncRead + Unpin>(
-    reader: R,
-    target: impl AsRef<Path>,
-    tar_backend: TarBackend,
-) -> Result<Vec<UnhashedFile>, Error> {
-    let reader = tokio::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
-    let decompressed_bytes = async_compression::tokio::bufread::ZstdDecoder::new(reader);
-    untar_in(decompressed_bytes, target.as_ref(), tar_backend).await
-}
-
-/// Unpack a `.tar` archive into the target directory, without requiring `Seek`.
-///
-/// This is useful for unpacking files as they're being downloaded.
-///
-/// Returns the list of unpacked files and their sizes.
-async fn untar<R: tokio::io::AsyncRead + Unpin>(
-    reader: R,
-    target: impl AsRef<Path>,
-    tar_backend: TarBackend,
-) -> Result<Vec<UnhashedFile>, Error> {
-    let reader = tokio::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
-    untar_in(reader, target.as_ref(), tar_backend).await
+    untar_in(decode(reader), target, tar_backend).await
 }
 
 /// Unpack a `.zip`, `.tar.gz`, or `.tar.zst` archive into the target directory,
 /// without requiring `Seek`.
 ///
-/// Returns the temporary directory and the list of unpacked files and their sizes.
+/// Returns the temporary directory containing the unpacked files.
 /// ZIP extraction transfers ownership of the directory to a blocking worker; see [`unzip`].
 pub async fn archive(
     // Share dispatch and decompression across file, network, and hashing reader adapters.
@@ -908,20 +783,53 @@ pub async fn archive(
     ext: SourceDistExtension,
     target: TempDir,
     tar_backend: TarBackend,
-) -> Result<(TempDir, Vec<UnhashedFile>), Error> {
-    let files = match ext {
+) -> Result<TempDir, Error> {
+    match ext {
         SourceDistExtension::Legacy(LegacySourceDistExtension::Zip) => {
-            return unzip(reader, target).await;
+            return unzip(reader, target).await.map(|(target, _)| target);
         }
         SourceDistExtension::Legacy(LegacySourceDistExtension::Tar) => {
-            untar(reader, target.path(), tar_backend).await
+            untar(reader, target.path(), tar_backend, |reader| reader).await
         }
         SourceDistExtension::Legacy(LegacySourceDistExtension::Tgz)
-        | SourceDistExtension::TarGz => untar_gz(reader, target.path(), tar_backend).await,
+        | SourceDistExtension::TarGz => {
+            untar(reader, target.path(), tar_backend, GzipDecoder::new).await
+        }
         SourceDistExtension::Legacy(LegacySourceDistExtension::TarZst) => {
-            untar_zst(reader, target.path(), tar_backend).await
+            untar(reader, target.path(), tar_backend, ZstdDecoder::new).await
         }
         SourceDistExtension::Legacy(_) => Err(Error::UnsupportedCompression),
     }?;
-    Ok((target, files))
+    Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use async_zip::base::write::ZipFileWriter;
+    use async_zip::{Compression, ZipEntryBuilder};
+
+    use super::{Error, unzip_inner};
+
+    #[tokio::test]
+    async fn zip_trailing_bytes_follow_central_directory_validation() -> anyhow::Result<()> {
+        let mut writer = ZipFileWriter::new(Vec::new());
+        writer
+            .write_entry_whole(
+                ZipEntryBuilder::new("file".into(), Compression::Stored),
+                b"content",
+            )
+            .await?;
+        let mut archive = writer.close().await?;
+        archive.extend_from_slice(&[0; 32]);
+        let target = tempfile::tempdir()?;
+
+        unzip_inner(archive.as_slice(), target.path(), false).await?;
+        archive.push(1);
+        let invalid_target = tempfile::tempdir()?;
+        assert!(matches!(
+            unzip_inner(archive.as_slice(), invalid_target.path(), false).await,
+            Err(Error::TrailingContents)
+        ));
+        Ok(())
+    }
 }
