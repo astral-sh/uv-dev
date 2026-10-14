@@ -21,9 +21,10 @@ struct Query {
 #[derive(Deserialize)]
 struct Package {
     name: String,
+    ecosystem: String,
 }
 
-/// A running audit service that returns one clean result for every queried package.
+/// A running audit service that returns one clean result for every queried PyPI package.
 ///
 /// The service requires at least one batch request before it is dropped.
 pub struct CleanAuditService {
@@ -38,9 +39,21 @@ impl CleanAuditService {
             .and(path(QUERY_BATCH_PATH))
             .respond_with(
                 |request: &Request| match request.body_json::<QueryBatch>() {
-                    Ok(batch) => ResponseTemplate::new(200).set_body_json(json!({
-                        "results": vec![json!({ "vulns": [] }); batch.queries.len()]
-                    })),
+                    Ok(batch) => {
+                        if let Some(query) = batch
+                            .queries
+                            .iter()
+                            .find(|query| query.package.ecosystem != "PyPI")
+                        {
+                            return ResponseTemplate::new(400).set_body_string(format!(
+                                "expected PyPI ecosystem for {}, got {}",
+                                query.package.name, query.package.ecosystem
+                            ));
+                        }
+                        ResponseTemplate::new(200).set_body_json(json!({
+                            "results": vec![json!({ "vulns": [] }); batch.queries.len()]
+                        }))
+                    }
                     Err(error) => ResponseTemplate::new(400)
                         .set_body_string(format!("invalid OSV query batch: {error}")),
                 },
@@ -144,5 +157,24 @@ mod tests {
                 &[("gamma", "3")],
             ])
             .await;
+    }
+
+    #[tokio::test]
+    async fn rejects_a_batch_with_non_pypi_query() {
+        let service = CleanAuditService::start().await;
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .post(format!("{}{QUERY_BATCH_PATH}", service.uri()))
+            .json(&json!({ "queries": [
+                { "package": { "name": "first", "ecosystem": "PyPI" }, "version": "1" },
+                { "package": { "name": "second", "ecosystem": "npm" }, "version": "2" }
+            ] }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
     }
 }
