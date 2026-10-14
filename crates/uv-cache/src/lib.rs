@@ -398,9 +398,7 @@ impl Cache {
         fs_err::create_dir_all(archive_entry.dir())?;
         uv_fs::rename_with_retry(temp_dir.as_ref(), archive_entry.path()).await?;
 
-        // Create a symlink to the directory store.
-        fs_err::create_dir_all(path.as_ref().parent().expect("Cache entry to have parent"))?;
-        self.create_link(&id, path.as_ref())?;
+        self.link_archive(&id, path.as_ref())?;
 
         Ok(id)
     }
@@ -424,11 +422,15 @@ impl Cache {
             return Err(err);
         }
 
-        // Create a symlink to the directory store.
-        fs_err::create_dir_all(path.as_ref().parent().expect("Cache entry to have parent"))?;
-        self.create_link(&id, path.as_ref())?;
+        self.link_archive(&id, path.as_ref())?;
 
         Ok(id)
+    }
+
+    /// Link an archive into the cache, creating the destination directory as needed.
+    fn link_archive(&self, id: &ArchiveId, path: &Path) -> io::Result<()> {
+        fs_err::create_dir_all(path.parent().expect("Cache entry to have parent"))?;
+        self.create_link(id, path)
     }
 
     /// Returns `true` if the [`Cache`] is temporary.
