@@ -313,10 +313,9 @@ impl ManagedPythonDownloadList {
 
         let json_downloads = match json_source {
             Source::BuiltIn => parse_builtin_downloads()?,
-            Source::Path(ref path) => parse_downloads_json(
-                &fs_err::read(path.as_ref())?,
-                path.to_string_lossy().to_string(),
-            )?,
+            Source::Path(ref path) => {
+                parse_downloads_json(&fs_err::read(path.as_ref())?, path.display())?
+            }
             Source::Http(ref url) => {
                 let client = CachedClient::new(
                     client_builder
@@ -350,7 +349,7 @@ impl ManagedPythonDownloadList {
 fn parse_builtin_downloads() -> Result<HashMap<String, JsonPythonDownload>, Error> {
     let mut json = Vec::new();
     Decoder::with_buffer(BUILTIN_PYTHON_DOWNLOADS_ZSTD)?.read_to_end(&mut json)?;
-    parse_downloads_json(&json, "EMBEDDED IN THE BINARY".to_owned())
+    parse_downloads_json(&json, "EMBEDDED IN THE BINARY")
 }
 
 /// Parse the downloads JSON.
@@ -358,11 +357,12 @@ fn parse_builtin_downloads() -> Result<HashMap<String, JsonPythonDownload>, Erro
 /// `source` is where the JSON came from for error reporting.
 fn parse_downloads_json(
     buf: &[u8],
-    source: String,
+    source: impl Display,
 ) -> Result<HashMap<String, JsonPythonDownload>, Error> {
     match serde_json::from_slice(buf) {
         Ok(data) => Ok(data),
         Err(e) => {
+            let source = source.to_string();
             // As an explicit compatibility mechanism, if there's a top-level "version" key, it
             // means it's a newer format than we know how to deal with. Before reporting a
             // parse error about the format of JsonPythonDownload, check for that key. We can do
@@ -408,7 +408,7 @@ async fn fetch_downloads_from_url(
             .bytes()
             .await
             .map_err(|err| Error::NetworkError(url.clone(), WrappedReqwestError::from(err)))?;
-        parse_downloads_json(&bytes, url.to_string())
+        parse_downloads_json(&bytes, url)
     };
 
     client
