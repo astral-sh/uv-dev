@@ -4455,8 +4455,12 @@ fn script() -> Result<()> {
     Resolved 9 packages in [TIME]
     ");
 
-    // If the lockfile didn't exist already, it shouldn't be persisted to disk.
-    assert!(!context.temp_dir.child("uv.lock").exists());
+    let script_lock = context.temp_dir.child("script.py.lock");
+    script_lock.assert(predicates::path::missing());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
 
     // Explicitly lock the script.
     uv_snapshot!(context.filters(), context.lock().arg("--script").arg(script.path()), @"
@@ -4465,7 +4469,7 @@ fn script() -> Result<()> {
     Resolved 9 packages in [TIME]
     ");
 
-    let lock = context.read("script.py.lock");
+    let lock = fs_err::read_to_string(&script_lock)?;
 
     insta::with_settings!({
         filters => context.filters(),
@@ -4650,7 +4654,7 @@ fn script() -> Result<()> {
     Resolved 10 packages in [TIME]
     ");
 
-    let lock = context.read("script.py.lock");
+    let lock = fs_err::read_to_string(&script_lock)?;
 
     insta::with_settings!({
         filters => context.filters(),
