@@ -19214,15 +19214,17 @@ fn lock_no_sources_package_multiple() -> Result<()> {
     Ok(())
 }
 
-/// Test that `--no-sources` takes precedence over `--no-sources-package`.
-#[cfg(all(feature = "test-universal", feature = "test-git"))]
+/// Global source disabling also skips sources absent from package-specific selection.
+#[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_sources_with_no_sources_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let missing_repository_url =
+        Url::from_directory_path(context.temp_dir.child("missing-repository").path())
+            .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -19233,13 +19235,10 @@ fn lock_no_sources_with_no_sources_package() -> Result<()> {
         ]
 
         [tool.uv.sources]
-        anyio = { git = "https://github.com/agronholm/anyio", tag = "3.7.0" }
-        iniconfig = { git = "https://github.com/pytest-dev/iniconfig", tag = "v2.0.0" }
-        "#,
-    )?;
+        anyio = {{ git = "{missing_repository_url}", tag = "3.7.0" }}
+        iniconfig = {{ git = "{missing_repository_url}", tag = "v2.0.0" }}
+    "#})?;
 
-    // Lock with both --no-sources and --no-sources-package
-    // --no-sources should take precedence and disable all sources
     uv_snapshot!(context.filters(), context.lock().arg("--no-sources").arg("--no-sources-package").arg("iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -19321,15 +19320,17 @@ fn lock_no_sources_with_no_sources_package() -> Result<()> {
     Ok(())
 }
 
-/// Test that `UV_NO_SOURCES_PACKAGE` environment variable works.
-#[cfg(all(feature = "test-universal", feature = "test-git"))]
+/// A space-separated package list from the environment disables every selected source.
+#[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_sources_package_env_var() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let missing_repository_url =
+        Url::from_directory_path(context.temp_dir.child("missing-repository").path())
+            .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -19340,13 +19341,11 @@ fn lock_no_sources_package_env_var() -> Result<()> {
         ]
 
         [tool.uv.sources]
-        anyio = { git = "https://github.com/agronholm/anyio", tag = "3.7.0" }
-        iniconfig = { git = "https://github.com/pytest-dev/iniconfig", tag = "v2.0.0" }
-        "#,
-    )?;
+        anyio = {{ git = "{missing_repository_url}", tag = "3.7.0" }}
+        iniconfig = {{ git = "{missing_repository_url}", tag = "v2.0.0" }}
+    "#})?;
 
-    // Lock with UV_NO_SOURCES_PACKAGE environment variable
-    uv_snapshot!(context.filters(), context.lock().env("UV_NO_SOURCES_PACKAGE", "anyio iniconfig"), @"
+    uv_snapshot!(context.filters(), context.lock().env(EnvVars::UV_NO_SOURCES_PACKAGE, "anyio iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
