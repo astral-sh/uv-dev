@@ -122,32 +122,21 @@ impl SimpleDetailHTML {
             // are optional, but if present should be well-formed.
             match name {
                 "pypi:project-status" => {
-                    status = {
-                        let status = attribute(&tag, "content").and_then(Status::new)?;
-                        Some(status)
-                    };
+                    status = Some(attribute(&tag, "content").and_then(Status::new)?);
                 }
                 "pypi:project-status-reason" => {
-                    reason = {
-                        let Some(content) = attribute(&tag, "content").map(SmallString::from)
-                        else {
-                            // TODO: Make this a hard error instead?
-                            warn!("Invalid project status reason (missing)");
-                            return None;
-                        };
-                        Some(content)
-                    }
+                    let Some(content) = attribute(&tag, "content") else {
+                        // TODO: Make this a hard error instead?
+                        warn!("Invalid project status reason (missing)");
+                        return None;
+                    };
+                    reason = Some(SmallString::from(content));
                 }
                 _ => {}
             }
         }
 
-        if let Some(status) = status {
-            let status = ProjectStatus { status, reason };
-            Some(status)
-        } else {
-            None
-        }
+        status.map(|status| ProjectStatus { status, reason })
     }
 
     /// Parse the `href` from a `<base>` tag.
