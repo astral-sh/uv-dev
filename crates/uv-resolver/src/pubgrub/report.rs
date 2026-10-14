@@ -846,27 +846,12 @@ impl PubGrubReportFormatter<'_> {
                     if let Some(name) = package.name_no_root() {
                         availability_hints(name, set, output_hints);
 
-                        let exclude_newer = if let Some(index) = fork_indexes.get(name) {
-                            options
-                                .exclude_newer
-                                .exclude_newer_package_for_index_with_source(
-                                    name,
-                                    index_locations.exclude_newer_for(index.url()),
-                                )
-                        } else {
-                            options
-                                .exclude_newer
-                                .exclude_newer_package(name)
-                                .map(|exclude_newer| {
-                                    let source = if options.exclude_newer.package.contains_key(name)
-                                    {
-                                        EffectiveExcludeNewerSource::Package
-                                    } else {
-                                        EffectiveExcludeNewerSource::Global
-                                    };
-                                    (exclude_newer, source)
-                                })
-                        };
+                        let index_cutoff = fork_indexes
+                            .get(name)
+                            .and_then(|index| index_locations.exclude_newer_for(index.url()));
+                        let exclude_newer = options
+                            .exclude_newer
+                            .exclude_newer_package_for_index_with_source(name, index_cutoff);
 
                         if let Some((exclude_newer, source)) = exclude_newer {
                             // Check if there are no included versions in the requested
