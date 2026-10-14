@@ -28,10 +28,10 @@ use crate::dirhash::{
     DirhashTree, HashedFile, UnhashedFile, UnzipOutput, blake3_copy_with_buffer,
     directory_tree_from_extracted,
 };
-use crate::{Error, insecure_no_validate};
-
-/// Default buffer size for streaming archive reads and file copies.
-const DEFAULT_BUF_SIZE: usize = 128 * 1024;
+use crate::{
+    DEFAULT_BUF_SIZE, Error, ExtractionDirectories, copy_zip_entry, insecure_no_validate,
+    validate_zip_directory_entry, zip_entry_buffer_capacity,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocalHeaderEntry {
@@ -171,7 +171,7 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
     let mut reader = futures::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader.compat());
     let mut zip = async_zip::base::read::stream::ZipFileReader::new(&mut reader);
 
-    let mut directories = FxHashSet::default();
+    let mut directories = ExtractionDirectories::default();
     let mut local_headers = FxHashMap::default();
     let mut output_paths = FxHashSet::default();
     let mut files = Vec::new();
@@ -192,12 +192,7 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
         };
 
         // Validate and sanitize the file name to prevent directory traversal attacks.
-        let relpath = match SanitizedArchivePath::from_archive_member(path) {
-            Ok(path) => path,
-            Err(_) if skip_validation => None,
-            Err(err) => return Err(err),
-        };
-        let Some(relpath) = relpath else {
+        let Some(relpath) = SanitizedArchivePath::for_extraction(path, skip_validation)? else {
             warn!("Skipping unsafe file name: {path}");
 
             // Close current file prior to proceeding, as per:
@@ -224,30 +219,10 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
         let path = target.join(relpath.as_path());
         let is_dir = zip_entry.dir()?;
         let computed = if is_dir {
-            if directories.insert(path.clone()) {
-                fs_err::create_dir_all(&path).map_err(Error::Io)?;
-            }
+            directories.create(&path)?;
 
-            // If this is a directory, we expect the CRC32 to be 0.
-            if zip_entry.crc32() != 0 {
-                if !skip_validation {
-                    return Err(Error::BadCrc32 {
-                        path: relpath.to_path_buf(),
-                        computed: 0,
-                        expected: zip_entry.crc32(),
-                    });
-                }
-            }
-
-            // If this is a directory, we expect the uncompressed size to be 0.
-            if zip_entry.uncompressed_size() != 0 {
-                if !skip_validation {
-                    return Err(Error::BadUncompressedSize {
-                        path: relpath.to_path_buf(),
-                        computed: 0,
-                        expected: zip_entry.uncompressed_size(),
-                    });
-                }
+            if !skip_validation {
+                validate_zip_directory_entry(zip_entry, relpath.as_path())?;
             }
 
             ComputedEntry {
@@ -258,9 +233,7 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
             }
         } else {
             if let Some(parent) = path.parent() {
-                if directories.insert(parent.to_path_buf()) {
-                    fs_err::create_dir_all(parent).map_err(Error::Io)?;
-                }
+                directories.create(parent)?;
             }
 
             // We don't know the file permissions here, because we haven't seen the central directory yet.
@@ -272,9 +245,10 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 Ok(file) => {
                     // Write the file to disk.
                     let file = AllowStdIo::new(file).compat_write();
-                    let size = zip_entry.uncompressed_size();
-                    let mut writer = if let Ok(size) = usize::try_from(size) {
-                        tokio::io::BufWriter::with_capacity(std::cmp::min(size, 1024 * 1024), file)
+                    let mut writer = if let Some(capacity) =
+                        zip_entry_buffer_capacity(expected_uncompressed_size)
+                    {
+                        tokio::io::BufWriter::with_capacity(capacity, file)
                     } else {
                         tokio::io::BufWriter::new(file)
                     };
@@ -286,23 +260,8 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                                 .map_err(Error::io_or_zip)?;
                         (bytes_read, Some(digest))
                     } else {
-                        let mut bytes_read = 0;
-                        copy_buffer.resize(DEFAULT_BUF_SIZE, 0);
-                        loop {
-                            let read = tokio::io::AsyncReadExt::read(&mut reader, &mut copy_buffer)
-                                .await
-                                .map_err(Error::io_or_zip)?;
-                            if read == 0 {
-                                break;
-                            }
-                            tokio::io::AsyncWriteExt::write_all(&mut writer, &copy_buffer[..read])
-                                .await
-                                .map_err(Error::Io)?;
-                            bytes_read += read as u64;
-                        }
-                        tokio::io::AsyncWriteExt::flush(&mut writer)
-                            .await
-                            .map_err(Error::Io)?;
+                        let bytes_read =
+                            copy_zip_entry(&mut reader, &mut writer, &mut copy_buffer).await?;
                         (bytes_read, None)
                     }
                 }
@@ -505,12 +464,8 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 };
 
                 // Validate and sanitize the file name to prevent directory traversal attacks.
-                let relpath = match SanitizedArchivePath::from_archive_member(path) {
-                    Ok(path) => path,
-                    Err(_) if skip_validation => None,
-                    Err(err) => return Err(err),
-                };
-                let Some(relpath) = relpath else {
+                let Some(relpath) = SanitizedArchivePath::for_extraction(path, skip_validation)?
+                else {
                     continue;
                 };
                 let is_dir = entry.dir()?;
@@ -603,13 +558,9 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 // which indicates the first entry in the central directory. So we continue reading from there.
                 #[cfg(unix)]
                 {
-                    use std::fs::Permissions;
-                    use std::os::unix::fs::PermissionsExt;
-
                     if is_dir {
                         continue;
                     }
-
                     let Some(mode) = entry.unix_permissions() else {
                         continue;
                     };
@@ -630,19 +581,8 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                         }
                     }
 
-                    // The executable bit is the only permission we preserve, otherwise we use the OS defaults.
-                    // https://github.com/pypa/pip/blob/3898741e29b7279e7bffe044ecfbe20f6a438b1e/src/pip/_internal/utils/unpacking.py#L88-L100
-                    let has_any_executable_bit = mode & 0o111;
-                    if has_any_executable_bit != 0 {
-                        let path = target.join(relpath.as_path());
-                        let permissions = fs_err::metadata(&path).map_err(Error::Io)?.permissions();
-                        if permissions.mode() & 0o111 != 0o111 {
-                            fs_err::set_permissions(
-                                &path,
-                                Permissions::from_mode(permissions.mode() | 0o111),
-                            )
-                            .map_err(Error::Io)?;
-                        }
+                    if mode & 0o111 != 0 {
+                        crate::set_executable_bits(&target.join(relpath.as_path()))?;
                     }
                 }
             }

@@ -87,21 +87,16 @@ async fn read_exact_or_eof(
     mut reader: Pin<&mut impl AsyncRead>,
     mut buf: &mut [u8],
 ) -> io::Result<usize> {
-    let mut bytes_read = 0;
-    loop {
+    let length = buf.len();
+    while !buf.is_empty() {
         match reader.read(buf).await {
-            Ok(0) => return Ok(bytes_read),
-            Ok(n) => {
-                bytes_read += n;
-                if n == buf.len() {
-                    return Ok(bytes_read);
-                }
-                buf = &mut buf[n..];
-            }
+            Ok(0) => break,
+            Ok(n) => buf = &mut buf[n..],
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) => return Err(e),
         }
     }
+    Ok(length - buf.len())
 }
 
 /// Copy all the bytes from an async reader to an async writer while computing their BLAKE3 hash.
@@ -174,44 +169,26 @@ struct SeenSymlinkNode<'a> {
     previous: Option<&'a Self>,
 }
 
-struct SeenSymlinks<'a> {
-    node: Option<SeenSymlinkNode<'a>>,
-}
-
-impl<'a> SeenSymlinks<'a> {
-    fn new() -> Self {
-        Self { node: None }
-    }
-
+impl<'a> SeenSymlinkNode<'a> {
     fn iter(&self) -> impl Iterator<Item = &Path> {
-        let mut node = self.node.as_ref();
-        std::iter::from_fn(move || {
-            if let Some(next_node) = node {
-                let next_path = &next_node.canonical_path;
-                node = next_node.previous;
-                Some(next_path.as_path())
-            } else {
-                None
-            }
-        })
+        std::iter::successors(Some(self), |node| node.previous)
+            .map(|node| node.canonical_path.as_path())
     }
 
-    fn push(&'a self, symlink_path: &Path) -> Result<Self, DirhashError> {
+    fn new(symlink_path: &Path, previous: Option<&'a Self>) -> Result<Self, DirhashError> {
         let canonical_path = canonical_path_to_symlink(symlink_path)?;
         // Walk the seen symlinks list and error out if we've seen this one before.
-        for seen in self.iter() {
-            if canonical_path == seen {
-                let mut paths: Vec<PathBuf> = self.iter().map(Path::to_owned).collect();
-                paths.reverse();
-                paths.push(canonical_path);
-                return Err(DirhashError::SymlinkCycle { paths });
-            }
+        if let Some(previous) = previous
+            && previous.iter().any(|seen| canonical_path == seen)
+        {
+            let mut paths: Vec<PathBuf> = previous.iter().map(Path::to_owned).collect();
+            paths.reverse();
+            paths.push(canonical_path);
+            return Err(DirhashError::SymlinkCycle { paths });
         }
         Ok(Self {
-            node: Some(SeenSymlinkNode {
-                canonical_path,
-                previous: self.node.as_ref(),
-            }),
+            canonical_path,
+            previous,
         })
     }
 }
@@ -241,19 +218,18 @@ fn canonical_path_to_symlink(symlink_path: &Path) -> Result<PathBuf, DirhashErro
 /// it encounters a symlink cycle, it will return an error.
 pub fn dirhash_path(path: &Path) -> Result<blake3::Hash, DirhashError> {
     initialize_rayon_once();
-    let seen_symlinks = SeenSymlinks::new();
-    dirhash_path_inner(path, &seen_symlinks)
+    dirhash_path_inner(path, None)
 }
 
 // Recurse to compute a dirhash, handling symlink cycles.
 fn dirhash_path_inner(
     path: &Path,
-    seen_symlinks: &SeenSymlinks,
+    seen_symlinks: Option<&SeenSymlinkNode<'_>>,
 ) -> Result<blake3::Hash, DirhashError> {
     let metadata = fs_err::symlink_metadata(path)?;
     if metadata.is_symlink() {
-        let seen_symlinks = seen_symlinks.push(path)?;
-        dirhash_path_inner_resolved(path, &fs_err::metadata(path)?, &seen_symlinks)
+        let seen_symlinks = SeenSymlinkNode::new(path, seen_symlinks)?;
+        dirhash_path_inner_resolved(path, &fs_err::metadata(path)?, Some(&seen_symlinks))
     } else {
         dirhash_path_inner_resolved(path, &metadata, seen_symlinks)
     }
@@ -263,7 +239,7 @@ fn dirhash_path_inner(
 fn dirhash_path_inner_resolved(
     path: &Path,
     metadata: &std::fs::Metadata,
-    seen_symlinks: &SeenSymlinks,
+    seen_symlinks: Option<&SeenSymlinkNode<'_>>,
 ) -> Result<blake3::Hash, DirhashError> {
     if metadata.is_dir() {
         // This is a directory. Recurse over its contents.
@@ -281,19 +257,15 @@ fn dirhash_path_inner_resolved(
         // Sort the directory contents by name, in lexicographic/UTF-8 order.
         dir_contents.sort_unstable();
         // Iterate over the contents in parallel using Rayon, hashing each one recursively.
-        let hashes = dir_contents
-            .par_iter()
+        let entries = dir_contents
+            .into_par_iter()
             // Recurse back to `dirhash_path_inner` for symlink handling.
-            .map(|(_, path)| dirhash_path_inner(path, seen_symlinks))
-            .collect::<Result<Vec<blake3::Hash>, _>>()?;
-        let dirhash_entries = dir_contents
-            .iter()
-            .zip(hashes)
-            .map(|((name, _), hash)| (name.as_str(), hash));
-        Ok(hash_dir_entries(dirhash_entries))
+            .map(|(name, path)| dirhash_path_inner(&path, seen_symlinks).map(|hash| (name, hash)))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(hash_dir_entries(entries))
     } else {
         // This is not a directory, so treat it like a file and hash it. `update_mmap_rayon` shares
-        // the same thread pool as `par_iter` above.
+        // the same thread pool as the parallel traversal above.
         Ok(blake3::Hasher::new().update_mmap_rayon(path)?.finalize())
     }
 }
@@ -319,50 +291,41 @@ impl DirhashTree {
         Self::default()
     }
 
-    fn insertion_entry(
+    /// Find the parent directory and final component of a normalized path.
+    fn parent_and_name<'path>(
         &mut self,
-        normalized_path: &str,
+        normalized_path: &'path str,
         original_path: &str,
         create_dirs: bool,
-    ) -> Result<Entry<'_, String, DirhashEntry>, DirhashError> {
-        if let Some((component, rest)) = normalized_path.split_once('/') {
-            // There are further path components after this one, so this one is a directory.
-            if self.children.contains_key(component) {
-                // This entry already exists.
-                //
-                // We have to do a double lookup here because of borrowck limitations. The
-                // alternative is using the `.entry()` API and always allocating a temporary
-                // `String` key. Polonius can't come soon enough, but also `BTreeMap` needs a "raw
-                // entry" API.
-                match self.children.get_mut(component).unwrap() {
-                    DirhashEntry::Directory(child) => {
-                        child.insertion_entry(rest, original_path, create_dirs)
-                    }
-                    DirhashEntry::File(_) => Err(DirhashError::FileDirectoryConflict {
-                        path: PathBuf::from(original_path),
-                    }),
-                }
+    ) -> Result<(&mut Self, &'path str), DirhashError> {
+        let Some((directories, name)) = normalized_path.rsplit_once('/') else {
+            return Ok((self, normalized_path));
+        };
+
+        let mut parent = self;
+        for component in directories.split('/') {
+            // The separate lookup avoids allocating an owned key for an existing directory.
+            let child = if create_dirs && !parent.children.contains_key(component) {
+                parent
+                    .children
+                    .entry(String::from(component))
+                    .or_insert_with(|| DirhashEntry::Directory(Self::default()))
             } else {
-                // We need to create this directory, or error if `create_dirs` is false.
-                if create_dirs {
-                    let child = self
-                        .children
-                        .entry(String::from(component))
-                        .or_insert(DirhashEntry::Directory(Self::default()));
-                    let DirhashEntry::Directory(child) = child else {
-                        unreachable!()
-                    };
-                    child.insertion_entry(rest, original_path, create_dirs)
-                } else {
-                    Err(DirhashError::MissingPath {
+                parent
+                    .children
+                    .get_mut(component)
+                    .ok_or_else(|| DirhashError::MissingPath {
                         path: PathBuf::from(original_path),
-                    })
-                }
-            }
-        } else {
-            // This is the final path component.
-            Ok(self.children.entry(String::from(normalized_path)))
+                    })?
+            };
+            let DirhashEntry::Directory(directory) = child else {
+                return Err(DirhashError::FileDirectoryConflict {
+                    path: PathBuf::from(original_path),
+                });
+            };
+            parent = directory;
         }
+        Ok((parent, name))
     }
 
     /// Add a pre-hashed file to the tree. It's an error if the filepath already exists.
@@ -379,8 +342,8 @@ impl DirhashTree {
     /// efficient to hash it as you write it than to read it back again. See [`blake3_copy`].
     pub fn add_file(&mut self, path: &str, hash: blake3::Hash) -> Result<(), DirhashError> {
         let normalized_path = normalize_dirhash_path(path)?;
-        let entry = self.insertion_entry(&normalized_path, path, true)?;
-        match entry {
+        let (parent, name) = self.parent_and_name(&normalized_path, path, true)?;
+        match parent.children.entry(name.to_owned()) {
             Entry::Vacant(vacant) => {
                 vacant.insert(DirhashEntry::File(hash));
                 Ok(())
@@ -404,20 +367,18 @@ impl DirhashTree {
     /// that already exists.
     pub fn update_file(&mut self, path: &str, hash: blake3::Hash) -> Result<(), DirhashError> {
         let normalized_path = normalize_dirhash_path(path)?;
-        let entry = self.insertion_entry(&normalized_path, path, false)?;
-        match entry {
-            Entry::Vacant(_) => Err(DirhashError::MissingPath {
+        let (parent, name) = self.parent_and_name(&normalized_path, path, false)?;
+        match parent.children.get_mut(name) {
+            None => Err(DirhashError::MissingPath {
                 path: PathBuf::from(path),
             }),
-            Entry::Occupied(mut occupied) => match occupied.get_mut() {
-                DirhashEntry::File(prev_hash) => {
-                    *prev_hash = hash;
-                    Ok(())
-                }
-                DirhashEntry::Directory(_) => Err(DirhashError::FileDirectoryConflict {
-                    path: PathBuf::from(path),
-                }),
-            },
+            Some(DirhashEntry::File(prev_hash)) => {
+                *prev_hash = hash;
+                Ok(())
+            }
+            Some(DirhashEntry::Directory(_)) => Err(DirhashError::FileDirectoryConflict {
+                path: PathBuf::from(path),
+            }),
         }
     }
 
@@ -430,18 +391,16 @@ impl DirhashTree {
     /// This function creates parent directories as needed.
     pub fn add_empty_dir(&mut self, path: &str) -> Result<(), DirhashError> {
         let normalized_path = normalize_dirhash_path(path)?;
-        let entry = self.insertion_entry(&normalized_path, path, true)?;
-        match entry {
-            Entry::Vacant(vacant) => {
-                vacant.insert(DirhashEntry::Directory(Self::default()));
-                Ok(())
-            }
-            Entry::Occupied(occupied) => match occupied.get() {
-                DirhashEntry::Directory(_) => Ok(()),
-                DirhashEntry::File(_) => Err(DirhashError::FileDirectoryConflict {
-                    path: PathBuf::from(path),
-                }),
-            },
+        let (parent, name) = self.parent_and_name(&normalized_path, path, true)?;
+        match parent
+            .children
+            .entry(name.to_owned())
+            .or_insert_with(|| DirhashEntry::Directory(Self::default()))
+        {
+            DirhashEntry::Directory(_) => Ok(()),
+            DirhashEntry::File(_) => Err(DirhashError::FileDirectoryConflict {
+                path: PathBuf::from(path),
+            }),
         }
     }
 
@@ -456,7 +415,7 @@ impl DirhashTree {
                 DirhashEntry::File(hash) => *hash,
                 DirhashEntry::Directory(child) => child.hash(),
             };
-            (name.as_str(), hash)
+            (name, hash)
         }))
     }
 }
@@ -498,16 +457,15 @@ fn normalize_dirhash_path(mut path: &str) -> Result<Cow<'_, str>, DirhashError> 
     Ok(Cow::Owned(components.join("/")))
 }
 
-fn hash_dir_entries<'a, Iter>(entries: Iter) -> blake3::Hash
-where
-    Iter: IntoIterator<Item = (&'a str, blake3::Hash)>,
-{
+fn hash_dir_entries<Name: AsRef<str>>(
+    entries: impl IntoIterator<Item = (Name, blake3::Hash)>,
+) -> blake3::Hash {
     // File hashes are the normal BLAKE3 hash of the file's contents. A directory hash shouldn't
     // collide with a file hash, no matter what bytes the file happens contain. BLAKE3's derive-key
     // mode with a context string guarantees that.
     let mut hasher = blake3::Hasher::new_derive_key("directory");
     for (name, hash) in entries {
-        hasher.update(name.as_bytes());
+        hasher.update(name.as_ref().as_bytes());
         hasher.update(&[0xff]);
         hasher.update(hash.as_bytes());
     }

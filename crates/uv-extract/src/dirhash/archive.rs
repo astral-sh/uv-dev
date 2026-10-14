@@ -1,6 +1,7 @@
 //! Content-addressed identities for extracted wheel archives.
 
-use std::path::{Path, PathBuf};
+use std::borrow::Cow;
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
 use super::{DirhashError, DirhashTree};
 use crate::archive_path::SanitizedArchivePath;
@@ -150,7 +151,12 @@ pub(crate) fn directory_tree_from_extracted<'a>(
 }
 
 /// Format a sanitized archive path with platform-independent separators.
-fn digest_path(path: &SanitizedArchivePath) -> String {
+fn digest_path(path: &SanitizedArchivePath) -> Cow<'_, str> {
+    // Sanitized archive paths are already normalized, so native `/` separators need no rebuilding.
+    if MAIN_SEPARATOR == '/' {
+        return path.as_path().to_string_lossy();
+    }
+
     let mut normalized = String::new();
     for component in path.as_path() {
         if !normalized.is_empty() {
@@ -158,7 +164,7 @@ fn digest_path(path: &SanitizedArchivePath) -> String {
         }
         normalized.push_str(&component.to_string_lossy());
     }
-    normalized
+    Cow::Owned(normalized)
 }
 
 fn encode_digest(digest: &blake3::Hash) -> String {
@@ -169,9 +175,8 @@ fn encode_digest(digest: &blake3::Hash) -> String {
         let mut remainder = 0u16;
         for byte in &mut value {
             let dividend = (remainder << 8) | u16::from(*byte);
-            let quotient = dividend / BASE36_RADIX;
-            debug_assert!(u8::try_from(quotient).is_ok());
-            *byte = quotient.to_le_bytes()[0];
+            *byte =
+                u8::try_from(dividend / BASE36_RADIX).expect("base-36 quotient fits in one byte");
             remainder = dividend % BASE36_RADIX;
         }
         *digit = BASE36_ALPHABET[usize::from(remainder)];

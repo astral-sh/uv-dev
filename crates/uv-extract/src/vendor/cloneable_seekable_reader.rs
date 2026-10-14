@@ -8,6 +8,7 @@
 
 use std::{
     io::{BufRead, Read, Seek, SeekFrom},
+    ops::Range,
     sync::Arc,
 };
 
@@ -30,20 +31,13 @@ pub(crate) struct CloneableSeekableReader {
     // TODO determine and store this once instead of per cloneable file
     file_length: Option<u64>,
     buffer: Box<[u8; BUFFER_SIZE]>,
-    buffer_position: usize,
-    buffer_length: usize,
+    /// Unconsumed bytes in `buffer`.
+    buffered: Range<usize>,
 }
 
 impl Clone for CloneableSeekableReader {
     fn clone(&self) -> Self {
-        Self {
-            file: self.file.clone(),
-            pos: self.pos,
-            file_length: self.file_length,
-            buffer: Box::new([0; BUFFER_SIZE]),
-            buffer_position: 0,
-            buffer_length: 0,
-        }
+        Self::at_position(Arc::clone(&self.file), self.pos, self.file_length)
     }
 }
 
@@ -54,13 +48,17 @@ impl CloneableSeekableReader {
     /// of the stream changes; any subsequent seeks will not take account
     /// of the changed stream length.
     pub(crate) fn new(file: fs_err::File) -> Self {
+        Self::at_position(Arc::new(file), 0, None)
+    }
+
+    /// Create an independently buffered reader at the given file position.
+    fn at_position(file: Arc<fs_err::File>, pos: u64, file_length: Option<u64>) -> Self {
         Self {
-            file: Arc::new(file),
-            pos: 0u64,
-            file_length: None,
+            file,
+            pos,
+            file_length,
             buffer: Box::new([0; BUFFER_SIZE]),
-            buffer_position: 0,
-            buffer_length: 0,
+            buffered: 0..0,
         }
     }
 
@@ -74,34 +72,18 @@ impl CloneableSeekableReader {
         Ok(len)
     }
 
-    fn buffered_len(&self) -> usize {
-        self.buffer_length.saturating_sub(self.buffer_position)
-    }
-
-    fn consume_buffer(&mut self, amount: usize) {
-        let amount = amount.min(self.buffered_len());
-        self.buffer_position += amount;
-        self.pos += amount as u64;
-
-        if self.buffer_position == self.buffer_length {
-            self.buffer_position = 0;
-            self.buffer_length = 0;
-        }
-    }
-
-    fn clear_buffer(&mut self) {
-        self.buffer_position = 0;
-        self.buffer_length = 0;
+    fn buffered_bytes(&self) -> &[u8] {
+        &self.buffer[self.buffered.clone()]
     }
 }
 
 impl Read for CloneableSeekableReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.buffered_len() > 0 {
-            let amount = buf.len().min(self.buffered_len());
-            buf[..amount]
-                .copy_from_slice(&self.buffer[self.buffer_position..self.buffer_position + amount]);
-            self.consume_buffer(amount);
+        let buffered = self.buffered_bytes();
+        if !buffered.is_empty() {
+            let amount = buf.len().min(buffered.len());
+            buf[..amount].copy_from_slice(&buffered[..amount]);
+            self.consume(amount);
             return Ok(amount);
         }
 
@@ -129,23 +111,24 @@ impl Seek for CloneableSeekableReader {
             )
         })?;
         self.pos = new_pos;
-        self.clear_buffer();
+        self.buffered = 0..0;
         Ok(new_pos)
     }
 }
 
 impl BufRead for CloneableSeekableReader {
     fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
-        if self.buffered_len() == 0 {
-            self.buffer_length = read_at(&self.file, &mut *self.buffer, self.pos)?;
-            self.buffer_position = 0;
+        if self.buffered.is_empty() {
+            self.buffered = 0..read_at(&self.file, &mut *self.buffer, self.pos)?;
         }
 
-        Ok(&self.buffer[self.buffer_position..self.buffer_length])
+        Ok(self.buffered_bytes())
     }
 
     fn consume(&mut self, amount: usize) {
-        self.consume_buffer(amount);
+        let amount = amount.min(self.buffered.len());
+        self.buffered.start += amount;
+        self.pos += amount as u64;
     }
 }
 

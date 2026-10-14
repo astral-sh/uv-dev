@@ -51,6 +51,17 @@ impl SanitizedArchivePath {
         Ok(Some(Self(path)))
     }
 
+    /// Normalize an extraction path, optionally skipping members with invalid names.
+    pub(crate) fn for_extraction(
+        file_name: &str,
+        skip_invalid: bool,
+    ) -> Result<Option<Self>, Error> {
+        match Self::from_archive_member(file_name) {
+            Err(_) if skip_invalid => Ok(None),
+            result => result,
+        }
+    }
+
     /// Return the normalized path.
     pub(crate) fn as_path(&self) -> &Path {
         &self.0

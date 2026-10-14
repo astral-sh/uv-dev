@@ -1,7 +1,7 @@
 use sha2::{Digest as _, digest::consts::U32};
 use std::pin::Pin;
-use std::task::{Context, Poll};
-use tokio::io::{AsyncReadExt, ReadBuf};
+use std::task::{Context, Poll, ready};
+use tokio::io::ReadBuf;
 
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
 
@@ -78,8 +78,7 @@ where
 
     /// Exhaust the underlying reader.
     pub async fn finish(&mut self) -> Result<(), std::io::Error> {
-        while self.read(&mut vec![0; 8192]).await? > 0 {}
-
+        tokio::io::copy(self, &mut tokio::io::sink()).await?;
         Ok(())
     }
 }
@@ -95,16 +94,12 @@ where
     ) -> Poll<std::io::Result<()>> {
         let reader = Pin::new(&mut self.reader);
         let filled = buf.filled().len();
-        match reader.poll_read(cx, buf) {
-            Poll::Ready(Ok(())) => {
-                let bytes = &buf.filled()[filled..];
-                self.bytes_read += bytes.len() as u64;
-                for hasher in self.hashers.iter_mut() {
-                    hasher.update(bytes);
-                }
-                Poll::Ready(Ok(()))
-            }
-            other => other,
+        ready!(reader.poll_read(cx, buf))?;
+        let bytes = &buf.filled()[filled..];
+        self.bytes_read += bytes.len() as u64;
+        for hasher in self.hashers.iter_mut() {
+            hasher.update(bytes);
         }
+        Poll::Ready(Ok(()))
     }
 }

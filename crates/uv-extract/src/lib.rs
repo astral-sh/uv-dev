@@ -1,6 +1,10 @@
+use std::path::{Path, PathBuf};
+
 pub use error::Error;
 use regex::regex;
+use rustc_hash::FxHashSet;
 pub use sync::*;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use uv_static::EnvVars;
 
 mod archive_path;
@@ -10,6 +14,91 @@ pub mod hash;
 pub mod stream;
 mod sync;
 mod vendor;
+
+/// Default buffer size for archive reads and file copies.
+pub(crate) const DEFAULT_BUF_SIZE: usize = 128 * 1024;
+
+/// Cap a ZIP entry's output buffer at 1 MiB, or defer to the writer's default if the entry size
+/// exceeds the platform's address space.
+pub(crate) fn zip_entry_buffer_capacity(uncompressed_size: u64) -> Option<usize> {
+    usize::try_from(uncompressed_size)
+        .ok()
+        .map(|size| size.min(1024 * 1024))
+}
+
+/// Track directories whose creation has been attempted during archive extraction.
+#[derive(Default)]
+pub(crate) struct ExtractionDirectories {
+    attempted: FxHashSet<PathBuf>,
+}
+
+impl ExtractionDirectories {
+    pub(crate) fn create(&mut self, path: &Path) -> Result<(), Error> {
+        if !self.attempted.contains(path) {
+            self.attempted.insert(path.to_path_buf());
+            fs_err::create_dir_all(path).map_err(Error::Io)?;
+        }
+        Ok(())
+    }
+}
+
+/// Copy a ZIP entry, preserving ZIP read errors separately from filesystem write errors.
+pub(crate) async fn copy_zip_entry(
+    mut reader: impl AsyncRead + Unpin,
+    mut writer: impl AsyncWrite + Unpin,
+    buffer: &mut Vec<u8>,
+) -> Result<u64, Error> {
+    buffer.resize(DEFAULT_BUF_SIZE, 0);
+    let mut copied = 0;
+    loop {
+        let read = reader.read(buffer).await.map_err(Error::io_or_zip)?;
+        if read == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..read]).await.map_err(Error::Io)?;
+        copied += read as u64;
+    }
+    writer.flush().await.map_err(Error::Io)?;
+    Ok(copied)
+}
+
+/// Validate the empty payload declared by a ZIP directory entry.
+pub(crate) fn validate_zip_directory_entry(
+    entry: &async_zip::ZipEntry,
+    path: &Path,
+) -> Result<(), Error> {
+    if entry.crc32() != 0 {
+        return Err(Error::BadCrc32 {
+            path: path.to_path_buf(),
+            computed: 0,
+            expected: entry.crc32(),
+        });
+    }
+    if entry.uncompressed_size() != 0 {
+        return Err(Error::BadUncompressedSize {
+            path: path.to_path_buf(),
+            computed: 0,
+            expected: entry.uncompressed_size(),
+        });
+    }
+    Ok(())
+}
+
+/// Set executable permissions according to pip's wheel extraction behavior.
+#[cfg(unix)]
+pub(crate) fn set_executable_bits(path: &Path) -> Result<(), Error> {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    // https://github.com/pypa/pip/blob/3898741e29b7279e7bffe044ecfbe20f6a438b1e/src/pip/_internal/utils/unpacking.py#L88-L100
+    let permissions = fs_err::metadata(path).map_err(Error::Io)?.permissions();
+    if permissions.mode() & 0o111 == 0o111 {
+        return Ok(());
+    }
+
+    fs_err::set_permissions(path, Permissions::from_mode(permissions.mode() | 0o111))
+        .map_err(Error::Io)
+}
 
 static REPLACEMENT_CHARACTER: &str = "\u{FFFD}";
 
