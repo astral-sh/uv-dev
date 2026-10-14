@@ -7,9 +7,12 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
-use insta::{assert_json_snapshot, assert_snapshot};
+#[cfg(feature = "test-universal")]
+use insta::assert_json_snapshot;
+use insta::assert_snapshot;
 
 use uv_redacted::SafeUrl;
+#[cfg(feature = "test-universal")]
 use uv_static::EnvVars;
 #[cfg(feature = "test-universal")]
 use uv_test::TestContext;
