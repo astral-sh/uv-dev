@@ -453,10 +453,8 @@ impl ScriptPython {
             }
         }) {
             // (2) Request from `.python-version`
-            (
-                PythonRequestSource::DotPythonVersion(file.clone()),
-                file.version().cloned(),
-            )
+            let request = file.version().cloned();
+            (PythonRequestSource::DotPythonVersion(file), request)
         } else if let Some(specifiers) = script.metadata().requires_python.as_ref() {
             // (3) `requires-python` from script metadata
             let request = PythonRequest::Version(VersionRequest::from_specifiers(

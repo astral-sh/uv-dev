@@ -144,9 +144,8 @@ impl ProjectPythonRequest {
             }
         }) {
             // (2) Request from `.python-version`
-            let source = PythonRequestSource::DotPythonVersion(file.clone());
             let request = file.version().cloned();
-            (source, request)
+            (PythonRequestSource::DotPythonVersion(file), request)
         } else {
             // (3) `requires-python` in `pyproject.toml`
             let request = requirement.as_ref().and_then(|requirement| {
