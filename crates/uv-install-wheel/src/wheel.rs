@@ -396,24 +396,15 @@ pub(crate) fn write_script_entrypoints(
         );
 
         // If necessary, wrap the launcher script in a Windows launcher binary.
-        if cfg!(windows) {
-            write_file_recorded(
-                site_packages,
-                &entrypoint_relative,
-                &windows_script_launcher(&launcher_python_script, is_gui, &launcher_executable)?,
-                record,
-            )?;
+        let launcher = if cfg!(windows) {
+            windows_script_launcher(&launcher_python_script, is_gui, &launcher_executable)?
         } else {
-            write_file_recorded(
-                site_packages,
-                &entrypoint_relative,
-                &launcher_python_script,
-                record,
-            )?;
+            launcher_python_script.into_bytes()
+        };
+        write_file_recorded(site_packages, &entrypoint_relative, launcher, record)?;
 
-            #[cfg(unix)]
-            make_executable(script.as_path())?;
-        }
+        #[cfg(unix)]
+        make_executable(script.as_path())?;
     }
     Ok(())
 }
