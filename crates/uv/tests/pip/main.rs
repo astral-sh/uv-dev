@@ -22,6 +22,9 @@ mod pip_show;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_sync;
 
+#[cfg(feature = "test-python")]
+mod pip_sync_cache;
+
 mod pip_tree;
 
 mod pip_uninstall;
