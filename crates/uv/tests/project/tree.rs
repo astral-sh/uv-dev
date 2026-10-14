@@ -14,9 +14,18 @@ use insta::assert_snapshot;
 use uv_redacted::SafeUrl;
 #[cfg(feature = "test-universal")]
 use uv_static::EnvVars;
-#[cfg(feature = "test-universal")]
-use uv_test::TestContext;
-use uv_test::{diff_snapshot, uv_snapshot};
+use uv_test::{TestContext, diff_snapshot, uv_snapshot};
+
+#[track_caller]
+fn assert_lockfile_package_count(context: &TestContext, expected: usize) -> Result<()> {
+    let lock = uv_lock::Lock::from_canonical_toml(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock.len(),
+        expected,
+        "persisted lockfile differs from the resolved package count"
+    );
+    Ok(())
+}
 
 /// Trees require a lockfile with revision 5 or later.
 #[cfg(feature = "test-universal")]
@@ -284,9 +293,7 @@ fn nested_dependencies() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 6)?;
 
     Ok(())
 }
@@ -1969,9 +1976,7 @@ fn platform_dependencies() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 8)?;
 
     Ok(())
 }
@@ -2432,9 +2437,7 @@ fn repeated_dependencies() -> Result<()> {
     Resolved 6 packages in [TIME]
     "#);
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 6)?;
 
     Ok(())
 }
@@ -2506,9 +2509,7 @@ fn repeated_version() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 7)?;
 
     Ok(())
 }
@@ -2558,9 +2559,7 @@ fn dev_dependencies() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 5)?;
 
     Ok(())
 }
@@ -2614,9 +2613,7 @@ fn dev_dependencies_inverted() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 5)?;
 
     Ok(())
 }
@@ -2664,9 +2661,7 @@ fn optional_dependencies() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 14)?;
 
     Ok(())
 }
@@ -2724,9 +2719,7 @@ fn optional_dependencies_inverted() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 14)?;
 
     Ok(())
 }
@@ -3209,9 +3202,7 @@ fn cycle() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 11)?;
 
     Ok(())
 }
@@ -3624,9 +3615,7 @@ fn workspace_dev() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 6)?;
 
     Ok(())
 }
@@ -4417,9 +4406,7 @@ fn non_project_member() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_lockfile_package_count(&context, 5)?;
 
     Ok(())
 }
