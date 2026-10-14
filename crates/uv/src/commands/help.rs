@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::{fmt::Display, fmt::Write};
@@ -69,22 +68,6 @@ pub(crate) fn help(query: &[String], printer: Printer, no_pager: bool) -> Result
         .render_long_help()
     };
 
-    // Reformat inline [env: VAR=] annotations to their own line.
-    let help_plain = if is_root {
-        help.to_string()
-    } else {
-        reformat_env_annotations(&help.to_string())
-    };
-    let help_ansi = if is_root {
-        help.ansi().to_string()
-    } else {
-        reformat_env_annotations(&help.ansi().to_string())
-    };
-
-    // Trim trailing whitespace from each line (https://github.com/clap-rs/clap/issues/5074).
-    let help_plain = help_plain.lines().map(str::trim_end).join("\n");
-    let help_ansi = help_ansi.lines().map(str::trim_end).join("\n");
-
     let want_color = match anstream::Stdout::choice(&std::io::stdout()) {
         ColorChoice::Always | ColorChoice::AlwaysAnsi => true,
         ColorChoice::Never => false,
@@ -92,32 +75,47 @@ pub(crate) fn help(query: &[String], printer: Printer, no_pager: bool) -> Result
         ColorChoice::Auto => unreachable!(),
     };
 
-    let is_terminal = std::io::stdout().is_terminal();
-    let should_page = !no_pager && !is_root && is_terminal;
-
-    if should_page && let Some(pager) = Pager::try_from_env() {
-        let query = query.join(" ");
-        if want_color && pager.supports_colors() {
-            pager.spawn(format!("{}: {query}", "uv help".bold()), &help_ansi)?;
-        } else {
-            pager.spawn(format!("uv help: {query}"), &help_plain)?;
-        }
+    let pager = if !no_pager && !is_root && std::io::stdout().is_terminal() {
+        Pager::try_from_env()
     } else {
-        if want_color {
-            writeln!(printer.stdout(), "{help_ansi}")?;
+        None
+    };
+    let use_color = want_color && pager.as_ref().is_none_or(Pager::supports_colors);
+
+    let help = if use_color {
+        help.ansi().to_string()
+    } else {
+        help.to_string()
+    };
+    // Reformat inline [env: VAR=] annotations to their own line.
+    let help = if is_root {
+        help
+    } else {
+        reformat_env_annotations(&help)
+    };
+    // Trim trailing whitespace from each line (https://github.com/clap-rs/clap/issues/5074).
+    let help = help.lines().map(str::trim_end).join("\n");
+
+    if let Some(pager) = pager {
+        let query = query.join(" ");
+        let heading = if use_color {
+            format!("{}: {query}", "uv help".bold())
         } else {
-            writeln!(printer.stdout(), "{help_plain}")?;
-        }
+            format!("uv help: {query}")
+        };
+        pager.spawn(heading, help)?;
+    } else {
+        writeln!(printer.stdout(), "{help}")?;
     }
 
     Ok(ExitStatus::Success)
 }
 
-/// Get the first non-ANSI character starting at a given byte position.
+/// Get the first non-ANSI character.
 ///
-/// Returns `None` if the rest of the string is empty or only contains ANSI sequences.
-fn first_non_ansi_char(s: &str, start: usize) -> Option<char> {
-    let mut chars = s[start..].chars().peekable();
+/// Returns `None` if the string is empty or only contains ANSI sequences.
+fn first_non_ansi_char(s: &str) -> Option<char> {
+    let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\x1b' {
             // Skip ANSI escape sequences.
@@ -141,15 +139,9 @@ fn first_non_ansi_char(s: &str, start: usize) -> Option<char> {
 /// Moves inline `[env: VAR=]` annotations to their own line at the end of each
 /// argument's description, matching clap's native formatting for environment vars.
 fn reformat_env_annotations(help: &str) -> String {
-    let mut result = String::new();
-    let mut pending_env: Option<String> = None;
-
-    let lines: Vec<&str> = help.lines().collect();
-    let mut i = 0;
-
-    while i < lines.len() {
-        let line = lines[i];
-
+    let mut result = String::with_capacity(help.len());
+    let mut pending_env = None;
+    for line in help.lines() {
         // Classify the line type based on clap's help formatting:
         // - Argument lines: 6 spaces + `-` or `<` (e.g., "      --offline", "      <PACKAGE>")
         // - Description lines: 10 spaces + text (e.g., "          Disable network access")
@@ -157,59 +149,42 @@ fn reformat_env_annotations(help: &str) -> String {
         //
         // Leading spaces never contain ANSI codes, but argument names may be colored,
         // so we skip ANSI sequences when checking the first content character.
-        let indent = line.len() - line.trim_start().len();
-        let first_char = first_non_ansi_char(line, indent);
+        let content = line.trim_start();
+        let indent = line.len() - content.len();
+        let first_char = first_non_ansi_char(content);
         let is_arg_line = indent == 6 && matches!(first_char, Some('-' | '<'));
         let is_section_header = indent == 0 && line.ends_with(':');
         let is_description_line = indent == 10;
 
         // Flush pending env before starting a new argument or section.
-        if is_arg_line || is_section_header {
-            if let Some(env) = pending_env.take() {
-                // Remove trailing blank lines; add exactly one blank line before the environment variable.
-                while result.ends_with("\n\n") {
-                    result.pop();
-                }
-                if !result.ends_with('\n') {
-                    result.push('\n');
-                }
-                result.push('\n');
-                let _ = write!(result, "          {env}\n\n");
-            }
+        if (is_arg_line || is_section_header)
+            && let Some(env) = pending_env.take()
+        {
+            append_env_annotation(&mut result, env);
+            result.push('\n');
         }
 
         // Check for inline environment annotations on description lines.
-        if is_description_line {
-            if let Some((env_annotation, new_line)) = extract_env_annotation(line) {
-                pending_env = Some(env_annotation);
-                if !new_line.trim().is_empty() {
-                    result.push_str(&new_line);
-                    // Add a period, if the line doesn't end with punctuation.
-                    if !new_line.ends_with('.') && !new_line.ends_with(':') {
-                        result.push('.');
-                    }
-                    result.push('\n');
-                }
-                i += 1;
-                continue;
+        if is_description_line
+            && let Some((env_annotation, new_line)) = extract_env_annotation(line)
+        {
+            pending_env = Some(env_annotation);
+            result.push_str(&new_line);
+            // Add a period, if the line doesn't end with punctuation.
+            if !new_line.ends_with('.') && !new_line.ends_with(':') {
+                result.push('.');
             }
+            result.push('\n');
+            continue;
         }
 
         result.push_str(line);
         result.push('\n');
-        i += 1;
     }
 
     // Flush any remaining pending environment variables at the end of the help.
     if let Some(env) = pending_env {
-        while result.ends_with("\n\n") {
-            result.pop();
-        }
-        if !result.ends_with('\n') {
-            result.push('\n');
-        }
-        result.push('\n');
-        let _ = writeln!(result, "          {env}");
+        append_env_annotation(&mut result, env);
     }
 
     if result.ends_with('\n') {
@@ -219,11 +194,24 @@ fn reformat_env_annotations(help: &str) -> String {
     result
 }
 
+/// Append an environment annotation after exactly one blank line.
+fn append_env_annotation(help: &mut String, annotation: &str) {
+    while help.ends_with("\n\n") {
+        help.pop();
+    }
+    if !help.ends_with('\n') {
+        help.push('\n');
+    }
+    help.push_str("\n          ");
+    help.push_str(annotation);
+    help.push('\n');
+}
+
 /// Extract an inline `[env: VAR=]` annotation from a line.
 ///
 /// Returns the annotation and the line with the annotation removed, or `None` if no
 /// annotation is found.
-fn extract_env_annotation(line: &str) -> Option<(String, String)> {
+fn extract_env_annotation(line: &str) -> Option<(&str, String)> {
     // Look for the pattern: " [env: SOMETHING=]"
     let start = line.find(" [env: ")?;
     let rest = &line[start + " [env: ".len()..];
@@ -236,16 +224,17 @@ fn extract_env_annotation(line: &str) -> Option<(String, String)> {
     }
 
     let annotation_end = start + " [env: ".len() + end_offset + "=]".len();
-    let annotation = line[start + " ".len()..annotation_end].to_string();
-    let new_line = format!("{}{}", &line[..start], &line[annotation_end..]);
+    let annotation = &line[start + " ".len()..annotation_end];
+    let prefix = &line[..start];
+    let suffix = &line[annotation_end..];
 
     // Only extract if there's actual text remaining (not just whitespace).
     // If the line is just the annotation (clap-generated), leave it alone.
-    if new_line.trim().is_empty() {
+    if prefix.trim().is_empty() && suffix.trim().is_empty() {
         return None;
     }
 
-    Some((annotation, new_line))
+    Some((annotation, format!("{prefix}{suffix}")))
 }
 
 /// Find the command corresponding to a set of arguments, e.g., `["uv", "pip", "install"]`.
@@ -255,12 +244,12 @@ fn find_command<'a>(
     query: &'a [String],
     cmd: &'a clap::Command,
 ) -> Result<&'a clap::Command, (&'a [String], &'a clap::Command)> {
-    let Some(next) = query.first() else {
+    let Some((next, remaining)) = query.split_first() else {
         return Ok(cmd);
     };
 
     let subcommand = cmd.find_subcommand(next).ok_or((query, cmd))?;
-    find_command(&query[1..], subcommand)
+    find_command(remaining, subcommand)
 }
 
 #[derive(Debug)]
@@ -281,8 +270,7 @@ impl PagerKind {
     fn default_args(&self) -> Vec<String> {
         match self {
             Self::Less => vec!["-R".to_string()],
-            Self::More => vec![],
-            Self::Other(_) => vec![],
+            Self::More | Self::Other(_) => vec![],
         }
     }
 }
@@ -308,36 +296,28 @@ impl FromStr for Pager {
             return Err(());
         };
 
-        match first {
-            "less" => Ok(Self {
-                kind: PagerKind::Less,
-                args: split.map(str::to_string).collect(),
-                path: None,
-            }),
-            "more" => Ok(Self {
-                kind: PagerKind::More,
-                args: split.map(str::to_string).collect(),
-                path: None,
-            }),
-            _ => Ok(Self {
-                kind: PagerKind::Other(first.to_string()),
-                args: split.map(str::to_string).collect(),
-                path: None,
-            }),
-        }
+        let kind = match first {
+            "less" => PagerKind::Less,
+            "more" => PagerKind::More,
+            _ => PagerKind::Other(first.to_string()),
+        };
+        Ok(Self {
+            kind,
+            args: split.map(str::to_string).collect(),
+            path: None,
+        })
     }
 }
 
 impl Pager {
     /// Display `contents` using the pager.
-    fn spawn(self, heading: String, contents: impl Display) -> Result<()> {
+    fn spawn(self, heading: String, contents: String) -> Result<()> {
         use std::io::Write;
 
         let command = self
             .path
-            .as_ref()
-            .map(|path| path.as_os_str().to_os_string())
-            .unwrap_or(OsString::from(self.kind.to_string()));
+            .map(PathBuf::into_os_string)
+            .unwrap_or_else(|| self.kind.to_string().into());
 
         let args = if self.args.is_empty() {
             self.kind.default_args()
@@ -355,7 +335,6 @@ impl Pager {
             .take()
             .ok_or_else(|| anyhow!("Failed to take child process stdin"))?;
 
-        let contents = contents.to_string();
         let writer = std::thread::spawn(move || {
             let _ = write!(stdin, "{heading}\n\n");
             let _ = stdin.write_all(contents.as_bytes());
@@ -372,10 +351,10 @@ impl Pager {
     /// Supports the `PAGER` environment variable, otherwise checks for `less` and `more` in the
     /// search path.
     fn try_from_env() -> Option<Self> {
-        if let Some(pager) = std::env::var_os(EnvVars::PAGER) {
-            if !pager.is_empty() {
-                return Self::from_str(&pager.to_string_lossy()).ok();
-            }
+        if let Some(pager) = std::env::var_os(EnvVars::PAGER)
+            && !pager.is_empty()
+        {
+            return Self::from_str(&pager.to_string_lossy()).ok();
         }
 
         if let Ok(less) = which("less") {

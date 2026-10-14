@@ -190,15 +190,19 @@ pub async fn upgrade(
 
     if let Some(python_request) = python_request {
         if !upgraded_environments.is_empty() {
-            let tools = upgraded_environments
-                .iter()
-                .map(|name| format!("`{}`", name.cyan()))
-                .collect::<Vec<_>>();
-            let s = if tools.len() > 1 { "s" } else { "" };
+            let tools = conjunction(
+                upgraded_environments
+                    .iter()
+                    .map(|name| format!("`{}`", name.cyan())),
+            );
+            let s = if upgraded_environments.len() > 1 {
+                "s"
+            } else {
+                ""
+            };
             writeln!(
                 printer.stderr(),
-                "Upgraded tool environment{s} for {} to {}",
-                conjunction(tools),
+                "Upgraded tool environment{s} for {tools} to {}",
                 python_request.cyan(),
             )?;
         }
