@@ -40318,7 +40318,7 @@ fn lock_omit_attached_artifacts_exclude_newer() -> Result<()> {
 }
 
 /// Check that we hint if the resolution failed in a different Python version.
-#[cfg(feature = "test-universal")]
+#[cfg(all(feature = "test-universal", feature = "test-python-eol"))]
 #[test]
 fn lock_conflict_for_disjoint_python_version() -> Result<()> {
     let context = uv_test::test_context!("3.9");
