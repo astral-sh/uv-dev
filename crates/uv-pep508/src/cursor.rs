@@ -80,15 +80,22 @@ impl<'a> Cursor<'a> {
         Some((pos, char))
     }
 
-    /// Peeks over the cursor as long as the condition is met, without consuming it.
-    pub(crate) fn peek_while(&mut self, condition: impl Fn(char) -> bool) -> (usize, usize) {
-        let peeker = self.chars.clone();
-        let start = self.pos();
-        let len = peeker
-            .take_while(|c| condition(*c))
-            .map(char::len_utf8)
-            .sum();
-        (start, len)
+    /// Consume a keyword followed by a delimiter or the end of input.
+    pub(crate) fn eat_keyword(
+        &mut self,
+        keyword: &str,
+        is_delimiter: impl FnOnce(char) -> bool,
+    ) -> bool {
+        let Some(remaining) = self.chars.as_str().strip_prefix(keyword) else {
+            return false;
+        };
+        if remaining.chars().next().is_some_and(|c| !is_delimiter(c)) {
+            return false;
+        }
+
+        self.chars = remaining.chars();
+        self.pos += keyword.len();
+        true
     }
 
     /// Consumes characters from the cursor as long as the condition is met.
