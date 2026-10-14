@@ -456,34 +456,34 @@ async fn get_item_attributes(item: &Item<'_>) -> Result<HashMap<String, String>>
     Ok(attributes)
 }
 
-/// Given an existing item, retrieve its non-controlled attributes.
+/// Update an existing item's non-controlled attributes.
 async fn update_item_attributes(item: &Item<'_>, attributes: &HashMap<&str, &str>) -> Result<()> {
     let existing = item.get_attributes().await.map_err(decode_error)?;
-    let mut updated: HashMap<&str, &str> = HashMap::new();
-    for (k, v) in &existing {
-        updated.insert(k, v);
-    }
-    for (k, v) in attributes {
-        if k.eq(&"target") || k.eq(&"service") || k.eq(&"username") {
-            continue;
-        }
-        if k.eq(&"label") {
-            if v.is_empty() {
-                return Err(ErrorCode::Invalid(
-                    "label".to_string(),
-                    "cannot be empty".to_string(),
-                ));
+    let mut updated: HashMap<&str, &str> = existing
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    for (&key, &value) in attributes {
+        match key {
+            "target" | "service" | "username" => {}
+            "label" => {
+                if value.is_empty() {
+                    return Err(ErrorCode::Invalid(
+                        "label".to_string(),
+                        "cannot be empty".to_string(),
+                    ));
+                }
+                item.set_label(value).await.map_err(decode_error)?;
+                if let Some(label) = updated.get_mut("label") {
+                    *label = value;
+                }
             }
-            item.set_label(v).await.map_err(decode_error)?;
-            if updated.contains_key("label") {
-                updated.insert("label", v);
+            _ => {
+                updated.insert(key, value);
             }
-        } else {
-            updated.insert(k, v);
         }
     }
-    item.set_attributes(updated).await.map_err(decode_error)?;
-    Ok(())
+    item.set_attributes(updated).await.map_err(decode_error)
 }
 
 // Given an existing item, delete it.
