@@ -1,9 +1,15 @@
+#[cfg(any(feature = "test-python", feature = "test-pypi"))]
 use anyhow::Result;
+#[cfg(feature = "test-pypi")]
 use assert_cmd::prelude::*;
-use assert_fs::fixture::FileWriteStr;
-use assert_fs::fixture::PathChild;
+#[cfg(feature = "test-python")]
+use assert_fs::fixture::ChildPath;
+#[cfg(any(feature = "test-python", feature = "test-pypi"))]
+use assert_fs::fixture::{FileWriteStr, PathChild};
+#[cfg(feature = "test-pypi")]
 use indoc::indoc;
 
+#[cfg(feature = "test-pypi")]
 use uv_static::EnvVars;
 
 #[cfg(feature = "test-pypi")]
@@ -366,38 +372,21 @@ fn show_editable() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
 fn show_required_by_multiple() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        anyio==4.0.0
-        requests==2.31.0
-    "
-    })?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + anyio==4.0.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + urllib3==2.2.1
-    "
-    );
-
-    context.assert_command("import requests").success();
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("idna-3.6.dist-info/METADATA")
+        .write_str("Metadata-Version: 2.1\nName: idna\nVersion: 3.6\n")?;
+    site_packages
+        .child("anyio-4.0.0.dist-info/METADATA")
+        .write_str("Metadata-Version: 2.1\nName: anyio\nVersion: 4.0.0\nRequires-Dist: idna\n")?;
+    site_packages
+        .child("requests-2.31.0.dist-info/METADATA")
+        .write_str(
+            "Metadata-Version: 2.1\nName: requests\nVersion: 2.31.0\nRequires-Dist: idna\n",
+        )?;
 
     // idna is required by anyio and requests
     uv_snapshot!(context.filters(), context.pip_show()
