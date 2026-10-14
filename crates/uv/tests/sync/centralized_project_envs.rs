@@ -478,7 +478,13 @@ fn cache_prune_removes_and_recreates_centralized_environment() -> Result<()> {
         .success();
     let link = context.temp_dir.child(".venv");
     let target = fs_err::read_link(link.path())?;
-    assert!(target.starts_with(context.cache_dir.child("environments-v2").path()));
+    let cache = context.cache_dir.child("environments-v2");
+    assert!(
+        uv_fs::verbatim_path(&target).starts_with(uv_fs::verbatim_path(cache.path()).as_ref()),
+        "centralized environment target {} is outside cache {}",
+        target.display(),
+        cache.path().display()
+    );
     assert!(target.is_dir());
 
     context.prune().assert().success();
