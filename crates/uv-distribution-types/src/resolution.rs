@@ -40,8 +40,9 @@ impl Resolution {
     /// Return the hashes for the given package name, if they exist.
     pub fn hashes(&self) -> impl Iterator<Item = (&ResolvedDist, &[HashDigest])> {
         self.graph
-            .node_indices()
-            .filter_map(move |node| match &self.graph[node] {
+            .raw_nodes()
+            .iter()
+            .filter_map(|node| match &node.weight {
                 Node::Dist {
                     dist,
                     hashes,
@@ -54,13 +55,7 @@ impl Resolution {
 
     /// Iterate over the [`ResolvedDist`] entities in this resolution.
     pub fn distributions(&self) -> impl Iterator<Item = &ResolvedDist> {
-        self.graph
-            .raw_nodes()
-            .iter()
-            .filter_map(|node| match &node.weight {
-                Node::Dist { dist, install, .. } if *install => Some(dist),
-                _ => None,
-            })
+        self.hashes().map(|(dist, _)| dist)
     }
 
     /// Return the number of distributions in this resolution.
@@ -82,10 +77,10 @@ impl Resolution {
     #[must_use]
     pub fn filter(mut self, predicate: impl Fn(&ResolvedDist) -> bool) -> Self {
         for node in self.graph.node_weights_mut() {
-            if let Node::Dist { dist, install, .. } = node {
-                if !predicate(dist) {
-                    *install = false;
-                }
+            if let Node::Dist { dist, install, .. } = node
+                && !predicate(dist)
+            {
+                *install = false;
             }
         }
         self
@@ -98,10 +93,10 @@ impl Resolution {
     #[must_use]
     pub fn map(mut self, predicate: impl Fn(&ResolvedDist) -> Option<ResolvedDist>) -> Self {
         for node in self.graph.node_weights_mut() {
-            if let Node::Dist { dist, .. } = node {
-                if let Some(transformed) = predicate(dist) {
-                    *dist = transformed;
-                }
+            if let Node::Dist { dist, .. } = node
+                && let Some(transformed) = predicate(dist)
+            {
+                *dist = transformed;
             }
         }
         self
