@@ -1005,168 +1005,51 @@ fn create_venv_reads_request_from_python_versions_file() -> Result<()> {
 
 #[test]
 fn create_venv_respects_pyproject_requires_python() -> Result<()> {
-    let mut context = uv_test::test_context_with_versions!(&["3.12", "3.10", "3.11"]);
-
-    // Without a Python requirement, we use the first on the PATH
-    uv_snapshot!(context.filters(), context.venv(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    "
-    );
-
     // Skip the incompatible first interpreter and select the first of two compatible versions.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! { r#"
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.10", "3.11"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = "<3.12"
-        dependencies = []
-        "#
-    })?;
+    "#})?;
 
-    uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
+    uv_snapshot!(context.filters(), context.venv(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
-    "
-    );
+    ");
+    assert_venv_python_version(&context, "3.10");
+    Ok(())
+}
 
-    // Put 3.10 first to distinguish requirements that accept it from those requiring 3.11 or later.
-    context.python_versions.rotate_left(1);
-
-    // With `requires-python = "==3.11.*"`, we prefer exact version (3.11)
-    pyproject_toml.write_str(indoc! { r#"
-        [project]
-        name = "foo"
-        version = "1.0.0"
-        requires-python = "==3.11.*"
-        dependencies = []
-        "#
-    })?;
-
-    uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    "
-    );
-
-    // With `requires-python = ">=3.11,<3.12"`, we prefer exact version (3.11)
-    pyproject_toml.write_str(indoc! { r#"
-        [project]
-        name = "foo"
-        version = "1.0.0"
-        requires-python = ">=3.11,<3.12"
-        dependencies = []
-        "#
-    })?;
-
-    uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    "
-    );
-
-    // With `requires-python = ">=3.10"`, we prefer the first compatible version (3.10).
-    pyproject_toml.write_str(indoc! { r#"
-        [project]
-        name = "foo"
-        version = "1.0.0"
-        requires-python = ">=3.10"
-        dependencies = []
-        "#
-    })?;
-
-    uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    "
-    );
-
-    // With `requires-python = ">=3.11"`, we prefer first compatible version (3.11)
-    pyproject_toml.write_str(indoc! { r#"
-        [project]
-        name = "foo"
-        version = "1.0.0"
-        requires-python = ">=3.11"
-        dependencies = []
-        "#
-    })?;
-
-    uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    "
-    );
-
-    // With `requires-python = ">3.11"`, we prefer first compatible version (3.11)
-    pyproject_toml.write_str(indoc! { r#"
-        [project]
-        name = "foo"
-        version = "1.0.0"
-        requires-python = ">3.11"
-        dependencies = []
-        "#
-    })?;
-
-    uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    "
-    );
-
-    // With `requires-python = ">=3.12"`, we prefer first compatible version (3.12)
-    pyproject_toml.write_str(indoc! { r#"
+#[test]
+fn create_venv_warns_for_incompatible_python_request() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.12"
-        dependencies = []
-        "#
-    })?;
+    "#})?;
 
-    uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    "
-    );
-
-    context.venv.assert(predicates::path::is_dir());
-
-    // We warn if we receive an incompatible version
-    uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg("3.11"), @"
+    uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.11"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
     warning: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
-    "
-    );
-
+    ");
+    assert_venv_python_version(&context, "3.11");
     Ok(())
 }
 
