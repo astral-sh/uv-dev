@@ -8,7 +8,7 @@ use indoc::{formatdoc, indoc};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 
-use uv_test::{TestContext, copy_dir_ignore, site_packages_path, uv_snapshot};
+use uv_test::{TestContext, copy_dir_ignore, site_packages_path, uv_snapshot, venv_bin_path};
 
 /// Filter the user scheme, which differs between Windows and Unix.
 fn user_scheme_bin_filter() -> (String, String) {
@@ -138,44 +138,24 @@ fn find_uv_bin_prefix() -> anyhow::Result<()> {
 #[test]
 fn find_uv_bin_base_prefix() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+        .with_filtered_exe_suffix();
 
-    // Test base prefix fallback by mutating sys.base_prefix
-    // First, create a "base" environment with fake-uv installed
-    let base_venv = context.temp_dir.child("base-venv");
-    context.venv().arg(base_venv.path()).assert().success();
+    // Keep the module outside the base prefix so module-relative lookup cannot find this binary.
+    let base_prefix = context.temp_dir.join("base-prefix");
+    let scripts = venv_bin_path(&base_prefix);
+    fs::create_dir_all(&scripts)?;
+    let executable = scripts.join(format!("uv{}", std::env::consts::EXE_SUFFIX));
+    fs::write(executable, "")?;
 
-    // Install fake-uv in the "base" venv
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--python")
-        .arg(base_venv.path())
-        .arg(fake_uv(&context)?), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using Python 3.12.[X] environment at: base-venv
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
-    "
-    );
-
-    context.venv().arg("--clear").assert().success();
-
-    // Mutate `base_prefix` to simulate lookup in a system Python installation
     uv_snapshot!(context.filters(), context.python_command()
         .arg("-c")
-        .arg(format!(r#"import sys, uv; sys.base_prefix = "{}"; print(uv.find_uv_bin())"#, base_venv.path().portable_display()))
-        .env(EnvVars::PYTHONPATH, site_packages_path(base_venv.path(), "python3.12")), @"
+        .arg("import sys, uv; sys.base_prefix = sys.argv[1]; print(uv.find_uv_bin())")
+        .arg(&base_prefix)
+        .env(EnvVars::PYTHONPATH, context.workspace_root.join("python")), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [TEMP_DIR]/base-venv/[BIN]/uv
+    [TEMP_DIR]/base-prefix/[BIN]/uv
     "
     );
 
