@@ -427,9 +427,19 @@ fn show_files() {
     "
     );
 
-    // Windows has a different files order.
-    #[cfg(not(windows))]
-    uv_snapshot!(context.filters(), context.pip_show().arg("requests").arg("--files"), @"
+    let snapshot = uv_test::capture_uv_snapshot!(
+        context.filters(),
+        context.pip_show().arg("requests").arg("--files")
+    );
+    let (header, files) = snapshot.split_once("Files:\n").expect("missing file list");
+    let mut files = files.lines().collect::<Vec<_>>();
+    assert!(
+        files.iter().all(|line| line.starts_with("  ")),
+        "unexpected output after file list: {snapshot}"
+    );
+    // RECORD ordering varies by platform; the listed paths should not.
+    files.sort_unstable();
+    insta::assert_snapshot!(format!("{header}Files:\n{}\n", files.join("\n")), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: requests
