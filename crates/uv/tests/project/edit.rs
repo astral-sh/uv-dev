@@ -31,7 +31,7 @@ use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
 use uv_test::subdirectory_archive::SubdirectoryArchive;
-use uv_test::{diff_snapshot, uv_snapshot, venv_bin_path};
+use uv_test::{TestContext, diff_snapshot, uv_snapshot, venv_bin_path};
 
 /// Add a PyPI requirement.
 #[test]
@@ -8362,7 +8362,7 @@ fn add_remove_frozen_unreadable_lockfile() -> Result<()> {
     Ok(())
 }
 
-fn assert_edit_rolled_back(context: &uv_test::TestContext, pyproject: &str, lock: Option<&str>) {
+fn assert_edit_rolled_back(context: &TestContext, pyproject: &str, lock: Option<&str>) {
     assert_eq!(context.read("pyproject.toml"), pyproject);
     match lock {
         Some(lock) => assert_eq!(context.read("uv.lock"), lock),
@@ -8375,9 +8375,7 @@ fn assert_edit_rolled_back(context: &uv_test::TestContext, pyproject: &str, lock
     }
 }
 
-/// Restore both files when syncing fails after resolution has written a lockfile.
-#[test]
-fn remove_version_build_failure_reverts_project() -> Result<()> {
+fn project_with_failing_editable_build() -> Result<TestContext> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -8401,24 +8399,58 @@ fn remove_version_build_failure_reverts_project() -> Result<()> {
             Path(__file__).with_name("built").touch()
             raise RuntimeError("build failed")
     "#})?;
+    Ok(context)
+}
+
+fn assert_failed_build_rolled_back(context: &TestContext, pyproject: &str, lock: Option<&str>) {
+    context
+        .temp_dir
+        .child("built")
+        .assert(predicate::path::is_file());
+    assert_edit_rolled_back(context, pyproject, lock);
+}
+
+#[test]
+fn remove_build_failure_reverts_new_lock() -> Result<()> {
+    let context = project_with_failing_editable_build()?;
     let pyproject = context.read("pyproject.toml");
-    let assert_rollback = |lock: Option<&str>| -> Result<()> {
-        fs_err::remove_file(context.temp_dir.child("built"))?;
-        assert_edit_rolled_back(&context, &pyproject, lock);
-        Ok(())
-    };
 
     context.remove().arg("iniconfig").assert().code(1);
-    assert_rollback(None)?;
-    context.version().args(["--bump", "minor"]).assert().code(1);
-    assert_rollback(None)?;
+    assert_failed_build_rolled_back(&context, &pyproject, None);
+    Ok(())
+}
 
+#[test]
+fn remove_build_failure_reverts_existing_lock() -> Result<()> {
+    let context = project_with_failing_editable_build()?;
     context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
     let lock = context.read("uv.lock");
+
     context.remove().arg("iniconfig").assert().code(1);
-    assert_rollback(Some(&lock))?;
+    assert_failed_build_rolled_back(&context, &pyproject, Some(&lock));
+    Ok(())
+}
+
+#[test]
+fn version_build_failure_reverts_new_lock() -> Result<()> {
+    let context = project_with_failing_editable_build()?;
+    let pyproject = context.read("pyproject.toml");
+
     context.version().args(["--bump", "minor"]).assert().code(1);
-    assert_rollback(Some(&lock))?;
+    assert_failed_build_rolled_back(&context, &pyproject, None);
+    Ok(())
+}
+
+#[test]
+fn version_build_failure_reverts_existing_lock() -> Result<()> {
+    let context = project_with_failing_editable_build()?;
+    context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
+    let lock = context.read("uv.lock");
+
+    context.version().args(["--bump", "minor"]).assert().code(1);
+    assert_failed_build_rolled_back(&context, &pyproject, Some(&lock));
     Ok(())
 }
 
