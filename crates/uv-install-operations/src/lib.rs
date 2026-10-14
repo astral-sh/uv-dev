@@ -705,23 +705,21 @@ async fn execute_plan(
                         if summary.dir_count == 1 { "y" } else { "ies" },
                     );
                 }
-                Err(uv_installer::UninstallError::Uninstall(
-                    uv_install_wheel::Error::MissingRecord(_),
-                )) => {
+                Err(error) => {
+                    let missing_file = match error {
+                        uv_installer::UninstallError::Uninstall(
+                            uv_install_wheel::Error::MissingRecord(_),
+                        ) => "RECORD",
+                        uv_installer::UninstallError::Uninstall(
+                            uv_install_wheel::Error::MissingTopLevel(_),
+                        ) => "top_level.txt",
+                        error => return Err(error.into()),
+                    };
                     warn_user!(
-                        "Failed to uninstall package at `{}` due to missing `RECORD` file. Installation may result in an incomplete environment.",
+                        "Failed to uninstall package at `{}` due to missing `{missing_file}` file. Installation may result in an incomplete environment.",
                         dist_info.install_path().user_display().cyan(),
                     );
                 }
-                Err(uv_installer::UninstallError::Uninstall(
-                    uv_install_wheel::Error::MissingTopLevel(_),
-                )) => {
-                    warn_user!(
-                        "Failed to uninstall package at `{}` due to missing `top_level.txt` file. Installation may result in an incomplete environment.",
-                        dist_info.install_path().user_display().cyan(),
-                    );
-                }
-                Err(err) => return Err(err.into()),
             }
         }
 
