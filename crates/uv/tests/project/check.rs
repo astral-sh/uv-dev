@@ -5,6 +5,8 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
+#[cfg(feature = "test-pypi")]
+use predicates::path::is_dir;
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -20,6 +22,21 @@ fn workspace_check(context: &uv_test::TestContext) -> Command {
     // can exercise new ty features without disrupting other tests.
     command.env(EnvVars::UV_EXCLUDE_NEWER, "2026-09-10T00:00:00Z");
     command
+}
+
+#[cfg(feature = "test-pypi")]
+fn assert_installed_ty_version(context: &uv_test::TestContext, version: &'static str) {
+    context.venv.assert(is_dir().follow_links(true));
+    context
+        .python_command()
+        .args([
+            "-I",
+            "-c",
+            "from importlib.metadata import version; print(version('ty'), end='')",
+        ])
+        .assert()
+        .success()
+        .stdout(version);
 }
 
 fn write_workspace_member(context: &uv_test::TestContext, name: &str, source: &str) -> Result<()> {
@@ -1793,7 +1810,7 @@ async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()
     );
 
     assert!(context.temp_dir.child("uv.lock").exists());
-    assert!(context.site_packages().join("ty").exists());
+    assert_installed_ty_version(&context, "0.0.17");
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -2020,7 +2037,7 @@ fn check_uses_ty_version_from_production_dependency() -> Result<()> {
     "
     );
 
-    assert!(context.site_packages().join("ty").exists());
+    assert_installed_ty_version(&context, "0.0.16");
 
     Ok(())
 }
@@ -2066,7 +2083,7 @@ fn check_uses_ty_version_from_forked_lock() -> Result<()> {
     "
     );
 
-    assert!(context.site_packages().join("ty").exists());
+    assert_installed_ty_version(&context, "0.0.17");
 
     Ok(())
 }
