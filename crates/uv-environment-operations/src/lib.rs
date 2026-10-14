@@ -1999,9 +1999,12 @@ pub fn detect_conflicts(
     // can be declared as conflicting with groups. So if extra `x` and
     // group `g` are declared as conflicting, then enabling both of
     // those should result in an error.
-    let lock = target.lock();
+    let conflicts = target.lock().conflicts();
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+
     let packages = target.packages(extras, groups);
-    let conflicts = lock.conflicts();
     for set in conflicts.iter() {
         let mut enabled = set.iter().filter(|item| {
             packages.contains(item.package())
