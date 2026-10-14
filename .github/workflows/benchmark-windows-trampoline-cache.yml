@@ -1,0 +1,115 @@
+on:
+  workflow_call:
+    inputs:
+      variant:
+        required: true
+        type: string
+      target-arch:
+        required: true
+        type: string
+      cache-prefix:
+        required: true
+        type: string
+      require-warm-cache:
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+  UV_LOCKED: 1
+
+jobs:
+  benchmark:
+    name: ${{ inputs.variant }} on ${{ inputs.target-arch }}
+    timeout-minutes: 20
+    runs-on: ${{ inputs.target-arch == 'aarch64' && 'windows-11-arm' || 'windows-latest' }}
+    env:
+      TARGET_ARCH: ${{ inputs.target-arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      - name: Copy Git Repo to Dev Drive
+        run: Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+
+      - name: Install minimal Rust toolchain
+        if: inputs.variant == 'improved'
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: |
+          rustup toolchain install --profile minimal
+          rustup target add "$($env:TARGET_ARCH)-pc-windows-msvc"
+      - name: Install minimal trampoline Rust toolchain
+        if: inputs.variant == 'improved'
+        working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+        run: |
+          rustup toolchain install --profile minimal
+          rustup target add "$($env:TARGET_ARCH)-pc-windows-msvc"
+          rustup component add rust-src
+
+      - name: Restore baseline cache
+        if: inputs.variant == 'baseline'
+        id: baseline-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: ${{ inputs.cache-prefix }}
+          shared-key: ${{ inputs.variant }}-${{ inputs.target-arch }}
+          workspaces: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+          save-if: ${{ !inputs.require-warm-cache }}
+      - name: Restore improved cache
+        if: inputs.variant == 'improved'
+        id: improved-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: ${{ inputs.cache-prefix }}
+          shared-key: ${{ inputs.variant }}-${{ inputs.target-arch }}
+          workspaces: |
+            ${{ env.UV_WORKSPACE }}
+            ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+          save-if: ${{ !inputs.require-warm-cache }}
+      - name: Require an exact warm cache hit
+        if: inputs.require-warm-cache && steps.baseline-cache.outputs.cache-hit != 'true' && steps.improved-cache.outputs.cache-hit != 'true'
+        run: throw "The measurement requires an exact cache hit."
+
+      - name: Install baseline trampoline target and sources
+        if: inputs.variant == 'baseline'
+        working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+        run: |
+          rustup target add "$($env:TARGET_ARCH)-pc-windows-msvc"
+          rustup component add rust-src --target "$($env:TARGET_ARCH)-pc-windows-msvc"
+      - name: Install baseline builder target
+        if: inputs.variant == 'baseline'
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: rustup target add "$($env:TARGET_ARCH)-pc-windows-msvc"
+
+      - name: Test committed binaries
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: cargo test --locked -p uv-trampoline-builder --target "$($env:TARGET_ARCH)-pc-windows-msvc"
+      - name: Build new binaries
+        working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+        run: |
+          cargo build --locked --target "$($env:TARGET_ARCH)-pc-windows-msvc"
+          Copy-Item "target/$($env:TARGET_ARCH)-pc-windows-msvc/debug/uv-trampoline-console.exe" "../uv-trampoline-builder/trampolines/uv-trampoline-$($env:TARGET_ARCH)-console.exe"
+          Copy-Item "target/$($env:TARGET_ARCH)-pc-windows-msvc/debug/uv-trampoline-gui.exe" "../uv-trampoline-builder/trampolines/uv-trampoline-$($env:TARGET_ARCH)-gui.exe"
+      - name: Test new binaries
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: cargo test --locked -p uv-trampoline-builder --target "$($env:TARGET_ARCH)-pc-windows-msvc" --no-default-features
+
+      - name: Record cache result
+        env:
+          VARIANT: ${{ inputs.variant }}
+          CACHE_HIT: ${{ steps.baseline-cache.outputs.cache-hit == 'true' || steps.improved-cache.outputs.cache-hit == 'true' }}
+          REQUIRE_WARM_CACHE: ${{ inputs.require-warm-cache }}
+        run: |
+          @"
+          | Variant | Target | Warm cache required | Exact cache hit |
+          | --- | --- | --- | --- |
+          | $env:VARIANT | $env:TARGET_ARCH | $env:REQUIRE_WARM_CACHE | $env:CACHE_HIT |
+          "@ >> $env:GITHUB_STEP_SUMMARY
