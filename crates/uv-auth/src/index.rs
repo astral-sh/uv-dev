@@ -101,11 +101,7 @@ impl Indexes {
 
     /// Create a new [`Indexes`] instance from an iterator of [`Index`]s.
     pub fn from_indexes(urls: impl IntoIterator<Item = Index>) -> Self {
-        let mut index_urls = Self::new();
-        for url in urls {
-            index_urls.0.insert(url);
-        }
-        index_urls
+        Self(urls.into_iter().collect())
     }
 
     /// Get the most specific index for a URL, keeping the first match among equally specific roots.
