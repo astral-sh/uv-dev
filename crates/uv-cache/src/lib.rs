@@ -683,28 +683,19 @@ impl Cache {
         for entry in fs_err::read_dir(&self.root)? {
             let entry = entry?;
             let metadata = entry.metadata()?;
+            let name = entry.file_name();
 
-            if entry.file_name() == "CACHEDIR.TAG"
-                || entry.file_name() == ".gitignore"
-                || entry.file_name() == ".git"
-                || entry.file_name() == ".lock"
+            if matches!(
+                name.to_str(),
+                Some("CACHEDIR.TAG" | ".gitignore" | ".git" | ".lock")
+            ) || (metadata.is_dir() && CacheBucket::iter().any(|bucket| name == bucket.to_str()))
             {
                 continue;
             }
 
-            if metadata.is_dir() {
-                // If the directory is not a cache bucket, remove it.
-                if CacheBucket::iter().all(|bucket| entry.file_name() != bucket.to_str()) {
-                    let path = entry.path();
-                    debug!("Removing dangling cache bucket: {}", path.display());
-                    summary += self.remove_path(path)?;
-                }
-            } else {
-                // If the file is not a marker file, remove it.
-                let path = entry.path();
-                debug!("Removing dangling cache bucket: {}", path.display());
-                summary += self.remove_path(path)?;
-            }
+            let path = entry.path();
+            debug!("Removing dangling cache bucket: {}", path.display());
+            summary += self.remove_path(path)?;
         }
 
         // Second, remove all cached environments. Centralized project environments can be
