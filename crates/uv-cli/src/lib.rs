@@ -2762,8 +2762,8 @@ pub struct BuildArgs {
 
     /// Always build through PEP 517, don't use the fast path for the uv build backend.
     ///
-    /// By default, uv calls its build backend directly and does not create a PEP 517 build
-    /// environment. This option forces uv to use PEP 517 instead.
+    /// By default, uv calls the backend directly for projects using a compatible `uv_build` backend,
+    /// without creating a PEP 517 build environment. This option forces uv to use PEP 517 instead.
     #[arg(long, conflicts_with = "list")]
     force_pep517: bool,
 
