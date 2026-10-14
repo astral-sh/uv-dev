@@ -20,7 +20,7 @@ async fn fetch_fixture(fixture: &str) -> reqwest::Response {
         .unwrap_or_else(|error| panic!("failed to fetch ZIP fixture `{fixture}`: {error}"))
 }
 
-async fn unzip(fixture: &str) -> anyhow::Result<(), uv_extract::Error> {
+async fn unzip(fixture: &str) -> anyhow::Result<tempfile::TempDir, uv_extract::Error> {
     let reader = fetch_fixture(fixture)
         .await
         .bytes_stream()
@@ -28,11 +28,11 @@ async fn unzip(fixture: &str) -> anyhow::Result<(), uv_extract::Error> {
         .into_async_read();
 
     let target = tempfile::TempDir::new().map_err(uv_extract::Error::Io)?;
-    uv_extract::stream::unzip(reader.compat(), target).await?;
-    Ok(())
+    let (target, _) = uv_extract::stream::unzip(reader.compat(), target).await?;
+    Ok(target)
 }
 
-async fn unzip_seekable(fixture: &str) -> anyhow::Result<(), uv_extract::Error> {
+async fn unzip_seekable(fixture: &str) -> anyhow::Result<tempfile::TempDir, uv_extract::Error> {
     let bytes = fetch_fixture(fixture)
         .await
         .bytes()
@@ -49,69 +49,70 @@ async fn unzip_seekable(fixture: &str) -> anyhow::Result<(), uv_extract::Error> 
     tokio::task::spawn_blocking(move || uv_extract::unzip(archive, &target_path))
         .await
         .expect("seekable ZIP extraction task should not panic")?;
-    Ok(())
+    Ok(target)
+}
+
+fn assert_extracted_file(target: &tempfile::TempDir, file: &str, expected: &str) {
+    let actual = fs_err::read_to_string(target.path().join(file)).unwrap();
+    assert_eq!(actual, expected, "incorrect contents for {file}");
+}
+
+async fn assert_streamed_file(fixture: &str, file: &str, expected: &str) {
+    assert_extracted_file(&unzip(fixture).await.unwrap(), file, expected);
 }
 
 #[tokio::test]
 async fn malo_accept_comment() {
-    unzip("accept/comment.zip").await.unwrap();
-    insta::assert_debug_snapshot!((), @"()");
+    assert_streamed_file("accept/comment.zip", "foo", "abcdefgh").await;
 }
 
 #[tokio::test]
 async fn malo_accept_data_descriptor_zip64() {
-    unzip("accept/data_descriptor_zip64.zip").await.unwrap();
-    insta::assert_debug_snapshot!((), @"()");
+    assert_streamed_file("accept/data_descriptor_zip64.zip", "fixme", "hello").await;
 }
 
 #[tokio::test]
 async fn malo_accept_data_descriptor() {
-    unzip("accept/data_descriptor.zip").await.unwrap();
-    insta::assert_debug_snapshot!((), @"()");
+    assert_streamed_file("accept/data_descriptor.zip", "fixme", "hello").await;
 }
 
 #[tokio::test]
 async fn malo_accept_deflate() {
-    unzip("accept/deflate.zip").await.unwrap();
-    insta::assert_debug_snapshot!((), @"()");
+    assert_streamed_file("accept/deflate.zip", "foo", "abcdefgh").await;
 }
 
 #[tokio::test]
 async fn malo_seekable_accept_deflate() {
-    unzip_seekable("accept/deflate.zip").await.unwrap();
-    insta::assert_debug_snapshot!((), @"()");
+    assert_extracted_file(
+        &unzip_seekable("accept/deflate.zip").await.unwrap(),
+        "foo",
+        "abcdefgh",
+    );
 }
 
 #[tokio::test]
 async fn malo_accept_normal_deflate_zip64_extra() {
-    unzip("accept/normal_deflate_zip64_extra.zip")
-        .await
-        .unwrap();
-    insta::assert_debug_snapshot!((), @"()");
+    assert_streamed_file("accept/normal_deflate_zip64_extra.zip", "fixme", "hello").await;
 }
 
 #[tokio::test]
 async fn malo_accept_normal_deflate() {
-    unzip("accept/normal_deflate.zip").await.unwrap();
-    insta::assert_debug_snapshot!((), @"()");
+    assert_streamed_file("accept/normal_deflate.zip", "fixme", "hello").await;
 }
 
 #[tokio::test]
 async fn malo_accept_store() {
-    unzip("accept/store.zip").await.unwrap();
-    insta::assert_debug_snapshot!((), @"()");
+    assert_streamed_file("accept/store.zip", "foo", "abcdefgh").await;
 }
 
 #[tokio::test]
 async fn malo_accept_subdir() {
-    unzip("accept/subdir.zip").await.unwrap();
-    insta::assert_debug_snapshot!((), @"()");
+    assert_streamed_file("accept/subdir.zip", "foo/bar", "abcdefgh").await;
 }
 
 #[tokio::test]
 async fn malo_accept_zip64_eocd() {
-    unzip("accept/zip64_eocd.zip").await.unwrap();
-    insta::assert_debug_snapshot!((), @"()");
+    assert_streamed_file("accept/zip64_eocd.zip", "fixme", "hello").await;
 }
 
 #[tokio::test]
@@ -126,12 +127,7 @@ async fn malo_iffy_8bitcomment() {
 
 #[tokio::test]
 async fn malo_iffy_extra3byte() {
-    let result = unzip("iffy/extra3byte.zip").await;
-    insta::assert_debug_snapshot!(result, @"
-    Ok(
-        (),
-    )
-    ");
+    assert_streamed_file("iffy/extra3byte.zip", "foo", "abcdefgh").await;
 }
 
 #[tokio::test]
@@ -148,12 +144,7 @@ async fn malo_iffy_non_ascii_original_name() {
 
 #[tokio::test]
 async fn malo_iffy_nosubdir() {
-    let result = unzip("iffy/nosubdir.zip").await;
-    insta::assert_debug_snapshot!(result, @"
-    Ok(
-        (),
-    )
-    ");
+    assert_streamed_file("iffy/nosubdir.zip", "foo/bar", "abcdefgh").await;
 }
 
 #[tokio::test]
