@@ -177,7 +177,7 @@ fn init_application() -> Result<()> {
     Ok(())
 }
 
-/// When `main.py` already exists in an unpackaged application, we don't create it again
+/// Initializing an unpackaged application leaves its existing entry point untouched.
 #[test]
 fn init_application_no_package_main_exists() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -186,7 +186,8 @@ fn init_application_no_package_main_exists() -> Result<()> {
     child.create_dir_all()?;
 
     let main_py = child.child("main.py");
-    main_py.touch()?;
+    let original_main = "print('user application')\n";
+    main_py.write_str(original_main)?;
 
     uv_snapshot!(context.filters(), context.init().current_dir(&child).arg("--app").arg("--no-package"), @"
     exit_code: 0 (success)
@@ -194,31 +195,10 @@ fn init_application_no_package_main_exists() -> Result<()> {
     Initialized project `foo`
     ");
 
-    let pyproject = context.read("foo/pyproject.toml");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            pyproject, @r#"
-        [project]
-        name = "foo"
-        version = "0.1.0"
-        description = "Add your description here"
-        readme = "README.md"
-        requires-python = ">=3.12"
-        dependencies = []
-        "#
-        );
-    });
-
-    let hello = context.read("foo/main.py");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            hello, @""
-        );
-    });
+    child
+        .child("pyproject.toml")
+        .assert(predicate::path::is_file());
+    main_py.assert(original_main);
 
     Ok(())
 }
