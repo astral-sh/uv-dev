@@ -39,8 +39,8 @@ struct BazelCredentialResponse {
     headers: HashMap<String, Vec<String>>,
 }
 
-impl TryFrom<Credentials> for BazelCredentialResponse {
-    fn try_from(creds: Credentials) -> Result<Self> {
+impl TryFrom<&Credentials> for BazelCredentialResponse {
+    fn try_from(creds: &Credentials) -> Result<Self> {
         let header_str = creds
             .to_header_value()
             .context("Invalid authorization header")?
@@ -57,10 +57,10 @@ impl TryFrom<Credentials> for BazelCredentialResponse {
     type Error = anyhow::Error;
 }
 
-async fn credentials_for_url(
+async fn response_for_url(
     url: &DisplaySafeUrl,
     preview: Preview,
-) -> Result<Option<Credentials>> {
+) -> Result<BazelCredentialResponse> {
     // Use only the username from the URL, if present - discarding the password
     let url_credentials = Credentials::from_url(url)?;
     let username = url_credentials.as_ref().and_then(|c| c.username());
@@ -72,11 +72,10 @@ async fn credentials_for_url(
     }
 
     let backend = AuthBackend::from_settings(preview).await?;
-    let credentials = match &backend {
-        AuthBackend::System(provider) => provider.fetch(url, username).await,
-        AuthBackend::TextStore(store, _lock) => store.get_credentials(url, username)?.cloned(),
+    let Some(credentials) = backend.get_credentials(url, username).await? else {
+        return Ok(BazelCredentialResponse::default());
     };
-    Ok(credentials)
+    BazelCredentialResponse::try_from(credentials.as_ref())
 }
 
 /// Implement the Bazel credential helper protocol.
@@ -103,14 +102,9 @@ pub(crate) async fn helper(preview: Preview, printer: Printer) -> Result<ExitSta
 
     // TODO: make this logic generic over the protocol by providing `request.uri` from a
     // trait - that should help with adding new protocols
-    let credentials = credentials_for_url(&request.uri, preview).await?;
-
-    let response = serde_json::to_string(
-        &credentials
-            .map(BazelCredentialResponse::try_from)
-            .unwrap_or_else(|| Ok(BazelCredentialResponse::default()))?,
-    )
-    .context("Failed to serialize response as JSON")?;
+    let response = response_for_url(&request.uri, preview).await?;
+    let response =
+        serde_json::to_string(&response).context("Failed to serialize response as JSON")?;
     writeln!(printer.stdout_important(), "{response}")?;
     Ok(ExitStatus::Success)
 }

@@ -29,16 +29,10 @@ pub(crate) async fn token(
 
     let display_url = super::display_service(&service, &username);
 
-    let credentials = match &backend {
-        AuthBackend::System(provider) => provider
-            .fetch(url, Some(&username))
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for `{display_url}`"))?,
-        AuthBackend::TextStore(store, _lock) => store
-            .get_credentials(url, Some(&username))?
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for `{display_url}`"))?,
-    };
+    let credentials = backend
+        .get_credentials(url, Some(&username))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for `{display_url}`"))?;
 
     let Some(password) = credentials.password() else {
         bail!(
