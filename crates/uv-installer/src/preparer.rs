@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 use std::sync::Arc;
 
-use futures::{FutureExt, Stream, TryStreamExt, stream::FuturesUnordered};
+use futures::{FutureExt, TryStreamExt, stream::FuturesUnordered};
 use tracing::{debug, instrument};
 
 use uv_configuration::BuildOptions;
@@ -55,28 +55,6 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
         }
     }
 
-    /// Fetch, build, and unzip the distributions in parallel.
-    fn prepare_stream<'stream>(
-        &'stream self,
-        distributions: Vec<Arc<Dist>>,
-        in_flight: &'stream InFlight,
-        resolution: &'stream Resolution,
-    ) -> impl Stream<Item = Result<CachedDist, Error>> + 'stream {
-        distributions
-            .into_iter()
-            .map(async |dist| {
-                let wheel = self
-                    .get_wheel(Arc::unwrap_or_clone(dist), in_flight, resolution)
-                    .boxed_local()
-                    .await?;
-                if let Some(reporter) = self.reporter.as_ref() {
-                    reporter.on_progress(&wheel);
-                }
-                Ok::<CachedDist, Error>(wheel)
-            })
-            .collect::<FuturesUnordered<_>>()
-    }
-
     /// Download, build, and unzip a set of distributions.
     #[instrument(skip_all, fields(total = distributions.len()))]
     pub async fn prepare(
@@ -89,8 +67,19 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
         distributions
             .sort_unstable_by_key(|distribution| Reverse(distribution.size().unwrap_or(u64::MAX)));
 
-        let wheels = self
-            .prepare_stream(distributions, in_flight, resolution)
+        let wheels = distributions
+            .into_iter()
+            .map(async |dist| {
+                let wheel = self
+                    .get_wheel(Arc::unwrap_or_clone(dist), in_flight, resolution)
+                    .boxed_local()
+                    .await?;
+                if let Some(reporter) = self.reporter.as_ref() {
+                    reporter.on_progress(&wheel);
+                }
+                Ok::<CachedDist, Error>(wheel)
+            })
+            .collect::<FuturesUnordered<_>>()
             .try_collect()
             .await?;
 
@@ -100,6 +89,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
 
         Ok(wheels)
     }
+
     /// Download, build, and unzip a single wheel.
     #[instrument(skip_all, fields(name = % dist, size = ? dist.size(), url = dist.file().map(| file | file.url.to_string()).unwrap_or_default()))]
     async fn get_wheel(
