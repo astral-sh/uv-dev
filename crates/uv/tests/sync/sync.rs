@@ -17686,14 +17686,14 @@ fn toggle_workspace_editable() -> Result<()> {
     ");
     assert_install_mode("editable");
 
-    let lock = context.read("uv.lock");
+    let editable_lock = context.read("uv.lock");
 
     // The child should be editable by default.
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            editable_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -17752,6 +17752,7 @@ fn toggle_workspace_editable() -> Result<()> {
     ");
 
     assert_install_mode("non-editable");
+    assert_eq!(context.read("uv.lock"), editable_lock);
 
     uv_snapshot!(context.filters(), context.sync().arg("--editable"), @"
     exit_code: 0 (success)
@@ -17790,60 +17791,10 @@ fn toggle_workspace_editable() -> Result<()> {
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    let lock = context.read("uv.lock");
-
-    // The manifest source records the child as a regular directory.
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [manifest]
-        members = [
-            "child",
-            "project",
-        ]
-
-        [[package]]
-        name = "child"
-        version = "0.1.0"
-        source = { directory = "child" }
-        dependencies = [
-            { name = "iniconfig" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "iniconfig", specifier = ">=1" }]
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "child" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "child", directory = "child" }]
-        "#
-        );
-    });
+    // Both the child's source and the project's requirement now refer to a regular directory.
+    let non_editable_lock =
+        editable_lock.replace(r#"editable = "child""#, r#"directory = "child""#);
+    assert_eq!(context.read("uv.lock"), non_editable_lock);
 
     assert_install_mode("non-editable");
 
@@ -17858,6 +17809,7 @@ fn toggle_workspace_editable() -> Result<()> {
     ");
 
     assert_install_mode("editable");
+    assert_eq!(context.read("uv.lock"), non_editable_lock);
 
     Ok(())
 }
