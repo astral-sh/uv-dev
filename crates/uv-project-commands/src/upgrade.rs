@@ -637,7 +637,6 @@ fn select_requirements(
     let mut to_upgrade = Vec::new();
     let mut skipped = Vec::new();
     let mut found_packages = BTreeSet::new();
-    let mut selected_packages = Vec::new();
     for dependency in dependencies {
         let requirement = parse_dependency(dependency, "`project.dependencies`", &pyproject_path)?;
         if exclude.contains(&requirement.name)
@@ -673,9 +672,6 @@ fn select_requirements(
             });
             continue;
         }
-        if !selected_packages.contains(&requirement.name) {
-            selected_packages.push(requirement.name.clone());
-        }
         to_upgrade.push(UpgradableRequirement {
             package: requirement.name.clone(),
             dependency_type: DependencyType::Production,
@@ -694,21 +690,17 @@ fn select_requirements(
             bail!("Dependency `{package}` was not found in `project.dependencies`");
         }
     }
-    if is_explicit_selection {
-        selected_packages.clear();
-        for package in packages
+    let active_packages = to_upgrade.iter().map(|selected| &selected.package);
+    let selected_packages: Vec<_> = if is_explicit_selection {
+        let mut active_packages: BTreeSet<_> = active_packages.collect();
+        packages
             .iter()
-            .filter(|package| !exclude.contains(*package))
-        {
-            if to_upgrade
-                .iter()
-                .any(|selected| selected.package == *package)
-                && !selected_packages.contains(package)
-            {
-                selected_packages.push(package.clone());
-            }
-        }
-    }
+            .filter(|package| active_packages.remove(*package))
+            .cloned()
+            .collect()
+    } else {
+        active_packages.unique().cloned().collect()
+    };
 
     if selected_packages.is_empty() && skipped.is_empty() {
         bail!("No dependencies selected for upgrade");
