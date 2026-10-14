@@ -14663,7 +14663,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
         from importlib.metadata import version
         a_version = version("a")
 
-        if not a_version.startswith(expected_version):
+        if a_version != expected_version:
             print(f"Expected `a` version {expected_version} but got {a_version}", file=sys.stderr)
             sys.exit(1)
 
@@ -14671,28 +14671,8 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     "#})?;
     child.child("src/child/__init__.py").touch()?;
 
-    // Create a project that will resolve to a non-latest version of `a`
-    let parent = &context.temp_dir;
-    let pyproject_toml = parent.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "parent"
-        version = "0.1.0"
-        requires-python = ">=3.9"
-        dependencies = ["a<0.3"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-    "#})?;
-    context
-        .temp_dir
-        .child("src")
-        .child("parent")
-        .child("__init__.py")
-        .touch()?;
-
-    // Now add the child dependency.
+    // Resolve an older runtime version of `a` while `child` requires it at build time.
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "parent"
@@ -14703,9 +14683,10 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
         [tool.uv.sources]
         child = { path = "child" }
     "#})?;
+    context.temp_dir.child("src/parent/__init__.py").touch()?;
 
     // Ensure our build backend is checking the version correctly
-    uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".").env("EXPECTED_A_VERSION", "0.1"), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".").env("EXPECTED_A_VERSION", "0.1.0"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -14714,7 +14695,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
-             Expected `a` version 0.1 but got 0.3.0
+             Expected `a` version 0.1.0 but got 0.3.0
 
     hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
@@ -14736,8 +14717,8 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
         child = [{ requirement = "a", match-runtime = true }]
     "#})?;
 
-    // The child should be built with a 0.2.
-    uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".").env("EXPECTED_A_VERSION", "0.2"), @"
+    // The child should be built with the resolved runtime version.
+    uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".").env("EXPECTED_A_VERSION", "0.2.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -14763,9 +14744,9 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
         child = [{ requirement = "a", match-runtime = true }]
     "#})?;
 
-    // The child should be rebuilt with a 0.1, without `--reinstall`.
+    // A forced child rebuild should use the newly resolved runtime version.
     uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".")
-        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.2"), @"
+        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.2.0"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -14774,7 +14755,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
-             Expected `a` version 0.2 but got 0.1.0
+             Expected `a` version 0.2.0 but got 0.1.0
 
     hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
@@ -14782,7 +14763,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     ");
 
     uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".")
-        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.1"), @"
+        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.1.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
