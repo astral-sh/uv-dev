@@ -604,21 +604,6 @@ impl Workspace {
             .await
     }
 
-    /// Set the current project to the given workspace member.
-    ///
-    /// Returns `None` if the package is not part of the workspace.
-    fn with_current_project(
-        self: Arc<Self>,
-        package_name: PackageName,
-    ) -> Option<ProjectWorkspace> {
-        let member = self.packages.get(&package_name)?;
-        Some(ProjectWorkspace {
-            project_root: member.root().clone(),
-            project_name: package_name,
-            workspace: self,
-        })
-    }
-
     /// Set the [`ProjectWorkspace`] for a given workspace member.
     ///
     /// Assumes that the project name is unchanged in the updated [`PyProjectToml`], and that the
@@ -2087,15 +2072,17 @@ impl VirtualProject {
         package: PackageName,
     ) -> Result<Self, WorkspaceError> {
         let workspace = Workspace::discover(path, options, cache, workspace_cache).await?;
-        let Some(project_workspace) =
-            Workspace::with_current_project(workspace.clone(), package.clone())
-        else {
+        let Some(member) = workspace.packages.get(&package) else {
             return Err(WorkspaceError::from(WorkspaceErrorKind::NoSuchMember(
                 package,
                 workspace.install_path.clone(),
             )));
         };
-        Ok(Self::Project(project_workspace))
+        Ok(Self::Project(ProjectWorkspace {
+            project_root: member.root().clone(),
+            project_name: package,
+            workspace,
+        }))
     }
 
     /// Update the `pyproject.toml` for the current project.
