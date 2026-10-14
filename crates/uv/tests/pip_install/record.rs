@@ -11,8 +11,74 @@ use indoc::indoc;
 use uv_cache::{Cache, CacheBucket};
 use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
 use uv_install_wheel::{read_record, validate_and_heal_record};
-use uv_test::packse::generate_wheel_with_files;
+use uv_test::packse::{PackseServer, generate_wheel_with_files, scenario::Scenario};
 use uv_test::{apply_filters, uv_snapshot};
+
+/// Warn when replacing a distribution without a RECORD, and install a usable replacement.
+#[test]
+fn reinstall_incomplete() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "missing-installed-record"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.anyio.versions."3.7.0"]
+        sdist = false
+        requires = ["idna==3.6", "sniffio==1.3.1"]
+        [packages.anyio.versions."4.0.0"]
+        sdist = false
+        requires = ["idna==3.6", "sniffio==1.3.1"]
+        [packages.idna.versions."3.6"]
+        sdist = false
+        [packages.sniffio.versions."1.3.1"]
+        sdist = false
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str("anyio==3.7.0")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["-r", "requirements.txt", "--default-index"])
+        .arg(index.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==3.7.0
+     + idna==3.6
+     + sniffio==1.3.1
+    ");
+
+    fs_err::remove_file(context.site_packages().join("anyio-3.7.0.dist-info/RECORD"))?;
+    requirements.write_str("anyio==4.0.0")?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["-r", "requirements.txt", "--default-index"])
+        .arg(index.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/anyio-3.7.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - anyio==3.7.0
+     + anyio==4.0.0
+    ");
+
+    context.assert_installed("anyio", "4.0.0");
+    context.assert_installed("idna", "3.6");
+    context.assert_installed("sniffio", "1.3.1");
+    let record = read_record(File::open(
+        context.site_packages().join("anyio-4.0.0.dist-info/RECORD"),
+    )?)?;
+    assert!(
+        record.iter().any(|entry| entry.path == "anyio/__init__.py"),
+        "replacement RECORD does not contain the installed module"
+    );
+    Ok(())
+}
 
 /// Repair missing and extraneous RECORD entries before caching and installing the wheel.
 #[test]

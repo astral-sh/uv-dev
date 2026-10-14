@@ -1436,54 +1436,6 @@ fn reinstall_extras() -> Result<()> {
     Ok(())
 }
 
-/// Warn, but don't fail, when uninstalling incomplete packages.
-#[test]
-fn reinstall_incomplete() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Install anyio.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==3.7.0")?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    // Manually remove the `RECORD` file.
-    fs_err::remove_file(context.site_packages().join("anyio-3.7.0.dist-info/RECORD"))?;
-
-    // Re-install anyio.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==4.0.0")?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 1 package in [TIME]
-    warning: Failed to uninstall package at `[SITE_PACKAGES]/anyio-3.7.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - anyio==3.7.0
-     + anyio==4.0.0
-    "
-    );
-
-    Ok(())
-}
-
 /// Like `pip`, we (unfortunately) allow incompatible environments.
 #[test]
 fn allow_incompatibilities() -> Result<()> {
