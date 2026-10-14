@@ -17,7 +17,7 @@ pub(super) enum Value {
 }
 
 /// The data extracted from a `_sysconfigdata_` file.
-#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(super) struct SysconfigData(BTreeMap<String, Value>);
 
 impl SysconfigData {
@@ -45,18 +45,6 @@ impl SysconfigData {
         Ok(format!(
             "# system configuration generated and used by the sysconfig module\nbuild_time_vars = {output}\n",
         ))
-    }
-}
-
-impl std::fmt::Display for SysconfigData {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let output = {
-            let mut buf = Vec::new();
-            let mut serializer = serde_json::Serializer::new(&mut buf);
-            self.0.serialize(&mut serializer).unwrap();
-            String::from_utf8(buf).unwrap()
-        };
-        write!(f, "{output}")
     }
 }
 
