@@ -154,15 +154,20 @@ impl ResolverOutput {
                 continue;
             }
 
-            let hashes = distribution
+            // Keep all original hashes if none correspond to an allowed artifact.
+            let Some(first_allowed) = distribution
                 .hashes
                 .iter()
+                .position(|hash| allowed_hashes.contains(hash))
+            else {
+                continue;
+            };
+            let hashes = std::mem::replace(&mut distribution.hashes, HashDigests::empty());
+            distribution.hashes = hashes
+                .into_iter()
+                .skip(first_allowed)
                 .filter(|hash| allowed_hashes.contains(hash))
-                .cloned()
-                .collect::<Vec<_>>();
-            if !hashes.is_empty() {
-                distribution.hashes = HashDigests::from(hashes);
-            }
+                .collect();
         }
     }
 
