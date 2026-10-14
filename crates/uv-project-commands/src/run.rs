@@ -755,7 +755,7 @@ pub async fn run(
                 let mode = if let Some(frozen_source) = frozen {
                     LockMode::Frozen(frozen_source.into())
                 } else {
-                    crate::lock::resolve_lock_mode(venv.interpreter(), lock_check, isolated)
+                    LockMode::from_settings(venv.interpreter(), lock_check, isolated)
                 };
 
                 let result = match Box::pin(
