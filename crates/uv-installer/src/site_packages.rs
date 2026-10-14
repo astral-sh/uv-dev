@@ -704,6 +704,25 @@ pub enum SitePackagesDiagnostic {
     },
 }
 
+impl SitePackagesDiagnostic {
+    /// Returns `true` if any installed package involved in this diagnostic matches the predicate.
+    pub fn includes_any(&self, mut predicate: impl FnMut(&PackageName) -> bool) -> bool {
+        match self {
+            Self::MetadataUnavailable { package, .. }
+            | Self::TagsUnavailable { package, .. }
+            | Self::IncompatiblePythonVersion { package, .. }
+            | Self::IncompatiblePlatform { package }
+            | Self::MissingDependency { package, .. }
+            | Self::DuplicatePackage { package, .. } => predicate(package),
+            Self::IncompatibleDependency {
+                package,
+                requirement,
+                ..
+            } => predicate(package) || predicate(&requirement.name),
+        }
+    }
+}
+
 impl Diagnostic for SitePackagesDiagnostic {
     /// Convert the diagnostic into a user-facing message.
     fn message(&self) -> String {
@@ -755,19 +774,7 @@ impl Diagnostic for SitePackagesDiagnostic {
 
     /// Returns `true` if the [`PackageName`] is involved in this diagnostic.
     fn includes(&self, name: &PackageName) -> bool {
-        match self {
-            Self::MetadataUnavailable { package, .. } => name == package,
-            Self::TagsUnavailable { package, .. } => name == package,
-            Self::IncompatiblePythonVersion { package, .. } => name == package,
-            Self::IncompatiblePlatform { package } => name == package,
-            Self::MissingDependency { package, .. } => name == package,
-            Self::IncompatibleDependency {
-                package,
-                requirement,
-                ..
-            } => name == package || &requirement.name == name,
-            Self::DuplicatePackage { package, .. } => name == package,
-        }
+        self.includes_any(|package| name == package)
     }
 }
 
