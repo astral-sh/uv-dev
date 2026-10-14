@@ -311,37 +311,14 @@ fn uninstall_egg_info() -> Result<()> {
 
     let site_packages = ChildPath::new(context.site_packages());
 
-    // Manually create a `.egg-info` directory.
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .create_dir_all()?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("top_level.txt")
-        .write_str("zstd")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("SOURCES.txt")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("PKG-INFO")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("dependency_links.txt")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("entry_points.txt")
-        .write_str("")?;
-
-    // Manually create the package directory.
-    site_packages.child("zstd").create_dir_all()?;
-    site_packages
-        .child("zstd")
-        .child("__init__.py")
-        .write_str("")?;
+    let egg_info = site_packages.child("zstandard-0.22.0-py3.12.egg-info");
+    egg_info.child("top_level.txt").write_str("zstd")?;
+    egg_info.child("SOURCES.txt").touch()?;
+    egg_info.child("PKG-INFO").touch()?;
+    egg_info.child("dependency_links.txt").touch()?;
+    egg_info.child("entry_points.txt").touch()?;
+    let package = site_packages.child("zstd");
+    package.child("__init__.py").touch()?;
 
     // Run `pip uninstall`.
     uv_snapshot!(context.pip_uninstall()
@@ -351,6 +328,9 @@ fn uninstall_egg_info() -> Result<()> {
     Uninstalled 1 package in [TIME]
      - zstandard==0.22.0
     ");
+
+    egg_info.assert(predicates::path::missing());
+    package.assert(predicates::path::missing());
 
     Ok(())
 }
@@ -455,37 +435,14 @@ fn dry_run_uninstall_egg_info() -> Result<()> {
 
     let site_packages = ChildPath::new(context.site_packages());
 
-    // Manually create a `.egg-info` directory.
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .create_dir_all()?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("top_level.txt")
-        .write_str("zstd")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("SOURCES.txt")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("PKG-INFO")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("dependency_links.txt")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("entry_points.txt")
-        .write_str("")?;
-
-    // Manually create the package directory.
-    site_packages.child("zstd").create_dir_all()?;
-    site_packages
-        .child("zstd")
-        .child("__init__.py")
-        .write_str("")?;
+    let egg_info = site_packages.child("zstandard-0.22.0-py3.12.egg-info");
+    egg_info.child("top_level.txt").write_str("zstd")?;
+    egg_info.child("SOURCES.txt").touch()?;
+    egg_info.child("PKG-INFO").touch()?;
+    egg_info.child("dependency_links.txt").touch()?;
+    egg_info.child("entry_points.txt").touch()?;
+    let package = site_packages.child("zstd");
+    package.child("__init__.py").touch()?;
 
     // Run `pip uninstall`.
     uv_snapshot!(context.pip_uninstall()
@@ -497,14 +454,8 @@ fn dry_run_uninstall_egg_info() -> Result<()> {
      - zstandard==0.22.0
     ");
 
-    // The `.egg-info` directory should still exist.
-    assert!(
-        site_packages
-            .child("zstandard-0.22.0-py3.12.egg-info")
-            .exists()
-    );
-    // The package directory should still exist.
-    assert!(site_packages.child("zstd").child("__init__.py").exists());
+    egg_info.child("top_level.txt").assert("zstd");
+    package.child("__init__.py").assert("");
 
     Ok(())
 }
