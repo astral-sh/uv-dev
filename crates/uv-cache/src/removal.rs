@@ -192,13 +192,7 @@ impl Removal {
             let entry = entry?;
 
             // Keep the root lock in place for other uv processes.
-            if skip_locked_file
-                && entry.file_name() == ".lock"
-                && entry
-                    .path()
-                    .strip_prefix(&path)
-                    .is_ok_and(|suffix| suffix == Path::new(".lock"))
-            {
+            if skip_locked_file && entry.depth() == 1 && entry.file_name() == ".lock" {
                 continue;
             }
 
@@ -207,7 +201,7 @@ impl Removal {
                 remove_dir(entry.path())?;
             } else if entry.file_type().is_dir() {
                 // Keep the root directory containing the lock, too.
-                if skip_locked_file && entry.path() == path.as_ref() {
+                if skip_locked_file && entry.depth() == 0 {
                     continue;
                 }
 
