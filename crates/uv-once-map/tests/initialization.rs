@@ -36,6 +36,24 @@ async fn cancelled_initialization_does_not_remove_a_completed_entry() {
 }
 
 #[tokio::test]
+async fn cancelled_initialization_does_not_remove_a_pending_replacement() {
+    let map = OnceMap::<_, _>::default();
+    let mut owner = Box::pin(map.get_or_init("package", pending::<u32>()));
+    assert!(poll!(&mut owner).is_pending());
+    assert_eq!(map.remove(&"package"), None);
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let mut replacement = Box::pin(map.get_or_init("package", async { receiver.await.unwrap() }));
+    assert!(poll!(&mut replacement).is_pending());
+
+    drop(owner);
+    sender.send(42).unwrap();
+
+    assert_eq!(replacement.await, 42);
+    assert_eq!(map.get(&"package"), Some(42));
+}
+
+#[tokio::test]
 async fn initialization_returns_a_result_published_by_another_caller() {
     let map = OnceMap::<_, _>::default();
     let (sender, receiver) = tokio::sync::oneshot::channel();
