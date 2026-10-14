@@ -342,17 +342,18 @@ impl Credentials {
     /// Returns an error if the bearer token contains invalid header characters.
     pub fn to_header_value(&self) -> Result<HeaderValue, InvalidHeaderValue> {
         let header_bytes = match self {
-            Self::Basic { .. } => {
+            Self::Basic { username, password } => {
                 // See: <https://github.com/seanmonstar/reqwest/blob/2c11ef000b151c2eebeed2c18a7b81042220c6b0/src/util.rs#L3>
                 let mut buf = b"Basic ".to_vec();
                 {
                     let mut encoder = EncoderWriter::new(&mut buf, &BASE64_STANDARD);
-                    write!(encoder, "{}:", self.username().unwrap_or_default())
-                        .expect("Write to base64 encoder should succeed");
-                    if let Some(password) = self.password() {
-                        write!(encoder, "{password}")
-                            .expect("Write to base64 encoder should succeed");
-                    }
+                    write!(
+                        encoder,
+                        "{}:{}",
+                        username.as_deref().unwrap_or_default(),
+                        password.as_ref().map_or("", Password::as_str)
+                    )
+                    .expect("Write to base64 encoder should succeed");
                 }
                 buf
             }
