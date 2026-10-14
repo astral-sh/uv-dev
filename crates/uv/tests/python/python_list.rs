@@ -60,18 +60,23 @@ fn python_list_default_arch() {
 }
 
 #[test]
+fn python_list_without_interpreters() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.python_list(), @"
+    exit_code: 0 (success)
+    ");
+}
+
+#[test]
 #[cfg(feature = "test-python")]
-fn python_list() -> Result<()> {
-    let mut context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+fn python_list() {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
         .with_filtered_python_keys()
         .with_collapsed_whitespace();
 
-    uv_snapshot!(context.filters(), context.python_list().env(EnvVars::UV_PYTHON_SEARCH_PATH, ""), @"
-    exit_code: 0 (success)
-    ");
-
-    // We show all interpreters
+    // Listings are ordered by version, not by the search path.
     uv_snapshot!(context.filters(), context.python_list(), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -79,71 +84,40 @@ fn python_list() -> Result<()> {
     cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
     ");
 
-    // Request Python 3.12
     uv_snapshot!(context.filters(), context.python_list().arg("3.12"), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
     ");
 
-    // Request Python 3.11
-    uv_snapshot!(context.filters(), context.python_list().arg("3.11"), @"
+    uv_snapshot!(context.filters(), context.python_list().arg("pypy"), @"
     exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
     ");
+}
 
-    // Request CPython
-    uv_snapshot!(context.filters(), context.python_list().arg("cpython"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
-    cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
-    ");
-
-    // Request CPython 3.12
-    uv_snapshot!(context.filters(), context.python_list().arg("cpython@3.12"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
-    ");
-
-    // Request CPython 3.12 via partial key syntax
-    uv_snapshot!(context.filters(), context.python_list().arg("cpython-3.12"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
-    ");
-
-    // Request CPython 3.12 for the fixture interpreter's platform.
-    let (_, python) = &context.python_versions[1];
+#[test]
+#[cfg(feature = "test-python")]
+fn python_list_filters_installed_interpreter_architecture() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_filtered_python_symlinks()
+        .with_filtered_python_keys()
+        .with_collapsed_whitespace();
+    let (_, python) = &context.python_versions[0];
     let (os, arch) = interpreter_platform(&context, python)?;
+
     uv_snapshot!(context.filters(), context.python_list().arg(format!("cpython-3.12-{os}-{arch}")), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
     ");
 
-    // Request PyPy (which should be missing)
-    uv_snapshot!(context.filters(), context.python_list().arg("pypy"), @"
+    let different_arch = if arch == "aarch64".parse()? {
+        "x86_64"
+    } else {
+        "aarch64"
+    };
+    uv_snapshot!(context.filters(), context.python_list().arg(format!("cpython-3.12-{os}-{different_arch}")), @"
     exit_code: 0 (success)
-    ");
-
-    // Swap the order of the Python versions
-    context.python_versions.reverse();
-
-    uv_snapshot!(context.filters(), context.python_list(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
-    cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
-    ");
-
-    // Request Python 3.11
-    uv_snapshot!(context.filters(), context.python_list().arg("3.11"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
     ");
     Ok(())
 }
