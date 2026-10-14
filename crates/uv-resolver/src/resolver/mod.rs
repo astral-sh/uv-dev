@@ -614,7 +614,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     let version = match version {
                         ResolverVersion::Unforked(version) => version,
                         ResolverVersion::Forked(forks) => {
-                            forked_states.extend(state.split_versions(forks));
+                            forked_states.extend(state.split_versions(forks.into_iter()));
                             continue 'FORK;
                         }
                         ResolverVersion::Unavailable(version, reason) => {
@@ -802,14 +802,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                                 // Revisit the version in each fork so its dependencies are added
                                 // under the narrowed Python requirement.
-                                let forks = forks
-                                    .into_iter()
-                                    .map(|env| VersionFork {
-                                        env,
-                                        id: next_id,
-                                        version: None,
-                                    })
-                                    .collect();
+                                let forks = forks.into_iter().map(|env| VersionFork {
+                                    env,
+                                    id: next_id,
+                                    version: None,
+                                });
                                 forked_states.extend(state.split_versions(forks));
                                 continue 'FORK;
                             }
@@ -901,7 +898,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         assert!(forks.len() >= 2);
         let package = current_state.next;
         current_state
-            .split(forks)
+            .split(forks.into_iter())
             .map(|(fork, state)| {
                 let env = fork.env.clone();
                 (fork, state.with_env(env))
@@ -2656,10 +2653,10 @@ impl<'index> ForkState<'index> {
     }
 
     /// Pair each fork with a resolver state, cloning only while another fork remains.
-    fn split<T>(self, forks: Vec<T>) -> impl Iterator<Item = (T, Self)> {
+    fn split<T>(self, forks: impl ExactSizeIterator<Item = T>) -> impl Iterator<Item = (T, Self)> {
         let fork_count = forks.len();
         let mut current = Some(self);
-        forks.into_iter().enumerate().map(move |(index, fork)| {
+        forks.enumerate().map(move |(index, fork)| {
             let state = current.take().expect("a state is available for each fork");
             if index + 1 < fork_count {
                 current = Some(state.clone());
@@ -2669,7 +2666,10 @@ impl<'index> ForkState<'index> {
     }
 
     /// Apply the environment and continuation selected for each version fork.
-    fn split_versions(self, forks: Vec<VersionFork>) -> impl Iterator<Item = Self> {
+    fn split_versions(
+        self,
+        forks: impl ExactSizeIterator<Item = VersionFork>,
+    ) -> impl Iterator<Item = Self> {
         self.split(forks).map(|(fork, state)| {
             let continuation = match fork.version {
                 Some(version) => ForkContinuation::UseVersion {
