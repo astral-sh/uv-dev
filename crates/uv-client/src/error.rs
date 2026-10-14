@@ -694,41 +694,24 @@ impl WrappedReqwestError {
     /// * dns error: failed to lookup address information: Name or service not known
     /// * failed to lookup address information: Name or service not known
     fn is_likely_offline(&self) -> bool {
-        if let Some(reqwest_err) = self.inner() {
-            if !reqwest_err.is_connect() {
-                return false;
-            }
-            // Self is "error sending request for url", the first source is "error trying to connect",
-            // the second source is "dns error". We have to check for the string because hyper errors
-            // are opaque.
-            if std::error::Error::source(&reqwest_err)
-                .and_then(|err| err.source())
-                .is_some_and(|err| err.to_string().starts_with("dns error: "))
-            {
-                return true;
-            }
-        }
-        false
+        self.has_connect_error_source("dns error: ")
     }
 
     /// Check if the error chain contains a `reqwest` error that looks like this:
     /// * invalid peer certificate: `UnknownIssuer`
     fn is_ssl(&self) -> bool {
-        if let Some(reqwest_err) = self.inner() {
-            if !reqwest_err.is_connect() {
-                return false;
-            }
-            // Self is "error sending request for url", the first source is "error trying to connect",
-            // the second source is "dns error". We have to check for the string because hyper errors
-            // are opaque.
-            if std::error::Error::source(&reqwest_err)
-                .and_then(|err| err.source())
-                .is_some_and(|err| err.to_string().starts_with("invalid peer certificate: "))
-            {
-                return true;
-            }
-        }
-        false
+        self.has_connect_error_source("invalid peer certificate: ")
+    }
+
+    /// Check the second source of a connection error. Hyper's errors are opaque, so the source
+    /// must be identified by its message.
+    fn has_connect_error_source(&self, prefix: &str) -> bool {
+        self.inner().is_some_and(|error| {
+            error.is_connect()
+                && std::error::Error::source(error)
+                    .and_then(|err| err.source())
+                    .is_some_and(|err| err.to_string().starts_with(prefix))
+        })
     }
 }
 
