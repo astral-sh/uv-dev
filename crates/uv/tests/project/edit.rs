@@ -15561,15 +15561,6 @@ async fn add_malware_detected() {
         .mount(&server)
         .await;
 
-    Mock::given(method("GET"))
-        .and(path("/v1/vulns/MAL-2026-1234"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "MAL-2026-1234",
-            "modified": "2026-01-01T00:00:00Z",
-        })))
-        .mount(&server)
-        .await;
-
     uv_snapshot!(context.filters(), context
         .add()
         .arg("iniconfig==2.0.0")
