@@ -105,23 +105,34 @@ fn python_uninstall_rejects_target_with_all() {
 }
 
 #[test]
-fn python_upgrade_not_allowed() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_managed_python_dirs();
+fn python_upgrade_rejects_patch() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
 
-    // Request a patch upgrade
-    uv_snapshot!(context.filters(), context.python_upgrade().arg("--preview").arg("3.13.0"), @"
+    uv_snapshot!(context.filters(), context.python_upgrade().arg("3.13.0"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: `uv python upgrade` only accepts minor versions, got: 3.13.0
     ");
+}
 
-    // Request a pre-release upgrade
-    uv_snapshot!(context.filters(), context.python_upgrade().arg("--preview").arg("3.14rc3"), @"
+#[test]
+fn python_upgrade_rejects_prerelease() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_upgrade().arg("3.14rc3"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: `uv python upgrade` only accepts minor versions, got: 3.14rc3
+    ");
+}
+
+#[test]
+fn python_install_upgrade_rejects_patch() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_install().arg("--upgrade").arg("3.11.4"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: `uv python install --upgrade` only accepts minor versions, got: 3.11.4
     ");
 }
