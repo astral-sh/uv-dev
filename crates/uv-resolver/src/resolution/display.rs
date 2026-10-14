@@ -382,9 +382,10 @@ fn reduce_graph<'graph, 'dist, K: Eq + Hash>(
     };
 
     // Re-add the edges to the reduced graph.
-    for edge in graph.edge_indices() {
-        let (source, target) = graph.edge_endpoints(edge).unwrap();
-        let (Some(source), Some(target)) = (remap[source.index()], remap[target.index()]) else {
+    for edge in graph.edge_references() {
+        let (Some(source), Some(target)) =
+            (remap[edge.source().index()], remap[edge.target().index()])
+        else {
             continue;
         };
 
