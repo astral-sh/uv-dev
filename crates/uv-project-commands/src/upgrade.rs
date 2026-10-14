@@ -647,28 +647,24 @@ fn select_requirements(
 
         found_packages.insert(requirement.name.clone());
         let mut effective_marker = requirement.marker.and(resolution_marker);
-        if effective_marker.is_false() {
-            skipped.push(SkippedRequirement {
-                package: requirement.name.clone(),
-                dependency_type: DependencyType::Production,
-                original_text: dependency.clone(),
-                display_text: display_requirement(&requirement),
-                reason: SkippedReason::EnvironmentOrPythonRequirement,
+        let skipped_reason = if effective_marker.is_false() {
+            Some(SkippedReason::EnvironmentOrPythonRequirement)
+        } else {
+            effective_marker = effective_marker.simplify_not_extras_with(|extra| {
+                optional_dependencies
+                    .is_none_or(|optional_dependencies| !optional_dependencies.contains_key(extra))
             });
-            continue;
-        }
-
-        effective_marker = effective_marker.simplify_not_extras_with(|extra| {
-            optional_dependencies
-                .is_none_or(|optional_dependencies| !optional_dependencies.contains_key(extra))
-        });
-        if effective_marker.is_false() {
+            effective_marker
+                .is_false()
+                .then_some(SkippedReason::UndefinedExtra)
+        };
+        if let Some(reason) = skipped_reason {
             skipped.push(SkippedRequirement {
                 package: requirement.name.clone(),
                 dependency_type: DependencyType::Production,
                 original_text: dependency.clone(),
                 display_text: display_requirement(&requirement),
-                reason: SkippedReason::UndefinedExtra,
+                reason,
             });
             continue;
         }
