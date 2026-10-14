@@ -496,23 +496,17 @@ fn non_project_group_python_requirements_in_lockfile() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    // An older lock must be updated when it omits the root's Python requirements.
-    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [manifest]
-        members = ["member"]
-
-        [[package]]
-        name = "member"
-        version = "1.0.0"
-        source = { virtual = "member" }
-    "#})?;
+    // Omitting only the root's group-specific Python requirements invalidates the lock.
+    let mut missing_group_requirements = contents.parse::<DocumentMut>()?;
+    missing_group_requirements["manifest"]
+        .as_table_mut()
+        .context("generated lock has no workspace manifest")?
+        .remove("group-requires-python")
+        .context("generated lock has no root group Python requirements")?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&missing_group_requirements.to_string())?;
 
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
     exit_code: 1 (failure)
@@ -528,6 +522,7 @@ fn non_project_group_python_requirements_in_lockfile() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+    assert_eq!(context.read("uv.lock"), contents);
 
     // Changing an included group's bound makes the lock stale even without dependencies.
     pyproject.write_str(indoc! {r#"
