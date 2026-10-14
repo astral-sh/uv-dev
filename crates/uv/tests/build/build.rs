@@ -1585,6 +1585,55 @@ fn build_dependency_check_isolated_build_calls_dependency_hook_once() -> Result<
     Ok(())
 }
 
+/// Backend-provided requirements must not override configured extra build dependencies.
+#[test]
+fn build_dynamic_requirements_respect_extra_build_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv.extra-build-dependencies]
+        project = ["ok==1.0.0"]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from importlib.metadata import version
+        from pathlib import Path
+        import zipfile
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return ["ok>=1"]
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            installed = version("ok")
+            assert installed == "1.0.0", installed
+            filename = "project-0.1.0-py3-none-any.whl"
+            with zipfile.ZipFile(Path(wheel_directory) / filename, "w") as wheel:
+                wheel.writestr("project-0.1.0.dist-info/METADATA", "Metadata-Version: 2.3\nName: project\nVersion: 0.1.0\n")
+                wheel.writestr("project-0.1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+                wheel.writestr("project-0.1.0.dist-info/RECORD", "")
+            return filename
+    "#})?;
+    uv_snapshot!(context.filters(), context.build()
+        .args(["--wheel", "--offline", "--no-index", "--find-links"])
+        .arg(context.workspace_root.join("test/links"))
+        .current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/project-0.1.0-py3-none-any.whl
+    ");
+    Ok(())
+}
+
 /// Regression test for <https://github.com/astral-sh/uv/issues/18283>.
 ///
 /// `uv build --all` should respect `tool.uv.build-constraint-dependencies` declared at the

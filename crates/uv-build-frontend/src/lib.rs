@@ -500,9 +500,7 @@ impl SourceBuild {
             {
                 debug!("Installing extra requirements for build backend");
                 let requirements: Vec<_> = build
-                    .pep517_backend
-                    .requirements
-                    .iter()
+                    .build_requirements()
                     .cloned()
                     .chain(extra_requires)
                     .collect();
