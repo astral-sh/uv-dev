@@ -2,9 +2,8 @@
 //!
 //! Useful for testing `--find-links` with an HTTP URL.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Arc;
 
 use indoc::formatdoc;
 use wiremock::{Request, ResponseTemplate};
@@ -20,8 +19,7 @@ pub struct FindLinksServer {
 impl FindLinksServer {
     /// Start a server that serves all files in the given directory.
     pub fn new(directory: &Path) -> Self {
-        let mut files: HashMap<String, FileData> = HashMap::new();
-        let mut filenames: Vec<String> = Vec::new();
+        let mut files = BTreeMap::new();
 
         for entry in fs_err::read_dir(directory).expect("failed to read find-links directory") {
             let entry = entry.expect("failed to read directory entry");
@@ -33,37 +31,24 @@ impl FindLinksServer {
                 continue;
             };
             let bytes = fs_err::read(&path).expect("failed to read file");
-            files.insert(filename.clone(), FileData::Bytes(bytes.into()));
-            filenames.push(filename);
+            files.insert(filename, FileData::Bytes(bytes.into()));
         }
-        filenames.sort();
-
-        let files = Arc::new(files);
-        let filenames = Arc::new(filenames);
-        let server = HttpServer::start(move |request, server_uri| {
-            handle_request(request, server_uri, &files, &filenames)
-        });
-
-        Self { server }
+        Self::from_files(files)
     }
 
     /// Start a server that serves the pinned registry artifacts used by tests.
     pub fn vendor() -> Self {
-        let mut files: HashMap<String, FileData> = HashMap::new();
-        let mut filenames: Vec<String> = Vec::new();
+        let files = vendor_artifacts()
+            .iter()
+            .map(|artifact| (artifact.filename.to_string(), FileData::Vendor(artifact)))
+            .collect();
+        Self::from_files(files)
+    }
 
-        for artifact in vendor_artifacts() {
-            files.insert(artifact.filename.to_string(), FileData::Vendor(artifact));
-            filenames.push(artifact.filename.to_string());
-        }
-        filenames.sort();
-
-        let files = Arc::new(files);
-        let filenames = Arc::new(filenames);
+    fn from_files(files: BTreeMap<String, FileData>) -> Self {
         let server = HttpServer::start(move |request, server_uri| {
-            handle_request(request, server_uri, &files, &filenames)
+            handle_request(request, server_uri, &files)
         });
-
         Self { server }
     }
 
@@ -76,14 +61,13 @@ impl FindLinksServer {
 fn handle_request(
     request: &Request,
     server_uri: &str,
-    files: &HashMap<String, FileData>,
-    filenames: &[String],
+    files: &BTreeMap<String, FileData>,
 ) -> ResponseTemplate {
     let path = request.url.path();
 
     if path == "/" {
-        let links = filenames
-            .iter()
+        let links = files
+            .keys()
             .map(|filename| format!("<a href=\"{server_uri}/{filename}\">{filename}</a>"))
             .collect::<Vec<_>>()
             .join("\n");
