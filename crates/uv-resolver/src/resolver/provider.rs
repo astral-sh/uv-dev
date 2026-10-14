@@ -203,30 +203,26 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
                     })
                     .collect(),
             )),
-            Err(err) => match err.kind() {
-                uv_client::ErrorKind::RemotePackageNotFound(_) => {
-                    if let Some(flat_index) = flat_distributions {
-                        Ok(VersionsResponse::Found(vec![VersionMap::from(flat_index)]))
-                    } else {
-                        Ok(VersionsResponse::NotFound)
-                    }
+            Err(err) => match (err.kind(), flat_distributions) {
+                (
+                    uv_client::ErrorKind::RemotePackageNotFound(_)
+                    | uv_client::ErrorKind::NoIndex(_)
+                    | uv_client::ErrorKind::Offline(_),
+                    Some(distributions),
+                ) => Ok(VersionsResponse::Found(vec![VersionMap::from(
+                    distributions,
+                )])),
+                (uv_client::ErrorKind::RemotePackageNotFound(_), None) => {
+                    Ok(VersionsResponse::NotFound)
                 }
-                uv_client::ErrorKind::NoIndex(_) => {
-                    if let Some(flat_index) = flat_distributions {
-                        Ok(VersionsResponse::Found(vec![VersionMap::from(flat_index)]))
-                    } else if flat_index.is_some_and(FlatIndex::offline) {
+                (uv_client::ErrorKind::NoIndex(_), None) => {
+                    if flat_index.is_some_and(FlatIndex::offline) {
                         Ok(VersionsResponse::Offline)
                     } else {
                         Ok(VersionsResponse::NoIndex)
                     }
                 }
-                uv_client::ErrorKind::Offline(_) => {
-                    if let Some(flat_index) = flat_distributions {
-                        Ok(VersionsResponse::Found(vec![VersionMap::from(flat_index)]))
-                    } else {
-                        Ok(VersionsResponse::Offline)
-                    }
-                }
+                (uv_client::ErrorKind::Offline(_), None) => Ok(VersionsResponse::Offline),
                 _ => Err(err),
             },
         }
@@ -278,12 +274,8 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
                         kind => Err(uv_client::Error::new(kind, retries, duration).into()),
                     }
                 }
-                uv_distribution::Error::WheelMetadataVersionMismatch { .. } => {
-                    Ok(MetadataResponse::Unavailable(
-                        MetadataUnavailable::InconsistentMetadata(Arc::new(err)),
-                    ))
-                }
-                uv_distribution::Error::WheelMetadataNameMismatch { .. } => {
+                uv_distribution::Error::WheelMetadataVersionMismatch { .. }
+                | uv_distribution::Error::WheelMetadataNameMismatch { .. } => {
                     Ok(MetadataResponse::Unavailable(
                         MetadataUnavailable::InconsistentMetadata(Arc::new(err)),
                     ))

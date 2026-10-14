@@ -1,8 +1,7 @@
 use std::cmp::Reverse;
 
-use hashbrown::hash_map::{EntryRef, OccupiedEntry};
+use hashbrown::hash_map::EntryRef;
 use pubgrub::DependencyProvider;
-use rustc_hash::FxBuildHasher;
 
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -53,59 +52,31 @@ impl PubGrubPriorities {
         };
 
         let len = self.package_priority.len();
+        let classify = |index| {
+            let index = Reverse(index);
+            if urls.get(name).is_some() {
+                PubGrubPriority::DirectUrl(index)
+            } else if version.is_singleton_constraint() {
+                PubGrubPriority::Singleton(index)
+            } else {
+                PubGrubPriority::Unspecified(index)
+            }
+        };
         match self.package_priority.entry_ref(name) {
             EntryRef::Occupied(mut entry) => {
                 // Preserve the original index.
-                let index = Self::get_index(&entry).unwrap_or(len);
+                let index = entry.get().index().unwrap_or(len);
+                let priority = classify(index);
 
-                // Compute the priority.
-                let priority = if urls.get(name).is_some() {
-                    PubGrubPriority::DirectUrl(Reverse(index))
-                } else if version.is_singleton_constraint() {
-                    PubGrubPriority::Singleton(Reverse(index))
-                } else {
-                    // Keep the conflict-causing packages to avoid loops where we seesaw between
-                    // `Unspecified` and `Conflict*`.
-                    if matches!(
-                        entry.get(),
-                        PubGrubPriority::ConflictEarly(_) | PubGrubPriority::ConflictLate(_)
-                    ) {
-                        return;
-                    }
-                    PubGrubPriority::Unspecified(Reverse(index))
-                };
-
-                // Take the maximum of the new and existing priorities.
+                // Retain higher priorities, including conflict priorities, to avoid
+                // reprioritization loops.
                 if priority > *entry.get() {
                     entry.insert(priority);
                 }
             }
             EntryRef::Vacant(entry) => {
-                // Compute the priority.
-                let priority = if urls.get(name).is_some() {
-                    PubGrubPriority::DirectUrl(Reverse(len))
-                } else if version.is_singleton_constraint() {
-                    PubGrubPriority::Singleton(Reverse(len))
-                } else {
-                    PubGrubPriority::Unspecified(Reverse(len))
-                };
-
-                // Insert the priority.
-                entry.insert(priority);
+                entry.insert(classify(len));
             }
-        }
-    }
-
-    fn get_index(
-        entry: &OccupiedEntry<'_, PackageName, PubGrubPriority, FxBuildHasher>,
-    ) -> Option<usize> {
-        match entry.get() {
-            PubGrubPriority::ConflictLate(Reverse(index))
-            | PubGrubPriority::Unspecified(Reverse(index))
-            | PubGrubPriority::ConflictEarly(Reverse(index))
-            | PubGrubPriority::Singleton(Reverse(index))
-            | PubGrubPriority::DirectUrl(Reverse(index)) => Some(*index),
-            PubGrubPriority::Root => None,
         }
     }
 
@@ -156,45 +127,28 @@ impl PubGrubPriorities {
         }
     }
 
-    /// Mark a package as prioritized by setting it to [`PubGrubPriority::ConflictEarly`], if it
-    /// doesn't have a higher priority already.
+    /// Set a package's priority to [`PubGrubPriority::ConflictEarly`].
     ///
     /// Returns whether the priority was changed, i.e., it's the first time we hit this condition
     /// for the package.
     pub(crate) fn mark_conflict_early(&mut self, package: &PubGrubPackage) -> bool {
-        let Some(name) = package.name_no_root() else {
-            // Not a correctness bug
-            debug_assert!(
-                false,
-                "URL packages must not be involved in conflict handling"
-            );
-            return false;
-        };
-
-        let len = self.package_priority.len();
-        match self.package_priority.entry_ref(name) {
-            EntryRef::Vacant(entry) => {
-                entry.insert(PubGrubPriority::ConflictEarly(Reverse(len)));
-                true
-            }
-            EntryRef::Occupied(mut entry) => {
-                if matches!(entry.get(), PubGrubPriority::ConflictEarly(_)) {
-                    // Already in the right category
-                    return false;
-                }
-                let index = Self::get_index(&entry).unwrap_or(len);
-                entry.insert(PubGrubPriority::ConflictEarly(Reverse(index)));
-                true
-            }
-        }
+        self.mark_conflict(package, PubGrubPriority::ConflictEarly)
     }
 
-    /// Mark a package as prioritized by setting it to [`PubGrubPriority::ConflictLate`], if it
-    /// doesn't have a higher priority already.
+    /// Set a package's priority to [`PubGrubPriority::ConflictLate`] unless it is already marked
+    /// as conflicting.
     ///
     /// Returns whether the priority was changed, i.e., it's the first time this package was
     /// marked as conflicting above the threshold.
     pub(crate) fn mark_conflict_late(&mut self, package: &PubGrubPackage) -> bool {
+        self.mark_conflict(package, PubGrubPriority::ConflictLate)
+    }
+
+    fn mark_conflict(
+        &mut self,
+        package: &PubGrubPackage,
+        make_priority: impl FnOnce(Reverse<usize>) -> PubGrubPriority,
+    ) -> bool {
         let Some(name) = package.name_no_root() else {
             // Not a correctness bug
             debug_assert!(
@@ -207,20 +161,21 @@ impl PubGrubPriorities {
         let len = self.package_priority.len();
         match self.package_priority.entry_ref(name) {
             EntryRef::Vacant(entry) => {
-                entry.insert(PubGrubPriority::ConflictLate(Reverse(len)));
+                entry.insert(make_priority(Reverse(len)));
                 true
             }
             EntryRef::Occupied(mut entry) => {
-                // The ConflictEarly` match avoids infinite loops.
-                if matches!(
-                    entry.get(),
-                    PubGrubPriority::ConflictLate(_) | PubGrubPriority::ConflictEarly(_)
-                ) {
-                    // Already in the right category
+                let current = *entry.get();
+                // Keep early conflict priorities stable to avoid reprioritization loops.
+                if matches!(current, PubGrubPriority::ConflictEarly(_)) {
                     return false;
                 }
-                let index = Self::get_index(&entry).unwrap_or(len);
-                entry.insert(PubGrubPriority::ConflictLate(Reverse(index)));
+                let index = current.index().unwrap_or(len);
+                let priority = make_priority(Reverse(index));
+                if current == priority {
+                    return false;
+                }
+                entry.insert(priority);
                 true
             }
         }
@@ -259,6 +214,20 @@ pub(crate) enum PubGrubPriority {
 
     /// The package is the root package.
     Root,
+}
+
+impl PubGrubPriority {
+    /// Return the package discovery index, if this priority has one.
+    fn index(self) -> Option<usize> {
+        match self {
+            Self::ConflictLate(Reverse(index))
+            | Self::Unspecified(Reverse(index))
+            | Self::ConflictEarly(Reverse(index))
+            | Self::Singleton(Reverse(index))
+            | Self::DirectUrl(Reverse(index)) => Some(index),
+            Self::Root => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

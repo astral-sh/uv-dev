@@ -1,9 +1,8 @@
-use std::cmp::min;
+use std::cmp::{Reverse, min};
 use std::sync::Arc;
 
 use itertools::Itertools;
 use pubgrub::Term;
-use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, trace};
 use uv_resolver_types::PackageNodeKind;
 
@@ -11,7 +10,10 @@ use crate::candidate_selector::CandidateSelector;
 use crate::prioritized_distribution::CompatibleDist;
 use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
 use crate::resolver::requests::{MetadataRequest, MetadataRequests};
-use crate::{PythonRequirement, ResolveError, ResolverEnvironment, VersionsResponse};
+use crate::{
+    FxHashbrownMap, FxHashbrownSet, PythonRequirement, ResolveError, ResolverEnvironment,
+    VersionsResponse,
+};
 use uv_distribution_types::{IndexCapabilities, IndexMetadata};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -41,11 +43,15 @@ enum BatchPrefetchStrategy {
 /// Note that these all heuristics that could totally prefetch lots of irrelevant versions.
 #[derive(Clone)]
 pub(crate) struct BatchPrefetcher {
-    // Types to determine whether we need to prefetch.
-    tried_versions: FxHashMap<PackageName, FxHashSet<Version>>,
-    last_prefetch: FxHashMap<PackageName, usize>,
-    // Types to execute the prefetch.
+    packages: FxHashbrownMap<PackageName, PackagePrefetchState>,
     prefetch_runner: BatchPrefetcherRunner,
+}
+
+#[derive(Clone, Default)]
+struct PackagePrefetchState {
+    tried_versions: FxHashbrownSet<Version>,
+    /// Number of tried versions at the last prefetch.
+    last_prefetch: usize,
 }
 
 /// The types that are needed for running the batch prefetching after we determined that we need to
@@ -61,8 +67,7 @@ pub(crate) struct BatchPrefetcherRunner {
 impl BatchPrefetcher {
     pub(crate) fn new(capabilities: IndexCapabilities, requests: MetadataRequests) -> Self {
         Self {
-            tried_versions: FxHashMap::default(),
-            last_prefetch: FxHashMap::default(),
+            packages: FxHashbrownMap::default(),
             prefetch_runner: BatchPrefetcherRunner {
                 capabilities,
                 requests,
@@ -91,10 +96,12 @@ impl BatchPrefetcher {
             return Ok(());
         };
 
-        let (num_tried, do_prefetch) = self.should_prefetch(next);
-        if !do_prefetch {
+        let Some(state) = self.packages.get_mut(name) else {
             return Ok(());
-        }
+        };
+        let Some(num_tried) = state.tried_count_for_prefetch() else {
+            return Ok(());
+        };
         let total_prefetch = min(num_tried, 50);
 
         // This is immediate, we already fetched the version map.
@@ -109,7 +116,7 @@ impl BatchPrefetcher {
             previous: version.clone(),
         };
 
-        self.last_prefetch.insert(name.clone(), num_tried);
+        state.last_prefetch = num_tried;
 
         self.prefetch_runner.send_prefetch(
             name,
@@ -136,52 +143,46 @@ impl BatchPrefetcher {
         else {
             return;
         };
-        self.tried_versions
-            .entry(name.clone())
+        self.packages
+            .entry_ref(name)
             .or_default()
-            .insert(version.clone());
-    }
-
-    /// After 5, 10, 20, 40 tried versions, prefetch that many versions to start early but not
-    /// too aggressive. Later we schedule the prefetch of 50 versions every 20 versions, this gives
-    /// us a good buffer until we see prefetch again and is high enough to saturate the task pool.
-    fn should_prefetch(&self, next: &PubGrubPackage) -> (usize, bool) {
-        let PubGrubPackageInner::Package {
-            name,
-            kind: PackageNodeKind::Base,
-            marker: MarkerTree::TRUE,
-        } = &**next
-        else {
-            return (0, false);
-        };
-
-        let num_tried = self.tried_versions.get(name).map_or(0, FxHashSet::len);
-        let previous_prefetch = self.last_prefetch.get(name).copied().unwrap_or_default();
-        let do_prefetch = (num_tried >= 5 && previous_prefetch < 5)
-            || (num_tried >= 10 && previous_prefetch < 10)
-            || (num_tried >= 20 && previous_prefetch < 20)
-            || (num_tried >= 20 && num_tried - previous_prefetch >= 20);
-        (num_tried, do_prefetch)
+            .tried_versions
+            .get_or_insert_with(version, Version::clone);
     }
 
     /// Log stats about how many versions we tried.
     pub(crate) fn log_tried_versions(&self) {
-        let total_versions: usize = self.tried_versions.values().map(FxHashSet::len).sum();
         let mut tried_versions: Vec<_> = self
-            .tried_versions
+            .packages
             .iter()
-            .map(|(name, versions)| (name, versions.len()))
+            .map(|(name, state)| (name, state.tried_versions.len()))
             .collect();
-        tried_versions.sort_by(|(p1, c1), (p2, c2)| {
-            c1.cmp(c2)
-                .reverse()
-                .then(p1.to_string().cmp(&p2.to_string()))
-        });
+        let total_versions: usize = tried_versions.iter().map(|(_, count)| count).sum();
+        tried_versions.sort_unstable_by_key(|&(name, count)| (Reverse(count), name.as_str()));
         let counts = tried_versions
-            .iter()
-            .map(|(package, count)| format!("{package} {count}"))
-            .join(", ");
+            .into_iter()
+            .format_with(", ", |(package, count), f| {
+                f(&format_args!("{package} {count}"))
+            })
+            .to_string();
         debug!("Tried {total_versions} versions: {counts}");
+    }
+}
+
+impl PackagePrefetchState {
+    /// Returns the number of tried versions if another prefetch should be scheduled.
+    ///
+    /// After 5, 10, 20, 40 tried versions, prefetch that many versions to start early but not
+    /// too aggressive. Later we schedule the prefetch of 50 versions every 20 versions, this gives
+    /// us a good buffer until we see prefetch again and is high enough to saturate the task pool.
+    fn tried_count_for_prefetch(&self) -> Option<usize> {
+        let num_tried = self.tried_versions.len();
+        let previous_prefetch = self.last_prefetch;
+        let do_prefetch = (num_tried >= 5 && previous_prefetch < 5)
+            || (num_tried >= 10 && previous_prefetch < 10)
+            || (num_tried >= 20 && previous_prefetch < 20)
+            || (num_tried >= 20 && num_tried - previous_prefetch >= 20);
+        do_prefetch.then_some(num_tried)
     }
 }
 
