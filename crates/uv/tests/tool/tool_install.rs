@@ -6313,7 +6313,8 @@ fn tool_install_reports_normalized_executable_names() -> Result<()> {
     uv_snapshot!(context.filters(), context.tool_install()
         .args(["--offline", "--no-index", "--find-links"])
         .arg(context.temp_dir.path())
-        .arg("report-tool"), @"
+        .arg("report-tool")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
