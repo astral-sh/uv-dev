@@ -4736,6 +4736,14 @@ fn only_group() -> Result<()> {
     Resolved 9 packages in [TIME]
     "
     );
+    let lock = context.read("uv.lock");
+    assert!(
+        uv_lock::Lock::from_canonical_toml(&lock)?
+            .packages()
+            .iter()
+            .any(|package| package.name().as_str() == "pytest"),
+        "the lock must include the test group even though the default tree omits it"
+    );
 
     uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--only-group").arg("dev"), @"
     exit_code: 0 (success)
@@ -4750,6 +4758,7 @@ fn only_group() -> Result<()> {
     Resolved 9 packages in [TIME]
     "
     );
+    assert_eq!(context.read("uv.lock"), lock);
 
     uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--only-group").arg("test"), @"
     exit_code: 0 (success)
@@ -4765,10 +4774,7 @@ fn only_group() -> Result<()> {
     Resolved 9 packages in [TIME]
     "
     );
-
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
