@@ -90,7 +90,7 @@ pub async fn project_version(
     // Read the metadata
     let project = find_target(
         project_dir,
-        package.as_ref(),
+        package,
         explicit_project,
         cache,
         workspace_cache,
@@ -308,7 +308,7 @@ fn hint_uv_self_version(err: WorkspaceError, explicit_project: bool) -> ProjectE
 /// Note that `uv version` never needs to support PEP 723 scripts, as those are unversioned.
 async fn find_target(
     project_dir: &Path,
-    package: Option<&PackageName>,
+    package: Option<PackageName>,
     explicit_project: bool,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -320,7 +320,7 @@ async fn find_target(
             &DiscoveryOptions::default(),
             cache,
             workspace_cache,
-            package.clone(),
+            package,
         )
         .await
         .map_err(|err| hint_uv_self_version(err, explicit_project))?
