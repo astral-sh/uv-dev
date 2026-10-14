@@ -1549,7 +1549,7 @@ pub async fn resolve_environment(
     );
 
     // Resolve the requirements.
-    Ok(uv_resolve_operations::resolve(
+    let (output, _) = uv_resolve_operations::resolve(
         requirements,
         constraints,
         overrides,
@@ -1580,8 +1580,8 @@ pub async fn resolve_environment(
         logger,
         printer,
     )
-    .await?
-    .0)
+    .await?;
+    Ok(output)
 }
 
 /// Sync a [`PythonEnvironment`] with a set of resolved requirements.
@@ -1923,7 +1923,7 @@ pub async fn update_environment(
     );
 
     // Resolve the requirements.
-    let (resolution, hasher) = match uv_resolve_operations::resolve(
+    let (output, hasher) = uv_resolve_operations::resolve(
         requirements,
         constraints,
         overrides,
@@ -1954,11 +1954,9 @@ pub async fn update_environment(
         resolve,
         printer,
     )
-    .await
-    {
-        Ok((resolution, hasher)) => (Resolution::from(resolution), hasher),
-        Err(err) => return Err(err.into()),
-    };
+    .await?;
+    let resolution = Resolution::from(output);
+
     // Sync the environment.
     let changelog = uv_install_operations::install(
         &resolution,
