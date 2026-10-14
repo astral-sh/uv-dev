@@ -76,7 +76,7 @@ fn create_venv() {
 fn create_venv_ksh() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
-    // OpenBSD ksh does not support `source`, so this activation hint is unusable.
+    // OpenBSD ksh requires `.` to source the activation script.
     // See astral-sh/uv#22537.
     uv_snapshot!(context.filters(), context.venv()
         .arg("--python")
@@ -86,7 +86,7 @@ fn create_venv_ksh() {
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
+    Activate with: . .venv/bin/activate
     ");
 
     context.venv.assert(predicates::path::is_dir());
