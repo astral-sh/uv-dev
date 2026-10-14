@@ -1,34 +1,56 @@
+use std::collections::BTreeMap;
+use std::process::Command;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{FileWriteStr, PathChild};
+use assert_fs::fixture::{FileWriteBin, FileWriteStr, PathChild};
 
 use uv_static::EnvVars;
+use uv_test::packse::generate_wheel;
+use uv_test::{TestContext, assert_path_missing, uv_snapshot};
 
-use uv_test::{assert_path_missing, uv_snapshot};
+/// Create an offline installation command for a tool with known entry points.
+fn local_tool_install(context: &TestContext, name: &str, entry_points: &[&str]) -> Result<Command> {
+    let entry_points = entry_points
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let (filename, contents) = generate_wheel(
+        &name.parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &entry_points,
+    );
+    let wheel = context.temp_dir.child(filename);
+    wheel.write_binary(&contents)?;
+
+    let mut command = context.tool_install();
+    command.arg(wheel.path()).arg("--offline");
+    Ok(command)
+}
 
 #[test]
-fn tool_uninstall() {
+fn tool_uninstall() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
-        .assert()
-        .success();
+    let mut install = local_tool_install(&context, "formatter", &["formatter", "formatterd"])?;
+    install.assert().success();
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black"), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("formatter"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Uninstalled 2 executables: black, blackd
+    Uninstalled 2 executables: formatter, formatterd
     ");
 
-    assert_path_missing(context.temp_dir.child("tools/black"));
-    assert_path_missing(bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX)));
-    assert_path_missing(bin_dir.child(format!("blackd{}", std::env::consts::EXE_SUFFIX)));
+    assert_path_missing(context.temp_dir.child("tools/formatter"));
+    assert_path_missing(bin_dir.child(format!("formatter{}", std::env::consts::EXE_SUFFIX)));
+    assert_path_missing(bin_dir.child(format!("formatterd{}", std::env::consts::EXE_SUFFIX)));
     assert!(context.temp_dir.child("tools/.lock").is_file());
 
     // After uninstalling the tool, it shouldn't be listed.
@@ -39,21 +61,15 @@ fn tool_uninstall() {
     ");
 
     // After uninstalling the tool, we should be able to reinstall it.
-    uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black==24.2.0")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), install.env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==24.2.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + formatter==1.0.0 (from file://[TEMP_DIR]/formatter-1.0.0-py3-none-any.whl)
+    Installed 2 executables: formatter, formatterd
     ");
+    Ok(())
 }
 
 /// Files beside the tools directory must survive removal of the last tool, even if no other
@@ -73,19 +89,17 @@ fn tool_uninstall_preserves_parent_files() -> Result<()> {
         .child("data/keep.txt")
         .write_str("Unrelated file\n")?;
 
-    context
-        .tool_install()
-        .arg("ruff==0.3.4")
+    local_tool_install(&context, "linter", &["linter"])?
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .assert()
         .success();
 
     uv_snapshot!(context.filters(), context.tool_uninstall()
-        .arg("ruff")
+        .arg("linter")
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Uninstalled 1 executable: ruff
+    Uninstalled 1 executable: linter
     ");
 
     assert_eq!(context.read("data/uv.toml"), "# User configuration\n");
@@ -96,24 +110,22 @@ fn tool_uninstall_preserves_parent_files() -> Result<()> {
 }
 
 #[test]
-fn tool_uninstall_multiple_names() {
+fn tool_uninstall_multiple_names() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
+    local_tool_install(&context, "formatter", &["formatter", "formatterd"])?
+        .assert()
+        .success();
+    local_tool_install(&context, "linter", &["linter"])?
         .assert()
         .success();
 
-    context.tool_install().arg("ruff==0.3.4").assert().success();
-
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black").arg("ruff"), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("formatter").arg("linter"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Uninstalled 3 executables: black, blackd, ruff
+    Uninstalled 3 executables: formatter, formatterd, linter
     ");
 
     // After uninstalling the tool, it shouldn't be listed.
@@ -122,55 +134,52 @@ fn tool_uninstall_multiple_names() {
     ----- stderr -----
     No tools installed
     ");
+    Ok(())
 }
 
 #[test]
-fn tool_uninstall_missing_receipt() {
+fn tool_uninstall_missing_receipt() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let environment = context.temp_dir.child("tools/black");
+    let environment = context.temp_dir.child("tools/formatter");
 
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
+    local_tool_install(&context, "formatter", &["formatter", "formatterd"])?
         .assert()
         .success();
 
-    fs_err::remove_file(environment.child("uv-receipt.toml")).unwrap();
+    fs_err::remove_file(environment.child("uv-receipt.toml"))?;
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black"), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("formatter"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Removed dangling environment for `black`
+    Removed dangling environment for `formatter`
     ");
     assert_path_missing(environment);
+    Ok(())
 }
 
 #[test]
-fn tool_uninstall_multiple_names_with_missing_receipt() {
+fn tool_uninstall_multiple_names_with_missing_receipt() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let environment = context.temp_dir.child("tools/black");
+    let environment = context.temp_dir.child("tools/formatter");
 
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
+    local_tool_install(&context, "formatter", &["formatter", "formatterd"])?
+        .assert()
+        .success();
+    local_tool_install(&context, "linter", &["linter"])?
         .assert()
         .success();
 
-    context.tool_install().arg("ruff==0.3.4").assert().success();
+    fs_err::remove_file(environment.child("uv-receipt.toml"))?;
 
-    fs_err::remove_file(environment.child("uv-receipt.toml")).unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black").arg("ruff"), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("formatter").arg("linter"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Removed dangling environment for `black`
-    Uninstalled 1 executable: ruff
+    Removed dangling environment for `formatter`
+    Uninstalled 1 executable: linter
     ");
     assert_path_missing(environment);
 
@@ -180,28 +189,27 @@ fn tool_uninstall_multiple_names_with_missing_receipt() {
     ----- stderr -----
     No tools installed
     ");
+    Ok(())
 }
 
 #[test]
-fn tool_uninstall_all_missing_receipt() {
+fn tool_uninstall_all_missing_receipt() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let environment = context.temp_dir.child("tools/black");
+    let environment = context.temp_dir.child("tools/formatter");
 
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
+    local_tool_install(&context, "formatter", &["formatter", "formatterd"])?
         .assert()
         .success();
 
-    fs_err::remove_file(environment.child("uv-receipt.toml")).unwrap();
+    fs_err::remove_file(environment.child("uv-receipt.toml"))?;
 
     uv_snapshot!(context.filters(), context.tool_uninstall().arg("--all"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Removed dangling environment for `black`
+    Removed dangling environment for `formatter`
     ");
     assert_path_missing(environment);
+    Ok(())
 }
