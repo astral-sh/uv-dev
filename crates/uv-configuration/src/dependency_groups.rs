@@ -249,7 +249,11 @@ impl DependencyGroupsWithDefaults {
     /// but various commands or subsystems never enable any dependency-groups,
     /// in which case they want this.
     pub fn none() -> Self {
-        DependencyGroups::default().with_defaults(DefaultGroups::default())
+        let groups = DependencyGroups::default();
+        Self {
+            cur: groups.clone(),
+            prev: groups,
+        }
     }
 
     /// Returns `true` if the specification was enabled, and *only* because it was a default
