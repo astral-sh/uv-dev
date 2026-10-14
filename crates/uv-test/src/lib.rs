@@ -615,20 +615,20 @@ impl TestContext {
     /// Adds a filter that replaces the latest Python patch versions with `[LATEST]` placeholder.
     #[must_use]
     pub fn with_filtered_latest_python_versions(mut self) -> Self {
-        // Filter the latest patch versions with [LATEST] placeholder
-        // The order matters - we want to match the full version first
-        for (minor, patch) in [
-            ("3.16", LATEST_PYTHON_3_16.strip_prefix("3.16.").unwrap()),
-            ("3.15", LATEST_PYTHON_3_15.strip_prefix("3.15.").unwrap()),
-            ("3.14", LATEST_PYTHON_3_14.strip_prefix("3.14.").unwrap()),
-            ("3.13", LATEST_PYTHON_3_13.strip_prefix("3.13.").unwrap()),
-            ("3.12", LATEST_PYTHON_3_12.strip_prefix("3.12.").unwrap()),
-            ("3.11", LATEST_PYTHON_3_11.strip_prefix("3.11.").unwrap()),
-            ("3.10", LATEST_PYTHON_3_10.strip_prefix("3.10.").unwrap()),
+        for version in [
+            LATEST_PYTHON_3_16,
+            LATEST_PYTHON_3_15,
+            LATEST_PYTHON_3_14,
+            LATEST_PYTHON_3_13,
+            LATEST_PYTHON_3_12,
+            LATEST_PYTHON_3_11,
+            LATEST_PYTHON_3_10,
         ] {
-            // Match the full version in various contexts (cpython-X.Y.Z, Python X.Y.Z, etc.)
-            let pattern = format!(r"(\b){minor}\.{patch}(\b)");
-            let replacement = format!("${{1}}{minor}.[LATEST]${{2}}");
+            let (major_minor, _) = version
+                .rsplit_once('.')
+                .expect("latest Python version includes a patch component");
+            let pattern = format!(r"\b{}\b", regex::escape(version));
+            let replacement = format!("{major_minor}.[LATEST]");
             self.filters.push((pattern, replacement));
         }
         self
@@ -2501,8 +2501,8 @@ mod python_discovery_tests {
 }
 
 #[cfg(test)]
-mod path_pattern_tests {
-    use super::{TestContext, apply_filters};
+mod filter_tests {
+    use super::{LATEST_PYTHON_3_12, TestContext, apply_filters};
 
     #[test]
     fn canonical_path_has_one_pattern() -> anyhow::Result<()> {
@@ -2528,6 +2528,19 @@ mod path_pattern_tests {
             "[COW_FS]/[TEMP_DIR]/project\n[COW_FS]/[VENV]/package"
         );
         Ok(())
+    }
+
+    #[test]
+    fn latest_python_version_filter_matches_literal_separators() {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into())
+            .with_filtered_latest_python_versions();
+        let malformed = LATEST_PYTHON_3_12.replacen('.', "x", 1);
+        let output = format!("Python {LATEST_PYTHON_3_12}; Python {malformed}");
+
+        assert_eq!(
+            apply_filters(output, context.filters()),
+            format!("Python 3.12.[LATEST]; Python {malformed}")
+        );
     }
 }
 
