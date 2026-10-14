@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{FileTouch, FileWriteStr};
+use assert_fs::fixture::FileWriteStr;
 use assert_fs::prelude::PathChild;
 use insta::assert_snapshot;
 use uv_python_managed::platform_key_from_env;
@@ -507,17 +507,17 @@ fn python_upgrade_transparent_from_venv_module_in_venv() {
 // interpreter.
 #[test]
 fn python_upgrade_force_install() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.13"])
+    let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
         .with_empty_python_install_mirror()
         .with_managed_python_dirs()
         .with_filtered_latest_python_versions();
 
-    context
+    let executable = context
         .bin_dir
-        .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX))
-        .touch()?;
+        .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
+    executable.write_str("unmanaged executable\n")?;
 
     // Try to upgrade with a non-managed interpreter installed in `bin`.
     uv_snapshot!(context.filters(), context.python_upgrade().arg("3.12"), @"
@@ -527,14 +527,21 @@ fn python_upgrade_force_install() -> Result<()> {
     Installed Python 3.12.[LATEST] in [TIME]
      + cpython-3.12.[LATEST]-[PLATFORM]
     ");
+    assert_eq!(context.read(&executable), "unmanaged executable\n");
 
     // Force the `bin` install.
-    uv_snapshot!(context.filters(), context.python_install().arg("3.12").arg("--force").arg("3.12"), @"
+    uv_snapshot!(context.filters(), context.python_install().arg("3.12").arg("--force"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Installed Python 3.12.[LATEST] in [TIME]
      + cpython-3.12.[LATEST]-[PLATFORM] (python3.12)
     ");
+    context
+        .external_command(&executable)
+        .args(["-c", "import sys; print(sys.version_info[:2], end='')"])
+        .assert()
+        .success()
+        .stdout("(3, 12)");
 
     Ok(())
 }
