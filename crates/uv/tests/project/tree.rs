@@ -1559,6 +1559,14 @@ fn nested_platform_dependencies() -> Result<()> {
     Resolved 12 packages in [TIME]
     "
     );
+    let lock = context.read("uv.lock");
+    assert!(
+        uv_lock::Lock::from_canonical_toml(&lock)?
+            .packages()
+            .iter()
+            .any(|package| package.name().as_str() == "pywin32"),
+        "the lock must retain packages excluded from the Linux tree"
+    );
 
     uv_snapshot!(context.filters(), context.tree().arg("--universal"), @"
     exit_code: 0 (success)
@@ -1582,9 +1590,7 @@ fn nested_platform_dependencies() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
