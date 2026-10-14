@@ -254,7 +254,7 @@ impl TextCredentialStore {
     }
 
     /// Return the standard file path for storing credentials.
-    pub fn default_file() -> Result<PathBuf, TomlCredentialError> {
+    pub(crate) fn default_file() -> Result<PathBuf, TomlCredentialError> {
         let dir = Self::directory_path()?;
         Ok(dir.join("credentials.toml"))
     }
