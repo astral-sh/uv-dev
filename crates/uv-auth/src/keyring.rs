@@ -93,8 +93,7 @@ impl KeyringProvider {
 
         match &self.backend {
             KeyringProviderBackend::Native => {
-                self.store_native(&Self::service_name(url), username, password)
-                    .await?;
+                Self::store_native(&Self::service_name(url), username, password).await?;
                 Ok(true)
             }
             backend => Err(Error::StoreUnsupported(backend.name())),
@@ -103,12 +102,7 @@ impl KeyringProvider {
 
     /// Store credentials to the system keyring.
     #[instrument(skip_all, fields(service = ?service, username = ?username))]
-    async fn store_native(
-        &self,
-        service: &str,
-        username: &str,
-        password: &str,
-    ) -> Result<(), Error> {
+    async fn store_native(service: &str, username: &str, password: &str) -> Result<(), Error> {
         let entry = Self::native_entry(service, username)?;
         entry.set_password(password).await?;
         Ok(())
@@ -120,22 +114,19 @@ impl KeyringProvider {
     #[instrument(skip_all, fields(%url, username))]
     pub async fn remove(&self, url: &DisplaySafeUrl, username: &str) -> Result<(), Error> {
         match &self.backend {
-            KeyringProviderBackend::Native => self
-                .remove_native(&Self::service_name(url), username)
-                .await
-                .map_err(Error::from),
+            KeyringProviderBackend::Native => {
+                Self::remove_native(&Self::service_name(url), username)
+                    .await
+                    .map_err(Error::from)
+            }
             backend => Err(Error::RemoveUnsupported(backend.name())),
         }
     }
 
     /// Remove credentials from the system keyring for the given `service_name`/`username`
     /// pair.
-    #[instrument(skip(self))]
-    async fn remove_native(
-        &self,
-        service_name: &str,
-        username: &str,
-    ) -> Result<(), uv_keyring::Error> {
+    #[instrument]
+    async fn remove_native(service_name: &str, username: &str) -> Result<(), uv_keyring::Error> {
         let entry = Self::native_entry(service_name, username)?;
         entry.delete_credential().await?;
         trace!("Removed credentials for {username}@{service_name} from system keyring");
@@ -215,16 +206,15 @@ impl KeyringProvider {
         username: Option<&str>,
     ) -> Option<(String, String)> {
         match &self.backend {
-            KeyringProviderBackend::Native => self.fetch_native(service, username).await,
-            KeyringProviderBackend::Subprocess => self.fetch_subprocess(service, username).await,
+            KeyringProviderBackend::Native => Self::fetch_native(service, username).await,
+            KeyringProviderBackend::Subprocess => Self::fetch_subprocess(service, username).await,
             #[cfg(test)]
             KeyringProviderBackend::Dummy(store) => Self::fetch_dummy(store, service, username),
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument]
     async fn fetch_subprocess(
-        &self,
         service_name: &str,
         username: Option<&str>,
     ) -> Option<(String, String)> {
@@ -319,12 +309,8 @@ impl KeyringProvider {
         }
     }
 
-    #[instrument(skip(self))]
-    async fn fetch_native(
-        &self,
-        service: &str,
-        username: Option<&str>,
-    ) -> Option<(String, String)> {
+    #[instrument]
+    async fn fetch_native(service: &str, username: Option<&str>) -> Option<(String, String)> {
         let username = username?;
         let entry = Self::native_entry(service, username).ok()?;
         match entry.get_password().await {
