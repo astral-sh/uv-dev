@@ -208,9 +208,9 @@ async fn read_dist_info_file_async_stream<R: futures::AsyncRead + Unpin>(
 
     while let Some(mut entry) = zip.next_with_entry().await? {
         // Find the requested `.dist-info` entry.
-        let path = entry.reader().entry().filename().as_str()?.to_owned();
+        let path = entry.reader().entry().filename().as_str()?;
 
-        if dist_info_entry(&path, filename, entry_name)?.is_some() {
+        if dist_info_entry(path, filename, entry_name)?.is_some() {
             let mut reader = entry.reader_mut().compat();
             let mut contents = Vec::new();
             reader.read_to_end(&mut contents).await.map_err(Error::Io)?;
@@ -222,7 +222,7 @@ async fn read_dist_info_file_async_stream<R: futures::AsyncRead + Unpin>(
             let expected = reader.entry().crc32();
             if computed != expected {
                 let error = Error::BadCrc32 {
-                    path,
+                    path: reader.entry().filename().as_str()?.to_owned(),
                     computed,
                     expected,
                 };
