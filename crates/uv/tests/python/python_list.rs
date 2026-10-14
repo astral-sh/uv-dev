@@ -11,7 +11,7 @@ use indoc::indoc;
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{any, method, path},
 };
 
 #[test]
@@ -608,8 +608,7 @@ async fn python_list_only_installed_skips_download_metadata() {
         .with_collapsed_whitespace();
     let server = MockServer::start().await;
 
-    Mock::given(method("GET"))
-        .and(path("/"))
+    Mock::given(any())
         .respond_with(ResponseTemplate::new(200).set_body_raw("{", "application/json"))
         .expect(0)
         .mount(&server)
