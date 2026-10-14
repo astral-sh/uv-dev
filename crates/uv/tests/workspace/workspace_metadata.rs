@@ -1405,7 +1405,9 @@ dependencies = [
         "#);
     });
 
-    context.pip_show().arg("missing-owner").assert().failure();
+    context
+        .assert_command("import installed_module; import importlib.util; assert importlib.util.find_spec('missing_module') is None")
+        .success();
 
     // Remove the manifest to discover the workspace and its environment from the lockfile.
     fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
@@ -1415,38 +1417,11 @@ dependencies = [
         .assert()
         .success();
     let lockfile_metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
-    insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(lockfile_metadata["environment"], @r#"
-        {
-          "packages": {
-            "installed-owner==0.1.0@path+[TEMP_DIR]/installed_owner-0.1.0-py3-none-any.whl": {
-              "editable": false,
-              "name": "installed-owner",
-              "path": "[SITE_PACKAGES]/installed_owner-0.1.0.dist-info",
-              "version": "0.1.0"
-            }
-          },
-          "python": {
-            "implementation": "cpython",
-            "path": "[VENV]/[BIN]/[PYTHON]",
-            "version": "3.12.[X]"
-          },
-          "root": "[VENV]/"
-        }
-        "#);
-        insta::assert_json_snapshot!(lockfile_metadata["modules"], @r#"
-        {
-          "installed_module": {
-            "owners": [
-              {
-                "package_id": "installed-owner==0.1.0@path+[TEMP_DIR]/installed_owner-0.1.0-py3-none-any.whl"
-              }
-            ]
-          }
-        }
-        "#);
-    });
-    context.pip_show().arg("missing-owner").assert().failure();
+    assert_eq!(lockfile_metadata["environment"], metadata["environment"]);
+    assert_eq!(lockfile_metadata["modules"], metadata["modules"]);
+    context
+        .assert_command("import installed_module; import importlib.util; assert importlib.util.find_spec('missing_module') is None")
+        .success();
 
     let override_env = context.temp_dir.child("override-env");
     context.venv().arg(override_env.path()).assert().success();
