@@ -48,28 +48,26 @@ impl InstallState {
         &self.locks
     }
 
-    /// Register which package installs which (top level) path.
+    /// Register top-level wheel paths for conflict detection.
     ///
-    /// This is later used warn when different files at the same path exist in multiple packages.
-    ///
-    /// The first non-self argument is the target path relative to site-packages, the second is the
-    /// source path in the unpacked wheel.
-    fn register_installed_path(&self, relative: PathBuf, absolute: PathBuf, wheel: &WheelFilename) {
-        debug_assert!(!relative.is_absolute());
-        debug_assert!(absolute.is_absolute());
+    /// Only top-level entries are reliably available because cloning a directory on macOS
+    /// traverses outside our code.
+    fn register_installed_paths(&self, wheel: &Path, filename: &WheelFilename) -> io::Result<()> {
+        for entry in fs::read_dir(wheel)? {
+            let entry = entry?;
+            let absolute = entry.path();
+            let relative = PathBuf::from(entry.file_name());
+            debug_assert!(!relative.is_absolute());
+            debug_assert!(absolute.is_absolute());
 
-        // Only register top level entries, these are the only ones we have reliably as cloning
-        // a directory on macOS traverses outside our code.
-        if relative.components().count() != 1 {
-            return;
+            self.site_packages_paths
+                .lock()
+                .unwrap()
+                .entry(relative)
+                .or_default()
+                .insert((filename.clone(), absolute));
         }
-
-        self.site_packages_paths
-            .lock()
-            .unwrap()
-            .entry(relative)
-            .or_default()
-            .insert((wheel.clone(), absolute));
+        Ok(())
     }
 
     /// Warn when the same file with different contents exists in multiple packages.
@@ -258,7 +256,7 @@ pub(crate) fn link_wheel_files(
 ) -> Result<(), Error> {
     let wheel = wheel.as_path();
     let site_packages = site_packages.as_ref();
-    register_installed_paths(wheel, state, filename)?;
+    state.register_installed_paths(wheel, filename)?;
 
     // The `RECORD` file is modified during installation, so it needs a real
     // copy rather than a link back to the cache.
@@ -298,19 +296,4 @@ fn update_site_packages_mtime(site_packages: &Path) {
             site_packages.display()
         ),
     }
-}
-
-/// Register top-level wheel paths for conflict detection.
-fn register_installed_paths(
-    wheel: &Path,
-    state: &InstallState,
-    filename: &WheelFilename,
-) -> Result<(), Error> {
-    for entry in fs::read_dir(wheel)? {
-        let entry = entry?;
-        let path = entry.path();
-        let relative = PathBuf::from(entry.file_name());
-        state.register_installed_path(relative, path, filename);
-    }
-    Ok(())
 }
