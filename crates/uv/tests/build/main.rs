@@ -18,6 +18,8 @@ mod build_backend_requires;
 #[cfg(feature = "test-python")]
 mod build_fast_path;
 
+mod build_list_validation;
+
 #[cfg(feature = "test-python")]
 mod build_output;
 

@@ -306,34 +306,15 @@ fn list_sdist_and_wheel_plan() {
     assert_path_missing(output.child("built_by_uv-0.1.0-py3-none-any.whl"));
 }
 
-/// Test `--list` option errors.
 #[test]
-fn list_files_errors() {
-    let context = uv_test::test_context!("3.12");
-
-    let built_by_uv = context.workspace_root.join("test/packages/built-by-uv");
-
-    uv_snapshot!(context.filters(), context.build()
-        .arg(&built_by_uv)
-        .arg("--out-dir")
-        .arg(context.temp_dir.join("output1"))
-        .arg("--list")
-        .arg("--force-pep517"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: the argument '--list' cannot be used with '--force-pep517'
-
-    Usage: uv build --cache-dir [CACHE_DIR] --out-dir <OUT_DIR> --exclude-newer <EXCLUDE_NEWER> <SRC>
-
-    For more information, try '--help'.
-    ");
-
-    // Not a uv build backend package, we can't list it.
+fn list_rejects_incompatible_backend() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let anyio_local = context.workspace_root.join("test/packages/anyio_local");
     uv_snapshot!(context.filters(), context.build()
         .arg(&anyio_local)
         .arg("--out-dir")
-        .arg(context.temp_dir.join("output2"))
+        .arg(context.temp_dir.join("dist"))
+        .arg("--no-index")
         .arg("--list"), @"
     exit_code: 2 (failure)
     ----- stderr -----
