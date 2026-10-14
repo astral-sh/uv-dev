@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, Bound},
-    ffi::OsString,
+    ffi::OsStr,
     fmt::Write,
     io,
     path::{Path, PathBuf},
@@ -779,12 +779,8 @@ pub(super) fn finalize_tool_install(
         let target_entrypoints = dist_entrypoints
             .into_iter()
             .map(|(name, source_path)| {
-                let target_path = executable_directory.join(
-                    source_path
-                        .file_name()
-                        .map(std::borrow::ToOwned::to_owned)
-                        .unwrap_or_else(|| OsString::from(name.clone())),
-                );
+                let target_path = executable_directory
+                    .join(source_path.file_name().unwrap_or_else(|| OsStr::new(&name)));
                 (name, source_path, target_path)
             })
             .collect::<BTreeSet<_>>();
