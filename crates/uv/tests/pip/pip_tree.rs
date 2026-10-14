@@ -548,7 +548,7 @@ fn no_dedupe() {
 }
 
 #[test]
-#[cfg(feature = "test-git")]
+#[cfg(all(feature = "test-git", feature = "test-pypi"))]
 fn with_editable() {
     let context = uv_test::test_context!("3.12");
 
