@@ -22,13 +22,11 @@ impl ToolReceipt {
         Ok(Self { raw, ..tool })
     }
 
-    ///  Read a [`ToolReceipt`] from the given path.
+    /// Read a [`ToolReceipt`] from the given path.
     pub(crate) fn from_path(path: &Path) -> Result<Self, crate::Error> {
-        match fs_err::read_to_string(path) {
-            Ok(contents) => Ok(Self::from_string(contents)
-                .map_err(|err| crate::Error::ReceiptRead(path.to_owned(), Box::new(err)))?),
-            Err(err) => Err(err.into()),
-        }
+        let contents = fs_err::read_to_string(path)?;
+        Self::from_string(contents)
+            .map_err(|err| crate::Error::ReceiptRead(path.to_owned(), Box::new(err)))
     }
 
     /// Returns the TOML representation of this receipt.
