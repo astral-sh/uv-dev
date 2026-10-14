@@ -326,6 +326,10 @@ impl TextCredentialStore {
         url: &DisplaySafeUrl,
         username: Option<&str>,
     ) -> Result<Option<&Credentials>, LookupError> {
+        if self.credentials.is_empty() {
+            return Ok(None);
+        }
+
         // Perform an exact lookup first
         // TODO(zanieb): Consider adding `DisplaySafeUrlRef` so we can avoid this clone
         // TODO(zanieb): We could also return early here if we can't normalize to a `Service`
