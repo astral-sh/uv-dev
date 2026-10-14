@@ -1121,14 +1121,14 @@ impl PythonRunner {
             printer: Printer,
         ) -> io::Result<Vec<String>> {
             let mut reader = tokio::io::BufReader::new(reader).split(b'\n');
-            let mut buffer = Vec::with_capacity(1024);
+            let mut lines = Vec::new();
             while let Some(line_buf) = reader.next_segment().await? {
                 let line_buf = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
                 let line = String::from_utf8_lossy(line_buf).into_owned();
                 printer.print_line(&line);
-                buffer.push(line);
+                lines.push(line);
             }
-            Ok(buffer)
+            Ok(lines)
         }
 
         let _permit = self.concurrent_build_slots.acquire().await.unwrap();
