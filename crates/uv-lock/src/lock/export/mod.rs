@@ -314,7 +314,7 @@ impl<'lock> ExportableRequirements<'lock> {
         }
 
         // Determine the reachability of each node in the graph.
-        let mut reachability = conflict_marker_reachability(&graph, &[], &activated_items);
+        let mut reachability = conflict_marker_reachability(&graph, &activated_items);
 
         // Collect all packages.
         let nodes = graph
@@ -383,15 +383,6 @@ enum Edge<'lock> {
 }
 
 impl Edge<'_> {
-    /// Return the [`MarkerTree`] for this edge.
-    fn marker(&self) -> &MarkerTree {
-        match self {
-            Self::Prod { marker, .. } => marker,
-            Self::Optional { marker, .. } => marker,
-            Self::Dev { marker, .. } => marker,
-        }
-    }
-
     /// Return the dependency extras activated by traversing this edge.
     fn dep_extras(&self) -> &[&ExtraName] {
         match self {
@@ -412,7 +403,6 @@ impl Edge<'_> {
 /// all conflict items from the marker expression.
 fn conflict_marker_reachability<'lock>(
     graph: &Graph<Node<'lock>, Edge<'lock>>,
-    fork_markers: &[Edge<'lock>],
     known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
 ) -> FxHashMap<NodeIndex, MarkerTree> {
     // For each node, track the conditions under which each conflict item is enabled.
@@ -440,20 +430,9 @@ fn conflict_marker_reachability<'lock>(
         })
         .collect();
 
-    // The root nodes are always applicable, unless the user has restricted resolver
-    // environments with `tool.uv.environments`.
-    let root_markers = if fork_markers.is_empty() {
-        MarkerTree::TRUE
-    } else {
-        fork_markers
-            .iter()
-            .fold(MarkerTree::FALSE, |mut acc, edge| {
-                acc = acc.or(*edge.marker());
-                acc
-            })
-    };
+    // Export roots are unconditional; dependency edges carry the applicable markers.
     for root_index in &queue {
-        reachability.insert(*root_index, root_markers);
+        reachability.insert(*root_index, MarkerTree::TRUE);
     }
 
     // Propagate all markers through the graph, so that the eventual marker for each node is the
