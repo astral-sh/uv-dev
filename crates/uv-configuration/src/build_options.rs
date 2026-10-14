@@ -113,7 +113,7 @@ impl NoBinary {
     }
 
     /// Determine the binary installation strategy to use for the given arguments from the pip CLI.
-    pub fn from_pip_args(no_binary: Vec<PackageNameSpecifier>) -> Self {
+    pub fn from_pip_args(no_binary: impl IntoIterator<Item = PackageNameSpecifier>) -> Self {
         let combined = PackageNameSpecifiers::from_iter(no_binary.into_iter());
         match combined {
             PackageNameSpecifiers::All => Self::All,
@@ -124,7 +124,7 @@ impl NoBinary {
 
     /// Determine the binary installation strategy to use for the given argument from the pip CLI.
     pub fn from_pip_arg(no_binary: PackageNameSpecifier) -> Self {
-        Self::from_pip_args(vec![no_binary])
+        Self::from_pip_args([no_binary])
     }
 
     /// Combine a set of [`NoBinary`] values.
@@ -197,7 +197,10 @@ impl NoBuild {
     }
 
     /// Determine the build strategy to use for the given arguments from the pip CLI.
-    pub fn from_pip_args(only_binary: Vec<PackageNameSpecifier>, no_build: bool) -> Self {
+    pub fn from_pip_args(
+        only_binary: impl IntoIterator<Item = PackageNameSpecifier>,
+        no_build: bool,
+    ) -> Self {
         if no_build {
             Self::All
         } else {
@@ -212,7 +215,7 @@ impl NoBuild {
 
     /// Determine the build strategy to use for the given argument from the pip CLI.
     pub fn from_pip_arg(no_build: PackageNameSpecifier) -> Self {
-        Self::from_pip_args(vec![no_build], false)
+        Self::from_pip_args([no_build], false)
     }
 
     /// Combine a set of [`NoBuild`] values.
