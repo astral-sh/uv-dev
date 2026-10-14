@@ -413,23 +413,30 @@ fn coalesce(mut requirements: Vec<Requirement>) -> Vec<Requirement> {
         return requirements;
     }
 
-    // Store the original marker and source separately because the semantic key discards registry
-    // specifiers and excludes the marker when coalescing.
-    let mut combined = IndexMap::<RequirementsKey, (MarkerTree, RequirementSource)>::new();
+    // Store the marker and registry specifiers separately because the semantic key discards them.
+    let mut combined = IndexMap::<RequirementsKey, (MarkerTree, VersionSpecifiers)>::new();
     for mut requirement in requirements {
         let marker = mem::replace(&mut requirement.marker, MarkerTree::TRUE);
-        let source = requirement.source.clone();
+        let specifiers = requirement
+            .source
+            .version_specifiers()
+            .cloned()
+            .unwrap_or_default();
         combined
             .entry(RequirementsKey::new(requirement))
             .and_modify(|(existing, _)| *existing = existing.or(marker))
-            .or_insert((marker, source));
+            .or_insert((marker, specifiers));
     }
     combined
         .into_iter()
-        .map(|(key, (marker, source))| Requirement {
-            marker,
-            source,
-            ..key.requirement
+        .map(|(mut key, (marker, specifiers))| {
+            if let RequirementSource::Registry { specifier, .. } = &mut key.requirement.source {
+                *specifier = specifiers;
+            }
+            Requirement {
+                marker,
+                ..key.requirement
+            }
         })
         .collect()
 }
