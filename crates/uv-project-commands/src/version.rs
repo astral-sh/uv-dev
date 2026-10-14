@@ -595,7 +595,7 @@ async fn lock_and_sync(
     let workspace_cache = WorkspaceCache::default();
 
     // Lock and sync the environment, if necessary.
-    let lock = match Box::pin(
+    let lock = Box::pin(
         LockOperation::new(
             mode,
             &settings.resolver,
@@ -611,10 +611,8 @@ async fn lock_and_sync(
         .execute(project.workspace().into()),
     )
     .await
-    {
-        Ok(result) => result.into_lock(),
-        Err(err) => return Err(UvError::from(err).into()),
-    };
+    .map_err(UvError::from)?
+    .into_lock();
 
     let PythonTarget::Environment(venv) = &python_target else {
         // If we're not syncing, exit early.
