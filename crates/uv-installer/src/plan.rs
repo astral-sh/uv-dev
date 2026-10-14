@@ -407,17 +407,9 @@ impl<'a> Planner<'a> {
                     }
                 }
                 Dist::Built(BuiltDist::DirectUrl(wheel)) => {
-                    if !wheel.filename.is_compatible(tags) {
-                        return Err(PlanError::IncompatibleWheel(Box::new(
-                            IncompatibleWheelError {
-                                kind: IncompatibleWheelKind::Url(wheel.url.to_url()),
-                                compatibility_hint: generate_wheel_compatibility_hint(
-                                    &wheel.filename,
-                                    tags,
-                                ),
-                            },
-                        )));
-                    }
+                    validate_wheel_compatibility(&wheel.filename, tags, || {
+                        IncompatibleWheelKind::Url(wheel.url.to_url())
+                    })?;
 
                     if no_binary {
                         return Err(PlanError::NoBinaryUrl(wheel.url.clone()));
@@ -478,17 +470,9 @@ impl<'a> Planner<'a> {
                         return Err(Error::NotFound(wheel.url.to_url()).into());
                     }
 
-                    if !wheel.filename.is_compatible(tags) {
-                        return Err(PlanError::IncompatibleWheel(Box::new(
-                            IncompatibleWheelError {
-                                kind: IncompatibleWheelKind::Path(wheel.install_path.to_path_buf()),
-                                compatibility_hint: generate_wheel_compatibility_hint(
-                                    &wheel.filename,
-                                    tags,
-                                ),
-                            },
-                        )));
-                    }
+                    validate_wheel_compatibility(&wheel.filename, tags, || {
+                        IncompatibleWheelKind::Path(wheel.install_path.to_path_buf())
+                    })?;
 
                     if no_binary {
                         return Err(PlanError::NoBinaryPath(wheel.url.clone()));
@@ -751,6 +735,21 @@ fn is_seed_package(dist_info: &InstalledDist, venv: &PythonEnvironment) -> bool 
             "pip" | "setuptools" | "wheel" | "uv"
         )
     }
+}
+
+/// Check a URL or local wheel against the platform tags, constructing a diagnostic on mismatch.
+fn validate_wheel_compatibility(
+    filename: &WheelFilename,
+    tags: &Tags,
+    kind: impl FnOnce() -> IncompatibleWheelKind,
+) -> Result<(), Box<IncompatibleWheelError>> {
+    if filename.is_compatible(tags) {
+        return Ok(());
+    }
+    Err(Box::new(IncompatibleWheelError {
+        kind: kind(),
+        compatibility_hint: generate_wheel_compatibility_hint(filename, tags),
+    }))
 }
 
 /// Generate a hint for explaining wheel compatibility issues.
