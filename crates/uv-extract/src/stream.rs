@@ -2,7 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
-use async_zip::base::read::cd::Entry;
+use async_zip::base::read::cd::{CentralDirectoryEntry, Entry};
 use async_zip::error::ZipError;
 use futures::executor::block_on;
 use futures::io::AllowStdIo;
@@ -41,7 +41,7 @@ struct LocalHeaderEntry {
     is_dir: bool,
     /// The computed CRC32 checksum of the entry.
     crc32: u32,
-    /// The computed compressed size of the entry.
+    /// The compressed size declared in the local file header.
     compressed_size: u64,
     /// The computed uncompressed size of the entry.
     uncompressed_size: u64,
@@ -49,6 +49,55 @@ struct LocalHeaderEntry {
     data_descriptor: bool,
     /// The digest of the extracted file contents.
     digest: Option<blake3::Hash>,
+}
+
+impl LocalHeaderEntry {
+    /// Validate the fields shared by a local file header and its central-directory entry.
+    fn validate_central_directory_entry(
+        &self,
+        entry: &CentralDirectoryEntry,
+        relpath: &SanitizedArchivePath,
+        is_dir: bool,
+    ) -> Result<(), Error> {
+        if &self.relpath != relpath {
+            return Err(Error::ConflictingPaths {
+                offset: entry.file_offset(),
+                local_path: self.relpath.to_path_buf(),
+                central_directory_path: relpath.to_path_buf(),
+            });
+        }
+        if self.is_dir != is_dir {
+            return Err(Error::ConflictingEntryTypes {
+                path: relpath.to_path_buf(),
+                offset: entry.file_offset(),
+            });
+        }
+        if self.crc32 != entry.crc32() {
+            return Err(Error::ConflictingChecksums {
+                path: relpath.to_path_buf(),
+                offset: entry.file_offset(),
+                local_crc32: self.crc32,
+                central_directory_crc32: entry.crc32(),
+            });
+        }
+        if self.uncompressed_size != entry.uncompressed_size() {
+            return Err(Error::ConflictingUncompressedSizes {
+                path: relpath.to_path_buf(),
+                offset: entry.file_offset(),
+                local_uncompressed_size: self.uncompressed_size,
+                central_directory_uncompressed_size: entry.uncompressed_size(),
+            });
+        }
+        if !self.data_descriptor && self.compressed_size != entry.compressed_size() {
+            return Err(Error::ConflictingCompressedSizes {
+                path: relpath.to_path_buf(),
+                offset: entry.file_offset(),
+                local_compressed_size: self.compressed_size,
+                central_directory_compressed_size: entry.compressed_size(),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,12 +332,10 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                         .map_err(Error::io_or_zip)?;
 
                     // Verify that the existing file contents match the expected contents.
-                    if existing_contents != expected_contents {
-                        if !skip_validation {
-                            return Err(Error::DuplicateLocalFileHeader {
-                                path: relpath.to_path_buf(),
-                            });
-                        }
+                    if !skip_validation && existing_contents != expected_contents {
+                        return Err(Error::DuplicateLocalFileHeader {
+                            path: relpath.to_path_buf(),
+                        });
                     }
 
                     let digest = hash_contents.then(|| blake3::hash(&expected_contents));
@@ -297,48 +344,41 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 Err(err) => return Err(Error::Io(err)),
             };
 
-            // Validate the uncompressed size.
-            if actual_uncompressed_size != expected_uncompressed_size {
-                if !(expected_compressed_size == 0 && expected_data_descriptor) {
-                    if !skip_validation {
-                        return Err(Error::BadUncompressedSize {
-                            path: relpath.to_path_buf(),
-                            computed: actual_uncompressed_size,
-                            expected: expected_uncompressed_size,
-                        });
-                    }
-                }
+            // A zero compressed size with a data descriptor means the sizes were unknown when
+            // the local file header was written.
+            let validate_header_sizes =
+                !(skip_validation || (expected_compressed_size == 0 && expected_data_descriptor));
+            if validate_header_sizes && actual_uncompressed_size != expected_uncompressed_size {
+                return Err(Error::BadUncompressedSize {
+                    path: relpath.to_path_buf(),
+                    computed: actual_uncompressed_size,
+                    expected: expected_uncompressed_size,
+                });
             }
 
             // Validate the compressed size.
             let reader = entry.reader_mut();
             let actual_compressed_size = reader.bytes_read();
-            if actual_compressed_size != expected_compressed_size {
-                if !(expected_compressed_size == 0 && expected_data_descriptor) {
-                    if !skip_validation {
-                        return Err(Error::BadCompressedSize {
-                            path: relpath.to_path_buf(),
-                            computed: actual_compressed_size,
-                            expected: expected_compressed_size,
-                        });
-                    }
-                }
+            if validate_header_sizes && actual_compressed_size != expected_compressed_size {
+                return Err(Error::BadCompressedSize {
+                    path: relpath.to_path_buf(),
+                    computed: actual_compressed_size,
+                    expected: expected_compressed_size,
+                });
             }
 
-            // Validate the CRC of any file we unpack
-            // (It would be nice if async_zip made it harder to Not do this...)
+            // Validate the CRC32 of the unpacked file.
             let actual_crc32 = reader.compute_hash();
             let expected_crc32 = reader.entry().crc32();
-            if actual_crc32 != expected_crc32 {
-                if !(expected_crc32 == 0 && expected_data_descriptor) {
-                    if !skip_validation {
-                        return Err(Error::BadCrc32 {
-                            path: relpath.to_path_buf(),
-                            computed: actual_crc32,
-                            expected: expected_crc32,
-                        });
-                    }
-                }
+            if !skip_validation
+                && actual_crc32 != expected_crc32
+                && !(expected_crc32 == 0 && expected_data_descriptor)
+            {
+                return Err(Error::BadCrc32 {
+                    path: relpath.to_path_buf(),
+                    computed: actual_crc32,
+                    expected: expected_crc32,
+                });
             }
 
             ComputedEntry {
@@ -353,51 +393,42 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
         // https://docs.rs/async_zip/0.0.16/async_zip/base/read/stream/
         let (descriptor, next) = entry.skip().await?;
 
-        // Verify that the data descriptor field is consistent with the presence (or absence) of a
-        // data descriptor in the local file header.
-        if expected_data_descriptor && descriptor.is_none() {
-            if !skip_validation {
-                return Err(Error::MissingDataDescriptor {
-                    path: relpath.to_path_buf(),
-                });
-            }
-        }
-        if !expected_data_descriptor && descriptor.is_some() {
-            if !skip_validation {
-                return Err(Error::UnexpectedDataDescriptor {
-                    path: relpath.to_path_buf(),
-                });
-            }
-        }
-
-        // If we have a data descriptor, validate it.
-        if let Some(descriptor) = descriptor {
-            if descriptor.crc != computed.crc32 {
-                if !skip_validation {
-                    return Err(Error::BadCrc32 {
+        if !skip_validation {
+            match (expected_data_descriptor, descriptor) {
+                (true, None) => {
+                    return Err(Error::MissingDataDescriptor {
                         path: relpath.to_path_buf(),
-                        computed: computed.crc32,
-                        expected: descriptor.crc,
                     });
                 }
-            }
-            if descriptor.uncompressed_size != computed.uncompressed_size {
-                if !skip_validation {
-                    return Err(Error::BadUncompressedSize {
+                (false, Some(_)) => {
+                    return Err(Error::UnexpectedDataDescriptor {
                         path: relpath.to_path_buf(),
-                        computed: computed.uncompressed_size,
-                        expected: descriptor.uncompressed_size,
                     });
                 }
-            }
-            if descriptor.compressed_size != computed.compressed_size {
-                if !skip_validation {
-                    return Err(Error::BadCompressedSize {
-                        path: relpath.to_path_buf(),
-                        computed: computed.compressed_size,
-                        expected: descriptor.compressed_size,
-                    });
+                (true, Some(descriptor)) => {
+                    if descriptor.crc != computed.crc32 {
+                        return Err(Error::BadCrc32 {
+                            path: relpath.to_path_buf(),
+                            computed: computed.crc32,
+                            expected: descriptor.crc,
+                        });
+                    }
+                    if descriptor.uncompressed_size != computed.uncompressed_size {
+                        return Err(Error::BadUncompressedSize {
+                            path: relpath.to_path_buf(),
+                            computed: computed.uncompressed_size,
+                            expected: descriptor.uncompressed_size,
+                        });
+                    }
+                    if descriptor.compressed_size != computed.compressed_size {
+                        return Err(Error::BadCompressedSize {
+                            path: relpath.to_path_buf(),
+                            computed: computed.compressed_size,
+                            expected: descriptor.compressed_size,
+                        });
+                    }
                 }
+                (false, None) => {}
             }
         }
 
@@ -470,58 +501,11 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 };
                 let is_dir = entry.dir()?;
 
-                // Validate that various fields are consistent between the local file header and the
-                // central directory entry.
                 match local_headers.remove(&entry.file_offset()) {
                     Some(local_header) => {
-                        if local_header.relpath != relpath {
-                            if !skip_validation {
-                                return Err(Error::ConflictingPaths {
-                                    offset: entry.file_offset(),
-                                    local_path: local_header.relpath.to_path_buf(),
-                                    central_directory_path: relpath.to_path_buf(),
-                                });
-                            }
-                        }
-                        if local_header.is_dir != is_dir {
-                            if !skip_validation {
-                                return Err(Error::ConflictingEntryTypes {
-                                    path: relpath.to_path_buf(),
-                                    offset: entry.file_offset(),
-                                });
-                            }
-                        }
-                        if local_header.crc32 != entry.crc32() {
-                            if !skip_validation {
-                                return Err(Error::ConflictingChecksums {
-                                    path: relpath.to_path_buf(),
-                                    offset: entry.file_offset(),
-                                    local_crc32: local_header.crc32,
-                                    central_directory_crc32: entry.crc32(),
-                                });
-                            }
-                        }
-                        if local_header.uncompressed_size != entry.uncompressed_size() {
-                            if !skip_validation {
-                                return Err(Error::ConflictingUncompressedSizes {
-                                    path: relpath.to_path_buf(),
-                                    offset: entry.file_offset(),
-                                    local_uncompressed_size: local_header.uncompressed_size,
-                                    central_directory_uncompressed_size: entry.uncompressed_size(),
-                                });
-                            }
-                        }
-                        if local_header.compressed_size != entry.compressed_size() {
-                            if !local_header.data_descriptor {
-                                if !skip_validation {
-                                    return Err(Error::ConflictingCompressedSizes {
-                                        path: relpath.to_path_buf(),
-                                        offset: entry.file_offset(),
-                                        local_compressed_size: local_header.compressed_size,
-                                        central_directory_compressed_size: entry.compressed_size(),
-                                    });
-                                }
-                            }
+                        if !skip_validation {
+                            local_header
+                                .validate_central_directory_entry(&entry, &relpath, is_dir)?;
                         }
                         if is_dir {
                             if hash_contents {
@@ -571,12 +555,10 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                             entry.insert(mode);
                         }
                         std::collections::hash_map::Entry::Occupied(entry) => {
-                            if mode != *entry.get() {
-                                if !skip_validation {
-                                    return Err(Error::DuplicateExecutableFileHeader {
-                                        path: relpath.to_path_buf(),
-                                    });
-                                }
+                            if !skip_validation && mode != *entry.get() {
+                                return Err(Error::DuplicateExecutableFileHeader {
+                                    path: relpath.to_path_buf(),
+                                });
                             }
                         }
                     }
@@ -591,28 +573,21 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 comment,
                 extensible,
             } => {
-                // Reject ZIP64 end-of-central-directory records with extensible data, as the safety
-                // tradeoffs don't outweigh the usefulness. We don't ever expect to encounter wheels
-                // that leverage this feature anyway.
-                if extensible {
-                    if !skip_validation {
+                if !skip_validation {
+                    // Reject ZIP64 end-of-central-directory records with extensible data, as the
+                    // safety tradeoffs don't outweigh the usefulness for wheels.
+                    if extensible {
                         return Err(Error::ExtensibleData);
                     }
-                }
 
-                // Sanitize the comment by rejecting bytes `01` to `08`. If the comment contains an
-                // embedded ZIP file, it _must_ contain one of these bytes, which are otherwise
-                // very rare (non-printing) characters.
-                if comment.as_bytes().iter().any(|&b| (1..=8).contains(&b)) {
-                    if !skip_validation {
+                    // Sanitize the comment by rejecting bytes `01` to `08`. If the comment contains
+                    // an embedded ZIP file, it must contain one of these rare non-printing bytes.
+                    if comment.as_bytes().iter().any(|&b| (1..=8).contains(&b)) {
                         return Err(Error::ZipInZip);
                     }
-                }
 
-                // Validate that the reported number of entries match what we experienced while
-                // reading the local file headers.
-                if record.num_entries() != num_entries {
-                    if !skip_validation {
+                    // Check the reported count against the entries read from the central directory.
+                    if record.num_entries() != num_entries {
                         return Err(Error::ConflictingNumberOfEntries {
                             expected: num_entries,
                             actual: record.num_entries(),
@@ -625,20 +600,16 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
         }
     }
 
-    // If we didn't see the file in the central directory, it means it was not present in the
-    // archive.
     if !skip_validation {
+        // Every local file header must have a corresponding central-directory entry.
         if let Some((key, value)) = local_headers.iter().next() {
             return Err(Error::MissingCentralDirectoryEntry {
                 offset: *key,
                 path: value.relpath.to_path_buf(),
             });
         }
-    }
 
-    // Determine whether the reader is exhausted, but allow trailing null bytes, which some zip
-    // implementations incorrectly include.
-    if !skip_validation {
+        // Allow trailing null bytes, which some ZIP implementations incorrectly include.
         let mut has_trailing_bytes = false;
         let mut buf = [0u8; 256];
         loop {
@@ -649,13 +620,10 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 }
                 break;
             }
-            for &b in &buf[..n] {
-                if b == 0 {
-                    has_trailing_bytes = true;
-                } else {
-                    return Err(Error::TrailingContents);
-                }
+            if buf[..n].iter().any(|&byte| byte != 0) {
+                return Err(Error::TrailingContents);
             }
+            has_trailing_bytes = true;
         }
     }
 
