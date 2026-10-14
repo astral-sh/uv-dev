@@ -91,13 +91,11 @@ impl KeyringProvider {
             return Ok(false);
         };
 
-        match &self.backend {
-            KeyringProviderBackend::Native => {
-                Self::store_native(&Self::service_name(url), username, password).await?;
-                Ok(true)
-            }
-            backend => Err(Error::StoreUnsupported(backend.name())),
-        }
+        let service = self
+            .native_service_name(url)
+            .map_err(Error::StoreUnsupported)?;
+        Self::store_native(&service, username, password).await?;
+        Ok(true)
     }
 
     /// Store credentials to the system keyring.
@@ -113,14 +111,12 @@ impl KeyringProvider {
     /// Only the native keyring provider is supported at this time.
     #[instrument(skip_all, fields(%url, username))]
     pub async fn remove(&self, url: &DisplaySafeUrl, username: &str) -> Result<(), Error> {
-        match &self.backend {
-            KeyringProviderBackend::Native => {
-                Self::remove_native(&Self::service_name(url), username)
-                    .await
-                    .map_err(Error::from)
-            }
-            backend => Err(Error::RemoveUnsupported(backend.name())),
-        }
+        let service = self
+            .native_service_name(url)
+            .map_err(Error::RemoveUnsupported)?;
+        Self::remove_native(&service, username)
+            .await
+            .map_err(Error::from)
     }
 
     /// Remove credentials from the system keyring for the given `service_name`/`username`
@@ -131,6 +127,14 @@ impl KeyringProvider {
         entry.delete_credential().await?;
         trace!("Removed credentials for {username}@{service_name} from system keyring");
         Ok(())
+    }
+
+    /// Return a service name for native operations, or the unsupported backend's name.
+    fn native_service_name(&self, url: &DisplaySafeUrl) -> Result<String, &'static str> {
+        if !matches!(self.backend, KeyringProviderBackend::Native) {
+            return Err(self.backend.name());
+        }
+        Ok(Self::service_name(url))
     }
 
     /// Return the credential-free service name used to store and remove keyring entries.
