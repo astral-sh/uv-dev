@@ -2002,7 +2002,7 @@ impl TestContext {
         site_packages_path_for_version(&self.venv, self.python_kind(), version)
     }
 
-    /// Reset the virtual environment in the test context.
+    /// Reset the fixture virtual environment independently of project configuration.
     pub fn reset_venv(&self) {
         self.create_venv();
     }
@@ -2174,6 +2174,7 @@ fn create_venv_from_executable<P: AsRef<Path>>(
         .arg("venv")
         .arg(path.as_ref().as_os_str())
         .arg("--clear")
+        .arg("--no-config")
         .arg("--cache-dir")
         .arg(cache_dir.path())
         .arg("--python")
