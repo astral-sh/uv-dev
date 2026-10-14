@@ -13593,7 +13593,7 @@ fn find_links_relative_in_config_works_from_subdir() -> Result<()> {
 
 #[test]
 fn sync_dry_run() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13674,7 +13674,7 @@ fn sync_dry_run() -> Result<()> {
         [project]
         name = "project"
         version = "0.1.0"
-        requires-python = "==3.9.*"
+        requires-python = "==3.11.*"
         dependencies = ["iniconfig"]
         "#,
     )?;
@@ -13682,9 +13682,9 @@ fn sync_dry_run() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
     Would replace project environment at: .venv
-    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version >= '3.12'` vs `python_full_version == '3.9.*'`
+    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version >= '3.12'` vs `python_full_version == '3.11.*'`
     Resolved 2 packages in [TIME]
     Would update lockfile at: uv.lock
     Would install 1 package
@@ -13697,10 +13697,10 @@ fn sync_dry_run() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version >= '3.12'` vs `python_full_version == '3.9.*'`
+    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version >= '3.12'` vs `python_full_version == '3.11.*'`
     Resolved 2 packages in [TIME]
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
