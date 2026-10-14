@@ -1090,51 +1090,43 @@ async fn login_text_store() {
     ");
 }
 
-#[test]
-fn login_text_store_empty_file() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
-    context.temp_dir.child("credentials.toml").write_str("")?;
-
-    uv_snapshot!(context.auth_login()
-        .arg("https://example.com/simple")
-        .arg("--token")
-        .arg("test-token")
-        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for https://example.com/
-    ");
-
-    uv_snapshot!(context.auth_token()
-        .arg("https://example.com/simple")
-        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    test-token
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn login_text_store_comments_only_file() -> Result<()> {
+fn assert_login_to_empty_text_store(contents: &str) -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
     context
         .temp_dir
         .child("credentials.toml")
-        .write_str("# No credentials have been configured yet.\n")?;
+        .write_str(contents)?;
 
-    uv_snapshot!(context.auth_login()
+    context
+        .auth_login()
         .arg("https://example.com/simple")
         .arg("--token")
         .arg("test-token")
-        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for https://example.com/
-    ");
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str())
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("Stored credentials for https://example.com/\n");
 
+    context
+        .auth_token()
+        .arg("https://example.com/simple")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str())
+        .assert()
+        .success()
+        .stdout("test-token\n")
+        .stderr("");
     Ok(())
+}
+
+#[test]
+fn login_text_store_empty_file() -> Result<()> {
+    assert_login_to_empty_text_store("")
+}
+
+#[test]
+fn login_text_store_comments_only_file() -> Result<()> {
+    assert_login_to_empty_text_store("# No credentials have been configured yet.\n")
 }
 
 #[test]
