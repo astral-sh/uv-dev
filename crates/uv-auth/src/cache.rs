@@ -66,17 +66,14 @@ impl CredentialsCache {
         url: &DisplaySafeUrl,
     ) -> Result<bool, CredentialsFromUrlError> {
         if let Some(credentials) = Credentials::from_url(url)? {
-            trace!("Caching credentials for `{url}`");
-            self.insert(url, Arc::new(Authentication::from(credentials)));
+            self.store_credentials(url, credentials);
             Ok(true)
         } else {
             Ok(false)
         }
     }
 
-    /// Populate the global authentication store with credentials on a URL, if there are any.
-    ///
-    /// Returns `true` if the store was updated.
+    /// Populate the authentication cache with credentials for a URL.
     pub fn store_credentials(&self, url: &DisplaySafeUrl, credentials: Credentials) {
         trace!("Caching credentials for `{url}`");
         self.insert(url, Arc::new(Authentication::from(credentials)));
