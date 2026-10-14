@@ -39,12 +39,22 @@ impl<'a> Iterator for MemchrSplitter<'a> {
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        // We know we'll return at least one item if there's remaining text.
-        let min = usize::from(self.offset < self.haystack.len());
+        // Every item consumes at least one byte, including empty items between delimiters.
+        let remaining = self.haystack.len() - self.offset;
+        (usize::from(remaining > 0), Some(remaining))
+    }
+}
 
-        // Maximum possible splits is remaining length divided by 2 (minimum one char between delimiters).
-        let max = (self.haystack.len() - self.offset).div_ceil(2) + min;
+#[cfg(test)]
+mod tests {
+    use super::MemchrSplitter;
 
-        (min, Some(max))
+    #[test]
+    fn size_hint_bounds_adjacent_delimiters() {
+        let splitter = MemchrSplitter::split("....", b'.');
+        let (_, Some(upper)) = splitter.size_hint() else {
+            panic!("the upper bound should be known");
+        };
+        assert!(splitter.count() <= upper);
     }
 }
