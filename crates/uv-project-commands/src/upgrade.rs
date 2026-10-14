@@ -46,7 +46,6 @@ use crate::lock::LockEvent;
 
 /// A dependency requirement selected for upgrading.
 struct UpgradableRequirement {
-    package: PackageName,
     dependency_type: DependencyType,
     original_text: String,
     requirement: Requirement<VerbatimParsedUrl>,
@@ -84,7 +83,6 @@ struct DeclarationIdentity {
 
 /// An existing requirement and its proposed replacement.
 struct RequirementUpdate {
-    package: PackageName,
     dependency_type: DependencyType,
     original_text: String,
     existing: Requirement<VerbatimUrl>,
@@ -149,7 +147,7 @@ impl BlockedReason {
 impl UpgradableRequirement {
     fn identity(&self) -> DeclarationIdentity {
         DeclarationIdentity {
-            package: self.package.clone(),
+            package: self.requirement.name.clone(),
             dependency_type: self.dependency_type.clone(),
             text: self.original_text.clone(),
         }
@@ -268,7 +266,7 @@ pub async fn upgrade(
     if !declaration_outcomes.is_empty() {
         let active_packages = requirements
             .iter()
-            .map(|selected| &selected.package)
+            .map(|selected| &selected.requirement.name)
             .collect::<FxHashSet<_>>();
         selected_packages.retain(|package| active_packages.contains(package));
     }
@@ -282,17 +280,12 @@ pub async fn upgrade(
         .iter()
         .map(|selected| {
             Ok(RequirementUpdate {
-                package: selected.package.clone(),
                 dependency_type: selected.dependency_type.clone(),
                 original_text: selected.original_text.clone(),
-                existing: into_verbatim_requirement(
+                existing: into_verbatim_requirement(selected.requirement.clone())?,
+                replacement: into_verbatim_requirement(relax_requirement(
                     selected.requirement.clone(),
-                    &selected.package,
-                )?,
-                replacement: into_verbatim_requirement(
-                    relax_requirement(selected.requirement.clone()),
-                    &selected.package,
-                )?,
+                ))?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -418,7 +411,8 @@ pub async fn upgrade(
             match propose_specifiers(&selected.requirement, &selected.resolved_versions) {
                 Ok(Some(specifiers)) => specifiers,
                 Ok(None) => {
-                    declaration_outcomes.push(DeclarationOutcome::Unchanged(selected.package));
+                    declaration_outcomes
+                        .push(DeclarationOutcome::Unchanged(selected.requirement.name));
                     continue;
                 }
                 Err(err) => {
@@ -430,18 +424,17 @@ pub async fn upgrade(
                 }
             };
 
-        let existing = into_verbatim_requirement(selected.requirement.clone(), &selected.package)?;
+        let existing = into_verbatim_requirement(selected.requirement.clone())?;
         let mut proposed_requirement = selected.requirement;
         proposed_requirement.version_or_url = Some(VersionOrUrl::VersionSpecifier(specifiers));
-        let replacement = into_verbatim_requirement(proposed_requirement, &selected.package)?;
+        let replacement = into_verbatim_requirement(proposed_requirement)?;
         let update = RequirementUpdate {
-            package: selected.package,
             dependency_type: selected.dependency_type,
             original_text: selected.original_text,
             existing,
             replacement,
         };
-        declaration_outcomes.push(DeclarationOutcome::Changed(update.package.clone()));
+        declaration_outcomes.push(DeclarationOutcome::Changed(update.existing.name.clone()));
         updated_requirements
             .entry((
                 update.dependency_type.toml_table_name().into_owned(),
@@ -523,7 +516,7 @@ fn collect_resolved_versions(
     let mut requirements_by_package = BTreeMap::<_, Vec<_>>::new();
     for selected in requirements {
         requirements_by_package
-            .entry(&selected.package)
+            .entry(&selected.requirement.name)
             .or_default()
             .push((selected.effective_marker, &mut selected.resolved_versions));
     }
@@ -651,7 +644,6 @@ fn select_requirements(
             continue;
         }
         to_upgrade.push(UpgradableRequirement {
-            package: requirement.name.clone(),
             dependency_type: DependencyType::Production,
             original_text: dependency.to_owned(),
             requirement,
@@ -660,7 +652,7 @@ fn select_requirements(
         });
     }
 
-    let active_packages = to_upgrade.iter().map(|selected| &selected.package);
+    let active_packages = to_upgrade.iter().map(|selected| &selected.requirement.name);
     let selected_packages: Vec<_> = if is_explicit_selection {
         let mut active_packages: BTreeSet<_> = active_packages.collect();
         let skipped_packages: BTreeSet<_> =
@@ -706,7 +698,7 @@ fn validate_requirements(
                 Some(VersionOrUrl::Url(_))
             )
         })
-        .map(|selected| &selected.package)
+        .map(|selected| &selected.requirement.name)
         .collect();
     if let Some(package) = packages
         .iter()
@@ -739,7 +731,7 @@ fn validate_requirements(
             .filter(|source| {
                 !matches!(source, Source::Registry { .. })
                     && requirements.iter().any(|selected| {
-                        selected.package == *package
+                        selected.requirement.name == *package
                             && source_is_applicable(
                                 source,
                                 &selected.dependency_type,
@@ -844,13 +836,13 @@ fn apply_requirement_replacements<'a>(
 ) -> Result<()> {
     let mut applied = FxHashMap::default();
     for RequirementUpdate {
-        package,
         dependency_type,
         existing,
         replacement,
         ..
     } in replacements
     {
+        let package = &existing.name;
         match applied.entry((dependency_type, existing)) {
             Entry::Occupied(entry) => {
                 if *entry.get() != replacement {
@@ -900,7 +892,6 @@ fn source_is_applicable(
 /// Convert a parsed requirement into the representation used by the mutable manifest.
 fn into_verbatim_requirement(
     requirement: Requirement<VerbatimParsedUrl>,
-    package: &PackageName,
 ) -> Result<Requirement<VerbatimUrl>> {
     let Requirement {
         name,
@@ -914,7 +905,7 @@ fn into_verbatim_requirement(
             Some(VersionOrUrl::VersionSpecifier(specifiers))
         }
         Some(VersionOrUrl::Url(_)) => {
-            bail!("Dependency `{package}` is a direct URL requirement and cannot be upgraded");
+            bail!("Dependency `{name}` is a direct URL requirement and cannot be upgraded");
         }
         None => None,
     };
