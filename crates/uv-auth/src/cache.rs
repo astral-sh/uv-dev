@@ -145,48 +145,36 @@ impl CredentialsCache {
             return;
         }
 
-        // Insert an entry for requests including the username
+        let realm = Realm::from(url);
         let username = credentials.to_username();
-        if username.is_some() {
-            let realm = (Realm::from(url), username);
-            self.insert_realm(realm, &credentials);
+        {
+            let mut realms = self.realms.write().unwrap();
+            if username.is_some() {
+                Self::insert_realm(&mut realms, (realm.clone(), username), &credentials);
+            }
+            Self::insert_realm(&mut realms, (realm, Username::none()), &credentials);
         }
-
-        // Insert an entry for requests with no username
-        self.insert_realm((Realm::from(url), Username::none()), &credentials);
 
         // Insert an entry for the URL
         let mut urls = self.urls.write().unwrap();
         urls.insert(url, credentials);
     }
 
-    /// Private interface to update a realm cache entry.
-    ///
-    /// Returns replaced credentials, if any.
+    /// Update a realm cache entry without replacing password-bearing credentials with an
+    /// unauthenticated value.
     fn insert_realm(
-        &self,
+        realms: &mut FxHashMap<(Realm, Username), Arc<Authentication>>,
         key: (Realm, Username),
         credentials: &Arc<Authentication>,
-    ) -> Option<Arc<Authentication>> {
-        // Do not cache empty credentials
-        if credentials.is_empty() {
-            return None;
-        }
-
-        let mut realms = self.realms.write().unwrap();
-
-        // Always replace existing entries if we have a password or token
-        if credentials.is_authenticated() {
-            return realms.insert(key, credentials.clone());
-        }
-
-        // If we only have a username, add a new entry or replace an existing entry if it doesn't have a password
-        let existing = realms.get(&key);
-        if existing.is_none_or(|credentials| credentials.password().is_none()) {
-            return realms.insert(key, credentials.clone());
-        }
-
-        None
+    ) {
+        realms
+            .entry(key)
+            .and_modify(|cached| {
+                if credentials.is_authenticated() || cached.password().is_none() {
+                    *cached = Arc::clone(credentials);
+                }
+            })
+            .or_insert_with(|| Arc::clone(credentials));
     }
 }
 
