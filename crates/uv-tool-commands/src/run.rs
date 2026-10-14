@@ -4,7 +4,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use uv_dispatch::PlatformState;
-use uv_distribution_types::RequirementScope;
 use uv_environment_operations::environment::CachedEnvironment;
 
 use anyhow::{Context, bail};
@@ -16,7 +15,7 @@ use tracing::{debug, warn};
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::BaseClientBuilder;
 use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, Excludes, GitLfsSetting,
     Overrides, TargetTriple, ToolRunCommand,
@@ -24,14 +23,12 @@ use uv_configuration::{
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
-    IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    IndexUrl, Name, NameRequirementSpecification, Requirement, RequirementSource,
+    UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_errors::HintOrdering;
 use uv_installer::{BuildSettings, InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
-use uv_pep440::{VersionSpecifier, VersionSpecifiers};
-use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
@@ -53,13 +50,12 @@ use uv_command_support::{
 
 use crate::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::error::ToolError;
-use crate::requirements::resolve_names;
+use crate::requirements::{registry_requirement, resolve_latest};
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations as operations;
-use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::ResolverInstallerSettings;
@@ -840,6 +836,24 @@ async fn get_or_create_environment(
         operations::read_constraints(build_constraints, client_builder).await?,
     );
 
+    let resolve_names = async |requirements| {
+        crate::requirements::resolve_names(
+            requirements,
+            &interpreter,
+            &settings.resolver,
+            &build_constraints,
+            client_builder,
+            &state,
+            concurrency,
+            cache,
+            workspace_cache,
+            printer,
+            preview,
+            lfs,
+        )
+        .await
+    };
+
     let from = match request {
         ToolRequest::Python {
             executable: request_executable,
@@ -875,23 +889,7 @@ async fn get_or_create_environment(
                         UnresolvedRequirement::Unnamed(..) => None,
                     };
 
-                    let requirement = resolve_names(
-                        vec![spec],
-                        &interpreter,
-                        &settings.resolver,
-                        &build_constraints,
-                        client_builder,
-                        &state,
-                        concurrency,
-                        cache,
-                        workspace_cache,
-                        printer,
-                        preview,
-                        lfs,
-                    )
-                    .await?
-                    .pop()
-                    .unwrap();
+                    let requirement = resolve_names(vec![spec]).await?.pop().unwrap();
 
                     // Prefer, in order:
                     // 1. The verbatim executable provided by the user, independent of the requirement (as in: `uvx --from package executable`).
@@ -909,21 +907,8 @@ async fn get_or_create_environment(
                     let executable = request_executable
                         .map(ToString::to_string)
                         .unwrap_or_else(|| (*executable).to_string());
-                    let requirement = Requirement {
-                        name: name.clone(),
-                        extras: extras.clone(),
-                        groups: Box::new([]),
-                        marker: MarkerTree::default(),
-                        source: RequirementSource::Registry {
-                            specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(
-                                version.clone(),
-                            )),
-                            index: None,
-                            conflict: None,
-                        },
-                        scope: RequirementScope::Global,
-                        origin: None,
-                    };
+                    let requirement =
+                        registry_requirement(name.clone(), extras.clone(), Some(version.clone()));
 
                     (executable, requirement)
                 }
@@ -932,19 +917,7 @@ async fn get_or_create_environment(
                     let executable = request_executable
                         .map(ToString::to_string)
                         .unwrap_or_else(|| (*executable).to_string());
-                    let requirement = Requirement {
-                        name: name.clone(),
-                        extras: extras.clone(),
-                        groups: Box::new([]),
-                        marker: MarkerTree::default(),
-                        source: RequirementSource::Registry {
-                            specifier: VersionSpecifiers::empty(),
-                            index: None,
-                            conflict: None,
-                        },
-                        scope: RequirementScope::Global,
-                        origin: None,
-                    };
+                    let requirement = registry_requirement(name.clone(), extras.clone(), None);
 
                     (executable, requirement)
                 }
@@ -957,68 +930,18 @@ async fn get_or_create_environment(
         }
     };
 
-    // For `@latest`, fetch the latest version and create a constraint.
-    let latest = if let ToolRequest::Package {
-        target: Target::Latest(_, name, _),
-        ..
-    } = &request
-    {
-        // Build the registry client to fetch the latest version.
-        let client = RegistryClientBuilder::new(
-            client_builder
-                .clone()
-                .keyring(settings.resolver.keyring_provider),
-            cache.clone(),
-        )
-        .index_locations(settings.resolver.index_locations.clone())
-        .index_strategy(settings.resolver.index_strategy)
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
-
-        // Initialize the capabilities.
-        let capabilities = IndexCapabilities::default();
-        let download_concurrency = concurrency.downloads_semaphore.clone();
-
-        // Initialize the client to fetch the latest version.
-        let latest_client = LatestClient {
-            client: &client,
-            capabilities: &capabilities,
-            prerelease: &settings.resolver.prerelease,
-            exclude_newer: &settings.resolver.exclude_newer,
-            index_locations: &settings.resolver.index_locations,
-            tags: None,
-            requires_python: None,
-        };
-
-        // Fetch the latest version.
-        if let Some(dist_filename) = latest_client
-            .find_latest(name, None, &download_concurrency)
-            .await?
-        {
-            let version = dist_filename.version().clone();
-            debug!("Resolved `{name}@latest` to `{name}=={version}`");
-
-            // The constraint pins the version during resolution to prevent backtracking.
-            Some(Requirement {
-                name: name.clone(),
-                extras: vec![].into_boxed_slice(),
-                groups: Box::new([]),
-                marker: MarkerTree::default(),
-                source: RequirementSource::Registry {
-                    specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
-                    index: None,
-                    conflict: None,
-                },
-                scope: RequirementScope::Global,
-                origin: None,
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let latest = resolve_latest(
+        request,
+        &interpreter,
+        &settings.resolver,
+        client_builder,
+        concurrency,
+        cache,
+    )
+    .await?;
+    if let Some(latest) = &latest {
+        debug!("Resolved `{}@latest` to `{latest}`", latest.name);
+    }
 
     // Read the `--with` requirements.
     let spec = RequirementsSpecification::from_sources(
@@ -1039,23 +962,7 @@ async fn get_or_create_environment(
             ToolRequirement::Python { .. } => {}
             ToolRequirement::Package { requirement, .. } => requirements.push(requirement.clone()),
         }
-        requirements.extend(
-            resolve_names(
-                spec.requirements.clone(),
-                &interpreter,
-                &settings.resolver,
-                &build_constraints,
-                client_builder,
-                &state,
-                concurrency,
-                cache,
-                workspace_cache,
-                printer,
-                preview,
-                lfs,
-            )
-            .await?,
-        );
+        requirements.extend(resolve_names(spec.requirements.clone()).await?);
         requirements
     };
 
@@ -1068,21 +975,7 @@ async fn get_or_create_environment(
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    let overrides = resolve_names(
-        spec.overrides.clone(),
-        &interpreter,
-        &settings.resolver,
-        &build_constraints,
-        client_builder,
-        &state,
-        concurrency,
-        cache,
-        workspace_cache,
-        printer,
-        preview,
-        lfs,
-    )
-    .await?;
+    let overrides = resolve_names(spec.overrides.clone()).await?;
 
     // Check if the tool is already installed in a compatible environment.
     if !isolated && !request.is_latest() {

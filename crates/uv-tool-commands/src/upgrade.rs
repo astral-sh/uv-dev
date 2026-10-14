@@ -388,7 +388,7 @@ async fn upgrade_tool(
         let tool_lock = ToolLock::from_resolution(
             &tool_dir,
             &universal_resolution,
-            &lock_manifest,
+            lock_manifest,
             &settings.resolver.index_locations,
         )?;
         let resolution = tool_lock.to_resolution(
@@ -557,10 +557,11 @@ async fn upgrade_tool(
         )
         .await?;
 
-        let outcome = if changelog.includes(name) {
-            UpgradeOutcome::UpgradeTool
-        } else if changelog.is_empty() {
+        let mut changed_packages = changelog.added_or_removed_packages().peekable();
+        let outcome = if changed_packages.peek().is_none() {
             UpgradeOutcome::NoOp
+        } else if changed_packages.any(|package| package == name) {
+            UpgradeOutcome::UpgradeTool
         } else {
             UpgradeOutcome::UpgradeDependencies
         };
@@ -586,14 +587,8 @@ async fn upgrade_tool(
                 name,
                 &entrypoints,
                 installed_tools,
-                &ToolOptions::from(options),
                 true,
-                existing_tool_receipt.python().to_owned(),
-                existing_tool_receipt.requirements().to_vec(),
-                existing_tool_receipt.constraints().to_vec(),
-                existing_tool_receipt.overrides().to_vec(),
-                existing_tool_receipt.excludes().to_vec(),
-                existing_tool_receipt.build_constraints().to_vec(),
+                existing_tool_receipt.with_options(ToolOptions::from(options)),
                 tool_lock.as_ref(),
                 printer,
             )?;

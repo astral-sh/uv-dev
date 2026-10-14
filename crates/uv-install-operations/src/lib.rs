@@ -192,16 +192,13 @@ impl Changelog {
         Self::from_local(installed, Vec::new())
     }
 
-    /// Returns `true` if the changelog includes a distribution with the given name, either via
-    /// an installation or uninstallation.
-    pub fn includes(&self, name: &PackageName) -> bool {
-        self.installed.iter().any(|dist| dist.name() == name)
-            || self.uninstalled.iter().any(|dist| dist.name() == name)
-    }
-
-    /// Returns `true` if the changelog is empty.
-    pub fn is_empty(&self) -> bool {
-        self.installed.is_empty() && self.uninstalled.is_empty()
+    /// Return package names for added or removed distributions, excluding unchanged reinstalls.
+    /// A package name can appear more than once.
+    pub fn added_or_removed_packages(&self) -> impl Iterator<Item = &PackageName> {
+        self.installed
+            .iter()
+            .chain(&self.uninstalled)
+            .map(ChangedDist::name)
     }
 }
 

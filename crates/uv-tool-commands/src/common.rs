@@ -47,7 +47,7 @@ use uv_python_types::{
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{FlatIndex, OptionsBuilder, ResolverOutput};
-use uv_settings::{PythonInstallMirrors, ToolOptions};
+use uv_settings::PythonInstallMirrors;
 use uv_shell::Shell;
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
@@ -291,25 +291,32 @@ pub(super) struct ToolLock {
 
 /// A tool lock validated against the current resolution inputs.
 pub(super) struct ValidatedToolLock {
-    lock: ToolLock,
-    satisfied: bool,
-    usable: bool,
+    root: PathBuf,
+    lock: ValidatedLock,
 }
 
 impl ValidatedToolLock {
     /// Return whether the existing lock satisfies the current resolution inputs.
     pub(super) fn is_satisfied(&self) -> bool {
-        self.satisfied
+        self.lock.is_satisfied()
     }
 
     /// Return the lock as a resolver preference if its versions remain usable.
-    pub(super) fn preference(&self) -> Option<&ToolLock> {
-        self.usable.then_some(&self.lock)
+    fn preference(&self) -> Option<PreferenceLocation<'_>> {
+        self.lock
+            .usable_lock()
+            .map(|lock| PreferenceLocation::Lock {
+                lock,
+                install_path: &self.root,
+            })
     }
 
     /// Return the validated lock.
     pub(super) fn into_lock(self) -> ToolLock {
-        self.lock
+        ToolLock {
+            root: self.root,
+            lock: self.lock.into_lock(),
+        }
     }
 }
 
@@ -339,10 +346,10 @@ impl ToolLock {
     pub(super) fn from_resolution(
         root: &Path,
         resolution: &ResolverOutput,
-        manifest: &ResolverManifest,
+        manifest: ResolverManifest,
         index_locations: &IndexLocations,
     ) -> anyhow::Result<Self> {
-        let manifest = manifest.clone().relative_to(root)?;
+        let manifest = manifest.relative_to(root)?;
         let lock = Lock::from_resolution(
             resolution,
             manifest,
@@ -549,16 +556,9 @@ impl ToolLock {
             printer,
         )
         .await?;
-        let satisfied = validated.is_satisfied();
-        let usable = validated.is_usable();
-
         Ok(ValidatedToolLock {
-            lock: Self {
-                root,
-                lock: validated.into_lock(),
-            },
-            satisfied,
-            usable,
+            root,
+            lock: validated,
         })
     }
 
@@ -614,15 +614,12 @@ impl ToolLock {
 /// available, then falling back to the installed environment.
 pub(super) fn tool_environment_spec<'a>(
     requirements: RequirementsSpecification,
-    lock: Option<&'a ToolLock>,
+    lock: Option<&'a ValidatedToolLock>,
     site_packages: Option<&'a SitePackages>,
 ) -> EnvironmentSpecification<'a> {
     let specification = EnvironmentSpecification::from(requirements);
     let preference = lock
-        .map(|lock| PreferenceLocation::Lock {
-            lock: &lock.lock,
-            install_path: &lock.root,
-        })
+        .and_then(ValidatedToolLock::preference)
         .or_else(|| site_packages.map(PreferenceLocation::Installed));
     match preference {
         Some(preference) => specification.with_preferences(preference),
@@ -725,20 +722,14 @@ pub(super) async fn refine_interpreter(
 ///
 /// Installs tool executables for a given package, handling any conflicts.
 ///
-/// Adds a receipt for the tool.
+/// Updates the tool receipt with the installed entrypoints and saves it.
 pub(super) fn finalize_tool_install(
     environment: &PythonEnvironment,
     name: &PackageName,
     entrypoints: &[PackageName],
     installed_tools: &InstalledTools,
-    options: &ToolOptions,
     force: bool,
-    python: Option<PythonRequest>,
-    requirements: Vec<Requirement>,
-    constraints: Vec<Requirement>,
-    overrides: Vec<Requirement>,
-    excludes: Vec<ExcludeDependency>,
-    build_constraints: Vec<NameRequirementSpecification>,
+    receipt: Tool,
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
@@ -907,7 +898,7 @@ pub(super) fn finalize_tool_install(
                 fs_err::copy(src, &target).context("Failed to install entrypoint")?;
             }
 
-            let tool_entry = ToolEntrypoint::new(&name, target, package.to_string());
+            let tool_entry = ToolEntrypoint::new(name, target, package.to_string());
             names.insert(tool_entry.name.clone());
             installed_entrypoints.push(tool_entry);
         }
@@ -927,18 +918,9 @@ pub(super) fn finalize_tool_install(
     }
 
     debug!("Adding receipt for tool `{name}`");
-    let tool = Tool::new(
-        requirements,
-        constraints,
-        overrides,
-        excludes,
-        build_constraints,
-        python,
-        installed_entrypoints,
-        options.clone(),
-    );
+    let receipt = receipt.with_entrypoints(installed_entrypoints);
     ToolLock::write(&installed_tools.tool_dir(name), lock)?;
-    installed_tools.add_tool_receipt(name, tool)?;
+    installed_tools.add_tool_receipt(name, receipt)?;
 
     warn_out_of_path(&executable_directory);
 
