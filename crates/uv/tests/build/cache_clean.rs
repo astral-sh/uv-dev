@@ -16,9 +16,9 @@ use uv_cache::Cache;
 use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_static::EnvVars;
 
-#[cfg(unix)]
-use uv_test::assert_path_missing;
 use uv_test::uv_snapshot;
+#[cfg(unix)]
+use uv_test::{assert_link_target, assert_path_missing};
 
 /// `cache clean` should remove all packages.
 #[test]
@@ -512,22 +512,22 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
     Removed 6 files ([SIZE])
     ");
 
-    assert!(victim_dir.is_dir());
-    assert!(victim_dir.child("payload.txt").is_file());
+    assert_eq!(context.read(victim_dir.child("payload.txt")), "payload");
     assert_path_missing(package_entry);
     assert_path_missing(archive_entry);
     assert_path_missing(shard.child("orphan"));
     assert_path_missing(shard.child("nested"));
-    assert!(fs_err::symlink_metadata(files.child("escape"))?.is_symlink());
-    assert!(fs_err::symlink_metadata(shard.child("escape"))?.is_symlink());
+    assert_link_target(files.child("escape"), &victim_dir);
+    assert_link_target(shard.child("escape"), &victim_dir);
     assert_path_missing(flat_shard.child("orphan"));
-    assert!(retained.is_file());
+    assert_eq!(context.read(&retained), "retained");
     assert!(flat_shard.child("retained").is_file());
-    assert!(fs_err::symlink_metadata(flat_shard.child("escape"))?.is_symlink());
+    assert_link_target(flat_shard.child("escape"), &victim_dir);
 
     // A full clean also leaves external targets intact, even through a symlinked cache root.
     let cache_link = context.temp_dir.child("cache-link");
-    fs_err::os::unix::fs::symlink(context.cache_dir.path(), cache_link.path())?;
+    let original_cache = context.cache_dir.to_path_buf();
+    fs_err::os::unix::fs::symlink(&original_cache, cache_link.path())?;
     let context = context
         .with_cache_dir(cache_link.path())
         .with_filtered_file_counts();
@@ -538,9 +538,10 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    assert!(cache_link.path().is_symlink());
+    assert_link_target(&cache_link, &original_cache);
     assert_path_missing(&files);
-    assert!(victim_dir.child("payload.txt").is_file());
+    assert_eq!(context.read(victim_dir.child("payload.txt")), "payload");
+    assert_eq!(context.read(&retained), "retained");
 
     Ok(())
 }
