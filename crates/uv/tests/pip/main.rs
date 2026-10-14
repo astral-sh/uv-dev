@@ -40,6 +40,7 @@ mod pip_sync_reinstall;
 #[cfg(feature = "test-python")]
 mod pip_sync_target;
 
+#[cfg(feature = "test-python")]
 mod pip_tree;
 
 #[cfg(feature = "test-python")]
