@@ -624,50 +624,43 @@ impl<'lock> InstallTarget<'lock> {
         let Some(first_extra) = requested_extras.peek().copied() else {
             return Ok(());
         };
-        match self {
-            Self::Project { lock, .. }
-            | Self::Projects { lock, .. }
-            | Self::Workspace { lock, .. }
-            | Self::NonProjectWorkspace { lock, .. }
-            | Self::Lockfile { lock, .. } => {
-                if !lock.supports_provides_extra() {
-                    return Ok(());
-                }
-
-                let roots = self.roots().collect::<FxHashSet<_>>();
-                // Read only the lockfile so frozen installs cannot select newly declared extras.
-                let known_extras = lock
-                    .packages()
-                    .iter()
-                    .filter(|package| roots.contains(package.name()))
-                    .flat_map(|package| {
-                        package
-                            .provides_extras()
-                            .iter()
-                            .chain(package.optional_dependencies().keys())
-                    })
-                    .collect::<FxHashSet<_>>();
-
-                for extra in requested_extras {
-                    if !known_extras.contains(extra) {
-                        return match self {
-                            Self::Project { name, .. } => Err(
-                                EnvironmentError::MissingExtraProject(extra.clone(), name.clone()),
-                            ),
-                            Self::Projects { .. } => {
-                                Err(EnvironmentError::MissingExtraProjects(extra.clone()))
-                            }
-                            _ => Err(EnvironmentError::MissingExtraProjects(extra.clone())),
-                        };
-                    }
-                }
-            }
+        let project_name = match self {
+            Self::Project { name, .. } => Some(name),
+            Self::Projects { .. }
+            | Self::Workspace { .. }
+            | Self::NonProjectWorkspace { .. }
+            | Self::Lockfile { .. } => None,
             Self::Script { .. } => {
                 return Err(EnvironmentError::MissingExtraScript(first_extra.clone()));
             }
+        };
+
+        let lock = self.lock();
+        if !lock.supports_provides_extra() {
+            return Ok(());
         }
 
-        Ok(())
+        let roots = self.roots().collect::<FxHashSet<_>>();
+        // Read only the lockfile so frozen installs cannot select newly declared extras.
+        let known_extras = lock
+            .packages()
+            .iter()
+            .filter(|package| roots.contains(package.name()))
+            .flat_map(|package| {
+                package
+                    .provides_extras()
+                    .iter()
+                    .chain(package.optional_dependencies().keys())
+            })
+            .collect::<FxHashSet<_>>();
+
+        let Some(extra) = requested_extras.find(|extra| !known_extras.contains(*extra)) else {
+            return Ok(());
+        };
+        Err(match project_name {
+            Some(name) => EnvironmentError::MissingExtraProject(extra.clone(), name.clone()),
+            None => EnvironmentError::MissingExtraProjects(extra.clone()),
+        })
     }
 
     /// Validate the dependency groups requested by the [`DependencyGroupSpecifier`].
