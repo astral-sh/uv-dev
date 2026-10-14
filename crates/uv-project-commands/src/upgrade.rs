@@ -401,7 +401,7 @@ pub async fn upgrade(
         Arc::new(MetadataResponse::Found(ArchiveMetadata::from(metadata))),
     );
 
-    let result = match Box::pin(
+    let result = Box::pin(
         LockOperation::new(
             LockMode::DryRun(&interpreter),
             &settings,
@@ -418,10 +418,7 @@ pub async fn upgrade(
         .execute(LockTarget::Workspace(project.workspace())),
     )
     .await
-    {
-        Ok(result) => result,
-        Err(err) => return Err(UvError::from(err).into()),
-    };
+    .map_err(UvError::from)?;
 
     let lock = result.lock();
     for resolved_package in lock.packages() {

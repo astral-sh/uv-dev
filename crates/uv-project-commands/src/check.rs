@@ -403,7 +403,7 @@ pub async fn check(
         } else {
             LockMode::Write(venv.interpreter())
         };
-        let result = match Box::pin(
+        let result = Box::pin(
             LockOperation::new(
                 mode,
                 &settings.resolver,
@@ -419,10 +419,7 @@ pub async fn check(
             .execute(lock_target),
         )
         .await
-        {
-            Ok(result) => result,
-            Err(err) => return Err(UvError::from(err).into()),
-        };
+        .map_err(UvError::from)?;
 
         let marker_environment = venv.interpreter().to_resolver_marker_environment();
         if ty_path.is_none()
@@ -577,7 +574,7 @@ pub async fn check(
         };
 
         let selection = PackageSelection::from_args(all_packages, &package, project.project_name());
-        let result = match Box::pin(
+        let result = Box::pin(
             LockOperation::new(
                 mode,
                 &settings.resolver,
@@ -598,10 +595,7 @@ pub async fn check(
             .execute(project.workspace().into()),
         )
         .await
-        {
-            Ok(result) => result,
-            Err(err) => return Err(UvError::from(err).into()),
-        };
+        .map_err(UvError::from)?;
 
         let target = InstallTarget::from_project(project, result.lock(), selection);
 

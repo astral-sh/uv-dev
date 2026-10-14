@@ -343,7 +343,7 @@ pub async fn export(
             // Initialize any shared state.
             let state = UniversalState::default();
 
-            resolved_lock = match Box::pin(
+            resolved_lock = Box::pin(
                 LockOperation::new(
                     mode,
                     &settings,
@@ -359,10 +359,8 @@ pub async fn export(
                 .execute((*target).into()),
             )
             .await
-            {
-                Ok(result) => result.into_lock(),
-                Err(err) => return Err(UvError::from(err).into()),
-            };
+            .map_err(UvError::from)?
+            .into_lock();
             &resolved_lock
         }
     };
