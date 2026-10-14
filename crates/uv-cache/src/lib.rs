@@ -268,34 +268,17 @@ impl Cache {
     ///
     /// If the lock is not immediately available, returns [`Err`] with self.
     pub fn with_exclusive_lock_no_wait(self) -> Result<Self, Self> {
-        let Self {
-            root,
-            refresh,
-            temp_dir,
-            lock_file,
-            removal_accounting,
-        } = self;
-
-        match LockedFile::acquire_no_wait(
-            root.join(".lock"),
+        let Some(lock_file) = LockedFile::acquire_no_wait(
+            self.root.join(".lock"),
             LockedFileMode::Exclusive,
-            root.simplified_display(),
-        ) {
-            Some(lock_file) => Ok(Self {
-                root,
-                refresh,
-                temp_dir,
-                lock_file: Some(Arc::new(lock_file)),
-                removal_accounting,
-            }),
-            None => Err(Self {
-                root,
-                refresh,
-                lock_file,
-                temp_dir,
-                removal_accounting,
-            }),
-        }
+            self.root.simplified_display(),
+        ) else {
+            return Err(self);
+        };
+        Ok(Self {
+            lock_file: Some(Arc::new(lock_file)),
+            ..self
+        })
     }
 
     /// Return the root of the cache.
