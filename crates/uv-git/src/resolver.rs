@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -205,14 +204,12 @@ impl GitResolver {
 
         // If we know the precise commit already, reuse it, to ensure that all fetches within a
         // single process are consistent.
-        let url = if let Some(precise) = self.get(&reference) {
-            Cow::Owned(
-                url.clone()
-                    .with_precise(precise)
-                    .map_err(|error| GitResolverError::Git(error.into()))?,
-            )
-        } else {
-            Cow::Borrowed(url)
+        let url = url.clone();
+        let url = match self.get(&reference) {
+            Some(precise) => url
+                .with_precise(precise)
+                .map_err(|error| GitResolverError::Git(error.into()))?,
+            None => url,
         };
 
         // Avoid races between different processes, too.
@@ -227,7 +224,7 @@ impl GitResolver {
         .await?;
 
         // Fetch the Git repository.
-        let source = GitSource::new(url.into_owned(), cache, http_settings.offline);
+        let source = GitSource::new(url, cache, http_settings.offline);
         let source = if let Some(reporter) = reporter {
             source.with_reporter(reporter)
         } else {
