@@ -362,36 +362,23 @@ fn parse_version_in_expr(
 ) -> Option<MarkerExpression> {
     let operator = ContainerOperator::from_marker_operator(operator)?;
 
-    let mut cursor = Cursor::new(value);
-    let mut versions = Vec::new();
-
-    // Parse all of the values in the list as versions
-    loop {
-        // Allow arbitrary whitespace between versions
-        cursor.eat_whitespace();
-
-        let (start, len) = cursor.take_while(|c| !c.is_whitespace());
-        if len == 0 {
-            break;
-        }
-
-        let version = match Version::from_str(cursor.slice(start, len)) {
-            Ok(version) => version,
-            Err(err) => {
-                reporter.report(
-                    MarkerWarningKind::Pep440Error,
-                    format!(
-                        "Expected PEP 440 versions to compare with {key}, found {value},
+    let versions = match value
+        .split_whitespace()
+        .map(Version::from_str)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(versions) => versions,
+        Err(err) => {
+            reporter.report(
+                MarkerWarningKind::Pep440Error,
+                format!(
+                    "Expected PEP 440 versions to compare with {key}, found {value},
                         will be ignored: {err}"
-                    ),
-                );
-
-                return None;
-            }
-        };
-
-        versions.push(version);
-    }
+                ),
+            );
+            return None;
+        }
+    };
 
     Some(MarkerExpression::VersionIn {
         key,
