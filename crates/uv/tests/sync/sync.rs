@@ -13630,6 +13630,14 @@ fn sync_dry_run() -> Result<()> {
     Would install 1 package
      + iniconfig==2.0.0
     ");
+    context
+        .temp_dir
+        .child(".venv")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
 
     // Perform a full sync.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -13642,6 +13650,8 @@ fn sync_dry_run() -> Result<()> {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+    let lock = context.read("uv.lock");
+    let pyvenv_cfg = context.read(".venv/pyvenv.cfg");
 
     // Update the requirements.
     pyproject_toml.write_str(
@@ -13666,6 +13676,10 @@ fn sync_dry_run() -> Result<()> {
      - iniconfig==2.0.0
      + typing-extensions==4.10.0
     ");
+    assert_eq!(context.read("uv.lock"), lock);
+    context
+        .assert_command("import iniconfig; import importlib.util; assert importlib.util.find_spec('typing_extensions') is None")
+        .success();
 
     // Update the `requires-python`.
     pyproject_toml.write_str(
@@ -13689,6 +13703,8 @@ fn sync_dry_run() -> Result<()> {
     Would install 1 package
      + iniconfig==2.0.0
     ");
+    assert_eq!(context.read("uv.lock"), lock);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), pyvenv_cfg);
 
     // Perform a full sync.
     uv_snapshot!(context.filters(), context.sync(), @"
