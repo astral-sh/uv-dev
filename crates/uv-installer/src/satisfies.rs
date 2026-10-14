@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fmt::{Debug, Display};
 use std::path::Path;
 
@@ -10,9 +9,8 @@ use uv_cache_info::CacheInfo;
 use uv_cache_key::{CanonicalUrl, RepositoryUrl};
 use uv_distribution_filename::ExpandedTags;
 use uv_distribution_types::{
-    BuildInfo, BuildVariables, ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires,
-    ExtraBuildVariables, InstalledDirectUrlDist, InstalledDist, InstalledDistKind,
-    PackageConfigSettings, RequirementSource,
+    BuildInfo, ConfigSettings, ExtraBuildRequires, ExtraBuildVariables, InstalledDirectUrlDist,
+    InstalledDist, InstalledDistKind, PackageConfigSettings, RequirementSource,
 };
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl};
 use uv_normalize::PackageName;
@@ -29,6 +27,25 @@ pub struct BuildSettings<'a> {
     pub config_settings_package: &'a PackageConfigSettings,
     pub extra_build_requires: &'a ExtraBuildRequires,
     pub extra_build_variables: &'a ExtraBuildVariables,
+}
+
+impl BuildSettings<'_> {
+    /// Construct the expected build info for a package.
+    fn build_info_for(&self, name: &PackageName) -> BuildInfo {
+        let config_settings = self.config_settings.clone();
+        let config_settings = match self.config_settings_package.get(name) {
+            Some(package_settings) => package_settings.clone().merge(config_settings),
+            None => config_settings,
+        };
+        BuildInfo::from_settings(
+            config_settings,
+            self.extra_build_requires
+                .get(name)
+                .cloned()
+                .unwrap_or_default(),
+            self.extra_build_variables.get(name).cloned(),
+        )
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -58,21 +75,7 @@ impl RequirementSatisfaction {
         // If the distribution was built with other settings, it is out of date.
         if let Some(build_settings) = build_settings
             && distribution.build_info().is_some_and(|dist_build_info| {
-                let config_settings = config_settings_for(
-                    name,
-                    build_settings.config_settings,
-                    build_settings.config_settings_package,
-                );
-                let extra_build_requires =
-                    extra_build_requires_for(name, build_settings.extra_build_requires);
-                let extra_build_variables =
-                    extra_build_variables_for(name, build_settings.extra_build_variables);
-                let build_info = BuildInfo::from_settings(
-                    config_settings.into_owned(),
-                    extra_build_requires.to_vec(),
-                    extra_build_variables.cloned(),
-                );
-                dist_build_info != &build_info
+                dist_build_info != &build_settings.build_info_for(name)
             })
         {
             debug!("Build info mismatch for {name}: {distribution}");
@@ -433,38 +436,6 @@ fn git_commit_matches(installed_commit: Option<&str>, requested_git: &GitUrl) ->
     } else {
         false
     }
-}
-
-/// Determine the [`ConfigSettings`] for the given package name.
-fn config_settings_for<'settings>(
-    name: &PackageName,
-    config_settings: &'settings ConfigSettings,
-    config_settings_package: &PackageConfigSettings,
-) -> Cow<'settings, ConfigSettings> {
-    if let Some(package_settings) = config_settings_package.get(name) {
-        Cow::Owned(package_settings.clone().merge(config_settings.clone()))
-    } else {
-        Cow::Borrowed(config_settings)
-    }
-}
-
-/// Determine the extra build requirements for the given package name.
-fn extra_build_requires_for<'settings>(
-    name: &PackageName,
-    extra_build_requires: &'settings ExtraBuildRequires,
-) -> &'settings [ExtraBuildRequirement] {
-    extra_build_requires
-        .get(name)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-}
-
-/// Determine the extra build variables for the given package name.
-fn extra_build_variables_for<'settings>(
-    name: &PackageName,
-    extra_build_variables: &'settings ExtraBuildVariables,
-) -> Option<&'settings BuildVariables> {
-    extra_build_variables.get(name)
 }
 
 /// Generate a hint for explaining tag compatibility issues.
