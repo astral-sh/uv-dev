@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::{iter, slice};
 
 use either::Either;
-use rustc_hash::FxHashSet;
+use hashbrown::hash_set::Entry;
 use tracing::trace;
 
 use uv_configuration::{Constraints, DependencyModifierScope, DependencyModifiers};
@@ -15,6 +15,7 @@ use uv_pep440::Version;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictItemRef;
 
+use crate::FxHashbrownSet;
 use crate::python_requirement::PythonRequirement;
 use crate::resolver::environment::ResolverEnvironment;
 
@@ -114,22 +115,24 @@ impl<'a> RequirementExpander<'a> {
 
         // Transitively process all extras that are recursively included, starting with the current
         // extra.
-        let mut seen = FxHashSet::<(ExtraName, MarkerTree)>::default();
+        let mut seen = FxHashbrownSet::<(ExtraName, MarkerTree)>::default();
         let mut queue: VecDeque<_> = requirements
             .iter()
             .filter(|req| name == &req.name)
             .flat_map(|req| req.extras.iter().cloned().map(|extra| (extra, req.marker)))
             .collect();
         while let Some((extra, marker)) = queue.pop_front() {
-            if !seen.insert((extra.clone(), marker)) {
+            let Entry::Vacant(entry) = seen.entry((extra, marker)) else {
                 continue;
-            }
+            };
+            let entry = entry.insert();
+            let (extra, _) = entry.get();
             for requirement in self.requirements_for_context(
                 dependencies,
                 RequirementContext::Extra {
                     name,
                     version,
-                    extra: &extra,
+                    extra,
                 },
             ) {
                 let requirement = match requirement {
@@ -140,7 +143,7 @@ impl<'a> RequirementExpander<'a> {
                     Cow::Borrowed(requirement) => {
                         let marker = marker.and(requirement.marker);
                         let mut requirement = requirement.clone();
-                        requirement.marker = marker.simplify_extras(slice::from_ref(&extra));
+                        requirement.marker = marker.simplify_extras(slice::from_ref(extra));
                         requirement
                     }
                 };
@@ -148,8 +151,8 @@ impl<'a> RequirementExpander<'a> {
                 // unsatisfiability check.
                 let applicable_marker = requirement
                     .marker
-                    .simplify_extras(slice::from_ref(&extra))
-                    .simplify_not_extras_with(|candidate| candidate != &extra);
+                    .simplify_extras(slice::from_ref(extra))
+                    .simplify_not_extras_with(|candidate| candidate != extra);
                 if python_marker.is_disjoint(applicable_marker)
                     || !env.included_by_marker(applicable_marker)
                 {
