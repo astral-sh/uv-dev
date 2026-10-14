@@ -279,45 +279,28 @@ async fn upgrade_tool(
 ) -> Result<UpgradeReport> {
     let tool_locks = preview.is_enabled(PreviewFeature::ToolInstallLocks);
     // Ensure the tool is installed.
-    let existing_tool_receipt = match installed_tools.get_tool_receipt(name) {
-        Ok(Some(receipt)) => receipt,
-        Ok(None) => {
-            let install_command = format!("uv tool install {name}");
-            return Err(anyhow::anyhow!(
-                "`{}` is not installed; run `{}` to install",
-                name.cyan(),
-                install_command.green()
-            ));
-        }
-        Err(_) => {
-            let install_command = format!("uv tool install --force {name}");
-            return Err(anyhow::anyhow!(
-                "`{}` is missing a valid receipt; run `{}` to reinstall",
-                name.cyan(),
-                install_command.green()
-            ));
-        }
+    let not_installed = || {
+        anyhow::anyhow!(
+            "`{}` is not installed; run `{}` to install",
+            name.cyan(),
+            format!("uv tool install {name}").green()
+        )
     };
-
-    let environment = match installed_tools.get_environment(name, cache) {
-        Ok(Some(environment)) => environment,
-        Ok(None) => {
-            let install_command = format!("uv tool install {name}");
-            return Err(anyhow::anyhow!(
-                "`{}` is not installed; run `{}` to install",
-                name.cyan(),
-                install_command.green()
-            ));
-        }
-        Err(_) => {
-            let install_command = format!("uv tool install --force {name}");
-            return Err(anyhow::anyhow!(
-                "`{}` is missing a valid environment; run `{}` to reinstall",
-                name.cyan(),
-                install_command.green()
-            ));
-        }
+    let invalid_component = |component: &str| {
+        anyhow::anyhow!(
+            "`{}` is missing a valid {component}; run `{}` to reinstall",
+            name.cyan(),
+            format!("uv tool install --force {name}").green()
+        )
     };
+    let existing_tool_receipt = installed_tools
+        .get_tool_receipt(name)
+        .map_err(|_| invalid_component("receipt"))?
+        .ok_or_else(not_installed)?;
+    let environment = installed_tools
+        .get_environment(name, cache)
+        .map_err(|_| invalid_component("environment"))?
+        .ok_or_else(not_installed)?;
 
     // Restore credentials from user configuration when the receipt refers to the same index.
     // Receipts intentionally omit credentials, including usernames needed for keyring lookups.
