@@ -153,9 +153,13 @@ def probe(root, reference):
         output.mkdir()
         os.chdir(root)
         os.environ.update(
-            RUST_LOG="debug", UV_PREVIEW="1", TERM="xterm-256color", CLICOLOR="1"
+            RUST_LOG="debug",
+            UV_PREVIEW="1",
+            TERM="xterm-256color",
+            CLICOLOR="1",
+            CLICOLOR_FORCE="1",
         )
-        for name in ["NO_COLOR", "CLICOLOR_FORCE", "CI"]:
+        for name in ["NO_COLOR", "CI"]:
             os.environ.pop(name, None)
         clear()
         filename = subprocess.check_output(
@@ -169,7 +173,8 @@ def probe(root, reference):
         assert actual_filename == filename
         assert actual == expected, (actual, expected)
         assert any(attributes != initial.attributes for _, attributes in expected), (
-            "The native reference did not exercise console colors"
+            "The native reference did not exercise console colors: "
+            + repr("".join(character for character, _ in expected))
         )
         (root / "console-result.json").write_text(
             json.dumps(
