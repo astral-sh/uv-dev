@@ -28,14 +28,14 @@ pub fn uninstall_wheel(
     // Read the RECORD file.
     let record = {
         let record_path = dist_info.join("RECORD");
-        let mut record_file = match fs_err::File::open(&record_path) {
+        let record_file = match fs_err::File::open(&record_path) {
             Ok(record_file) => record_file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 return Err(Error::MissingRecord(record_path));
             }
             Err(err) => return Err(err.into()),
         };
-        read_record(&mut record_file)?
+        read_record(record_file)?
     };
 
     let mut uninstall = Uninstall::default();
