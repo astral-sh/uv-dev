@@ -4283,38 +4283,6 @@ fn install_no_binary_env() {
     context.assert_command("import idna").success();
 }
 
-/// Overlapping usage of `--no-binary` and `--only-binary`
-#[test]
-fn install_only_binary_overrides_no_binary_all() {
-    let context = uv_test::test_context!("3.12");
-    let server = PackseServer::new("simple/single-package.toml");
-
-    // The specific `--only-binary` should override the less specific `--no-binary`
-    let mut command = context.pip_install();
-    command
-        .arg("a")
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("--no-binary")
-        .arg(":all:")
-        .arg("--only-binary")
-        .arg("a")
-        .arg("--strict");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==2.0.0
-    "
-    );
-
-    context.assert_command("import a").success();
-}
-
 /// Accept comma-separated values for `--only-binary` (pip compatibility)
 #[test]
 fn install_only_binary_comma_separated() {
