@@ -1167,14 +1167,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn author_to_toml_string_handles_inline_quotes() {
+    fn author_inline_table_handles_inline_quotes() {
         let author = Author::NameEmail {
             name: "Tony \"Iron Man\" Stark".to_string(),
             email: "ironman@example.com".to_string(),
         };
 
         assert_eq!(
-            author.to_toml_string(),
+            author.to_inline_table().to_string(),
             "{ name = 'Tony \"Iron Man\" Stark', email = \"ironman@example.com\" }"
         );
     }
