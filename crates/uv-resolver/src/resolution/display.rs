@@ -327,11 +327,7 @@ fn combine_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxt
     reduce_graph(
         graph,
         |dist| (dist.name(), dist.markers),
-        |node, dist| {
-            node.extras.extend(dist.extras.iter().cloned());
-            node.extras.sort_unstable();
-            node.extras.dedup();
-        },
+        RequirementsTxtDist::combine_extras,
     )
 }
 
@@ -344,7 +340,7 @@ fn combine_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxt
 /// We also remove the root node, to simplify the graph structure.
 fn strip_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGraph<'dist> {
     reduce_graph(graph, DistributionMetadata::version_id, |node, dist| {
-        node.extras.clear();
+        node.strip_extras();
         // A package must be included wherever either merged node was reachable.
         node.markers = node.markers.or(dist.markers);
     })

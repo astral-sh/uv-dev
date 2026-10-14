@@ -22,10 +22,25 @@ pub(crate) struct RequirementsTxtDist<'dist> {
     pub(super) version: &'dist Version,
     pub(super) hashes: &'dist [HashDigest],
     pub(super) markers: MarkerTree,
-    pub(super) extras: Vec<ExtraName>,
+    /// The extras for this distribution, sorted and deduplicated.
+    extras: Vec<ExtraName>,
 }
 
 impl<'dist> RequirementsTxtDist<'dist> {
+    /// Merge the extras from another distribution.
+    pub(super) fn combine_extras(&mut self, other: &Self) {
+        for extra in &other.extras {
+            if let Err(index) = self.extras.binary_search(extra) {
+                self.extras.insert(index, extra.clone());
+            }
+        }
+    }
+
+    /// Remove all extras from this distribution.
+    pub(super) fn strip_extras(&mut self) {
+        self.extras.clear();
+    }
+
     /// Convert the [`RequirementsTxtDist`] to a requirement that adheres to the `requirements.txt`
     /// format.
     ///
@@ -115,16 +130,13 @@ impl<'dist> RequirementsTxtDist<'dist> {
                 self.dist.verbatim()
             }
         } else {
-            let mut extras = self.extras.clone();
-            extras.sort_unstable();
-            extras.dedup();
             let (separator, marker) = markers
                 .as_deref()
                 .map_or(("", ""), |marker| (" ; ", marker));
             Cow::Owned(format!(
                 "{}[{}]{}{separator}{marker}",
                 self.name(),
-                extras.into_iter().format(", "),
+                self.extras.iter().format(", "),
                 self.version_or_url().verbatim(),
             ))
         }
