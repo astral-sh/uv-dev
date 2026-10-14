@@ -690,36 +690,35 @@ fn list_format_freeze() {
     "
     );
 
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=freeze"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    anyio==4.3.0
-    idna==3.6
-    poetry-editable==0.1.0
-    sniffio==1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=freeze")
-    .arg("--editable"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    poetry-editable==0.1.0
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=freeze")
-    .arg("--exclude-editable"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    anyio==4.3.0
-    idna==3.6
-    sniffio==1.3.1
-    "
-    );
+    let cases = [
+        (
+            None,
+            concat!(
+                "anyio==4.3.0\n",
+                "idna==3.6\n",
+                "poetry-editable==0.1.0\n",
+                "sniffio==1.3.1\n",
+            ),
+        ),
+        (Some("--editable"), "poetry-editable==0.1.0\n"),
+        (
+            Some("--exclude-editable"),
+            "anyio==4.3.0\nidna==3.6\nsniffio==1.3.1\n",
+        ),
+    ];
+    for (filter, expected) in cases {
+        for quiet in [false, true] {
+            let mut command = context.pip_list();
+            command.arg("--format=freeze");
+            if let Some(filter) = filter {
+                command.arg(filter);
+            }
+            if quiet {
+                command.arg("--quiet");
+            }
+            command.assert().success().stdout(expected).stderr("");
+        }
+    }
 }
 
 #[test]
@@ -803,63 +802,6 @@ Version: 0.1-bulbasaur
     );
 
     Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn list_ignores_quiet_flag_format_freeze() {
-    let context = uv_test::test_context!("3.12");
-
-    // Install the editable package.
-    uv_snapshot!(context.filters(), context
-        .pip_install()
-        .arg("-e")
-        .arg(context.workspace_root.join("test/packages/poetry_editable")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + poetry-editable==0.1.0 (from file://[WORKSPACE]/test/packages/poetry_editable)
-     + sniffio==1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=freeze")
-    .arg("--quiet"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    anyio==4.3.0
-    idna==3.6
-    poetry-editable==0.1.0
-    sniffio==1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=freeze")
-    .arg("--editable")
-    .arg("--quiet"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    poetry-editable==0.1.0
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=freeze")
-    .arg("--exclude-editable")
-    .arg("--quiet"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    anyio==4.3.0
-    idna==3.6
-    sniffio==1.3.1
-    "
-    );
 }
 
 #[test]
