@@ -7,6 +7,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
 
 use uv_cache::Cache;
@@ -834,22 +835,20 @@ fn standard_library_package(
     python_minor: u8,
 ) -> Option<PackageName> {
     let no_solution_error = operation_error.as_no_solution()?;
+    let mut implicated_packages = None;
 
-    edits.iter().find_map(|edit| {
-        if edit
-            .source
-            .as_ref()
-            .is_none_or(|source| matches!(source, Source::Registry { .. }))
-            && is_known_standard_library_package(python_minor, edit.requirement.name.as_ref())
-            && no_solution_error
-                .packages()
-                .any(|package| package == &edit.requirement.name)
-        {
-            Some(edit.requirement.name.clone())
-        } else {
-            None
-        }
-    })
+    edits
+        .iter()
+        .find(|edit| {
+            edit.source
+                .as_ref()
+                .is_none_or(|source| matches!(source, Source::Registry { .. }))
+                && is_known_standard_library_package(python_minor, edit.requirement.name.as_ref())
+                && implicated_packages
+                    .get_or_insert_with(|| no_solution_error.packages().collect::<FxHashSet<_>>())
+                    .contains(&edit.requirement.name)
+        })
+        .map(|edit| edit.requirement.name.clone())
 }
 
 fn edits(
