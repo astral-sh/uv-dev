@@ -2,7 +2,7 @@
 
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::{PathChild, PathCreateDir};
-use uv_test::{assert_path_missing, uv_snapshot};
+use uv_test::uv_snapshot;
 
 #[test]
 fn python_find_rejects_unsupported_minor() {
@@ -69,8 +69,8 @@ fn python_install_resolves_all_requests_before_installation() {
         .assert()
         .success()
         .stdout("");
-    assert_path_missing(context.temp_dir.child("managed").child(available));
-    assert_path_missing(
+    context.assert_path_missing(format!("managed/{available}"));
+    context.assert_path_missing(
         context
             .bin_dir
             .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX)),

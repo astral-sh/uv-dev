@@ -1469,7 +1469,7 @@ fn non_utf8_path() {
     "
     );
 
-    assert_path_missing(context.temp_dir.join(path));
+    context.assert_path_missing(path);
 }
 
 #[test]

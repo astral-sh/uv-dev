@@ -1,7 +1,7 @@
 use anyhow::Result;
 use assert_fs::fixture::{FileTouch, FileWriteBin, FileWriteStr, PathChild};
 use indoc::indoc;
-use uv_test::{assert_path_missing, uv_snapshot};
+use uv_test::uv_snapshot;
 
 #[test]
 fn license_glob_without_matches_errors() -> Result<()> {
@@ -32,11 +32,7 @@ fn license_glob_without_matches_errors() -> Result<()> {
     error: Invalid project metadata
       cause: `project.license-files` glob `abc` did not match any files
     ");
-    assert_path_missing(
-        context
-            .temp_dir
-            .child("missing_license-1.0.0-py3-none-any.whl"),
-    );
+    context.assert_path_missing("missing_license-1.0.0-py3-none-any.whl");
     Ok(())
 }
 
@@ -67,10 +63,6 @@ fn license_file_must_be_utf8() -> Result<()> {
     error: Invalid project metadata
       cause: License file `LICENSE.bin` must be UTF-8 encoded
     ");
-    assert_path_missing(
-        context
-            .temp_dir
-            .child("license_utf8-1.0.0-py3-none-any.whl"),
-    );
+    context.assert_path_missing("license_utf8-1.0.0-py3-none-any.whl");
     Ok(())
 }

@@ -110,7 +110,7 @@ fn tool_install_mismatched_registry_requirement_name() {
     ----- stderr -----
     error: Package name (`flask`) provided with `--from` does not match install request (`black`)
     ");
-    assert_path_missing(context.temp_dir.join("tools/black"));
+    context.assert_path_missing("tools/black");
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn tool_install_conflicting_registry_requirement_version() {
     ----- stderr -----
     error: Package requirement (`black==24.3.0`) provided with `--from` conflicts with install request (`black==24.2.0`)
     ");
-    assert_path_missing(context.temp_dir.join("tools/black"));
+    context.assert_path_missing("tools/black");
 }
 
 #[test]

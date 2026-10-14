@@ -1,7 +1,7 @@
 use anyhow::Result;
 use assert_fs::fixture::{PathChild, PathCreateDir};
 
-use uv_test::{assert_path_missing, uv_snapshot};
+use uv_test::uv_snapshot;
 
 #[test]
 fn missing_tool_directory() {
@@ -12,7 +12,7 @@ fn missing_tool_directory() {
     ----- stderr -----
     No tools installed
     ");
-    assert_path_missing(context.temp_dir.child("tools"));
+    context.assert_path_missing("tools");
 }
 
 #[test]

@@ -11,7 +11,7 @@ use indoc::{formatdoc, indoc};
 use std::path::Path;
 use tempfile::TempDir;
 use uv_static::EnvVars;
-use uv_test::{TestContext, assert_path_missing, copy_dir_ignore, uv_snapshot};
+use uv_test::{TestContext, copy_dir_ignore, uv_snapshot};
 
 const BUILT_BY_UV_TEST_SCRIPT: &str = indoc! {r#"
     from built_by_uv import greet
@@ -1169,7 +1169,7 @@ fn sdist_rejects_external_module_root() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/source`
       cause: Module root must be inside the project: ..
     ");
-    assert_path_missing(context.temp_dir.child("dist/project-0.1.0.tar.gz"));
+    context.assert_path_missing("dist/project-0.1.0.tar.gz");
     Ok(())
 }
 
@@ -1186,11 +1186,7 @@ fn wheel_rejects_external_module_root() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/source`
       cause: Module root must be inside the project: ..
     ");
-    assert_path_missing(
-        context
-            .temp_dir
-            .child("dist/project-0.1.0-py3-none-any.whl"),
-    );
+    context.assert_path_missing("dist/project-0.1.0-py3-none-any.whl");
     Ok(())
 }
 
@@ -1230,7 +1226,7 @@ fn sdist_rejects_external_header_directory() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project`
       cause: The path for the data directory headers must be inside the project: ../header
     ");
-    assert_path_missing(context.temp_dir.child("dist/project-0.1.0.tar.gz"));
+    context.assert_path_missing("dist/project-0.1.0.tar.gz");
     Ok(())
 }
 
@@ -1251,11 +1247,7 @@ fn wheel_rejects_external_header_directory() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project`
       cause: The path for the data directory headers must be inside the project: ../header
     ");
-    assert_path_missing(
-        context
-            .temp_dir
-            .child("dist/project-0.1.0-py3-none-any.whl"),
-    );
+    context.assert_path_missing("dist/project-0.1.0-py3-none-any.whl");
     Ok(())
 }
 
@@ -1277,11 +1269,7 @@ fn wheel_rejects_normalized_external_header_directory() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project`
       cause: The path for the data directory headers must be inside the project: ../outside
     ");
-    assert_path_missing(
-        context
-            .temp_dir
-            .child("dist/project-0.1.0-py3-none-any.whl"),
-    );
+    context.assert_path_missing("dist/project-0.1.0-py3-none-any.whl");
     Ok(())
 }
 

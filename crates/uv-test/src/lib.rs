@@ -2082,6 +2082,12 @@ impl TestContext {
         diff_snapshot(&old_lock, &new_lock, 10)
     }
 
+    /// Assert that no filesystem entry exists, resolving relative paths against the temporary directory.
+    #[track_caller]
+    pub fn assert_path_missing(&self, path: impl AsRef<Path>) {
+        path::assert_path_missing(self.temp_dir.join(path));
+    }
+
     /// Read a UTF-8 file, resolving relative paths against the temporary directory.
     #[track_caller]
     pub fn read(&self, file: impl AsRef<Path>) -> String {
@@ -2624,15 +2630,15 @@ mod python_discovery_tests {
 
     use assert_fs::fixture::PathCreateDir;
 
+    use super::TestContext;
     #[cfg(unix)]
-    use super::isolated_python_search_path;
-    use super::{TestContext, assert_path_missing};
+    use super::{assert_path_missing, isolated_python_search_path};
 
     #[test]
     fn does_not_initialize_discovery_cache_without_python() {
         let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
 
-        assert_path_missing(context.temp_dir.join("cache"));
+        context.assert_path_missing("cache");
     }
 
     #[cfg(unix)]
