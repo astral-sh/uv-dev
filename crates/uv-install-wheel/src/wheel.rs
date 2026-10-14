@@ -789,9 +789,7 @@ pub(crate) fn install_data(
                         .or_else(|| name.strip_suffix(".pya"))
                         .unwrap_or(&name);
                     if entrypoints
-                        .console_scripts
-                        .iter()
-                        .chain(&entrypoints.gui_scripts)
+                        .scripts()
                         .any(|script| script.name == match_name)
                     {
                         continue;
