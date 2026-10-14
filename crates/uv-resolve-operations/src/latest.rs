@@ -112,17 +112,22 @@ impl LatestClient<'_> {
 
         let mut latest: Option<DistFilename> = None;
 
-        let mut update_latest = |candidate: DistFilename| {
-            // Prefer higher versions, and prefer wheels over sdists at parity.
-            if latest.as_ref().is_none_or(|current| {
-                candidate.version() > current.version()
-                    || (candidate.version() == current.version()
-                        && matches!(candidate, DistFilename::WheelFilename(_))
-                        && matches!(current, DistFilename::SourceDistFilename(_)))
-            }) {
-                latest = Some(candidate);
-            }
-        };
+        let mut update_latest =
+            |candidate: DistFilename, file: &File, exclude_newer: Option<&jiff::Timestamp>| {
+                if !self.consider_candidate(package, &candidate, file, exclude_newer) {
+                    return;
+                }
+
+                // Prefer higher versions, and prefer wheels over sdists at parity.
+                if latest.as_ref().is_none_or(|current| {
+                    candidate.version() > current.version()
+                        || (candidate.version() == current.version()
+                            && matches!(candidate, DistFilename::WheelFilename(_))
+                            && matches!(current, DistFilename::SourceDistFilename(_)))
+                }) {
+                    latest = Some(candidate);
+                }
+            };
 
         let archives = match self
             .client
@@ -159,28 +164,14 @@ impl LatestClient<'_> {
                                 .expect("archived version files always deserializes");
 
                         for (filename, file) in files.all(package) {
-                            if self.consider_candidate(
-                                package,
-                                &filename,
-                                &file,
-                                exclude_newer.as_ref(),
-                            ) {
-                                update_latest(filename);
-                            }
+                            update_latest(filename, &file, exclude_newer.as_ref());
                         }
                     }
                 }
                 MetadataFormat::Flat(entries) => {
                     for entry in entries {
                         let (filename, file, _) = entry.into_parts();
-                        if self.consider_candidate(
-                            package,
-                            &filename,
-                            &file,
-                            exclude_newer.as_ref(),
-                        ) {
-                            update_latest(filename);
-                        }
+                        update_latest(filename, &file, exclude_newer.as_ref());
                     }
                 }
             }
@@ -194,9 +185,7 @@ impl LatestClient<'_> {
             {
                 let (filename, file, index) = entry.into_parts();
                 let exclude_newer = self.effective_exclude_newer(package, &index);
-                if self.consider_candidate(package, &filename, &file, exclude_newer.as_ref()) {
-                    update_latest(filename);
-                }
+                update_latest(filename, &file, exclude_newer.as_ref());
             }
         }
 
