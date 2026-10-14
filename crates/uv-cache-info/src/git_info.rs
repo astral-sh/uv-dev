@@ -33,11 +33,10 @@ impl Commit {
     pub(crate) fn from_repository(path: &Path) -> Result<Self, GitInfoError> {
         let repository = GitRepository::find(path)?;
 
-        let git_head_path = repository.git_dir.join("HEAD");
-        if !git_head_path.exists() {
+        let Some(git_head_contents) = read_optional_git_file(&repository.git_dir.join("HEAD"))?
+        else {
             return Err(GitInfoError::MissingHead(repository.git_dir));
-        }
-        let git_head_contents = fs_err::read_to_string(git_head_path)?;
+        };
 
         // The contents are either a commit or a reference in the following formats
         // - "<commit>" when the head is detached
@@ -154,26 +153,21 @@ fn read_git_dir(dot_git_path: &Path) -> Option<PathBuf> {
 
     let contents = fs_err::read_to_string(dot_git_path).ok()?;
     let git_dir = contents.strip_prefix("gitdir:")?.trim();
-    Some(resolve_relative_path(dot_git_path.parent()?, git_dir))
+    Some(dot_git_path.parent()?.join(git_dir))
 }
 
 /// Return the common Git directory, following a linked worktree's `commondir` file.
 fn read_common_dir(git_dir: &Path) -> Result<PathBuf, GitInfoError> {
-    let commondir_path = git_dir.join("commondir");
-    let contents = match fs_err::read_to_string(commondir_path) {
-        Ok(contents) => contents,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(git_dir.to_path_buf()),
-        Err(err) => return Err(err.into()),
+    let Some(contents) = read_optional_git_file(&git_dir.join("commondir"))? else {
+        return Ok(git_dir.to_path_buf());
     };
-    Ok(resolve_relative_path(git_dir, contents.trim()))
+    Ok(git_dir.join(contents.trim()))
 }
 
 /// Read and validate a loose ref, returning [`None`] when it does not exist.
 fn read_ref_file(path: &Path) -> Result<Option<String>, GitInfoError> {
-    let contents = match fs_err::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
+    let Some(contents) = read_optional_git_file(path)? else {
+        return Ok(None);
     };
     let commit = contents.trim().to_string();
     validate_commit(&commit)?;
@@ -182,11 +176,8 @@ fn read_ref_file(path: &Path) -> Result<Option<String>, GitInfoError> {
 
 /// Read the direct refs from `packed-refs`, ignoring comments and peeled tag lines.
 fn read_packed_refs(git_dir: &Path) -> Result<BTreeMap<String, String>, GitInfoError> {
-    let path = git_dir.join("packed-refs");
-    let contents = match fs_err::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(err) => return Err(err.into()),
+    let Some(contents) = read_optional_git_file(&git_dir.join("packed-refs"))? else {
+        return Ok(BTreeMap::new());
     };
 
     let mut refs = BTreeMap::new();
@@ -206,12 +197,12 @@ fn read_packed_refs(git_dir: &Path) -> Result<BTreeMap<String, String>, GitInfoE
     Ok(refs)
 }
 
-fn resolve_relative_path(base: &Path, path: &str) -> PathBuf {
-    let path = PathBuf::from(path);
-    if path.is_absolute() {
-        path
-    } else {
-        base.join(path)
+/// Read a Git metadata file, distinguishing absence from other I/O failures.
+fn read_optional_git_file(path: &Path) -> std::io::Result<Option<String>> {
+    match fs_err::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
     }
 }
 
