@@ -181,10 +181,15 @@ impl<'a> RequirementExpander<'a> {
         // Retain any self-constraints for that extra, e.g., if `project[foo]` includes
         // `project[bar]>1.0`, as a dependency, we need to propagate `project>1.0`, in addition to
         // transitively expanding `project[bar]`.
-        let mut self_constraints = vec![];
-        for req in &requirements {
-            if name == &req.name && !req.extras.is_empty() && !req.source.is_empty() {
-                self_constraints.push(Requirement {
+        let self_constraints = requirements
+            .extract_if(.., |req| name == &req.name && !req.extras.is_empty())
+            .filter(|req| !req.source.is_empty())
+            .map(|req| match req {
+                Cow::Owned(mut req) => {
+                    req.extras = Box::new([]);
+                    Cow::Owned(req)
+                }
+                Cow::Borrowed(req) => Cow::Owned(Requirement {
                     name: req.name.clone(),
                     extras: Box::new([]),
                     groups: req.groups.clone(),
@@ -192,13 +197,10 @@ impl<'a> RequirementExpander<'a> {
                     scope: req.scope.clone(),
                     origin: req.origin.clone(),
                     marker: req.marker,
-                });
-            }
-        }
-
-        // Drop all the self-requirements now that we flattened them out.
-        requirements.retain(|req| name != &req.name || req.extras.is_empty());
-        requirements.extend(self_constraints.into_iter().map(Cow::Owned));
+                }),
+            })
+            .collect::<Vec<_>>();
+        requirements.extend(self_constraints);
 
         Either::Right(requirements.into_iter())
     }
