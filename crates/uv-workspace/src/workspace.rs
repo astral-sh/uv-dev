@@ -1553,19 +1553,10 @@ impl ProjectWorkspace {
             Some(Err(error)) => return Err(error),
             None => return Ok(None),
         };
-        let Some((project_name, _member)) = workspace
-            .packages
-            .iter()
-            .find(|(_project_name, member)| member.root() == project_root)
-        else {
-            return Ok(None);
-        };
-
-        Ok(Some(Self {
-            project_root: project_root.to_path_buf(),
-            project_name: project_name.clone(),
-            workspace,
-        }))
+        match VirtualProject::from_cached_workspace(project_root, workspace) {
+            VirtualProject::Project(project) => Ok(Some(project)),
+            VirtualProject::NonProject(_) => Ok(None),
+        }
     }
 
     /// Find the current project and workspace, given the current directory.
@@ -2080,6 +2071,23 @@ pub enum VirtualProject {
 }
 
 impl VirtualProject {
+    /// Classify a cached workspace by whether the discovered root belongs to a member.
+    fn from_cached_workspace(project_root: &Path, workspace: Arc<Workspace>) -> Self {
+        let Some((project_name, _)) = workspace
+            .packages
+            .iter()
+            .find(|(_, member)| member.root() == project_root)
+        else {
+            return Self::NonProject(workspace);
+        };
+
+        Self::Project(ProjectWorkspace {
+            project_root: project_root.to_path_buf(),
+            project_name: project_name.clone(),
+            workspace,
+        })
+    }
+
     /// Find the current project or virtual workspace root, given the current directory.
     ///
     /// Similar to calling [`ProjectWorkspace::discover`] with a fallback to [`Workspace::discover`],
@@ -2101,21 +2109,7 @@ impl VirtualProject {
 
         // Fast path: The workspace is already cached.
         if let Some(workspace) = workspace_cache.get(project_root, &options.members) {
-            let workspace = workspace?;
-            let virtual_project = if let Some((project_name, _member)) = workspace
-                .packages
-                .iter()
-                .find(|(_package_name, member)| member.root == project_root)
-            {
-                Self::Project(ProjectWorkspace {
-                    project_root: project_root.to_path_buf(),
-                    project_name: project_name.clone(),
-                    workspace,
-                })
-            } else {
-                Self::NonProject(workspace.clone())
-            };
-            return Ok(virtual_project);
+            return workspace.map(|workspace| Self::from_cached_workspace(project_root, workspace));
         }
 
         // Read the current `pyproject.toml`.
