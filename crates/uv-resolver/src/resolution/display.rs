@@ -1,14 +1,20 @@
 use std::collections::BTreeSet;
+use std::fmt::Write;
+use std::hash::Hash;
 
+use either::Either;
+use itertools::Itertools;
 use owo_colors::OwoColorize;
 use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use uv_configuration::AnnotationStyle;
-use uv_distribution_types::{DistributionMetadata, Name, SourceAnnotation, SourceAnnotations};
+use uv_distribution_types::{
+    DistributionMetadata, Name, Requirement, SourceAnnotation, SourceAnnotations,
+};
 use uv_normalize::PackageName;
-use uv_pep508::MarkerTree;
+use uv_pep508::RequirementOrigin;
 
 use crate::resolution::{RequirementsTxtDist, ResolutionGraphNode};
 use crate::{ResolverEnvironment, ResolverOutput};
@@ -82,6 +88,22 @@ impl<'a> DisplayResolutionGraph<'a> {
             annotation_style,
         }
     }
+
+    /// Add source annotations for requirements that apply in this environment.
+    fn annotate_requirements<'req>(
+        &self,
+        sources: &mut SourceAnnotations,
+        requirements: impl IntoIterator<Item = &'req Requirement>,
+        annotation: impl Fn(RequirementOrigin) -> SourceAnnotation,
+    ) {
+        for requirement in requirements {
+            if requirement.evaluate_markers(self.env.marker_environment(), &[])
+                && let Some(origin) = &requirement.origin
+            {
+                sources.add(&requirement.name, annotation(origin.clone()));
+            }
+        }
+    }
 }
 
 /// Write the graph in the `{name}=={version}` format of requirements.txt that pip uses.
@@ -91,48 +113,21 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
         let sources = if self.include_annotations {
             let mut sources = SourceAnnotations::default();
 
-            for requirement in self.resolution.requirements.iter().filter(|requirement| {
-                requirement.evaluate_markers(self.env.marker_environment(), &[])
-            }) {
-                if let Some(origin) = &requirement.origin {
-                    sources.add(
-                        &requirement.name,
-                        SourceAnnotation::Requirement(origin.clone()),
-                    );
-                }
-            }
-
-            for requirement in self
-                .resolution
-                .constraints
-                .requirements()
-                .filter(|requirement| {
-                    requirement.evaluate_markers(self.env.marker_environment(), &[])
-                })
-            {
-                if let Some(origin) = &requirement.origin {
-                    sources.add(
-                        &requirement.name,
-                        SourceAnnotation::Constraint(origin.clone()),
-                    );
-                }
-            }
-
-            for requirement in self
-                .resolution
-                .modifiers
-                .global_overrides()
-                .filter(|requirement| {
-                    requirement.evaluate_markers(self.env.marker_environment(), &[])
-                })
-            {
-                if let Some(origin) = &requirement.origin {
-                    sources.add(
-                        &requirement.name,
-                        SourceAnnotation::Override(origin.clone()),
-                    );
-                }
-            }
+            self.annotate_requirements(
+                &mut sources,
+                &self.resolution.requirements,
+                SourceAnnotation::Requirement,
+            );
+            self.annotate_requirements(
+                &mut sources,
+                self.resolution.constraints.requirements(),
+                SourceAnnotation::Constraint,
+            );
+            self.annotate_requirements(
+                &mut sources,
+                self.resolution.modifiers.global_overrides(),
+                SourceAnnotation::Override,
+            );
 
             for edge in self.resolution.graph.edge_references() {
                 let (ResolutionGraphNode::Dist(parent), ResolutionGraphNode::Dist(dependency)) = (
@@ -141,22 +136,14 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
                 ) else {
                     continue;
                 };
-                for requirement in self
-                    .resolution
-                    .modifiers
-                    .scoped_overrides_for(&parent.name, &parent.version)
-                    .filter(|requirement| requirement.name == dependency.name)
-                    .filter(|requirement| {
-                        requirement.evaluate_markers(self.env.marker_environment(), &[])
-                    })
-                {
-                    if let Some(origin) = &requirement.origin {
-                        sources.add(
-                            &requirement.name,
-                            SourceAnnotation::Override(origin.clone()),
-                        );
-                    }
-                }
+                self.annotate_requirements(
+                    &mut sources,
+                    self.resolution
+                        .modifiers
+                        .scoped_overrides_for(&parent.name, &parent.version)
+                        .filter(|requirement| requirement.name == dependency.name),
+                    SourceAnnotation::Override,
+                );
             }
 
             sources
@@ -209,20 +196,18 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
         nodes.sort_unstable_by_key(|(index, node)| (node.to_comparator(), *index));
 
         // Print out the dependency graph.
+        let mut dependents = Vec::new();
         for (index, node) in nodes {
             // Display the node itself.
             let mut line = node
                 .to_requirements_txt(&self.resolution.requires_python, self.include_markers)
-                .to_string();
+                .into_owned();
 
             // Display the distribution hashes, if any.
-            let mut has_hashes = false;
-            if self.show_hashes {
+            let has_hashes = self.show_hashes && !node.hashes.is_empty();
+            if has_hashes {
                 for hash in node.hashes {
-                    has_hashes = true;
-                    line.push_str(" \\\n");
-                    line.push_str("    --hash=");
-                    line.push_str(&hash.to_string());
+                    write!(line, " \\\n    --hash={hash}")?;
                 }
             }
 
@@ -233,16 +218,15 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
             // package (e.g., `# via mypy`).
             if self.include_annotations {
                 // Display all dependents (i.e., all packages that depend on the current package).
-                let dependents = {
-                    let mut dependents = graph
+                dependents.clear();
+                dependents.extend(
+                    graph
                         .edges_directed(index, Direction::Incoming)
                         .map(|edge| &graph[edge.source()])
-                        .map(uv_distribution_types::Name::name)
-                        .collect::<Vec<_>>();
-                    dependents.sort_unstable();
-                    dependents.dedup();
-                    dependents
-                };
+                        .map(uv_distribution_types::Name::name),
+                );
+                dependents.sort_unstable();
+                dependents.dedup();
 
                 // Include all external sources (e.g., requirements files).
                 let default = BTreeSet::default();
@@ -260,13 +244,12 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
                         }
                         dependents => {
                             let separator = if has_hashes { "\n    " } else { "  " };
-                            let dependents = dependents
+                            let origins = dependents
                                 .iter()
-                                .map(ToString::to_string)
-                                .chain(source.iter().map(ToString::to_string))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            let comment = format!("# via {dependents}").green().to_string();
+                                .map(Either::Left)
+                                .chain(source.iter().map(Either::Right))
+                                .format(", ");
+                            let comment = format!("# via {origins}").green().to_string();
                             annotation = Some((separator, comment));
                         }
                     },
@@ -286,14 +269,13 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
                         }
                         dependents => {
                             let separator = "\n";
-                            let dependent = source
+                            let origins = source
                                 .iter()
-                                .map(ToString::to_string)
-                                .chain(dependents.iter().map(ToString::to_string))
-                                .map(|name| format!("    #   {name}"))
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            let comment = format!("    # via\n{dependent}").green().to_string();
+                                .map(Either::Left)
+                                .chain(dependents.iter().map(Either::Right))
+                                .format("\n    #   ");
+                            let comment =
+                                format!("    # via\n    #   {origins}").green().to_string();
                             annotation = Some((separator, comment));
                         }
                     },
@@ -342,105 +324,69 @@ type RequirementsTxtGraph<'dist> = Graph<RequirementsTxtDist<'dist>, (), Directe
 ///
 /// We also remove the root node, to simplify the graph structure.
 fn combine_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGraph<'dist> {
-    /// Return the key for a node.
-    fn version_marker<'dist>(dist: &'dist RequirementsTxtDist) -> (&'dist PackageName, MarkerTree) {
-        (dist.name(), dist.markers)
-    }
-
-    let mut next = RequirementsTxtGraph::with_capacity(graph.node_count(), graph.edge_count());
-    let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
-
-    // Re-add the nodes to the reduced graph.
-    for index in graph.node_indices() {
-        let DisplayResolutionGraphNode::Dist(dist) = &graph[index] else {
-            continue;
-        };
-
-        // In the `requirements.txt` output, we want a flat installation list, so we need to use
-        // the reachability markers instead of the edge markers.
-        match inverse.entry(version_marker(dist)) {
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                let index = *entry.get();
-                let node: &mut RequirementsTxtDist = &mut next[index];
-                node.extras.extend(dist.extras.iter().cloned());
-                node.extras.sort_unstable();
-                node.extras.dedup();
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let index = next.add_node(dist.clone());
-                entry.insert(index);
-            }
-        }
-    }
-
-    // Re-add the edges to the reduced graph.
-    for edge in graph.edge_indices() {
-        let (source, target) = graph.edge_endpoints(edge).unwrap();
-        let DisplayResolutionGraphNode::Dist(source_node) = &graph[source] else {
-            continue;
-        };
-        let DisplayResolutionGraphNode::Dist(target_node) = &graph[target] else {
-            continue;
-        };
-        let source = inverse[&version_marker(source_node)];
-        let target = inverse[&version_marker(target_node)];
-
-        next.update_edge(source, target, ());
-    }
-
-    next
+    reduce_graph(
+        graph,
+        |dist| (dist.name(), dist.markers),
+        RequirementsTxtDist::combine_extras,
+    )
 }
 
 /// Reduce the graph, such that all nodes for a single package are combined, with extras
 /// removed.
 ///
 /// For example, `flask`, `flask[async]`, and `flask[dotenv]` should be reduced into a single
-/// `flask` node, with a conjunction of their markers.
+/// `flask` node, with a disjunction of their markers.
 ///
 /// We also remove the root node, to simplify the graph structure.
 fn strip_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGraph<'dist> {
+    reduce_graph(graph, DistributionMetadata::version_id, |node, dist| {
+        node.strip_extras();
+        // A package must be included wherever either merged node was reachable.
+        node.markers = node.markers.or(dist.markers);
+    })
+}
+
+/// Merge nodes with the same key and remove the root.
+fn reduce_graph<'graph, 'dist, K: Eq + Hash>(
+    graph: &'graph IntermediatePetGraph<'dist>,
+    key: impl Fn(&'graph RequirementsTxtDist<'dist>) -> K,
+    merge: impl Fn(&mut RequirementsTxtDist<'dist>, &'graph RequirementsTxtDist<'dist>),
+) -> RequirementsTxtGraph<'dist> {
     let mut next = RequirementsTxtGraph::with_capacity(graph.node_count(), graph.edge_count());
-    let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
 
-    // Re-add the nodes to the reduced graph.
-    for index in graph.node_indices() {
-        let DisplayResolutionGraphNode::Dist(dist) = &graph[index] else {
-            continue;
-        };
+    // Node weights are yielded in index order, so each entry maps its original node index to its
+    // reduced node index.
+    let remap = {
+        let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
+        graph
+            .node_weights()
+            .map(|node| {
+                let DisplayResolutionGraphNode::Dist(dist) = node else {
+                    return None;
+                };
 
-        // In the `requirements.txt` output, we want a flat installation list, so we need to use
-        // the reachability markers instead of the edge markers.
-        match inverse.entry(dist.version_id()) {
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                let index = *entry.get();
-                let node: &mut RequirementsTxtDist = &mut next[index];
-                node.extras.clear();
-                // Consider:
-                // ```
-                // foo[bar]==1.0.0; sys_platform == 'linux'
-                // foo==1.0.0; sys_platform != 'linux'
-                // ```
-                // In this case, we want to write `foo==1.0.0; sys_platform == 'linux' or sys_platform == 'windows'`
-                node.markers = node.markers.or(dist.markers);
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let index = next.add_node(dist.clone());
-                entry.insert(index);
-            }
-        }
-    }
+                // In the `requirements.txt` output, we want a flat installation list, so we need
+                // to use the reachability markers instead of the edge markers.
+                Some(match inverse.entry(key(dist)) {
+                    std::collections::hash_map::Entry::Occupied(entry) => {
+                        let index = *entry.get();
+                        merge(&mut next[index], dist);
+                        index
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        *entry.insert(next.add_node(dist.clone()))
+                    }
+                })
+            })
+            .collect::<Vec<_>>()
+    };
 
     // Re-add the edges to the reduced graph.
     for edge in graph.edge_indices() {
         let (source, target) = graph.edge_endpoints(edge).unwrap();
-        let DisplayResolutionGraphNode::Dist(source_node) = &graph[source] else {
+        let (Some(source), Some(target)) = (remap[source.index()], remap[target.index()]) else {
             continue;
         };
-        let DisplayResolutionGraphNode::Dist(target_node) = &graph[target] else {
-            continue;
-        };
-        let source = inverse[&source_node.version_id()];
-        let target = inverse[&target_node.version_id()];
 
         next.update_edge(source, target, ());
     }

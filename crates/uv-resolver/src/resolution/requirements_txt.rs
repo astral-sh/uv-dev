@@ -19,13 +19,28 @@ use crate::resolution::AnnotatedDist;
 /// A pinned package with its resolved distribution and all the extras that were pinned for it.
 pub(crate) struct RequirementsTxtDist<'dist> {
     pub(super) dist: &'dist ResolvedDist,
-    pub(super) version: &'dist Version,
+    version: &'dist Version,
     pub(super) hashes: &'dist [HashDigest],
     pub(super) markers: MarkerTree,
-    pub(super) extras: Vec<ExtraName>,
+    /// The extras for this distribution, sorted and deduplicated.
+    extras: Vec<ExtraName>,
 }
 
 impl<'dist> RequirementsTxtDist<'dist> {
+    /// Merge the extras from another distribution.
+    pub(super) fn combine_extras(&mut self, other: &Self) {
+        for extra in &other.extras {
+            if let Err(index) = self.extras.binary_search(extra) {
+                self.extras.insert(index, extra.clone());
+            }
+        }
+    }
+
+    /// Remove all extras from this distribution.
+    pub(super) fn strip_extras(&mut self) {
+        self.extras.clear();
+    }
+
     /// Convert the [`RequirementsTxtDist`] to a requirement that adheres to the `requirements.txt`
     /// format.
     ///
@@ -44,6 +59,12 @@ impl<'dist> RequirementsTxtDist<'dist> {
                 return Cow::Owned(format!("-e {given}"));
             }
         }
+
+        let markers = if include_markers {
+            SimplifiedMarkerTree::new(requires_python, self.markers).try_to_string()
+        } else {
+            None
+        };
 
         // If the URL is not _definitively_ a `file://` URL, write it as a relative path.
         if self.dist.is_local() {
@@ -93,11 +114,7 @@ impl<'dist> RequirementsTxtDist<'dist> {
                     }
                 };
                 if let Some(given) = given {
-                    return if let Some(markers) =
-                        SimplifiedMarkerTree::new(requires_python, self.markers)
-                            .try_to_string()
-                            .filter(|_| include_markers)
-                    {
+                    return if let Some(markers) = markers {
                         Cow::Owned(format!("{given} ; {markers}"))
                     } else {
                         given
@@ -107,37 +124,21 @@ impl<'dist> RequirementsTxtDist<'dist> {
         }
 
         if self.extras.is_empty() {
-            if let Some(markers) = SimplifiedMarkerTree::new(requires_python, self.markers)
-                .try_to_string()
-                .filter(|_| include_markers)
-            {
+            if let Some(markers) = markers {
                 Cow::Owned(format!("{} ; {}", self.dist.verbatim(), markers))
             } else {
                 self.dist.verbatim()
             }
         } else {
-            let mut extras = self.extras.clone();
-            extras.sort_unstable();
-            extras.dedup();
-            if let Some(markers) = SimplifiedMarkerTree::new(requires_python, self.markers)
-                .try_to_string()
-                .filter(|_| include_markers)
-            {
-                Cow::Owned(format!(
-                    "{}[{}]{} ; {}",
-                    self.name(),
-                    extras.into_iter().join(", "),
-                    self.version_or_url().verbatim(),
-                    markers,
-                ))
-            } else {
-                Cow::Owned(format!(
-                    "{}[{}]{}",
-                    self.name(),
-                    extras.into_iter().join(", "),
-                    self.version_or_url().verbatim()
-                ))
-            }
+            let (separator, marker) = markers
+                .as_deref()
+                .map_or(("", ""), |marker| (" ; ", marker));
+            Cow::Owned(format!(
+                "{}[{}]{}{separator}{marker}",
+                self.name(),
+                self.extras.iter().format(", "),
+                self.version_or_url().verbatim(),
+            ))
         }
     }
 
@@ -150,20 +151,15 @@ impl<'dist> RequirementsTxtDist<'dist> {
             }
         }
 
-        if let VersionOrUrlRef::Url(url) = self.version_or_url() {
-            RequirementsTxtComparator::Name {
-                name: self.name(),
-                version: self.version,
-                url: Some(url.verbatim()),
-                extras: &self.extras,
-            }
-        } else {
-            RequirementsTxtComparator::Name {
-                name: self.name(),
-                version: self.version,
-                url: None,
-                extras: &self.extras,
-            }
+        let version_or_url = self.version_or_url();
+        RequirementsTxtComparator::Name {
+            name: self.name(),
+            version: self.version,
+            url: match version_or_url {
+                VersionOrUrlRef::Version(_) => None,
+                VersionOrUrlRef::Url(url) => Some(url.verbatim()),
+            },
+            extras: &self.extras,
         }
     }
 
