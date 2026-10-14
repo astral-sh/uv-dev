@@ -34604,29 +34604,18 @@ fn lock_dynamic_version_no_build() -> Result<()> {
         dependencies = []
 
         [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-
-        [tool.uv]
-        cache-keys = [{ file = "pyproject.toml" }, { file = "src/project/__init__.py" }]
-
-        [tool.setuptools.dynamic]
-        version = { attr = "project.__version__" }
-
-        [tool.setuptools]
-        package-dir = { "" = "src" }
-
-        [tool.setuptools.packages.find]
-        where = ["src"]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
         "#,
     )?;
 
-    context
-        .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .write_str("__version__ = '0.1.0'")?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        Path(__file__).with_name("backend-executed").touch()
+        raise RuntimeError("the build backend must not run")
+    "#})?;
 
     context.temp_dir.child("uv.lock").write_str(indoc::indoc! {
     r#"
@@ -34642,12 +34631,15 @@ fn lock_dynamic_version_no_build() -> Result<()> {
         source = { editable = "." }
         "#})?;
 
-    // Validate the lockfile with `--offline` to ensure that the package itself isn't built.
     uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicates::path::missing());
 
     let pyproject = context.read("pyproject.toml");
     pyproject_toml.write_str(&pyproject.replace(
@@ -34682,6 +34674,10 @@ fn lock_dynamic_version_no_build() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicates::path::missing());
 
     Ok(())
 }
