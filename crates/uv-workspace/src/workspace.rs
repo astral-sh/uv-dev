@@ -504,11 +504,9 @@ impl Workspace {
         let path =
             normalize_path(std::path::absolute(path).map_err(WorkspaceErrorKind::Normalize)?);
 
-        let project_path = path
-            .ancestors()
-            .find(|path| path.join("pyproject.toml").is_file())
-            .ok_or(WorkspaceErrorKind::MissingPyprojectToml)?
-            .to_path_buf();
+        let (project_path, pyproject_path) =
+            find_pyproject(path.ancestors()).ok_or(WorkspaceErrorKind::MissingPyprojectToml)?;
+        let project_path = project_path.to_path_buf();
 
         // Fast path: The workspace was already fully discovered.
         // It's possible that there are two separate discoveries for the same workspace going on
@@ -519,7 +517,6 @@ impl Workspace {
             return workspace;
         }
 
-        let pyproject_path = project_path.join("pyproject.toml");
         let contents = fs_err::tokio::read_to_string(&pyproject_path).await?;
         let pyproject_toml = PyProjectToml::from_string(contents, &pyproject_path)
             .map_err(|err| WorkspaceErrorKind::Toml(pyproject_path.clone(), Box::new(err)))?;
