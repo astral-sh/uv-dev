@@ -9,7 +9,7 @@ use predicates::prelude::predicate;
 
 use uv_static::EnvVars;
 
-use uv_test::{TestContext, uv_snapshot};
+use uv_test::{TestContext, assert_path_missing, uv_snapshot};
 
 #[test]
 fn init() {
@@ -3888,11 +3888,19 @@ fn init_python_variant() {
 #[test]
 fn git_states() {
     let context = uv_test::test_context!("3.12");
+    let assert_git_repository = |project: &str| {
+        Command::new("git")
+            .current_dir(context.temp_dir.child(project))
+            .args(["rev-parse", "--git-dir"])
+            .assert()
+            .success()
+            .stdout(".git\n");
+    };
 
     // First, with working git.
 
     context.init().arg("working").assert().success();
-    assert!(context.temp_dir.child("working/.git").is_dir());
+    assert_git_repository("working");
 
     context
         .init()
@@ -3901,7 +3909,7 @@ fn git_states() {
         .arg("none")
         .assert()
         .success();
-    assert!(!context.temp_dir.child("working-no-git/.git").is_dir());
+    assert_path_missing(context.temp_dir.child("working-no-git/.git"));
 
     context
         .init()
@@ -3910,14 +3918,14 @@ fn git_states() {
         .arg("git")
         .assert()
         .success();
-    assert!(context.temp_dir.child("working-git/.git").is_dir());
+    assert_git_repository("working-git");
 
     // The same tests again, but with broken git.
     TestContext::disallow_git_cli(&context.bin_dir)
         .expect("Failed to setup disallowed `git` command");
 
     context.init().arg("broken").assert().success();
-    assert!(!context.temp_dir.child("broken/.git").is_dir());
+    assert_path_missing(context.temp_dir.child("broken/.git"));
 
     context
         .init()
@@ -3926,7 +3934,7 @@ fn git_states() {
         .arg("none")
         .assert()
         .success();
-    assert!(!context.temp_dir.child("broken-no-git/.git").is_dir());
+    assert_path_missing(context.temp_dir.child("broken-no-git/.git"));
 
     uv_snapshot!(context.filters(), context
         .init()
@@ -3939,7 +3947,7 @@ fn git_states() {
     stdout:
     stderr: error: `git` operations are not allowed — are you missing a cfg for the `git` feature?
     ");
-    assert!(!context.temp_dir.child("broken-git/.git").is_dir());
+    assert_path_missing(context.temp_dir.child("broken-git/.git"));
 }
 
 /// Using `uv init` with `--project` isn't allowed.
