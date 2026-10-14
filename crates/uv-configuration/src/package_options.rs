@@ -276,8 +276,11 @@ impl Upgrade {
 
         // For `constraints`: always merge the constraints of `self` and `other`.
         let mut constraints = self.constraints;
-        for (package, requirements) in other.constraints {
-            constraints.entry(package).or_default().extend(requirements);
+        for (package, mut requirements) in other.constraints {
+            constraints
+                .entry(package)
+                .and_modify(|existing| existing.append(&mut requirements))
+                .or_insert(requirements);
         }
 
         Self {

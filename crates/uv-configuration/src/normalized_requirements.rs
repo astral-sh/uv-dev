@@ -117,10 +117,11 @@ impl From<Vec<Override<Requirement>>> for NormalizedOverrideEntries {
             match entry {
                 Override::Requirement(requirement) => global.push(requirement),
                 Override::Package(package) => {
+                    let mut dependencies = package.dependencies.into_vec();
                     scoped
                         .entry(package.package)
-                        .or_default()
-                        .extend(package.dependencies);
+                        .and_modify(|existing| existing.append(&mut dependencies))
+                        .or_insert(dependencies);
                 }
             }
         }
