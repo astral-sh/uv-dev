@@ -178,14 +178,12 @@ impl GitResolver {
         let precise = response.text().await?;
         let precise =
             GitOid::from_str(&precise).map_err(|err| GitResolverError::Git(err.into()))?;
-        let url = url
-            .clone()
-            .with_precise(precise)
+        url.validate_precise(precise)
             .map_err(|error| GitResolverError::Git(error.into()))?;
 
         // Insert the resolved URL into the in-memory cache. This ensures that subsequent fetches
         // resolve to the same precise commit.
-        self.insert(RepositoryReference::from(&url), precise);
+        self.insert(RepositoryReference::from(url), precise);
 
         Ok(Some(precise))
     }
