@@ -15680,6 +15680,15 @@ fn sync_python_platform() -> Result<()> {
      + pathspec==0.12.1
      + platformdirs==4.2.0
     ");
+    context.assert_not_installed("colorama");
+
+    // Selecting Windows must include Click's platform-specific dependency on every host.
+    context
+        .sync()
+        .args(["--python-platform", "windows"])
+        .assert()
+        .success();
+    context.assert_installed("colorama", "0.4.6");
 
     Ok(())
 }
