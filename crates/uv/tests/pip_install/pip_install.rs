@@ -1367,76 +1367,78 @@ fn install_from_dev_stdin() -> Result<()> {
     Ok(())
 }
 
-/// Install a package from a remote `requirements.txt` into a virtual environment.
+/// Re-read an authenticated remote requirements file when its contents change.
 #[tokio::test]
 async fn install_remote_requirements_txt() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let server = MockServer::start().await;
+    let original_requirements = Mock::given(method("GET"))
+        .and(path("/requirements.txt"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok==1.0.0"))
+        .with_priority(1)
+        .expect(1)
+        .mount_as_scoped(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/requirements.txt"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1..)
+        .mount(&server)
+        .await;
 
-    let username = "user";
-    let password = "password";
-    let requirements_txt = "Flask";
-
-    let server_url = start_requirements_server(username, password, requirements_txt).await;
-
-    let mut requirements_url = SafeUrl::parse(&format!("{server_url}/requirements.txt"))?;
-
-    // Should fail without credentials
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
-        .arg(requirements_url.as_str())
-        .arg("--strict"), @"
+        .arg(format!("{}/requirements.txt", server.uri())), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Error while accessing remote requirements file: http://[LOCALHOST]/requirements.txt
     "
     );
 
-    let _ = requirements_url.set_username(username);
-    let _ = requirements_url.set_password(Some(password));
-
-    // Should succeed with credentials
+    let requirements_url = format!("http://user:password@{}/requirements.txt", server.address());
+    let links = context.workspace_root.join("test/links");
     uv_snapshot!(context.pip_install()
         .arg("-r")
-        .arg(requirements_url.as_str())
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    "
-    );
-
-    context.assert_command("import flask").success();
-
-    let requirements_txt = "iniconfig";
-    // Update the mock server to serve a new requirements.txt
-    let server_url = start_requirements_server(username, password, requirements_txt).await;
-    let mut requirements_url = SafeUrl::parse(&format!("{server_url}/requirements.txt"))?;
-    let _ = requirements_url.set_username(username);
-    let _ = requirements_url.set_password(Some(password));
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg(requirements_url.as_str())
-        .arg("--strict"), @"
+        .arg(&requirements_url)
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + ok==1.0.0
     "
     );
 
-    context.assert_command("import flask").success();
+    drop(original_requirements);
+    Mock::given(method("GET"))
+        .and(path("/requirements.txt"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("tqdm==1000.0.0"))
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg(&requirements_url)
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tqdm==1000.0.0
+    "
+    );
+
+    context.assert_command("import ok; import tqdm").success();
 
     Ok(())
 }
@@ -1503,27 +1505,6 @@ async fn install_remote_requirements_txt_redacts_nested_url() -> Result<()> {
     );
 
     Ok(())
-}
-
-async fn start_requirements_server(
-    username: &str,
-    password: &str,
-    requirements_txt: &str,
-) -> String {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/requirements.txt"))
-        .and(basic_auth(username, password))
-        .respond_with(ResponseTemplate::new(200).set_body_string(requirements_txt))
-        .mount(&server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/requirements.txt"))
-        .respond_with(ResponseTemplate::new(401))
-        .mount(&server)
-        .await;
-    server.uri()
 }
 
 /// Warn (but don't fail) when unsupported flags are set in the `requirements.txt`.
