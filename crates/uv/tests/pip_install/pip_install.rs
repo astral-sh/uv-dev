@@ -2550,105 +2550,68 @@ fn install_git_checkout_marker_symlink() -> Result<()> {
 #[cfg(feature = "test-git")]
 fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
-
     let repository = context.temp_dir.child("repository");
-    repository.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "example"
-        version = "0.1.0"
-        requires-python = ">=3.12"
+    repository.create_dir_all()?;
+    let git = || {
+        let mut command = context.external_command("git");
+        command.arg("-C").arg(repository.path());
+        command
+    };
+    git().arg("init").assert().success();
+    let commit = |version: &str, message: &str| -> Result<String> {
+        repository
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+                [project]
+                name = "example"
+                version = "{version}"
+                requires-python = ">=3.12"
 
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-    "#})?;
-    repository
-        .child("src/example/__init__.py")
-        .write_str(r#"__version__ = "0.1.0""#)?;
-
-    Command::new("git")
-        .arg("init")
-        .arg(repository.path())
-        .assert()
-        .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args(["add", "."])
-        .assert()
-        .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args([
-            "-c",
-            "user.name=ferris",
-            "-c",
-            "user.email=ferris@example.com",
-            "commit",
-            "-m",
-            "Trusted commit",
-        ])
-        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
-        .assert()
-        .success();
-
-    let trusted_commit = Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args(["rev-parse", "HEAD"])
-        .output()?;
-    assert!(trusted_commit.status.success());
-    let trusted_commit = String::from_utf8(trusted_commit.stdout)?;
-    let trusted_commit = trusted_commit.trim();
-
-    repository.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "example"
-        version = "9.9.9"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-    "#})?;
-    repository
-        .child("src/example/__init__.py")
-        .write_str(r#"__version__ = "9.9.9""#)?;
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args(["add", "."])
-        .assert()
-        .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args([
-            "-c",
-            "user.name=ferris",
-            "-c",
-            "user.email=ferris@example.com",
-            "commit",
-            "-m",
-            "Untrusted commit",
-        ])
-        .env("GIT_AUTHOR_DATE", "2000-01-02T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2000-01-02T00:00:00Z")
-        .assert()
-        .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
+                [build-system]
+                requires = ["hatchling"]
+                build-backend = "hatchling.build"
+            "#})?;
+        repository
+            .child("src/example/__init__.py")
+            .write_str(&format!("__version__ = \"{version}\""))?;
+        git()
+            .args([
+                "add",
+                "--force",
+                "pyproject.toml",
+                "src/example/__init__.py",
+            ])
+            .assert()
+            .success();
+        git()
+            .args([
+                "-c",
+                "user.name=ferris",
+                "-c",
+                "user.email=ferris@example.com",
+                "commit",
+                "--no-gpg-sign",
+                "-m",
+                message,
+            ])
+            .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+            .assert()
+            .success();
+        let output = git().args(["rev-parse", "HEAD"]).assert().success();
+        Ok(String::from_utf8(output.get_output().stdout.clone())?
+            .trim()
+            .to_string())
+    };
+    let trusted_commit = commit("0.1.0", "Trusted commit")?;
+    let untrusted_commit = commit("9.9.9", "Untrusted commit")?;
+    git()
         .arg("update-ref")
         .arg(format!("refs/heads/{trusted_commit}"))
         .arg("HEAD")
         .assert()
         .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
+    git()
         .args(["update-ref", "refs/heads/20240222", "HEAD"])
         .assert()
         .success();
@@ -2670,7 +2633,17 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
      + example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
     ");
 
-    context.assert_installed("example", "0.1.0");
+    let assert_revision = |version: &str, revision: &str| -> Result<()> {
+        context.assert_installed("example", version);
+        let direct_url: serde_json::Value = serde_json::from_slice(&fs::read(
+            context
+                .site_packages()
+                .join(format!("example-{version}.dist-info/direct_url.json")),
+        )?)?;
+        assert_eq!(direct_url["vcs_info"]["commit_id"].as_str(), Some(revision));
+        Ok(())
+    };
+    assert_revision("0.1.0", &trusted_commit)?;
 
     // Full commit hashes identify the same installed commit regardless of hexadecimal case.
     uv_snapshot!(filters, context
@@ -2695,7 +2668,7 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
      + example==9.9.9 (from git+file://[TEMP_DIR]/repository@[COMMIT])
     ");
 
-    context.assert_installed("example", "9.9.9");
+    assert_revision("9.9.9", &untrusted_commit)?;
 
     Ok(())
 }
