@@ -446,22 +446,17 @@ impl SourceBuild {
         // See if there is an OS PATH variable.
         let os_path = env::var_os(EnvVars::PATH);
 
-        // Prepend the user supplied PATH to the existing OS PATH
-        let modified_path = match (user_path, os_path) {
-            (Some(user_path), Some(os_path)) => {
-                let paths = env::split_paths(&user_path).chain(env::split_paths(&os_path));
-                Some(env::join_paths(paths).map_err(Error::BuildScriptPath)?)
+        // Search the build environment first, followed by the user-supplied and OS paths.
+        let modified_path = match (
+            user_path.as_deref().map(env::split_paths),
+            os_path.as_deref().map(env::split_paths),
+        ) {
+            (None, None) => OsString::from(venv.scripts()),
+            (user_paths, os_paths) => {
+                let paths = iter::once(venv.scripts().to_path_buf())
+                    .chain(user_paths.into_iter().chain(os_paths).flatten());
+                env::join_paths(paths).map_err(Error::BuildScriptPath)?
             }
-            (Some(path), None) | (None, Some(path)) => Some(path),
-            (None, None) => None,
-        };
-
-        // Prepend the venv bin directory to the modified path
-        let modified_path = if let Some(path) = modified_path {
-            let venv_path = iter::once(venv.scripts().to_path_buf()).chain(env::split_paths(&path));
-            env::join_paths(venv_path).map_err(Error::BuildScriptPath)?
-        } else {
-            OsString::from(venv.scripts())
         };
 
         // Create the PEP 517 build environment. If build isolation is disabled, we assume the build
