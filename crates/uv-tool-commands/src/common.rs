@@ -750,55 +750,17 @@ pub(super) fn finalize_tool_install(
         }
 
         let installed = site_packages.get_packages(package);
-        let Some(dist) = installed.first() else {
-            if package != name {
-                bail!("Expected package `{package}` to be installed");
-            }
-
-            writeln!(
-                printer.stdout(),
-                "No executables are provided by package `{}`; removing tool",
-                package.cyan()
-            )?;
-            rollback_tool_install(installed_tools, name, &installed_entrypoints)?;
-
-            return Err(NoExecutablesError::Root {
-                package: package.clone(),
-                matching_dependency_packages: Vec::new(),
-            }
-            .into());
+        let dist_entrypoints = match installed.first() {
+            Some(dist) => entrypoint_paths(&site_packages, dist.name(), dist.version())?,
+            None if package != name => bail!("Expected package `{package}` to be installed"),
+            None => Vec::new(),
         };
-        let dist_entrypoints = entrypoint_paths(&site_packages, dist.name(), dist.version())?;
-
-        // Determine the entry points targets. Use a sorted collection for deterministic output.
-        let target_entrypoints = dist_entrypoints
-            .into_iter()
-            .map(|(name, source_path)| {
-                let target_path = executable_directory
-                    .join(source_path.file_name().unwrap_or_else(|| OsStr::new(&name)));
-                (name, source_path, target_path)
-            })
-            .collect::<BTreeSet<_>>();
-
-        if target_entrypoints.is_empty() {
-            let err = if package != name {
-                NoExecutablesError::Dependency {
-                    package: package.clone(),
-                }
-            } else {
-                NoExecutablesError::Root {
-                    package: package.clone(),
-                    matching_dependency_packages: matching_package_names(
-                        package.as_ref(),
-                        &site_packages,
-                    )
-                    .cloned()
-                    .collect(),
-                }
-            };
-
+        if dist_entrypoints.is_empty() {
             if package != name {
                 // Non-root package: display the error with hints and continue.
+                let err = NoExecutablesError::Dependency {
+                    package: package.clone(),
+                };
                 writeln!(
                     printer.stdout(),
                     "{}",
@@ -808,6 +770,16 @@ pub(super) fn finalize_tool_install(
             }
 
             // For the root package, this is a fatal error.
+            let err = NoExecutablesError::Root {
+                package: package.clone(),
+                matching_dependency_packages: if installed.is_empty() {
+                    Vec::new()
+                } else {
+                    matching_package_names(package.as_ref(), &site_packages)
+                        .cloned()
+                        .collect()
+                },
+            };
             writeln!(
                 printer.stdout(),
                 "No executables are provided by package `{}`; removing tool",
@@ -818,6 +790,16 @@ pub(super) fn finalize_tool_install(
 
             return Err(err.into());
         }
+
+        // Determine the entry points targets. Use a sorted collection for deterministic output.
+        let target_entrypoints = dist_entrypoints
+            .into_iter()
+            .map(|(name, source_path)| {
+                let target_path = executable_directory
+                    .join(source_path.file_name().unwrap_or_else(|| OsStr::new(&name)));
+                (name, source_path, target_path)
+            })
+            .collect::<BTreeSet<_>>();
 
         // Error if we're overwriting an existing entrypoint, unless the user passed `--force`.
         if !force {
