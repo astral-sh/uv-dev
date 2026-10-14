@@ -42248,6 +42248,7 @@ async fn lock_path_dependency_explicit_index_workspace_member() -> Result<()> {
 async fn lock_path_dependency_mixed_indexes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
+    let proxy_index = format!("{}/simple", proxy.uri());
 
     // Create the path dependency with both explicit and non-explicit indexes.
     let pkg_a = context.temp_dir.child("pkg_a");
@@ -42268,14 +42269,13 @@ async fn lock_path_dependency_mixed_indexes() -> Result<()> {
 
         [[tool.uv.index]]
         name = "non-explicit-index"
-        url = "{proxy_uri}/simple"
+        url = "{proxy_index}"
 
         [[tool.uv.index]]
         name = "explicit-index"
         url = "https://pypi.org/simple"
         explicit = true
-        "#,
-        proxy_uri = proxy.uri()
+        "#
     ))?;
 
     // Create a project that depends on pkg_a.
@@ -42308,6 +42308,16 @@ async fn lock_path_dependency_mixed_indexes() -> Result<()> {
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 6 packages in [TIME]
     ");
+
+    let lock = context.read("pkg_b/uv.lock");
+    assert_eq!(
+        locked_package(&lock, "iniconfig")?["source"]["registry"].as_str(),
+        Some("https://pypi.org/simple")
+    );
+    assert_eq!(
+        locked_package(&lock, "anyio")?["source"]["registry"].as_str(),
+        Some(proxy_index.as_str())
+    );
 
     uv_snapshot!(context.filters(), context.lock().arg("--check").current_dir(&pkg_b), @"
     exit_code: 0 (success)
