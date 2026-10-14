@@ -17906,20 +17906,24 @@ fn lock_local_index() -> Result<()> {
 ///
 /// When resolving, we should ignore the `tool.uv.sources` and instead pull in `anyio` from PyPI.
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_sources_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+#[tokio::test]
+async fn lock_sources_url() -> Result<()> {
+    let archive = crate::workspace_sources::archive()?;
+    let server = PackageServer::new(&"workspace".parse()?).await;
+    server.serve("workspace.zip", &archive, None).await;
+    let archive_url = server.file_url("workspace.zip");
+    let context = uv_test::test_context!("3.12")
+        .with_filter((hex::encode(Sha256::digest(&archive)), "[WORKSPACE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["workspace @ https://github.com/user-attachments/files/16592193/workspace.zip"]
-        "#,
-    )?;
+        dependencies = ["workspace @ {archive_url}"]
+        "#
+    })?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -17972,7 +17976,7 @@ fn lock_sources_url() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "workspace", url = "https://github.com/user-attachments/files/16592193/workspace.zip" }]
+        requires-dist = [{ name = "workspace", url = "http://[LOCALHOST]/workspace.zip" }]
 
         [[package]]
         name = "sniffio"
@@ -17986,11 +17990,11 @@ fn lock_sources_url() -> Result<()> {
         [[package]]
         name = "workspace"
         version = "0.1.0"
-        source = { url = "https://github.com/user-attachments/files/16592193/workspace.zip" }
+        source = { url = "http://[LOCALHOST]/workspace.zip" }
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:ba690a925dc3d1b53e0675201c9ec26ab59eeec72ab271562f53297bf1817263" }
+        sdist = { hash = "sha256:[WORKSPACE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
@@ -18014,7 +18018,7 @@ fn lock_sources_url() -> Result<()> {
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
-     + workspace==0.1.0 (from https://github.com/user-attachments/files/16592193/workspace.zip)
+     + workspace==0.1.0 (from http://[LOCALHOST]/workspace.zip)
     ");
 
     Ok(())
