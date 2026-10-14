@@ -28,7 +28,7 @@ use wiremock::{
 
 use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
 use uv_fs::{PortablePath, Simplified};
-use uv_install_wheel::validate_and_heal_record;
+use uv_install_wheel::{read_record, validate_and_heal_record};
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::{generate_source_archive, write_tar_gz};
@@ -16697,18 +16697,25 @@ fn install_editable_uv_build_data() -> Result<()> {
         "#
     );
 
-    let record = context.read(
+    let record = read_record(File::open(
         context
             .site_packages()
-            .join("project-0.1.0.dist-info")
-            .join("RECORD"),
-    );
-    assert!(record.lines().any(|line| line.contains("/project-script")));
-    assert!(record.lines().any(|line| line.contains("/project.h")));
+            .join("project-0.1.0.dist-info/RECORD"),
+    )?)?;
     assert!(
         record
-            .lines()
-            .any(|line| line.contains("/project-config.txt"))
+            .iter()
+            .any(|entry| entry.path.ends_with("/project-script"))
+    );
+    assert!(
+        record
+            .iter()
+            .any(|entry| entry.path.ends_with("/project.h"))
+    );
+    assert!(
+        record
+            .iter()
+            .any(|entry| entry.path.ends_with("/project-config.txt"))
     );
 
     Ok(())
@@ -16747,30 +16754,31 @@ fn record_uses_forward_slashes() -> Result<()> {
         print("Hello from script")
     "#})?;
 
-    let scripts_dir = context.temp_dir.child("headers");
-    scripts_dir.child("project.h").write_str(indoc! {r"
+    let headers_dir = context.temp_dir.child("headers");
+    headers_dir.child("project.h").write_str(indoc! {r"
         #include <stdio.h>
     "})?;
 
     context.pip_install().arg(".").assert().success();
 
     // Read the RECORD file and check that all paths use forward slashes.
-    let record_path = context
-        .site_packages()
-        .join("project-0.1.0.dist-info")
-        .join("RECORD");
-
-    let record = context.read(&record_path);
-    let record_lines: Vec<_> = record
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    assert!(record_lines.iter().any(|line| line.contains("/my_script")));
-    assert!(record_lines.iter().any(|line| line.contains("/project.h")));
-    for line in record_lines {
-        // Each RECORD line is: path,hash,size
-        let path = line.split(',').next().unwrap();
-        assert!(!path.contains('\\'), "{path}");
+    let record = read_record(File::open(
+        context
+            .site_packages()
+            .join("project-0.1.0.dist-info/RECORD"),
+    )?)?;
+    assert!(
+        record
+            .iter()
+            .any(|entry| entry.path.ends_with("/my_script"))
+    );
+    assert!(
+        record
+            .iter()
+            .any(|entry| entry.path.ends_with("/project.h"))
+    );
+    for entry in record {
+        assert!(!entry.path.contains('\\'), "{}", entry.path);
     }
 
     Ok(())
