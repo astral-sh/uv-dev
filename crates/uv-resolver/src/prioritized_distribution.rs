@@ -243,71 +243,53 @@ impl IncompatibleDist {
 impl Display for IncompatibleDist {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Wheel(incompatibility) => match incompatibility {
-                IncompatibleWheel::NoBinary => f.write_str("no source distribution"),
-                IncompatibleWheel::Tag(tag) => match tag {
-                    IncompatibleTag::Variant => f.write_str("only unsupported wheel variants"),
-                    IncompatibleTag::Invalid => f.write_str("no wheels with valid tags"),
-                    IncompatibleTag::Python => {
-                        f.write_str("no wheels with a matching Python implementation tag")
-                    }
-                    IncompatibleTag::Abi => f.write_str("no wheels with a matching Python ABI tag"),
-                    IncompatibleTag::FreethreadedAbi => {
-                        f.write_str("no wheels with a free-threading compatible ABI tag")
-                    }
-                    IncompatibleTag::AbiPythonVersion => {
-                        f.write_str("no wheels with a matching Python version tag")
-                    }
-                    IncompatibleTag::Platform => {
-                        f.write_str("no wheels with a matching platform tag")
-                    }
-                },
-                IncompatibleWheel::Yanked(yanked) => match yanked {
-                    Yanked::Bool(_) => f.write_str("yanked"),
-                    Yanked::Reason(reason) => write!(
-                        f,
-                        "yanked (reason: {})",
-                        reason.trim().trim_end_matches('.')
-                    ),
-                },
-                IncompatibleWheel::ExcludeNewer(ts) => match ts {
-                    Some(_) => f.write_str("published after the exclude newer time"),
-                    None => f.write_str("no publish time"),
-                },
-                IncompatibleWheel::RequiresPython(python, _) => {
-                    write!(f, "Python {python}")
-                }
-                IncompatibleWheel::MissingPlatform(marker) => {
-                    if let Some(platform) = KnownPlatform::from_marker(*marker) {
-                        write!(f, "no {platform}-compatible wheels")
-                    } else if let Some(marker) = marker.try_to_string() {
-                        write!(f, "no `{marker}`-compatible wheels")
-                    } else {
-                        write!(f, "no compatible wheels")
-                    }
-                }
+            Self::Wheel(IncompatibleWheel::Yanked(yanked))
+            | Self::Source(IncompatibleSource::Yanked(yanked)) => match yanked {
+                Yanked::Bool(_) => f.write_str("yanked"),
+                Yanked::Reason(reason) => write!(
+                    f,
+                    "yanked (reason: {})",
+                    reason.trim().trim_end_matches('.')
+                ),
             },
-            Self::Source(incompatibility) => match incompatibility {
-                IncompatibleSource::NoBuild => f.write_str("no usable wheels"),
-                IncompatibleSource::Yanked(yanked) => match yanked {
-                    Yanked::Bool(_) => f.write_str("yanked"),
-                    Yanked::Reason(reason) => write!(
-                        f,
-                        "yanked (reason: {})",
-                        reason.trim().trim_end_matches('.')
-                    ),
-                },
-                IncompatibleSource::ExcludeNewer(ts) => match ts {
-                    Some(_) => f.write_str("published after the exclude newer time"),
-                    None => f.write_str("no publish time"),
-                },
-                IncompatibleSource::RequiresPython(python, _) => {
-                    write!(f, "Python {python}")
-                }
-                IncompatibleSource::NotPep625Filename => {
-                    f.write_str("a non-PEP 625-compliant source distribution filename")
-                }
+            Self::Wheel(IncompatibleWheel::ExcludeNewer(ts))
+            | Self::Source(IncompatibleSource::ExcludeNewer(ts)) => match ts {
+                Some(_) => f.write_str("published after the exclude newer time"),
+                None => f.write_str("no publish time"),
             },
+            Self::Wheel(IncompatibleWheel::RequiresPython(python, _))
+            | Self::Source(IncompatibleSource::RequiresPython(python, _)) => {
+                write!(f, "Python {python}")
+            }
+            Self::Wheel(IncompatibleWheel::NoBinary) => f.write_str("no source distribution"),
+            Self::Wheel(IncompatibleWheel::Tag(tag)) => match tag {
+                IncompatibleTag::Variant => f.write_str("only unsupported wheel variants"),
+                IncompatibleTag::Invalid => f.write_str("no wheels with valid tags"),
+                IncompatibleTag::Python => {
+                    f.write_str("no wheels with a matching Python implementation tag")
+                }
+                IncompatibleTag::Abi => f.write_str("no wheels with a matching Python ABI tag"),
+                IncompatibleTag::FreethreadedAbi => {
+                    f.write_str("no wheels with a free-threading compatible ABI tag")
+                }
+                IncompatibleTag::AbiPythonVersion => {
+                    f.write_str("no wheels with a matching Python version tag")
+                }
+                IncompatibleTag::Platform => f.write_str("no wheels with a matching platform tag"),
+            },
+            Self::Wheel(IncompatibleWheel::MissingPlatform(marker)) => {
+                if let Some(platform) = KnownPlatform::from_marker(*marker) {
+                    write!(f, "no {platform}-compatible wheels")
+                } else if let Some(marker) = marker.try_to_string() {
+                    write!(f, "no `{marker}`-compatible wheels")
+                } else {
+                    write!(f, "no compatible wheels")
+                }
+            }
+            Self::Source(IncompatibleSource::NoBuild) => f.write_str("no usable wheels"),
+            Self::Source(IncompatibleSource::NotPep625Filename) => {
+                f.write_str("a non-PEP 625-compliant source distribution filename")
+            }
             Self::Unavailable => f.write_str("no available distributions"),
         }
     }
